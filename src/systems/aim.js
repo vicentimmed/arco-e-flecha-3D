@@ -1,68 +1,70 @@
 /* ---------------------------------------------------------------------------
-   Linha de tiro e pino de mira.
+   Linha de tiro.
 
-   A direção do disparo é definida SÓ pelo mouse (yaw/pitch). A câmera é livre
-   para se posicionar onde a composição fica boa — atrás e à esquerda da
-   arqueira, como na referência — porque a mira não é um retículo colado no
-   centro da tela: ela é desenhada exatamente onde a linha de tiro passa na
-   distância do pino, projetada na tela a cada frame.
+   O retículo fica fixo no centro da tela e a flecha sai apontada exatamente
+   para o ponto do cenário que está sob ele. Para achar esse ponto lançamos um
+   raio pela engine de física a partir da câmera; o primeiro colisor atingido
+   define a distância de convergência.
 
-   É assim que funciona a mira de um arco de verdade. O pino é regulado pelo
-   jogador (roda do mouse, ou Tab para calibrar no alvo selecionado) e:
+   Por que isso não é "assistência de mira": a câmera e o arco não ocupam o
+   mesmo lugar no espaço, então uma direção de tiro paralela ao eixo da câmera
+   erraria o que está sob o retículo por um deslocamento fixo. A convergência
+   corrige APENAS essa diferença geométrica. Nada aqui compensa gravidade nem
+   vento — a flecha continua caindo e derivando durante o voo, e é isso que o
+   jogador precisa antecipar.
 
-     • elimina qualquer erro de paralaxe entre câmera e flecha;
-     • NÃO compensa gravidade, NÃO compensa vento, NÃO procura alvos.
-
-   Ou seja: pôr o pino em cima do alvo acerta em linha reta, mas a flecha cai.
-   Compensar a queda continua sendo trabalho do jogador.
+   Usamos raycast só para MIRAR. O acerto no alvo continua sendo detectado por
+   contato da engine de física, nunca por raio.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
+import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
-import { clamp } from "../utils/math.js";
 
 export class AimSolver {
-  constructor() {
-    this.pinDistance = CONFIG.aim.pinDistance;
+  constructor(physics) {
+    this.physics = physics;
+    /** Direção da câmera (eixo do retículo). */
+    this.axis = new THREE.Vector3(0, 0, -1);
+    /** Direção real de lançamento da flecha. */
     this.direction = new THREE.Vector3(0, 0, -1);
-    this.sightPoint = new THREE.Vector3();
-    this._ndc = new THREE.Vector3();
+    /** Ponto do mundo sob o retículo. */
+    this.focus = new THREE.Vector3();
+    /** Distância até esse ponto (m), para o HUD. */
+    this.focusDistance = CONFIG.aim.fallbackDistance;
+    /** true se o raio encontrou algo de verdade. */
+    this.hasFocus = false;
+
+    this._ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
   }
 
-  setPin(distance) {
-    this.pinDistance = clamp(distance, CONFIG.aim.pinMin, CONFIG.aim.pinMax);
-  }
-
-  nudgePin(steps) {
-    this.setPin(this.pinDistance + steps * CONFIG.aim.pinStep);
-  }
-
-  /** Direção de lançamento a partir dos ângulos de mira. */
-  solve(yaw, pitch) {
+  /** Eixo da câmera a partir dos ângulos de mira. */
+  solveAxis(yaw, pitch) {
     const cp = Math.cos(pitch);
-    this.direction.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
-    return this.direction;
-  }
-
-  /** Ponto onde o pino "enxerga": sobre a linha de tiro, na distância regulada. */
-  updateSightPoint(muzzle) {
-    return this.sightPoint
-      .copy(muzzle)
-      .addScaledVector(this.direction, this.pinDistance);
+    this.axis.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
+    return this.axis;
   }
 
   /**
-   * Projeta o pino na tela. Devolve null se estiver atrás da câmera.
-   * @returns {{x:number,y:number}|null} pixels
+   * Converge a linha de tiro no ponto sob o retículo.
+   * @param {THREE.Vector3} cameraPosition origem do raio da mira
+   * @param {THREE.Vector3} muzzle ponto de onde a flecha realmente sai
    */
-  projectSight(camera, width, height) {
-    this._ndc.copy(this.sightPoint).project(camera);
-    if (this._ndc.z > 1 || !Number.isFinite(this._ndc.x) || !Number.isFinite(this._ndc.y)) {
-      return null; // atrás da câmera, ou viewport degenerado
-    }
-    return {
-      x: (this._ndc.x * 0.5 + 0.5) * width,
-      y: (-this._ndc.y * 0.5 + 0.5) * height,
-    };
+  solve(cameraPosition, muzzle) {
+    this._ray.origin.x = cameraPosition.x;
+    this._ray.origin.y = cameraPosition.y;
+    this._ray.origin.z = cameraPosition.z;
+    this._ray.dir.x = this.axis.x;
+    this._ray.dir.y = this.axis.y;
+    this._ray.dir.z = this.axis.z;
+
+    const hit = this.physics.world.castRay(this._ray, CONFIG.aim.maxRange, true);
+    this.hasFocus = hit !== null;
+    const distance = hit ? hit.timeOfImpact : CONFIG.aim.fallbackDistance;
+    this.focusDistance = distance;
+
+    this.focus.copy(cameraPosition).addScaledVector(this.axis, distance);
+    this.direction.copy(this.focus).sub(muzzle).normalize();
+    return this.direction;
   }
 }

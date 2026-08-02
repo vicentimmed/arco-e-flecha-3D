@@ -104,6 +104,11 @@ export class Bow {
     this.setDraw(0);
   }
 
+  /** Distância do nock (em abertura total) até o punho — o "draw length". */
+  get fullDrawReach() {
+    return BRACE_HEIGHT + DRAW_LENGTH;
+  }
+
   makeLimb(material, sign) {
     const points = LIMB_PROFILE.map(
       ([y, z]) => new THREE.Vector3(0, y * sign, z),

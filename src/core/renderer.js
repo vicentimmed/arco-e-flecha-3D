@@ -72,7 +72,10 @@ export class Renderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0xbcd4e6, CONFIG.world.fogDensity);
+    // Perspectiva aérea: é o que dá escala à serra. Sem névoa, um cume a 250 m
+    // tem o mesmo contraste que a pedra ao lado do pé e a montanha vira adesivo.
+    // A cor tem de bater com a do horizonte do céu, senão aparece uma linha.
+    this.scene.fog = new THREE.FogExp2(0xc4d8e8, CONFIG.world.fogDensity);
 
     this.camera = new THREE.PerspectiveCamera(
       CONFIG.camera.fov,
@@ -98,9 +101,9 @@ export class Renderer {
       depthWrite: false,
       fog: false,
       uniforms: {
-        zenith: { value: new THREE.Color("#2f7fd4") },
-        horizon: { value: new THREE.Color("#cfe6f5") },
-        ground: { value: new THREE.Color("#b9c6c4") },
+        zenith: { value: new THREE.Color("#2c78cc") },
+        horizon: { value: new THREE.Color("#d0e2ee") },
+        ground: { value: new THREE.Color("#b3c3c6") },
         sunDir: { value: this.sunDirection.clone() },
         sunColor: { value: new THREE.Color("#ffe6b0") },
       },
@@ -138,7 +141,9 @@ export class Renderer {
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
-    this.hemi = new THREE.HemisphereLight(0xa8d3ff, 0x6b5a3c, 0.85);
+    // O rebote do chão puxa para verde-oliva (grama), não para areia: é o que
+    // assenta a rocha cinzenta da serra na paleta do vale.
+    this.hemi = new THREE.HemisphereLight(0xa8d3ff, 0x5d6142, 0.82);
     this.scene.add(this.hemi);
 
     // Preenchimento fraco vindo do lado oposto ao sol, para as sombras não
@@ -219,17 +224,19 @@ function buildClouds() {
     opacity: 0.9,
   });
 
+  // As nuvens ficam acima da linha dos cumes (~105 m): mais baixas, elas
+  // atravessariam a serra e o recorte entregaria que são sprites planos.
   const layout = [
-    [-180, 118, -300, 150],
-    [90, 132, -340, 190],
-    [260, 100, -190, 130],
-    [-260, 96, -60, 140],
-    [40, 150, -430, 230],
-    [-90, 108, -480, 170],
-    [330, 126, -380, 200],
-    [-330, 140, -420, 210],
-    [150, 92, 120, 120],
-    [-140, 104, 190, 150],
+    [-180, 168, -300, 150],
+    [90, 182, -340, 190],
+    [260, 150, -190, 130],
+    [-260, 146, -60, 140],
+    [40, 200, -430, 230],
+    [-90, 158, -480, 170],
+    [330, 176, -380, 200],
+    [-330, 190, -420, 210],
+    [150, 142, 120, 120],
+    [-140, 154, 190, 150],
   ];
   for (const [x, y, z, s] of layout) {
     const sprite = new THREE.Sprite(material);

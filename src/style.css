@@ -235,16 +235,16 @@ body {
 
 /* ---------------------------------------------------------------- mira ----- */
 
-/* O retículo é o PINO DE MIRA: sua posição na tela é calculada a cada frame
-   pela projeção da linha de tiro, e não fica travado no centro. */
+/* Retículo fixo no centro da tela: a linha de tiro converge exatamente para o
+   ponto do cenário que está sob ele. */
 #reticle {
   position: absolute;
-  left: 0;
-  top: 0;
+  left: 50%;
+  top: 50%;
   width: 46px;
   height: 46px;
-  margin: 0;
-  will-change: transform;
+  margin: -23px 0 0 -23px;
+  transition: transform 120ms ease;
 }
 
 #reticle.off {

@@ -29,6 +29,8 @@ export class Input {
     this.pitch = 0.06;
     this.forward = 0;
     this.strafe = 0;
+    /** Shift segurado: corre em vez de andar. */
+    this.run = false;
     this.drawing = false;
 
     /** true assim que o jogador engatou a mira (travada OU livre). */
@@ -41,17 +43,20 @@ export class Input {
 
     this.keys = new Set();
 
+    /** Quando true, o clique não tensiona o arco — ele só encerra a câmera da
+     *  flecha. Quem decide é o main, olhando o estado da câmera. */
+    this.blockDraw = false;
+
     /** Eventos de uma só vez, consumidos pelo main a cada frame. */
     this.actions = {
       release: false, // soltou a corda
+      dismissArrowCam: false, // clique para voltar à visão da arqueira
+      togglePerspective: false, // botão direito: primeira/terceira pessoa
       cycleTarget: false,
-      toggleArrowCam: false,
-      toggleAutoFollow: false,
       clearArrows: false,
       toggleDebug: false,
       toggleHelp: false,
       toggleTrace: false,
-      pinDelta: 0,
     };
 
     this.bind();
@@ -87,6 +92,7 @@ export class Input {
     this.drawing = false;
     this.forward = 0;
     this.strafe = 0;
+    this.run = false;
     this.keys.clear();
     if (document.pointerLockElement === this.canvas) {
       document.exitPointerLock?.();
@@ -134,10 +140,24 @@ export class Input {
         CONFIG.player.pitchMin,
         CONFIG.player.pitchMax,
       );
+      // O mouse também carrega o estado do Shift: se o keyup se perdeu, o
+      // primeiro movimento do mouse já desfaz a corrida presa.
+      if (e.shiftKey !== this.run) this.updateMovement(e);
     });
 
     document.addEventListener("mousedown", (e) => {
-      if (!this.active || e.button !== 0) return;
+      if (!this.active) return;
+      if (e.button === 2) {
+        this.actions.togglePerspective = true;
+        return;
+      }
+      if (e.button !== 0) return;
+      if (this.blockDraw) {
+        // Estamos vendo a flecha voar: este clique só traz a câmera de volta,
+        // sem começar a tensionar o arco (senão soltaria um tiro fraco).
+        this.actions.dismissArrowCam = true;
+        return;
+      }
       this.drawing = true;
     });
 
@@ -147,15 +167,10 @@ export class Input {
       this.drawing = false;
     });
 
-    document.addEventListener(
-      "wheel",
-      (e) => {
-        if (!this.active) return;
-        e.preventDefault();
-        this.actions.pinDelta += e.deltaY > 0 ? -1 : 1;
-      },
-      { passive: false },
-    );
+    // Sem menu de contexto: o botão direito é a troca de perspectiva.
+    document.addEventListener("contextmenu", (e) => {
+      if (this.active) e.preventDefault();
+    });
 
     window.addEventListener("keydown", (e) => {
       if (e.repeat) return;
@@ -171,10 +186,7 @@ export class Input {
           this.actions.cycleTarget = true;
           break;
         case "KeyC":
-          this.actions.toggleArrowCam = true;
-          break;
-        case "KeyF":
-          this.actions.toggleAutoFollow = true;
+          this.actions.togglePerspective = true;
           break;
         case "KeyR":
           this.actions.clearArrows = true;
@@ -190,12 +202,12 @@ export class Input {
           this.actions.toggleDebug = true;
           break;
       }
-      this.updateMovement();
+      this.updateMovement(e);
     });
 
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.code);
-      this.updateMovement();
+      this.updateMovement(e);
     });
 
     window.addEventListener("blur", () => {
@@ -205,10 +217,22 @@ export class Input {
     });
   }
 
-  updateMovement() {
+  /**
+   * Recalcula o vetor de movimento e o estado da corrida.
+   *
+   * Para o Shift a fonte da verdade é o EVENTO, não o conjunto de teclas: um
+   * keyup de modificador se perde com facilidade (a janela perde o foco, o
+   * sistema operacional captura a combinação, o Pointer Lock cai), e sem isso
+   * o personagem ficaria correndo para sempre. Todo evento de teclado e de
+   * mouse carrega `shiftKey` com o estado real do teclado — basta ler dali.
+   */
+  updateMovement(event) {
     const k = this.keys;
     this.forward = (k.has("KeyW") ? 1 : 0) - (k.has("KeyS") ? 1 : 0);
     this.strafe = (k.has("KeyD") ? 1 : 0) - (k.has("KeyA") ? 1 : 0);
+    this.run = event
+      ? event.shiftKey === true
+      : k.has("ShiftLeft") || k.has("ShiftRight");
   }
 
   /** Devolve e zera os eventos pontuais. */
@@ -216,14 +240,13 @@ export class Input {
     const a = this.actions;
     const snapshot = { ...a };
     a.release = false;
+    a.dismissArrowCam = false;
+    a.togglePerspective = false;
     a.cycleTarget = false;
-    a.toggleArrowCam = false;
-    a.toggleAutoFollow = false;
     a.clearArrows = false;
     a.toggleDebug = false;
     a.toggleHelp = false;
     a.toggleTrace = false;
-    a.pinDelta = 0;
     return snapshot;
   }
 }

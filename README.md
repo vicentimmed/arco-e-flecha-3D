@@ -35,17 +35,24 @@ qualquer hospedagem de arquivos estáticos.
 
 | Comando | Ação |
 |---|---|
-| **Mouse** | mirar (clique na tela para capturar o ponteiro; `Esc` libera) |
+| **Mouse** | mirar (clique na tela para começar; `Esc` sai) |
 | **Botão esquerdo** | segurar tensiona o arco, soltar dispara |
-| **W A S D** | andar |
-| **Roda do mouse** | regular o pino de mira (10–100 m) |
-| **Tab** | selecionar o próximo alvo e calibrar o pino nele |
-| **C** | alternar a câmera que acompanha a flecha |
-| **F** | acompanhar automaticamente toda flecha disparada |
-| **T** | traçado da trajetória real da última flecha |
+| **Clique** (durante o voo) | encerra a câmera da flecha e volta para a arqueira |
+| **Botão direito** / **C** | alterna primeira e terceira pessoa |
+| **W A S D** | andar · **Shift** correr |
+| **Tab** | selecionar o próximo alvo |
+| **T** | liga/desliga os traçados (ligados por padrão) |
 | **R** | limpar as flechas cravadas |
 | **~** | painel de depuração |
 | **H** | ocultar a ajuda |
+
+Todo disparo joga a câmera para trás da flecha automaticamente; um clique
+devolve a visão para a arqueira (esse clique não tensiona o arco, para não
+soltar um tiro fraco sem querer).
+
+Em **primeira pessoa** a câmera fica no olho da arqueira, logo acima da
+ancoragem da corda: a flecha passa rente ao rosto e o arco aparece à direita do
+quadro, como quem realmente mira.
 
 Segurar o arco tensionado por mais de 3 s começa a tremer a mira, e o tremor
 cresce com o tempo — vale soltar e reengatar.
@@ -121,28 +128,40 @@ estável e mais barato que um vínculo.
 A pontuação sai da posição do impacto convertida para o referencial do alvo, o
 que mantém os anéis corretos mesmo com o alvo tombado ou balançando.
 
-## Mira: o pino
+## Mira
 
-Este é o único ponto do jogo que merece explicação, porque parece assistência e
-não é.
+O retículo é fixo no centro da tela e a flecha sai apontada exatamente para o
+ponto do cenário que está sob ele. Para achar esse ponto, um raio é lançado pela
+engine de física a partir da câmera; o primeiro colisor atingido define a
+distância de convergência, e a linha de tiro é traçada do arco até lá.
 
-A câmera fica atrás e à esquerda da arqueira — enquadramento, não linha de tiro.
-Se o retículo ficasse fixo no centro da tela, ele mentiria: a flecha sai do arco,
-não da câmera. Então o retículo **não é fixo**. A cada frame ele é desenhado onde
-a linha de tiro real cruza a distância regulada no pino, projetada na tela.
-
-É exatamente o que faz a mira de um arco de verdade, e o que ela corrige é só
-geometria:
+Isso existe porque a câmera e o arco não ocupam o mesmo lugar no espaço. Uma
+direção de tiro paralela ao eixo da câmera erraria o que está sob a mira por um
+deslocamento fixo — em terceira pessoa, mais de um metro. A convergência corrige
+**apenas essa diferença geométrica**:
 
 - ✅ elimina o paralaxe entre câmera e flecha;
 - ❌ não compensa gravidade;
 - ❌ não compensa vento;
-- ❌ não sabe onde estão os alvos.
+- ❌ não procura alvos, não gruda, não corrige o disparo.
 
-Ou seja: pôr o pino em cima do alvo acerta **em linha reta**. A flecha cai. Se o
-alvo está a 60 m e o pino está em 30, a leitura da linha continua honesta — só a
-elevação e a deriva continuam sendo problema seu. `Tab` calibra o pino no alvo
-selecionado; a roda do mouse ajusta de 5 em 5 m.
+Ou seja: mirar no alvo acerta **em linha reta**. A flecha ainda cai e ainda
+deriva. Verificado com gravidade, arrasto e vento desligados: os sete alvos, de
+10 a 100 m, foram acertados na mosca só apontando o retículo para eles.
+
+O raycast é usado só para MIRAR. O acerto continua sendo detectado por contato da
+engine de física, nunca por raio.
+
+## Traçados
+
+Cada flecha desenha o caminho que realmente percorreu — os pontos são amostrados
+da posição do corpo rígido a 120 Hz durante o voo, não de uma curva prevista. Por
+isso o traçado mostra o efeito do arrasto e do vento, e não uma parábola ideal.
+
+Os traçados de tiros anteriores ficam na cena para comparação: **15 s totalmente
+visíveis** depois que a flecha para, e então **5 s desaparecendo gradualmente**.
+São desenhados com `Line2` porque `linewidth` de `LineBasicMaterial` é ignorado
+na maioria das plataformas — uma linha de 1 px some contra o cenário.
 
 ## Critérios de aceite
 
@@ -210,6 +229,17 @@ não conhece Three.js; a sincronização acontece num único lugar.
   serem zerados. `addForceAtPoint` alimenta os dois acumuladores, então
   `resetForces()` sozinho deixa o torque crescendo indefinidamente e a flecha
   acaba voando de traseira. É preciso `resetTorques()` também.
+- **Não mexa no mundo durante a drenagem de eventos.** Tratar um impacto cria
+  vínculos e remove corpos; fazer isso dentro do callback de
+  `drainCollisionEvents` invalida os handles dos eventos seguintes e o Rapier
+  entra em pânico (`unreachable`) no passo seguinte. Os contatos são
+  bufferizados e só despachados depois que a fila termina.
+- **Postura de arqueiro nasce da ancoragem, não do ombro.** A corda é puxada até
+  um ponto fixo do rosto, do lado da mão que puxa, e o arco fica onde a linha da
+  flecha manda. Derivar o punho a partir do ombro joga o nock para o lado errado
+  do rosto e o braço da corda atravessa o tronco. A âncora também precisa ser
+  medida no espaço do personagem, não no do tronco: o giro de 66° da postura
+  converte "esquerda" em "para trás" e centraliza a âncora no corpo.
 - **Orientação dos triângulos do terreno.** Como z diminui conforme o índice da
   linha cresce, a ordem ingênua de índices gera faces viradas para baixo e o chão
   some por backface culling.

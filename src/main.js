@@ -21,6 +21,7 @@ import { createTargets } from "./entities/target.js";
 import { Wind } from "./systems/wind.js";
 import { CameraRig, CameraMode } from "./systems/camera.js";
 import { AimSolver } from "./systems/aim.js";
+import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
 import { HUD } from "./ui/hud.js";
 import { DebugPanel } from "./ui/debug.js";
@@ -50,8 +51,15 @@ class Game {
     this.player = new Player(this.terrain);
     this.scene.add(this.player.root);
 
-    this.arrows = new ArrowManager(this.scene, physics, this.sync, this.wind);
-    this.aim = new AimSolver();
+    this.trails = new TrailManager(this.scene);
+    this.arrows = new ArrowManager(
+      this.scene,
+      physics,
+      this.sync,
+      this.wind,
+      this.trails,
+    );
+    this.aim = new AimSolver(physics);
     this.rig = new CameraRig(this.renderer.camera);
 
     this.hud = new HUD(document.getElementById("ui"));
@@ -82,6 +90,7 @@ class Game {
     this._spawn = new THREE.Vector3();
     this._forward = new THREE.Vector3();
     this._shadowFocus = new THREE.Vector3();
+    this._eye = new THREE.Vector3();
 
     this.arrows.onScore = (target, result) => {
       if (result.score > 0) {
@@ -92,7 +101,9 @@ class Game {
     };
     this.arrows.onMiss = (_arrow, what) => this.hud.miss(what);
 
-    this.hud.setPin(this.aim.pinDistance);
+    window.addEventListener("resize", () =>
+      this.trails.setResolution(this.renderer.width, this.renderer.height),
+    );
   }
 
   buildTargetMarker() {
@@ -104,7 +115,7 @@ class Game {
     this.marker.renderOrder = 5;
   }
 
-  selectTarget(index, adjustPin = true) {
+  selectTarget(index) {
     const target = this.targets[index];
     if (!target) return;
     this.selectedTarget = index;
@@ -112,12 +123,6 @@ class Game {
     target.group.add(this.marker);
     this.marker.position.copy(target.faceCenterLocal);
     this.marker.position.z += CONFIG.target.faceThickness / 2 + 0.01;
-    if (adjustPin) {
-      // Calibrar o pino no alvo escolhido é regular a mira, não mirar por você:
-      // corrige só o paralaxe da câmera, nunca a queda da flecha.
-      this.aim.setPin(target.distanceTo(this.player.position));
-      this.hud.setPin(this.aim.pinDistance);
-    }
   }
 
   /* ------------------------------------------------------------- laço ----- */
@@ -131,16 +136,21 @@ class Game {
 
     const actions = this.input.consume();
     this.handleActions(actions);
+
+    // Ordem importa: a pose define o ponto de disparo, a câmera se posiciona a
+    // partir dele, e só então a linha de tiro converge no que está sob a mira.
     this.updateAimAndPose(dt);
+    this.updateCamera(dt);
+    this.solveAim();
     if (actions.release) this.shoot();
 
     this.wind.update(dt);
     this.stepPhysics(dt);
     this.arrows.update(dt);
+    this.trails.update(dt);
     this.environment.update(dt, this.wind.vector);
 
     this.updateHud();
-    this.updateCamera(dt);
     this.debug.update({
       fps: this.fps,
       steps: this.stepsLastFrame,
@@ -160,18 +170,14 @@ class Game {
   }
 
   handleActions(a) {
-    if (a.pinDelta) {
-      this.aim.nudgePin(a.pinDelta);
-      this.hud.setPin(this.aim.pinDistance);
-    }
     if (a.cycleTarget) {
       this.selectTarget((this.selectedTarget + 1) % this.targets.length);
     }
-    if (a.toggleArrowCam) this.rig.toggleFollow(this.arrows.lastArrow);
-    if (a.toggleAutoFollow) {
-      this.rig.setAutoFollow(!this.rig.autoFollow);
+    if (a.dismissArrowCam) this.rig.returnToArcher();
+    if (a.togglePerspective) {
+      this.rig.togglePerspective();
       this.hud.toast(
-        this.rig.autoFollow ? "câmera segue a flecha" : "câmera fixa na arqueira",
+        this.rig.archerMode === CameraMode.FIRST ? "primeira pessoa" : "terceira pessoa",
         "miss",
       );
     }
@@ -188,6 +194,10 @@ class Game {
   }
 
   updateAimAndPose(dt) {
+    // Enquanto a câmera acompanha a flecha, o clique serve para voltar à visão
+    // da arqueira — não para tensionar o arco.
+    this.input.blockDraw = this.rig.isArrowCam;
+
     // Tensão do arco.
     if (this.input.drawing) this.drawTime += dt;
 
@@ -204,15 +214,29 @@ class Game {
     this.aimYaw = yaw;
     this.aimPitch = pitch;
 
-    const moving = this.player.move(dt, this.input.forward, this.input.strafe);
+    const moving = this.player.move(
+      dt,
+      this.input.forward,
+      this.input.strafe,
+      this.input.run,
+    );
     this.player.setAim(yaw, pitch);
     this.player.setDraw(drawFraction(this.drawTime));
     this.player.update(dt, moving);
     this.player.getMuzzle(this._muzzle);
 
-    // Direção de lançamento: vem só dos ângulos de mira.
-    this.aim.solve(yaw, this.player.pitch);
-    this._forward.copy(this.aim.direction);
+    // Eixo da mira (para onde a câmera olha). A linha de tiro real é resolvida
+    // depois, em solveAim(), quando a câmera já estiver posicionada.
+    this._forward.copy(this.aim.solveAxis(yaw, this.player.pitch));
+    this.player.getEye(this._eye, this._forward);
+  }
+
+  /**
+   * Converge a linha de tiro no ponto do cenário que está sob o retículo.
+   * Roda depois da câmera porque o raio parte de onde a câmera está.
+   */
+  solveAim() {
+    this.aim.solve(this.renderer.camera.position, this._muzzle);
   }
 
   shoot() {
@@ -252,27 +276,26 @@ class Game {
   }
 
   updateCamera(dt) {
-    this.rig.update(dt, this._muzzle, this._forward);
+    this.rig.update(dt, this._muzzle, this._forward, this._eye);
 
-    // O pino de mira é projetado depois da câmera: é a posição real da linha
-    // de tiro na tela, não um retículo decorativo no centro.
-    // `project()` usa matrixWorldInverse, que só o renderer recalcula — sem
-    // atualizar aqui, o retículo ficaria um frame atrás da câmera.
+    // Em primeira pessoa a câmera fica DENTRO da cabeça: escondê-la evita ver
+    // o interior do crânio ocupando a tela inteira.
+    this.player.setHeadVisible(!this.rig.isFirstPerson);
+
+    // O raycast da mira parte da câmera, então ela precisa estar com a matriz
+    // de mundo em dia antes de solveAim().
     const camera = this.renderer.camera;
     camera.updateMatrixWorld();
     camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
-    this.aim.updateSightPoint(this._muzzle);
-    const onArrowCam = this.rig.mode === CameraMode.ARROW;
-    this.hud.setReticle(
-      onArrowCam
-        ? null
-        : this.aim.projectSight(camera, this.renderer.width, this.renderer.height),
-    );
+
+    // Sem retículo enquanto acompanhamos a flecha: não há tiro para mirar.
+    this.hud.setReticleVisible(!this.rig.isArrowCam);
   }
 
   updateHud() {
     const fraction = drawFraction(this.drawTime);
     this.hud.setDraw(fraction, fraction > 0 ? drawSpeed(this.drawTime) : 0);
+    this.hud.setFocus(this.aim.focusDistance, this.aim.hasFocus);
     this.hud.setWind(
       this.wind.speed,
       this.wind.relativeAngle(this.aimYaw ?? 0),

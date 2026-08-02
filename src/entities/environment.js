@@ -1,31 +1,64 @@
 /* ---------------------------------------------------------------------------
-   Cenário: vale rochoso com trilha de terra, encostas de grama, matacões,
-   árvores estilizadas, cercas e bandeirolas de vento.
+   Cenário: uma ARENA FECHADA — bacia gramada com trilha de terra, cercada por
+   sopé arborizado e, atrás dele, uma serra que sobe até ~100 m e fecha os
+   quatro lados do horizonte.
 
-   O relevo vem de uma função de altura determinística; a MESMA geometria
-   alimenta o render e o colisor trimesh, então não existe descolamento entre
-   o que se vê e o que a física enxerga.
+   Três decisões estruturam este arquivo:
+
+   1. O relevo vem de uma função de altura determinística; a MESMA geometria
+      alimenta o render e o colisor trimesh, então não existe descolamento
+      entre o que se vê e o que a física enxerga.
+
+   2. O terreno se estende MUITO além da área jogável (±175 m em x, de +120 a
+      -300 m em z). Não é desperdício: é o que garante que a arqueira nunca
+      chegue a uma borda e caia no vazio, e que os cumes distantes tenham
+      montanha atrás deles em vez de céu recortado. A malha é adensada no
+      centro (ver `focusWarp`), então esse tamanho todo custa ~70 k triângulos.
+
+   3. Vegetação e matacões são InstancedMesh. Umas 500 peças de cenário saem em
+      6 chamadas de desenho em vez de 500.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { ValueNoise } from "../utils/noise.js";
 import { clamp, smoothstep, makeRandom } from "../utils/math.js";
 
+/* Paleta alpina: gramado no fundo do vale, granito acinzentado nas paredes,
+   talude claro no pé das falésias e neve nos cumes. O tom cinza-esverdeado é
+   deliberado — rocha bege satura o quadro inteiro e é o que fazia a serra
+   antiga parecer plástico. */
 const PALETTE = {
-  grass: new THREE.Color("#6f9c3f"),
-  grassDry: new THREE.Color("#9cb254"),
-  dirt: new THREE.Color("#c1996b"),
-  dirtDark: new THREE.Color("#9d7a4f"),
-  rockWarm: new THREE.Color("#c8ab84"),
-  rockCool: new THREE.Color("#9c8869"),
-  rockDark: new THREE.Color("#7d6b55"),
+  grass: new THREE.Color("#5d8a3a"),
+  grassDry: new THREE.Color("#95a552"),
+  grassDeep: new THREE.Color("#3f6b2c"),
+  dirt: new THREE.Color("#b18e60"),
+  dirtDark: new THREE.Color("#8a6a44"),
+  scree: new THREE.Color("#9c9280"),
+  rockLight: new THREE.Color("#8d867b"),
+  rockWarm: new THREE.Color("#897a63"),
+  rockDark: new THREE.Color("#4f4a43"),
+  snow: new THREE.Color("#e8eef5"),
+  snowShade: new THREE.Color("#b4c6da"),
 };
+
+const _c1 = new THREE.Color();
+const _c2 = new THREE.Color();
+const _n1 = new THREE.Vector3();
 
 /** Centro da trilha em função de z: uma curva suave, não uma reta. */
 export function pathCenterX(z) {
   return 3.0 * Math.sin(z * 0.016) + 1.6 * Math.sin(z * 0.0052 + 1.1);
+}
+
+/**
+ * Reparametrização da malha: leva t ∈ [-1,1] em [-1,1] concentrando amostras
+ * perto de 0. `a` é a derivada na origem — quanto menor, mais denso o centro.
+ */
+function focusWarp(t, a) {
+  return t * (a + (1 - a) * t * t);
 }
 
 /* ------------------------------------------------------------- terreno ----- */
@@ -33,40 +66,84 @@ export function pathCenterX(z) {
 export class Terrain {
   constructor(seed = 20260731) {
     this.noise = new ValueNoise(seed);
+    const A = CONFIG.world.arena;
+    this.centerZ = (A.zBack + A.zFront) * 0.5;
+    this.halfZ = (A.zBack - A.zFront) * 0.5;
+  }
+
+  /**
+   * Distância com sinal até a borda do piso da arena (negativo = dentro).
+   *
+   * É um retângulo arredondado (SDF de caixa) somado a um ruído de baixa
+   * frequência. O ruído é o que impede que a arena leia como "um retângulo":
+   * a borda ganha enseadas e esporões de até ~7 m, e como TODO o relevo da
+   * serra é função desta distância, os contrafortes herdam essa irregularidade
+   * de graça.
+   */
+  arenaDistance(x, z) {
+    const A = CONFIG.world.arena;
+    const qx = Math.abs(x) - A.halfX;
+    const qz = Math.abs(z - this.centerZ) - this.halfZ;
+    const ox = Math.max(qx, 0);
+    const oz = Math.max(qz, 0);
+    const box = Math.hypot(ox, oz) + Math.min(Math.max(qx, qz), 0);
+    return box + A.edgeNoise * this.noise.fbm2(x * 0.0072, z * 0.0072, 3);
   }
 
   /** Altura do terreno (m) em qualquer ponto do plano. */
   heightAt(x, z) {
     const n = this.noise;
-    const d = Math.abs(x - pathCenterX(z));
+    const A = CONFIG.world.arena;
 
-    // Fundo do vale: ondulação suave.
-    let h = 0.62 * n.fbm2(x * 0.019, z * 0.019, 3) + 0.24 * n.fbm2(x * 0.075, z * 0.075, 2);
-
-    // A trilha é plana e levemente escavada.
-    const onPath = 1 - smoothstep(3.0, 7.5, d);
+    /* --- piso da bacia: ondulação suave, trilha plana e escavada --------- */
+    const dPath = Math.abs(x - pathCenterX(z));
+    let h =
+      0.52 * n.fbm2(x * 0.021, z * 0.021, 3) + 0.19 * n.fbm2(x * 0.082, z * 0.082, 2);
+    const onPath = 1 - smoothstep(3.0, 7.5, dPath);
     h *= 1 - 0.8 * onPath;
     h -= 0.14 * onPath;
 
-    // Encosta gramada antes das paredes.
-    h += 3.0 * smoothstep(8.0, 17.0, d);
+    const ad = this.arenaDistance(x, z);
+    if (ad <= -A.footBand) return h;
 
-    // Paredes do desfiladeiro: sobem rápido (falésia) e saturam em ~34 m.
-    const wall = Math.max(0, d - 16);
-    if (wall > 0) {
-      const sat = 1 - Math.exp(-wall / 9);
-      const ridge = 0.5 + 0.5 * n.ridged2(x * 0.032, z * 0.024, 4);
-      h += 34 * sat * (0.55 + 0.62 * ridge);
-      h += 2.4 * n.fbm2(x * 0.11, z * 0.095, 3) * Math.min(1, wall / 5);
-      // Degraus horizontais: sugerem estratos de arenito.
-      h += 1.1 * Math.sin(h * 0.55 + n.noise2(x * 0.05, z * 0.05) * 2) * Math.min(1, wall / 8);
-    }
+    /* --- sopé gramado: a bacia fecha antes de virar rocha ---------------- */
+    h += A.footHeight * smoothstep(-A.footBand, A.footBand * 0.5, ad);
 
-    // Afloramentos rochosos isolados no meio do campo, para quebrar a monotonia.
-    const outcrop = n.fbm2(x * 0.014 + 31.7, z * 0.014 - 12.3, 2);
-    if (outcrop > 0.42 && d > 8) {
-      h += (outcrop - 0.42) * 26 * smoothstep(8, 14, d);
-    }
+    const w = ad - A.wallStart;
+    if (w <= 0) return h;
+
+    /* --- serra ------------------------------------------------------------
+       Domain warping: distorcer o espaço ANTES de amostrar o ruído é o que
+       transforma manchas genéricas em espigões e vales com direção coerente.
+       Sem isto, ruído fractal produz "morros de bolha" — exatamente o que a
+       versão anterior parecia. */
+    const wx = x + 30 * n.fbm2(x * 0.0052 + 5.2, z * 0.0052 - 2.1, 2);
+    const wz = z + 30 * n.fbm2(x * 0.0052 - 8.7, z * 0.0052 + 4.4, 2);
+
+    // Três escalas de crista: maciço → contrafortes → rugosidade.
+    const r1 = 0.5 + 0.5 * n.ridged2(wx * 0.0068, wz * 0.0068, 3);
+    const r2 = 0.5 + 0.5 * n.ridged2(wx * 0.018, wz * 0.018, 3);
+    const r3 = 0.5 + 0.5 * n.ridged2(wx * 0.044, wz * 0.044, 2);
+    // O expoente > 1 afina os cumes e alarga os vales. É a diferença entre um
+    // perfil de montanha e um perfil de duna.
+    const ridge = Math.pow(0.6 * r1 + 0.27 * r2 + 0.13 * r3, 1.5);
+
+    // A altura do maciço varia ao longo da serra: cumes e colos, não muralha.
+    const massif =
+      0.55 + 0.7 * (0.5 + 0.5 * n.fbm2(x * 0.0036 - 17.3, z * 0.0036 + 9.1, 2));
+    const rise = 1 - Math.exp(-w / A.rampLength);
+
+    h += A.peak * massif * rise * (0.22 + 0.9 * ridge);
+
+    // Estratos: degraus horizontais de rocha sedimentar nas encostas médias,
+    // atenuados perto dos cumes (onde o topo é erodido, não estratificado).
+    const bench =
+      Math.min(1, w / 14) * (1 - smoothstep(0.55, 1.0, h / (A.peak * 1.15)));
+    h += 1.5 * bench * Math.sin(h * 0.32 + n.noise2(x * 0.03, z * 0.03) * 2.4);
+
+    // Rugosidade fina só perto da arena: lá fora a malha é rala e não a
+    // resolveria — só produziria cintilação.
+    h += 2.2 * n.fbm2(x * 0.075, z * 0.075, 3) * Math.min(1, w / 8) * Math.exp(-w / 90);
 
     return h;
   }
@@ -80,42 +157,88 @@ export class Terrain {
     return out.set(hL - hR, 2 * eps, hD - hU).normalize();
   }
 
+  /**
+   * A arqueira pode pisar aqui?
+   *
+   * Duas condições: não passou muito da borda da arena, e o chão não é íngreme
+   * demais para se subir. É o que substitui o antigo clamp retangular — e,
+   * junto com o terreno que se estende por centenas de metros, é o que torna
+   * impossível "andar para fora do mundo".
+   */
+  isWalkable(x, z) {
+    const A = CONFIG.world.arena;
+    if (this.arenaDistance(x, z) > A.walkMargin) return false;
+    return this.normalAt(x, z, 0.7, _n1).y >= A.minWalkNormal;
+  }
+
   /** Constrói malha visual + colisor trimesh a partir da mesma geometria. */
   build(scene, physics) {
-    const { sizeX, sizeZ, segmentsX, segmentsZ } = CONFIG.world;
+    const W = CONFIG.world;
+    const { segmentsX, segmentsZ, gridFocus } = W;
     const nx = segmentsX + 1;
     const nz = segmentsZ + 1;
-    const halfX = sizeX / 2;
-    const originZ = 60; // o terreno vai de +60 (atrás) até -220 (frente)
+
+    const spanBack = W.maxZ - this.centerZ;
+    const spanFront = this.centerZ - W.minZ;
 
     const positions = new Float32Array(nx * nz * 3);
     const colors = new Float32Array(nx * nz * 3);
     const normals = new Float32Array(nx * nz * 3);
     const indices = new Uint32Array(segmentsX * segmentsZ * 6);
 
-    const c = new THREE.Color();
-    const nrm = new THREE.Vector3();
+    // Eixos pré-calculados: a malha é NÃO uniforme (densa na arena, rala nos
+    // cumes), então cada linha/coluna tem sua própria coordenada.
+    const xs = new Float32Array(nx);
+    for (let i = 0; i < nx; i++) {
+      const wgt = focusWarp((i / segmentsX) * 2 - 1, gridFocus);
+      xs[i] = wgt * (wgt < 0 ? -W.minX : W.maxX);
+    }
+    const zs = new Float32Array(nz);
+    for (let j = 0; j < nz; j++) {
+      // j cresce em direção a -Z (frente), como na versão anterior.
+      const wgt = focusWarp(1 - (j / segmentsZ) * 2, gridFocus);
+      zs[j] = this.centerZ + wgt * (wgt < 0 ? spanFront : spanBack);
+    }
 
     for (let j = 0; j < nz; j++) {
-      const z = originZ - (j / segmentsZ) * sizeZ;
+      const z = zs[j];
       for (let i = 0; i < nx; i++) {
-        const x = -halfX + (i / segmentsX) * sizeX;
-        const idx = j * nx + i;
-        const h = this.heightAt(x, z);
+        const idx = (j * nx + i) * 3;
+        positions[idx] = xs[i];
+        positions[idx + 1] = this.heightAt(xs[i], z);
+        positions[idx + 2] = z;
+      }
+    }
 
-        positions[idx * 3] = x;
-        positions[idx * 3 + 1] = h;
-        positions[idx * 3 + 2] = z;
+    /* Normais por diferença central sobre a PRÓPRIA grade, não por amostragem
+       analítica: assim o sombreamento descreve o triângulo que existe, e a
+       malha rala dos cumes não finge um detalhe que sua geometria não tem. */
+    const nrm = new THREE.Vector3();
+    const c = new THREE.Color();
+    for (let j = 0; j < nz; j++) {
+      const jm = Math.max(0, j - 1);
+      const jp = Math.min(nz - 1, j + 1);
+      const dz = zs[jp] - zs[jm]; // negativo: z decresce com j
+      for (let i = 0; i < nx; i++) {
+        const im = Math.max(0, i - 1);
+        const ip = Math.min(nx - 1, i + 1);
+        const dx = xs[ip] - xs[im];
+        const hL = positions[(j * nx + im) * 3 + 1];
+        const hR = positions[(j * nx + ip) * 3 + 1];
+        const hB = positions[(jm * nx + i) * 3 + 1];
+        const hF = positions[(jp * nx + i) * 3 + 1];
 
-        this.normalAt(x, z, 1.2, nrm);
-        normals[idx * 3] = nrm.x;
-        normals[idx * 3 + 1] = nrm.y;
-        normals[idx * 3 + 2] = nrm.z;
+        nrm.set(-(hR - hL) / dx, 1, -(hF - hB) / dz).normalize();
 
-        this.surfaceColor(x, z, h, nrm, c);
-        colors[idx * 3] = c.r;
-        colors[idx * 3 + 1] = c.g;
-        colors[idx * 3 + 2] = c.b;
+        const idx = (j * nx + i) * 3;
+        normals[idx] = nrm.x;
+        normals[idx + 1] = nrm.y;
+        normals[idx + 2] = nrm.z;
+
+        this.surfaceColor(xs[i], zs[j], positions[idx + 1], nrm, c);
+        colors[idx] = c.r;
+        colors[idx + 1] = c.g;
+        colors[idx + 2] = c.b;
       }
     }
 
@@ -147,9 +270,10 @@ export class Terrain {
 
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.94,
+      roughness: 0.95,
       metalness: 0.0,
     });
+    applyTerrainDetail(material);
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.receiveShadow = true;
@@ -171,40 +295,243 @@ export class Terrain {
     return this;
   }
 
+  /**
+   * Cor macro do terreno, por vértice. Resolve as ZONAS (grama, terra, rocha,
+   * talude, neve); o grão fino vem da textura triplanar do material.
+   */
   surfaceColor(x, z, h, normal, out) {
     const n = this.noise;
-    const d = Math.abs(x - pathCenterX(z));
+    const A = CONFIG.world.arena;
     const slope = 1 - normal.y; // 0 = plano, 1 = parede
-    const variation = n.fbm2(x * 0.16, z * 0.16, 2);
+    const grain = n.fbm2(x * 0.09, z * 0.09, 3);
+    const patch = n.fbm2(x * 0.021 + 40.5, z * 0.021 - 8.2, 2);
 
-    // Terra na trilha, grama fora dela.
-    const pathMix = 1 - smoothstep(1.8, 4.6, d);
-    out.copy(PALETTE.grass).lerp(PALETTE.grassDry, 0.5 + 0.5 * variation);
-    const dirt = PALETTE.dirt.clone().lerp(PALETTE.dirtDark, 0.5 + 0.5 * variation);
-    out.lerp(dirt, pathMix);
+    // Gramado do fundo do vale, com manchas secas e reentrâncias mais escuras.
+    out
+      .copy(PALETTE.grass)
+      .lerp(PALETTE.grassDry, clamp(0.45 + 0.55 * patch + 0.25 * grain, 0, 1))
+      .lerp(PALETTE.grassDeep, clamp(0.3 - 0.6 * patch, 0, 1) * 0.7);
 
-    // Rocha onde é íngreme. O limiar é baixo de propósito: o vale da
-    // referência é de arenito, não de morro gramado.
-    const rockMix = smoothstep(0.14, 0.4, slope);
-    if (rockMix > 0) {
-      // Estratos: bandas horizontais alternando tom quente e frio.
-      const strata = 0.5 + 0.5 * Math.sin(h * 0.42 + variation * 1.6);
-      const rock = PALETTE.rockWarm.clone()
-        .lerp(PALETTE.rockCool, clamp(0.25 + 0.5 * strata, 0, 1))
-        .lerp(PALETTE.rockDark, smoothstep(0.55, 0.95, slope) * 0.55);
+    // Trilha de terra batida.
+    const dPath = Math.abs(x - pathCenterX(z));
+    const pathMix = 1 - smoothstep(1.8, 4.6, dPath);
+    if (pathMix > 0) {
+      out.lerp(_c1.copy(PALETTE.dirt).lerp(PALETTE.dirtDark, 0.5 + 0.5 * grain), pathMix);
+    }
+
+    // Rocha: aflora tanto pela inclinação quanto pela altitude — o mesmo
+    // granito não pode ficar gramado só porque um cume é achatado.
+    const rockMix = clamp(
+      Math.max(smoothstep(0.16, 0.42, slope), smoothstep(16, 40, h)) + 0.12 * grain,
+      0,
+      1,
+    );
+    if (rockMix > 0.001) {
+      // Estratos: bandas horizontais alternando tom frio e quente.
+      const strata = 0.5 + 0.5 * Math.sin(h * 0.5 + grain * 1.8 + patch * 3.0);
+      const rock = _c2
+        .copy(PALETTE.rockLight)
+        .lerp(PALETTE.rockWarm, strata)
+        .lerp(PALETTE.rockDark, smoothstep(0.45, 0.9, slope) * 0.75);
+      // Talude de detritos: acumula onde a encosta afrouxa, ao pé das paredes.
+      rock.lerp(
+        PALETTE.scree,
+        (1 - smoothstep(0.12, 0.34, slope)) * smoothstep(10, 26, h) * 0.6,
+      );
       out.lerp(rock, rockMix);
     }
 
-    // Escurece levemente as reentrâncias — dá leitura de volume sem textura.
-    const ao = 0.88 + 0.12 * clamp(normal.y, 0, 1);
-    out.multiplyScalar(ao);
+    // Neve: só onde é alto E não é vertical demais — em parede de 70° a neve
+    // não fica, e é justamente esse recorte que dá leitura de altitude.
+    const line = A.snowLine + 16 * patch + 5 * grain;
+    const snowMix = smoothstep(line, line + 16, h) * smoothstep(0.62, 0.3, slope);
+    if (snowMix > 0.001) {
+      out.lerp(
+        _c1.copy(PALETTE.snow).lerp(PALETTE.snowShade, clamp(slope * 1.4, 0, 1)),
+        clamp(snowMix, 0, 1),
+      );
+    }
+
+    // Oclusão barata: faces viradas para baixo escurecem.
+    out.multiplyScalar(0.84 + 0.16 * clamp(normal.y, 0, 1));
   }
+}
+
+/* --------------------------------------------------- detalhe do terreno ---- */
+
+/**
+ * Textura de detalhe, gerada em código e PERIÓDICA (o ruído usa grades que dão
+ * a volta em 256 px), então ela ladrilha sem costura.
+ *
+ * Um único RGBA carrega duas coisas: RGB = normal tangente (Sobel sobre o campo
+ * de altura) e A = variação de albedo. Empacotar assim é o que permite fazer
+ * amostragem triplanar com 3 leituras em vez de 6.
+ */
+function detailTexture(seed = 4242) {
+  const S = 256;
+  const rnd = makeRandom(seed);
+  const height = new Float32Array(S * S);
+
+  for (const [cells, amp] of [
+    [4, 1.0],
+    [8, 0.55],
+    [16, 0.3],
+    [32, 0.18],
+    [64, 0.1],
+    [128, 0.06],
+  ]) {
+    const g = new Float32Array(cells * cells);
+    for (let i = 0; i < g.length; i++) g[i] = rnd();
+    const step = S / cells;
+    for (let y = 0; y < S; y++) {
+      const fy = y / step;
+      const y0 = Math.floor(fy);
+      const ty = fy - y0;
+      const sy = ty * ty * (3 - 2 * ty);
+      const y0i = y0 % cells;
+      const y1i = (y0 + 1) % cells;
+      for (let x = 0; x < S; x++) {
+        const fx = x / step;
+        const x0 = Math.floor(fx);
+        const tx = fx - x0;
+        const sx = tx * tx * (3 - 2 * tx);
+        const x0i = x0 % cells;
+        const x1i = (x0 + 1) % cells;
+        const top = g[y0i * cells + x0i] + (g[y0i * cells + x1i] - g[y0i * cells + x0i]) * sx;
+        const bot = g[y1i * cells + x0i] + (g[y1i * cells + x1i] - g[y1i * cells + x0i]) * sx;
+        height[y * S + x] += (top + (bot - top) * sy) * amp;
+      }
+    }
+  }
+
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < height.length; i++) {
+    if (height[i] < min) min = height[i];
+    if (height[i] > max) max = height[i];
+  }
+  const inv = 1 / (max - min || 1);
+  for (let i = 0; i < height.length; i++) height[i] = (height[i] - min) * inv;
+
+  const data = new Uint8Array(S * S * 4);
+  const STRENGTH = 3.2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const l = height[y * S + ((x - 1 + S) % S)];
+      const r = height[y * S + ((x + 1) % S)];
+      const u = height[((y - 1 + S) % S) * S + x];
+      const d = height[((y + 1) % S) * S + x];
+      const nx = (l - r) * STRENGTH;
+      const ny = (u - d) * STRENGTH;
+      const len = Math.hypot(nx, ny, 1);
+      const i4 = (y * S + x) * 4;
+      data[i4] = Math.round(((nx / len) * 0.5 + 0.5) * 255);
+      data[i4 + 1] = Math.round(((ny / len) * 0.5 + 0.5) * 255);
+      data[i4 + 2] = Math.round(((1 / len) * 0.5 + 0.5) * 255);
+      data[i4 + 3] = Math.round(clamp(0.5 + (height[y * S + x] - 0.5) * 0.9, 0, 1) * 255);
+    }
+  }
+
+  const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+let sharedDetail = null;
+
+/**
+ * Enxerta amostragem TRIPLANAR no MeshStandardMaterial do terreno.
+ *
+ * Por que triplanar e não uma UV planar: a serra tem paredes de 70°, e uma UV
+ * projetada em XZ estica a textura até virar listra justamente nelas. Triplanar
+ * projeta nos três planos do mundo e mistura pelo peso da normal — custa 3
+ * leituras em vez de 1, e é o que permite ter grão de rocha na falésia.
+ *
+ * A malha do terreno tem célula de 0,7 a 4,5 m; o detalhe fino (~2,4 m) e a
+ * variação macro (~22 m) vivem só aqui, no fragmento, onde não custam vértice.
+ */
+function applyTerrainDetail(material) {
+  if (!sharedDetail) sharedDetail = detailTexture();
+  const uniforms = {
+    detailMap: { value: sharedDetail },
+    detailScale: { value: 0.42 }, // repetições por metro ⇒ ladrilho de ~2,4 m
+    macroScale: { value: 0.045 }, // ⇒ manchas de ~22 m
+    detailBump: { value: 0.5 },
+  };
+
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vWorldPos;
+         varying vec3 vWorldNrm;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+         vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+         vWorldNrm = normalize(mat3(modelMatrix) * objectNormal);`,
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform sampler2D detailMap;
+         uniform float detailScale;
+         uniform float macroScale;
+         uniform float detailBump;
+         varying vec3 vWorldPos;
+         varying vec3 vWorldNrm;
+
+         vec4 triplanar(sampler2D m, vec3 p, vec3 w, float s) {
+           return texture2D(m, p.zy * s) * w.x
+                + texture2D(m, p.xz * s) * w.y
+                + texture2D(m, p.xy * s) * w.z;
+         }`,
+      )
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+         vec3 triW = pow(abs(vWorldNrm), vec3(4.0));
+         triW /= (triW.x + triW.y + triW.z + 1e-5);
+         vec4 detail = triplanar(detailMap, vWorldPos, triW, detailScale);
+         float macro = texture2D(detailMap, vWorldPos.xz * macroScale).a;
+         // Ambos centrados em 0.5, então o valor médio não altera a paleta.
+         diffuseColor.rgb *= (0.66 + 0.68 * detail.a) * (0.84 + 0.32 * macro);`,
+      )
+      .replace(
+        "#include <normal_fragment_maps>",
+        `#include <normal_fragment_maps>
+         {
+           vec3 gn = normalize(vWorldNrm);
+           vec3 tX = normalize(cross(abs(gn.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
+                                                      : vec3(1.0, 0.0, 0.0), gn));
+           vec3 tY = cross(gn, tX);
+           vec2 dn = detail.rg * 2.0 - 1.0;
+           vec3 wn = normalize(gn + (tX * dn.x + tY * dn.y) * detailBump);
+           normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
+         }`,
+      );
+  };
+  // Sem isto o Three reaproveitaria o programa de qualquer MeshStandardMaterial
+  // com as mesmas flags, e o enxerto seria ignorado.
+  material.customProgramCacheKey = () => "terrain-triplanar-detail";
 }
 
 /* ------------------------------------------------------------ matacões ----- */
 
-function makeBoulderGeometry(random, radius) {
-  const geo = new THREE.IcosahedronGeometry(radius, 1);
+function makeBoulderGeometry(random) {
+  const geo = new THREE.IcosahedronGeometry(1, 1);
   const pos = geo.attributes.position;
   const v = new THREE.Vector3();
   const seenKey = new Map();
@@ -225,65 +552,95 @@ function makeBoulderGeometry(random, radius) {
   return geo;
 }
 
+/**
+ * Matacões: 6 formas de raio unitário, instanciadas com escala e rotação
+ * próprias. O colisor é o casco convexo dos MESMOS vértices, já transformados,
+ * então a pedra que se vê é a pedra em que a flecha crava.
+ */
 function scatterBoulders(scene, physics, terrain, random) {
+  const A = CONFIG.world.arena;
+  const VARIANTS = 6;
+  const geos = [];
+  for (let i = 0; i < VARIANTS; i++) geos.push(makeBoulderGeometry(random));
+
   const material = new THREE.MeshStandardMaterial({
-    color: "#c3aa88",
-    roughness: 0.92,
+    roughness: 0.95,
     metalness: 0,
     flatShading: true,
   });
-  const materialDark = material.clone();
-  materialDark.color = new THREE.Color("#a08a6c");
 
-  const group = new THREE.Group();
-  group.name = "boulders";
+  const tints = [
+    new THREE.Color("#9a9184"),
+    new THREE.Color("#857d70"),
+    new THREE.Color("#a89e8c"),
+    new THREE.Color("#6f6a60"),
+  ];
+
+  const buckets = Array.from({ length: VARIANTS }, () => []);
   const up = new THREE.Vector3();
 
   let placed = 0;
   let guard = 0;
-  while (placed < 46 && guard++ < 900) {
-    const z = 40 - random() * 210;
-    const spread = 8 + random() * 34;
-    const side = random() < 0.5 ? -1 : 1;
-    const x = pathCenterX(z) + side * spread;
-    if (Math.abs(x) > CONFIG.world.sizeX / 2 - 12) continue;
-
-    const d = Math.abs(x - pathCenterX(z));
-    if (d < 4.5) continue; // não obstrui a linha de tiro
+  while (placed < 80 && guard++ < 4000) {
+    const x = (random() * 2 - 1) * (A.halfX + 30);
+    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 30);
+    const ad = terrain.arenaDistance(x, z);
+    if (ad > 20) continue; // já é parede de serra
+    // Não obstrui a linha de tiro.
+    if (Math.abs(x - pathCenterX(z)) < 7 && z > -112 && z < 30) continue;
     terrain.normalAt(x, z, 1.0, up);
-    if (up.y < 0.72) continue; // encosta íngreme demais para uma pedra assentada
+    if (up.y < 0.68) continue; // encosta íngreme demais para uma pedra assentada
 
-    const radius = 0.55 + random() * 1.9;
-    const geo = makeBoulderGeometry(random, radius);
-    const mesh = new THREE.Mesh(geo, random() < 0.35 ? materialDark : material);
+    buckets[Math.floor(random() * VARIANTS)].push({
+      x,
+      z,
+      radius: 0.5 + random() * 2.1,
+      rx: (random() - 0.5) * 0.4,
+      ry: random() * Math.PI * 2,
+      rz: (random() - 0.5) * 0.4,
+      tint: tints[Math.floor(random() * tints.length)],
+    });
+    placed++;
+  }
+
+  const group = new THREE.Group();
+  group.name = "boulders";
+  const dummy = new THREE.Object3D();
+  const v = new THREE.Vector3();
+
+  for (let g = 0; g < VARIANTS; g++) {
+    const list = buckets[g];
+    if (!list.length) continue;
+    const mesh = new THREE.InstancedMesh(geos[g], material, list.length);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    mesh.position.set(x, terrain.heightAt(x, z) - radius * 0.32, z);
-    mesh.rotation.set(
-      (random() - 0.5) * 0.4,
-      random() * Math.PI * 2,
-      (random() - 0.5) * 0.4,
-    );
-    mesh.updateMatrix();
-    group.add(mesh);
+    const verts = geos[g].attributes.position.array;
 
-    // Colisor: casco convexo dos MESMOS vértices, já com a rotação aplicada.
-    const verts = geo.attributes.position.array;
-    const rotated = new Float32Array(verts.length);
-    const v = new THREE.Vector3();
-    for (let i = 0; i < verts.length; i += 3) {
-      v.set(verts[i], verts[i + 1], verts[i + 2]).applyEuler(mesh.rotation);
-      rotated[i] = v.x;
-      rotated[i + 1] = v.y;
-      rotated[i + 2] = v.z;
-    }
-    const desc = RAPIER.ColliderDesc.convexHull(rotated);
-    if (desc) {
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      dummy.position.set(b.x, terrain.heightAt(b.x, b.z) - b.radius * 0.34, b.z);
+      dummy.rotation.set(b.rx, b.ry, b.rz);
+      dummy.scale.setScalar(b.radius);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, b.tint);
+
+      const hull = new Float32Array(verts.length);
+      for (let k = 0; k < verts.length; k += 3) {
+        v.set(verts[k], verts[k + 1], verts[k + 2])
+          .multiplyScalar(b.radius)
+          .applyEuler(dummy.rotation);
+        hull[k] = v.x;
+        hull[k + 1] = v.y;
+        hull[k + 2] = v.z;
+      }
+      const desc = RAPIER.ColliderDesc.convexHull(hull);
+      if (!desc) continue;
       const body = physics.createBody(
         RAPIER.RigidBodyDesc.fixed().setTranslation(
-          mesh.position.x,
-          mesh.position.y,
-          mesh.position.z,
+          dummy.position.x,
+          dummy.position.y,
+          dummy.position.z,
         ),
       );
       const collider = physics.createCollider(
@@ -292,112 +649,207 @@ function scatterBoulders(scene, physics, terrain, random) {
       );
       physics.register(collider, { kind: "scenery", name: "rocha" });
     }
-    placed++;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    group.add(mesh);
   }
+
   scene.add(group);
   return group;
 }
 
 /* ------------------------------------------------------------- árvores ----- */
 
-function makeTree(random, terrain, x, z) {
-  const group = new THREE.Group();
-  const scale = 0.85 + random() * 0.7;
+const BROADLEAF_TRUNK = 2.7; // m
+const CONIFER_TRUNK = 1.5; // m
 
-  const trunkMat = new THREE.MeshStandardMaterial({
+/** Copa de folhosa: aglomerado de esferas facetadas, já na altura do tronco. */
+function broadleafCanopyGeometry(random) {
+  const parts = [];
+  const blobs = [
+    [0, 0.55, 0, 1.4],
+    [0.78, 0.12, 0.3, 0.98],
+    [-0.72, 0.3, -0.36, 1.02],
+    [0.16, 1.28, -0.5, 0.86],
+    [-0.32, 0.98, 0.66, 0.82],
+  ];
+  for (const [bx, by, bz, br] of blobs) {
+    const g = new THREE.IcosahedronGeometry(br, 1);
+    g.scale(1, 0.85, 1);
+    g.rotateY(random() * 3.1);
+    g.rotateX(random() * 3.1);
+    g.translate(bx, BROADLEAF_TRUNK + by, bz);
+    parts.push(g);
+  }
+  return mergeGeometries(parts);
+}
+
+/** Conífera: três saias cônicas empilhadas — silhueta de abeto. */
+function coniferCanopyGeometry() {
+  const parts = [];
+  for (const [y, hh, r] of [
+    [0.0, 3.6, 1.2],
+    [1.7, 3.0, 0.92],
+    [3.3, 2.3, 0.6],
+  ]) {
+    const g = new THREE.ConeGeometry(r, hh, 7, 1);
+    g.translate(0, CONIFER_TRUNK + y + hh / 2 - 0.5, 0);
+    parts.push(g);
+  }
+  return mergeGeometries(parts);
+}
+
+function trunkGeometry(rTop, rBottom, height) {
+  const g = new THREE.CylinderGeometry(rTop, rBottom, height, 7, 1);
+  g.translate(0, height / 2, 0);
+  return g;
+}
+
+/**
+ * Vegetação da arena.
+ *
+ * Dois cinturões, com orçamentos diferentes:
+ *
+ * • ANEL — folhosas na borda do piso e no sopé. São as que o jogador chega
+ *   perto, então recebem sombra e colisor de tronco.
+ * • ENCOSTA — coníferas subindo a serra até a linha das árvores. São dezenas de
+ *   metros acima e atrás da barreira de caminhada, então não recebem nem
+ *   sombra nem colisor: seriam custo puro.
+ *
+ * Tudo instanciado: 4 InstancedMesh cobrem ~400 árvores.
+ */
+function scatterTrees(scene, physics, terrain, random) {
+  const A = CONFIG.world.arena;
+  const group = new THREE.Group();
+  group.name = "trees";
+
+  const barkMat = new THREE.MeshStandardMaterial({
     color: "#6b4a2c",
     roughness: 0.95,
     flatShading: true,
   });
   const leafMat = new THREE.MeshStandardMaterial({
-    color: "#4f8236",
-    roughness: 0.88,
+    roughness: 0.9,
     flatShading: true,
   });
-  const leafMat2 = leafMat.clone();
-  leafMat2.color = new THREE.Color("#669b40");
+  const needleMat = new THREE.MeshStandardMaterial({
+    roughness: 0.92,
+    flatShading: true,
+  });
 
-  const trunkH = 2.6 * scale;
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.13 * scale, 0.22 * scale, trunkH, 7),
-    trunkMat,
-  );
-  trunk.position.y = trunkH / 2;
-  trunk.castShadow = true;
-  trunk.receiveShadow = true;
-  group.add(trunk);
-
-  // Copa: aglomerado de esferas facetadas, estilo "pintado".
-  const blobs = [
-    [0, trunkH + 0.5 * scale, 0, 1.35],
-    [0.75 * scale, trunkH + 0.15 * scale, 0.3 * scale, 0.95],
-    [-0.7 * scale, trunkH + 0.3 * scale, -0.35 * scale, 1.0],
-    [0.15 * scale, trunkH + 1.25 * scale, -0.5 * scale, 0.85],
-    [-0.3 * scale, trunkH + 0.95 * scale, 0.65 * scale, 0.8],
+  const leafTints = [
+    new THREE.Color("#4f8236"),
+    new THREE.Color("#669b40"),
+    new THREE.Color("#3f6f2c"),
+    new THREE.Color("#7ba64a"),
   ];
-  for (const [bx, by, bz, br] of blobs) {
-    const mesh = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(br * scale, 1),
-      random() < 0.4 ? leafMat2 : leafMat,
-    );
-    mesh.position.set(bx, by, bz);
-    mesh.rotation.set(random() * 3, random() * 3, random() * 3);
-    mesh.scale.set(1, 0.85, 1);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    group.add(mesh);
+  const needleTints = [
+    new THREE.Color("#2f5a35"),
+    new THREE.Color("#27492c"),
+    new THREE.Color("#3a6b3c"),
+  ];
+
+  const up = new THREE.Vector3();
+  const ring = [];
+  const slope = [];
+
+  // --- anel: da borda do piso até a metade do sopé -----------------------
+  let guard = 0;
+  while (ring.length < 130 && guard++ < 6000) {
+    const x = (random() * 2 - 1) * (A.halfX + 22);
+    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 22);
+    const ad = terrain.arenaDistance(x, z);
+    if (ad < -11 || ad > 15) continue;
+    // A linha de tiro fica limpa da arqueira até bem além do último alvo.
+    if (Math.abs(x - pathCenterX(z)) < 9 && z > -114 && z < 26) continue;
+    terrain.normalAt(x, z, 1.2, up);
+    if (up.y < 0.84) continue;
+    ring.push({ x, z, scale: 0.85 + random() * 0.75 });
   }
 
-  group.position.set(x, terrain.heightAt(x, z) - 0.1, z);
-  group.rotation.y = random() * Math.PI * 2;
-  group.userData.trunkRadius = 0.2 * scale;
-  group.userData.trunkHeight = trunkH;
-  return group;
-}
+  // --- encosta: coníferas até a linha das árvores -------------------------
+  guard = 0;
+  while (slope.length < 300 && guard++ < 12000) {
+    const x = (random() * 2 - 1) * (A.halfX + 90);
+    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 90);
+    const ad = terrain.arenaDistance(x, z);
+    if (ad < 6) continue;
+    const h = terrain.heightAt(x, z);
+    if (h > A.treeLine) continue;
+    terrain.normalAt(x, z, 1.4, up);
+    if (up.y < 0.62) continue; // não nasce pinheiro em falésia
+    slope.push({ x, z, scale: 0.9 + random() * 1.1 });
+  }
 
-function scatterTrees(scene, physics, terrain, random) {
-  const group = new THREE.Group();
-  group.name = "trees";
-  const up = new THREE.Vector3();
+  if (ring.length) {
+    prepare(ring, terrain, 0.12);
+    instance(group, ring, trunkGeometry(0.13, 0.24, BROADLEAF_TRUNK), barkMat, null, true);
+    instance(group, ring, broadleafCanopyGeometry(random), leafMat, leafTints, true);
+  }
+  if (slope.length) {
+    prepare(slope, terrain, 0.1);
+    instance(group, slope, trunkGeometry(0.1, 0.18, CONIFER_TRUNK), barkMat, null, false);
+    instance(group, slope, coniferCanopyGeometry(), needleMat, needleTints, false);
+  }
 
-  let placed = 0;
-  let guard = 0;
-  while (placed < 14 && guard++ < 600) {
-    const z = 30 - random() * 200;
-    const side = random() < 0.5 ? -1 : 1;
-    const x = pathCenterX(z) + side * (10 + random() * 22);
-    if (Math.abs(x - pathCenterX(z)) < 7) continue;
-    terrain.normalAt(x, z, 1.2, up);
-    if (up.y < 0.86) continue;
-
-    const tree = makeTree(random, terrain, x, z);
-    group.add(tree);
-
-    const r = tree.userData.trunkRadius;
-    const h = tree.userData.trunkHeight;
+  /* Colisores só no anel — a encosta está atrás da barreira de caminhada. */
+  for (const t of ring) {
+    const h = BROADLEAF_TRUNK * t.scale;
     const body = physics.createBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(
-        tree.position.x,
-        tree.position.y + h / 2,
-        tree.position.z,
-      ),
+      RAPIER.RigidBodyDesc.fixed().setTranslation(t.x, t.y + h / 2, t.z),
     );
     const collider = physics.createCollider(
-      RAPIER.ColliderDesc.cylinder(h / 2, r)
+      RAPIER.ColliderDesc.cylinder(h / 2, 0.24 * t.scale)
         .setFriction(0.8)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       body,
     );
     physics.register(collider, { kind: "scenery", name: "árvore" });
-    placed++;
   }
+
   scene.add(group);
   return group;
 }
 
+/**
+ * Congela a transformação de cada árvore ANTES de instanciar.
+ *
+ * Tronco e copa são InstancedMesh diferentes, mas são a mesma árvore: se cada
+ * passada sorteasse o próprio ângulo e a própria altura, a copa flutuaria ao
+ * lado do tronco. Aqui a pose é decidida uma vez e as duas passadas a leem.
+ */
+function prepare(list, terrain, sink) {
+  for (const t of list) {
+    t.yaw = (Math.sin(t.x * 12.9898 + t.z * 78.233) * 43758.5453) % (Math.PI * 2);
+    t.tintIndex = Math.abs(Math.floor(t.x * 3.7 + t.z * 1.9));
+    t.y = terrain.heightAt(t.x, t.z) - sink;
+  }
+}
+
+/** Uma passada de instâncias. `tints` nulo = usa a cor do próprio material. */
+function instance(group, list, geo, material, tints, shadow) {
+  const dummy = new THREE.Object3D();
+  const mesh = new THREE.InstancedMesh(geo, material, list.length);
+  mesh.castShadow = shadow;
+  mesh.receiveShadow = shadow;
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i];
+    dummy.position.set(t.x, t.y, t.z);
+    dummy.rotation.set(0, t.yaw, 0);
+    dummy.scale.setScalar(t.scale);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(i, dummy.matrix);
+    if (tints) mesh.setColorAt(i, tints[t.tintIndex % tints.length]);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  group.add(mesh);
+  return mesh;
+}
+
 /* -------------------------------------------------------------- cercas ----- */
 
-function buildFences(scene, physics, terrain, random) {
+function buildFences(scene, terrain, random) {
   const group = new THREE.Group();
   group.name = "fences";
   const wood = new THREE.MeshStandardMaterial({
@@ -481,10 +933,12 @@ function grassTexture() {
   return tex;
 }
 
-function scatterGrass(scene, terrain, random) {
-  const tex = grassTexture();
+const GRASS_HEIGHT = 0.42; // m — altura da placa, usada pelo shader de balanço
+
+function scatterGrass(scene, terrain, random, sway) {
+  const A = CONFIG.world.arena;
   const material = new THREE.MeshStandardMaterial({
-    map: tex,
+    map: grassTexture(),
     transparent: false,
     alphaTest: 0.42,
     side: THREE.DoubleSide,
@@ -492,14 +946,48 @@ function scatterGrass(scene, terrain, random) {
     color: 0xffffff,
   });
 
+  /* Balanço: só o topo da lâmina se move, e a fase vem da posição da instância
+     — assim o campo inteiro ondula em vez de piscar em uníssono. Tudo em
+     vértice, sem custo de CPU por tufo. */
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.swayTime = sway.time;
+    shader.uniforms.swayWind = sway.wind;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform float swayTime;
+         uniform vec2 swayWind;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+         float bladeT = clamp(position.y / ${GRASS_HEIGHT.toFixed(2)}, 0.0, 1.0);
+         vec3 iPos = instanceMatrix[3].xyz;
+         float phase = iPos.x * 0.7 + iPos.z * 0.55;
+         float s = sin(swayTime * 1.9 + phase) + 0.45 * sin(swayTime * 3.7 + phase * 1.7);
+         vec3 dWorld = vec3(swayWind.x, 0.0, swayWind.y)
+                     * bladeT * bladeT * (0.55 + 0.45 * s);
+         /* Cada tufo tem um yaw aleatório. Deslocar o vértice direto faria a
+            matriz da instância girar o deslocamento junto, e o campo balançaria
+            em todas as direções. Projetando nos eixos da instância (e dividindo
+            pela escala) o vento sai igual para todo mundo, como vento é. */
+         vec3 aX = instanceMatrix[0].xyz;
+         float invS = 1.0 / max(length(aX), 1e-4);
+         transformed.x += dot(dWorld, aX * invS) * invS;
+         transformed.z += dot(dWorld, instanceMatrix[2].xyz * invS) * invS;`,
+      );
+  };
+  material.customProgramCacheKey = () => "grass-sway";
+
   // Tufo = duas placas cruzadas.
-  const plane = new THREE.PlaneGeometry(0.5, 0.42);
-  plane.translate(0, 0.21, 0);
+  const plane = new THREE.PlaneGeometry(0.5, GRASS_HEIGHT);
+  plane.translate(0, GRASS_HEIGHT / 2, 0);
   const plane2 = plane.clone();
   plane2.rotateY(Math.PI / 2);
   const merged = mergeGeometries([plane, plane2]);
 
-  const COUNT = 2600;
+  const COUNT = 4200;
   const mesh = new THREE.InstancedMesh(merged, material, COUNT);
   mesh.name = "grass";
   mesh.castShadow = false;
@@ -510,16 +998,18 @@ function scatterGrass(scene, terrain, random) {
   const up = new THREE.Vector3();
   let placed = 0;
   let guard = 0;
-  while (placed < COUNT && guard++ < COUNT * 12) {
-    const z = 30 - random() * 175;
+  while (placed < COUNT && guard++ < COUNT * 14) {
+    // Densidade decrescente a partir da trilha: perto do jogador é onde o
+    // detalhe se vê, e cada tufo distante é um quad que ninguém olha.
+    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 6);
     const side = random() < 0.5 ? -1 : 1;
-    const x = pathCenterX(z) + side * (3.4 + Math.pow(random(), 0.7) * 22);
+    const x = pathCenterX(z) + side * (2.6 + Math.pow(random(), 0.65) * (A.halfX + 8));
+    if (terrain.arenaDistance(x, z) > 8) continue;
     terrain.normalAt(x, z, 1.0, up);
     if (up.y < 0.8) continue;
-    const y = terrain.heightAt(x, z);
-    dummy.position.set(x, y - 0.03, z);
+    dummy.position.set(x, terrain.heightAt(x, z) - 0.03, z);
     dummy.rotation.set(0, random() * Math.PI, 0);
-    const s = 0.7 + random() * 0.85;
+    const s = 0.7 + random() * 0.9;
     dummy.scale.set(s, s * (0.8 + random() * 0.6), s);
     dummy.updateMatrix();
     mesh.setMatrixAt(placed, dummy.matrix);
@@ -529,37 +1019,6 @@ function scatterGrass(scene, terrain, random) {
   mesh.instanceMatrix.needsUpdate = true;
   scene.add(mesh);
   return mesh;
-}
-
-/** Mesclagem mínima de BufferGeometries não-indexadas equivalentes. */
-function mergeGeometries(geometries) {
-  const merged = new THREE.BufferGeometry();
-  const attrs = ["position", "normal", "uv"];
-  const counts = geometries.reduce((s, g) => s + g.attributes.position.count, 0);
-  const indexCount = geometries.reduce((s, g) => s + (g.index ? g.index.count : 0), 0);
-
-  for (const name of attrs) {
-    const itemSize = geometries[0].attributes[name].itemSize;
-    const array = new Float32Array(counts * itemSize);
-    let offset = 0;
-    for (const g of geometries) {
-      array.set(g.attributes[name].array, offset);
-      offset += g.attributes[name].array.length;
-    }
-    merged.setAttribute(name, new THREE.BufferAttribute(array, itemSize));
-  }
-
-  const index = new Uint16Array(indexCount);
-  let io = 0;
-  let vo = 0;
-  for (const g of geometries) {
-    const gi = g.index.array;
-    for (let i = 0; i < gi.length; i++) index[io + i] = gi[i] + vo;
-    io += gi.length;
-    vo += g.attributes.position.count;
-  }
-  merged.setIndex(new THREE.BufferAttribute(index, 1));
-  return merged;
 }
 
 /* ---------------------------------------------------------- bandeirolas ---- */
@@ -612,12 +1071,7 @@ class WindFlag {
     for (let i = 0; i < pos.count; i++) {
       const bx = base[i * 3];
       const by = base[i * 3 + 1];
-      pos.setXYZ(
-        i,
-        bx,
-        by,
-        Math.sin(bx * 5.5 - this.time * freq) * amp * (bx / 1.1),
-      );
+      pos.setXYZ(i, bx, by, Math.sin(bx * 5.5 - this.time * freq) * amp * (bx / 1.1));
     }
     pos.needsUpdate = true;
   }
@@ -629,10 +1083,16 @@ export function createEnvironment(scene, physics) {
   const random = makeRandom(90210);
   const terrain = new Terrain().build(scene, physics);
 
+  // Uniformes compartilhados com o shader de balanço da grama.
+  const sway = {
+    time: { value: 0 },
+    wind: { value: new THREE.Vector2() },
+  };
+
   scatterBoulders(scene, physics, terrain, random);
   scatterTrees(scene, physics, terrain, random);
-  buildFences(scene, physics, terrain, random);
-  scatterGrass(scene, terrain, random);
+  buildFences(scene, terrain, random);
+  scatterGrass(scene, terrain, random, sway);
 
   const flags = [
     new WindFlag(terrain, pathCenterX(-24) + 5.2, -24),
@@ -646,6 +1106,11 @@ export function createEnvironment(scene, physics) {
     flags,
     update(dt, wind) {
       for (const f of flags) f.update(dt, wind);
+      sway.time.value += dt;
+      // O deslocamento satura: rajada forte deita a grama, não a arranca.
+      const speed = Math.hypot(wind.x, wind.z) || 1e-6;
+      const amp = 0.055 + 0.11 * smoothstep(0, 12, speed);
+      sway.wind.value.set((wind.x / speed) * amp, (wind.z / speed) * amp);
     },
   };
 }

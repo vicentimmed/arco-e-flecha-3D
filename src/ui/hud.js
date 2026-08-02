@@ -30,9 +30,8 @@ export class HUD {
         </div>
       </div>
       <div class="chip" id="pin-chip">
-        <span class="label">Pino</span>
-        <span class="value" id="pin">30 m</span>
-        <span class="hint">roda</span>
+        <span class="label">Mira</span>
+        <span class="value" id="focus">—</span>
       </div>
       <div class="chip" id="target-chip">
         <span class="label">Alvo</span><span class="value" id="target-dist">—</span>
@@ -55,8 +54,8 @@ export class HUD {
 
       <div id="help">
         <div><kbd>Mouse</kbd> mirar · <kbd>Clique</kbd> segurar e soltar para atirar</div>
-        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> andar · <kbd>Roda</kbd> regular o pino</div>
-        <div><kbd>Tab</kbd> alvo · <kbd>C</kbd> câmera da flecha · <kbd>F</kbd> seguir sempre</div>
+        <div><kbd>Dir.</kbd> 1ª/3ª pessoa · <kbd>Clique</kbd> sai da câmera da flecha</div>
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> andar · <kbd>Shift</kbd> correr · <kbd>Tab</kbd> alvo</div>
         <div><kbd>T</kbd> traçado · <kbd>R</kbd> limpar · <kbd>~</kbd> depuração · <kbd>H</kbd> ocultar</div>
       </div>
 
@@ -73,7 +72,7 @@ export class HUD {
       stats: root.querySelector("#stats"),
       windArrow: root.querySelector("#wind-arrow"),
       windSpeed: root.querySelector("#wind-speed"),
-      pin: root.querySelector("#pin"),
+      focus: root.querySelector("#focus"),
       targetDist: root.querySelector("#target-dist"),
       power: root.querySelector("#power"),
       powerFill: root.querySelector("#power-fill"),
@@ -97,20 +96,15 @@ export class HUD {
     this.el.powerLabel.textContent = `${speed.toFixed(0)} m/s`;
   }
 
-  /**
-   * Coloca o retículo onde a linha de tiro cruza a distância do pino.
-   * @param {{x:number,y:number}|null} screenPos pixels, ou null para esconder
-   */
-  setReticle(screenPos) {
-    const el = this.el.reticle;
-    if (!screenPos) {
-      el.classList.add("off");
-      return;
-    }
-    el.classList.remove("off");
-    const scale = this.drawing ? 0.8 : 1;
-    el.style.transform =
-      `translate(${(screenPos.x - 23).toFixed(1)}px, ${(screenPos.y - 23).toFixed(1)}px) scale(${scale})`;
+  /** O retículo é fixo no centro; só escondemos na câmera da flecha. */
+  setReticleVisible(visible) {
+    this.el.reticle.classList.toggle("off", !visible);
+    this.el.reticle.style.transform = this.drawing ? "scale(0.8)" : "scale(1)";
+  }
+
+  /** Distância até o ponto do cenário sob a mira. */
+  setFocus(distance, hasFocus) {
+    this.el.focus.textContent = hasFocus ? `${distance.toFixed(0)} m` : "—";
   }
 
   /**
@@ -120,10 +114,6 @@ export class HUD {
   setWind(speed, relativeAngle) {
     this.el.windSpeed.textContent = `${speed.toFixed(1)} m/s`;
     this.el.windArrow.style.transform = `rotate(${radToDeg(relativeAngle) + 180}deg)`;
-  }
-
-  setPin(distance) {
-    this.el.pin.textContent = `${distance.toFixed(0)} m`;
   }
 
   setTarget(index, distance) {

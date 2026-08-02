@@ -34,6 +34,8 @@ export class PhysicsWorld {
 
     /** handle do colisor → objeto de jogo dono dele. */
     this.colliderOwners = new Map();
+    /** Buffer de contatos do passo atual (ver drainContacts). */
+    this.pendingContacts = [];
 
     this.stepCount = 0;
     this.simulatedTime = 0;
@@ -85,13 +87,21 @@ export class PhysicsWorld {
     this.drainContacts();
   }
 
+  /**
+   * Coleta os contatos do passo e só então avisa os interessados.
+   *
+   * O despacho acontece DEPOIS de a fila estar totalmente drenada, e não dentro
+   * do callback: quem trata um impacto cria vínculos e remove corpos (a flecha
+   * que crava, a mais antiga que é aposentada), e mexer no mundo no meio da
+   * drenagem invalida os handles dos eventos seguintes — o que fazia o Rapier
+   * entrar em pânico ("unreachable") no passo seguinte.
+   */
   drainContacts() {
-    if (this.onContact.size === 0) {
-      this.eventQueue.drainCollisionEvents(() => {});
-      return;
-    }
+    const pending = this.pendingContacts;
+    pending.length = 0;
+
     this.eventQueue.drainCollisionEvents((h1, h2, started) => {
-      if (!started) return;
+      if (!started || this.onContact.size === 0) return;
       const ownerA = this.colliderOwners.get(h1);
       const ownerB = this.colliderOwners.get(h2);
       if (!ownerA && !ownerB) return;
@@ -100,7 +110,7 @@ export class PhysicsWorld {
       const c2 = this.world.getCollider(h2);
       const contact = this.resolveContact(c1, c2);
 
-      const payload = {
+      pending.push({
         a: ownerA,
         b: ownerB,
         colliderA: c1,
@@ -108,9 +118,13 @@ export class PhysicsWorld {
         point: contact.point,
         normal: contact.normal,
         hasManifold: contact.found,
-      };
-      for (const fn of this.onContact) fn(payload);
+      });
     });
+
+    for (const payload of pending) {
+      for (const fn of this.onContact) fn(payload);
+    }
+    pending.length = 0;
   }
 
   /**

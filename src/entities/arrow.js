@@ -98,11 +98,12 @@ function buildArrowMesh() {
 let nextArrowId = 1;
 
 export class Arrow {
-  constructor(scene, physics, sync, origin, direction, speed) {
+  constructor(scene, physics, sync, origin, direction, speed, trail = null) {
     this.id = nextArrowId++;
     this.physics = physics;
     this.sync = sync;
     this.scene = scene;
+    this.trail = trail;
     this.stuck = false;
     this.dead = false;
     this.age = 0;
@@ -114,7 +115,7 @@ export class Arrow {
     this.flightTime = 0;
     this.lastSpeed = speed;
     this.lastDragForce = 0;
-    this.trace = [origin.clone()];
+    if (this.trail) this.trail.push(origin.x, origin.y, origin.z);
 
     this.mesh = buildArrowMesh();
     this.mesh.position.copy(origin);
@@ -171,6 +172,9 @@ export class Arrow {
 
     const t = body.translation();
     if (t.y > this.apex) this.apex = t.y;
+    // Amostrar no passo fixo (120 Hz) dá um traçado bem mais liso que
+    // amostrar por frame, principalmente logo após o disparo.
+    if (this.trail) this.trail.push(t.x, t.y, t.z);
 
     // Forças E TORQUES acumulam entre passos no Rapier até serem zerados.
     // `addForceAtPoint` alimenta os dois acumuladores, então zerar só as forças
@@ -225,15 +229,11 @@ export class Arrow {
     }
   }
 
-  /** Registro da trajetória real (para o traçado do modo treino). */
+  /** Amostra a posição real do corpo rígido para o traçado. */
   recordTrace() {
-    if (this.stuck || this.dead) return;
+    if (this.stuck || this.dead || !this.trail) return;
     const t = this.body.translation();
-    const last = this.trace[this.trace.length - 1];
-    if (last.distanceToSquared(t) > 0.25) {
-      this.trace.push(new THREE.Vector3(t.x, t.y, t.z));
-      if (this.trace.length > 900) this.trace.shift();
-    }
+    this.trail.push(t.x, t.y, t.z);
   }
 
   /**
@@ -244,6 +244,13 @@ export class Arrow {
   stick(otherBody, isDynamic) {
     if (this.stuck) return;
     this.stuck = true;
+
+    // Fecha o traçado na posição de parada; a partir daqui ele conta o tempo
+    // de vida até desaparecer.
+    if (this.trail) {
+      const t = this.body.translation();
+      this.trail.finish(t.x, t.y, t.z);
+    }
 
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
@@ -293,6 +300,9 @@ export class Arrow {
   dispose() {
     if (this.dead) return;
     this.dead = true;
+    // Uma flecha que sumiu sem cravar (saiu do mapa, expirou) também encerra o
+    // traçado — senão ele ficaria eternamente "em voo" e nunca desapareceria.
+    if (this.trail) this.trail.finish();
     if (this.joint) {
       this.physics.world.removeImpulseJoint(this.joint, true);
       this.joint = null;
@@ -308,11 +318,12 @@ export class Arrow {
 /* ------------------------------------------------------------ gerenciador -- */
 
 export class ArrowManager {
-  constructor(scene, physics, sync, wind) {
+  constructor(scene, physics, sync, wind, trails) {
     this.scene = scene;
     this.physics = physics;
     this.sync = sync;
     this.wind = wind;
+    this.trails = trails;
 
     this.live = [];
     this.stuck = [];
@@ -322,8 +333,6 @@ export class ArrowManager {
     this.onMiss = null;
 
     this.lastArrow = null;
-    this.traceLine = null;
-    this.showTrace = false;
 
     // UM callback antes de cada passo para todas as flechas: menos indireção.
     this.stepCallback = (h) => {
@@ -346,6 +355,7 @@ export class ArrowManager {
       origin,
       direction,
       speed,
+      this.trails ? this.trails.create() : null,
     );
     this.live.push(arrow);
     this.lastArrow = arrow;
@@ -434,31 +444,14 @@ export class ArrowManager {
       }
     }
     this.updatePuffs(dt);
-    if (this.showTrace) this.refreshTrace();
   }
 
-  /* -------------------------------------------------------- modo treino --- */
+  get showTrace() {
+    return this.trails ? this.trails.enabled : false;
+  }
 
   setTraceVisible(on) {
-    this.showTrace = on;
-    if (!on && this.traceLine) {
-      this.scene.remove(this.traceLine);
-      this.traceLine.geometry.dispose();
-      this.traceLine = null;
-    }
-  }
-
-  refreshTrace() {
-    const arrow = this.lastArrow;
-    if (!arrow || arrow.trace.length < 2) return;
-    if (this.traceLine) {
-      this.scene.remove(this.traceLine);
-      this.traceLine.geometry.dispose();
-    }
-    const geo = new THREE.BufferGeometry().setFromPoints(arrow.trace);
-    const mat = new THREE.LineBasicMaterial({ color: 0xffd873, transparent: true, opacity: 0.85 });
-    this.traceLine = new THREE.Line(geo, mat);
-    this.scene.add(this.traceLine);
+    if (this.trails) this.trails.setEnabled(on);
   }
 
   /* --------------------------------------------------------- poeirinha ---- */
@@ -522,10 +515,6 @@ export class ArrowManager {
     for (const a of this.live) a.dispose();
     this.live.length = 0;
     this.lastArrow = null;
-    if (this.traceLine) {
-      this.scene.remove(this.traceLine);
-      this.traceLine.geometry.dispose();
-      this.traceLine = null;
-    }
+    if (this.trails) this.trails.clear();
   }
 }

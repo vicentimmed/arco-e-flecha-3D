@@ -19,7 +19,7 @@ import { Player } from "./entities/player.js";
 import { ArrowManager } from "./entities/arrow.js";
 import { createTargets } from "./entities/target.js";
 import { Wind } from "./systems/wind.js";
-import { CameraRig, CameraMode } from "./systems/camera.js";
+import { CameraRig } from "./systems/camera.js";
 import { AimSolver } from "./systems/aim.js";
 import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
@@ -174,18 +174,21 @@ class Game {
       this.selectTarget((this.selectedTarget + 1) % this.targets.length);
     }
     if (a.dismissArrowCam) this.rig.returnToArcher();
-    if (a.togglePerspective) {
-      this.rig.togglePerspective();
-      this.hud.toast(
-        this.rig.archerMode === CameraMode.FIRST ? "primeira pessoa" : "terceira pessoa",
-        "miss",
-      );
-    }
     if (a.clearArrows) this.arrows.clearAll();
     if (a.toggleTrace) {
       this.arrows.setTraceVisible(!this.arrows.showTrace);
       this.hud.toast(
         this.arrows.showTrace ? "traçado ligado" : "traçado desligado",
+        "miss",
+      );
+    }
+    if (a.toggleWindInfluence) {
+      this.arrows.options.windInfluence = !this.arrows.options.windInfluence;
+      this.debug.syncWindInfluenceToggle(this.arrows.options.windInfluence);
+      this.hud.toast(
+        this.arrows.options.windInfluence
+          ? "vento na flecha ligado"
+          : "vento na flecha desligado",
         "miss",
       );
     }
@@ -276,6 +279,7 @@ class Game {
   }
 
   updateCamera(dt) {
+    this.rig.setFirstPerson(this.input.firstPerson);
     this.rig.update(dt, this._muzzle, this._forward, this._eye);
 
     // Em primeira pessoa a câmera fica DENTRO da cabeça: escondê-la evita ver

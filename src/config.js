@@ -12,7 +12,7 @@ const SHAFT_RADIUS = 0.004; // m — raio do tubo da flecha
 // multiplicador para que exista um único número a mexer quando o ritmo do jogo
 // mudar — `runSpeed` nunca sai de sincronia com `walkSpeed`.
 const WALK_SPEED = 3.2; // m/s
-const SPRINT_MULTIPLIER = 1.8; // Shift: quantas vezes a caminhada
+const SPRINT_MULTIPLIER = 3.0; // Shift: quantas vezes a caminhada
 
 export const CONFIG = {
   physics: {
@@ -63,7 +63,7 @@ export const CONFIG = {
   player: {
     walkSpeed: WALK_SPEED, // m/s
     sprintMultiplier: SPRINT_MULTIPLIER, // adimensional — Shift
-    runSpeed: WALK_SPEED * SPRINT_MULTIPLIER, // m/s (≈ 5,76)
+    runSpeed: WALK_SPEED * SPRINT_MULTIPLIER, // m/s (≈ 9,6)
     // A velocidade não salta ao apertar/soltar Shift: ela persegue o alvo com
     // amortecimento, e a animação vem junto porque a fase do passo é medida em
     // distância percorrida, não em tempo.
@@ -157,7 +157,7 @@ export const CONFIG = {
     // Deslocamento lateral do olho em relação à âncora. Empurra o arco para a
     // direita do quadro, como na referência, em vez de deixá-lo no centro
     // exato tapando o alvo.
-    eyeSide: 0.055, // m para a esquerda
+    eyeSide: 0.095, // m para a esquerda — afasta do braço do arco ao tensionar
     near: 0.05,
     fov: 62,
   },

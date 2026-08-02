@@ -31,6 +31,8 @@ export class Input {
     this.strafe = 0;
     /** Shift segurado: corre em vez de andar. */
     this.run = false;
+    /** Terceira pessoa por padrão; botão direito (ou C) segurado: primeira pessoa. */
+    this.firstPerson = false;
     this.drawing = false;
 
     /** true assim que o jogador engatou a mira (travada OU livre). */
@@ -51,12 +53,12 @@ export class Input {
     this.actions = {
       release: false, // soltou a corda
       dismissArrowCam: false, // clique para voltar à visão da arqueira
-      togglePerspective: false, // botão direito: primeira/terceira pessoa
       cycleTarget: false,
       clearArrows: false,
       toggleDebug: false,
       toggleHelp: false,
       toggleTrace: false,
+      toggleWindInfluence: false,
     };
 
     this.bind();
@@ -66,6 +68,7 @@ export class Input {
   engage() {
     if (this.active) return;
     this.active = true;
+    this.firstPerson = false;
     this.lockHint.classList.add("hidden");
 
     if (this.canvas.requestPointerLock) {
@@ -148,7 +151,7 @@ export class Input {
     document.addEventListener("mousedown", (e) => {
       if (!this.active) return;
       if (e.button === 2) {
-        this.actions.togglePerspective = true;
+        this.firstPerson = true;
         return;
       }
       if (e.button !== 0) return;
@@ -162,12 +165,13 @@ export class Input {
     });
 
     document.addEventListener("mouseup", (e) => {
+      if (e.button === 2) this.firstPerson = false;
       if (e.button !== 0) return;
       if (this.drawing) this.actions.release = true;
       this.drawing = false;
     });
 
-    // Sem menu de contexto: o botão direito é a troca de perspectiva.
+    // Sem menu de contexto: o botão direito segura a primeira pessoa.
     document.addEventListener("contextmenu", (e) => {
       if (this.active) e.preventDefault();
     });
@@ -186,13 +190,16 @@ export class Input {
           this.actions.cycleTarget = true;
           break;
         case "KeyC":
-          this.actions.togglePerspective = true;
+          this.firstPerson = true;
           break;
         case "KeyR":
           this.actions.clearArrows = true;
           break;
         case "KeyT":
           this.actions.toggleTrace = true;
+          break;
+        case "KeyV":
+          this.actions.toggleWindInfluence = true;
           break;
         case "KeyH":
           this.actions.toggleHelp = true;
@@ -207,6 +214,7 @@ export class Input {
 
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.code);
+      if (e.code === "KeyC") this.firstPerson = false;
       this.updateMovement(e);
     });
 
@@ -241,12 +249,12 @@ export class Input {
     const snapshot = { ...a };
     a.release = false;
     a.dismissArrowCam = false;
-    a.togglePerspective = false;
     a.cycleTarget = false;
     a.clearArrows = false;
     a.toggleDebug = false;
     a.toggleHelp = false;
     a.toggleTrace = false;
+    a.toggleWindInfluence = false;
     return snapshot;
   }
 }

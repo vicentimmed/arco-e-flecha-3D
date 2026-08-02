@@ -24,9 +24,11 @@ export class CameraRig {
   constructor(camera) {
     this.camera = camera;
     this.mode = CameraMode.ARCHER;
-    /** Para onde voltar quando a câmera da flecha for encerrada. */
-    this.archerMode = CameraMode.ARCHER;
     this.followArrow = null;
+    /** Câmera da flecha congelada no impacto (não segue alvo balançando). */
+    this.arrowCamFrozen = false;
+    this.frozenPosition = new THREE.Vector3();
+    this.frozenLookAt = new THREE.Vector3();
 
     this.position = new THREE.Vector3();
     this.lookAt = new THREE.Vector3();
@@ -39,6 +41,7 @@ export class CameraRig {
 
     this.baseFov = CONFIG.camera.fov;
     this.baseNear = CONFIG.camera.near;
+    this.applyLens();
   }
 
   get isFirstPerson() {
@@ -49,20 +52,20 @@ export class CameraRig {
     return this.mode === CameraMode.ARROW;
   }
 
-  /** Alterna entre primeira e terceira pessoa (botão direito). */
-  togglePerspective() {
-    this.archerMode =
-      this.archerMode === CameraMode.FIRST ? CameraMode.ARCHER : CameraMode.FIRST;
-    if (this.mode !== CameraMode.ARROW) {
-      this.mode = this.archerMode;
-      this.initialized = false; // evita um deslize longo entre os dois pontos
-    }
+  /** Terceira pessoa é o padrão; botão direito/C segura a primeira pessoa. */
+  setFirstPerson(on) {
+    if (this.mode === CameraMode.ARROW) return;
+    const next = on ? CameraMode.FIRST : CameraMode.ARCHER;
+    if (this.mode === next) return;
+    this.mode = next;
+    this.initialized = false;
     this.applyLens();
   }
 
   /** Todo disparo joga a câmera para a flecha. */
   onShoot(arrow) {
     this.followArrow = arrow;
+    this.arrowCamFrozen = false;
     this.mode = CameraMode.ARROW;
     this.applyLens();
   }
@@ -70,8 +73,9 @@ export class CameraRig {
   /** Clique: volta para a visão da arqueira. */
   returnToArcher() {
     if (this.mode !== CameraMode.ARROW) return false;
-    this.mode = this.archerMode;
+    this.mode = CameraMode.ARCHER;
     this.followArrow = null;
+    this.arrowCamFrozen = false;
     this.initialized = false;
     this.applyLens();
     return true;
@@ -94,8 +98,9 @@ export class CameraRig {
       const arrow = this.followArrow;
       // Se a flecha sumiu de vez, não prende o jogador numa câmera órfã.
       if (!arrow || arrow.dead) {
-        this.mode = this.archerMode;
+        this.mode = CameraMode.FIRST;
         this.followArrow = null;
+        this.arrowCamFrozen = false;
         this.initialized = false;
         this.applyLens();
       } else {
@@ -143,11 +148,22 @@ export class CameraRig {
   }
 
   updateArrowCam(dt, arrow) {
+    // No impacto a flecha pode ficar presa a um alvo dinâmico — congelamos a
+    // câmera na pose do momento do acerto, não no corpo que se move depois.
+    if (arrow.stuck) {
+      if (!this.arrowCamFrozen) {
+        this.freezeArrowCam(arrow);
+        this.arrowCamFrozen = true;
+      }
+      this.camera.position.copy(this.frozenPosition);
+      this.camera.lookAt(this.frozenLookAt);
+      return;
+    }
+
     const c = CONFIG.camera.arrowCam;
     const t = arrow.body.translation();
     const v = arrow.body.linvel();
     this._tmp.set(v.x, v.y, v.z);
-    // Flecha cravada tem velocidade zero: mantém a última direção conhecida.
     if (this._tmp.lengthSq() < 1e-4) {
       this._tmp.copy(arrow.lastVelocity);
       if (this._tmp.lengthSq() < 1e-4) this._tmp.set(0, 0, -1);
@@ -176,5 +192,17 @@ export class CameraRig {
 
     this.camera.position.copy(this.position);
     this.camera.lookAt(this.lookAt);
+  }
+
+  /** Fixa posição e olhar da câmera da flecha no instante do impacto. */
+  freezeArrowCam(arrow) {
+    const c = CONFIG.camera.arrowCam;
+    const anchor = arrow.stickCamAnchor;
+    const fwd = arrow.stickCamForward;
+    this.frozenPosition
+      .copy(anchor)
+      .addScaledVector(fwd, -c.distance)
+      .addScaledVector(this._up, c.up);
+    this.frozenLookAt.copy(anchor).addScaledVector(fwd, 6);
   }
 }

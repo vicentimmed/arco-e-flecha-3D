@@ -56,7 +56,7 @@ export class DebugPanel {
       <h3>Chaves</h3>
       <div class="toggles">
         <button data-toggle="drag" class="on">arrasto</button>
-        <button data-toggle="wind" class="on">vento</button>
+        <button data-toggle="wind" class="on">vento na flecha</button>
         <button data-toggle="aero" class="on">estabilização</button>
         <button data-toggle="vectors">vetores</button>
         <button data-toggle="trace">traçado</button>
@@ -81,9 +81,15 @@ export class DebugPanel {
       report: this.el.querySelector("#d-report"),
     };
 
+    this.windInfluenceBtn = this.el.querySelector('[data-toggle="wind"]');
+
     this.bindSliders();
     this.bindToggles();
     this.buildVectors();
+  }
+
+  syncWindInfluenceToggle(on) {
+    this.windInfluenceBtn?.classList.toggle("on", on);
   }
 
   bindSliders() {
@@ -133,7 +139,7 @@ export class DebugPanel {
             this.ctx.arrows.options.dragEnabled = on;
             break;
           case "wind":
-            this.ctx.wind.setEnabled(on);
+            this.ctx.arrows.options.windInfluence = on;
             break;
           case "aero":
             this.ctx.arrows.options.aeroStabilization = on;

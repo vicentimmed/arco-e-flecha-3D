@@ -158,6 +158,9 @@ export class Arrow {
     this._force = new THREE.Vector3();
     this._point = new THREE.Vector3();
     this._q = new THREE.Quaternion();
+    /** Âncora da câmera da flecha no impacto (antes do alvo se mover). */
+    this.stickCamAnchor = null;
+    this.stickCamForward = null;
   }
 
   /** Chamado uma vez por PASSO FIXO, antes de world.step(). */
@@ -190,7 +193,10 @@ export class Arrow {
 
     // Velocidade RELATIVA ao ar: é isso que o vento altera. Aplicar o vento
     // como força constante separada seria fisicamente errado.
-    this._vrel.set(v.x - wind.x, v.y - wind.y, v.z - wind.z);
+    const wx = options.windInfluence ? wind.x : 0;
+    const wy = options.windInfluence ? wind.y : 0;
+    const wz = options.windInfluence ? wind.z : 0;
+    this._vrel.set(v.x - wx, v.y - wy, v.z - wz);
     const speed = this._vrel.length();
     if (speed < 1e-3) {
       this.lastDragForce = 0;
@@ -244,6 +250,17 @@ export class Arrow {
   stick(otherBody, isDynamic) {
     if (this.stuck) return;
     this.stuck = true;
+
+    const t = this.body.translation();
+    this.stickCamAnchor = new THREE.Vector3(t.x, t.y, t.z);
+    this.stickCamForward = this.lastVelocity.clone();
+    if (this.stickCamForward.lengthSq() < 1e-4) {
+      const r = this.body.rotation();
+      this.stickCamForward.copy(UP).applyQuaternion(
+        new THREE.Quaternion(r.x, r.y, r.z, r.w),
+      );
+    }
+    this.stickCamForward.normalize();
 
     // Fecha o traçado na posição de parada; a partir daqui ele conta o tempo
     // de vida até desaparecer.
@@ -327,7 +344,12 @@ export class ArrowManager {
 
     this.live = [];
     this.stuck = [];
-    this.options = { dragEnabled: true, aeroStabilization: true };
+    this.options = {
+      dragEnabled: true,
+      aeroStabilization: true,
+      windInfluence: true,
+    };
+    this._noWind = new THREE.Vector3();
 
     this.onScore = null; // (target, score, distance, arrow) => void
     this.onMiss = null;
@@ -336,7 +358,7 @@ export class ArrowManager {
 
     // UM callback antes de cada passo para todas as flechas: menos indireção.
     this.stepCallback = (h) => {
-      const w = this.wind.vector;
+      const w = this.options.windInfluence ? this.wind.vector : this._noWind;
       for (const arrow of this.live) arrow.applyAerodynamics(h, w, this.options);
     };
     physics.beforeStep.add(this.stepCallback);

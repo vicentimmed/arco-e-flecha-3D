@@ -54,9 +54,9 @@ export class HUD {
 
       <div id="help">
         <div><kbd>Mouse</kbd> mirar · <kbd>Clique</kbd> segurar e soltar para atirar</div>
-        <div><kbd>Dir.</kbd> 1ª/3ª pessoa · <kbd>Clique</kbd> sai da câmera da flecha</div>
+        <div><kbd>Dir.</kbd> segurar 1ª pessoa · soltar volta à 3ª · <kbd>Clique</kbd> sai da câmera da flecha</div>
         <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> andar · <kbd>Shift</kbd> correr · <kbd>Tab</kbd> alvo</div>
-        <div><kbd>T</kbd> traçado · <kbd>R</kbd> limpar · <kbd>~</kbd> depuração · <kbd>H</kbd> ocultar</div>
+        <div><kbd>T</kbd> traçado · <kbd>V</kbd> vento na flecha · <kbd>R</kbd> limpar · <kbd>~</kbd> depuração · <kbd>H</kbd> ocultar</div>
       </div>
 
       <div id="lock-hint">

@@ -20,6 +20,8 @@
 import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
+import { resolveArrowHit } from "../core/hitResolver.js";
+import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -98,8 +100,9 @@ function buildArrowMesh() {
 let nextArrowId = 1;
 
 export class Arrow {
-  constructor(scene, physics, sync, origin, direction, speed, trail = null) {
+  constructor(scene, physics, sync, origin, direction, speed, trail = null, ownerEntityId = null) {
     this.id = nextArrowId++;
+    this.ownerEntityId = ownerEntityId;
     this.physics = physics;
     this.sync = sync;
     this.scene = scene;
@@ -351,8 +354,9 @@ export class ArrowManager {
     };
     this._noWind = new THREE.Vector3();
 
-    this.onScore = null; // (target, score, distance, arrow) => void
+    this.onScore = null;
     this.onMiss = null;
+    this.onCharacterHit = null;
 
     this.lastArrow = null;
 
@@ -369,7 +373,10 @@ export class ArrowManager {
     this.impactPuffs = [];
   }
 
-  spawn(origin, direction, speed) {
+  spawn(origin, direction, speed, ownerEntityId = null) {
+    // Modo treino: a tela mostra somente a trajetória do disparo atual.
+    // As flechas cravadas continuam no mundo; só o desenho do caminho some.
+    if (this.trails) this.trails.clear();
     const arrow = new Arrow(
       this.scene,
       this.physics,
@@ -378,6 +385,7 @@ export class ArrowManager {
       direction,
       speed,
       this.trails ? this.trails.create() : null,
+      ownerEntityId,
     );
     this.live.push(arrow);
     this.lastArrow = arrow;
@@ -392,8 +400,6 @@ export class ArrowManager {
 
     const other = arrowOwner === a ? b : a;
 
-    // Ponto de impacto: do manifold quando disponível; senão, a PONTA da
-    // flecha (nunca o centro de massa — o erro seria de ~37 cm).
     const impact = new THREE.Vector3();
     if (point) {
       impact.set(point.x, point.y, point.z);
@@ -407,40 +413,23 @@ export class ArrowManager {
         .add(new THREE.Vector3(t.x, t.y, t.z));
     }
 
-    const target = other?.kind === "target" ? other.target : null;
-    let otherBody = null;
-    let isDynamic = false;
+    const result = resolveArrowHit({
+      arrow,
+      other,
+      impact,
+      normal,
+      deps: {
+        onScore: this.onScore,
+        onMiss: this.onMiss,
+        onCharacterHit: this.onCharacterHit,
+        spawnPuff: (p, n) => this.spawnPuff(p, n),
+        retireArrow: (a) => this.retire(a),
+      },
+    });
 
-    if (target) {
-      otherBody = target.body;
-      isDynamic = target.body.bodyType() === RAPIER.RigidBodyType.Dynamic;
-
-      // Transferência de momento: J = m · v(passo anterior), no ponto do
-      // contato — é o que faz o alvo balançar ou tombar.
-      const v = arrow.lastVelocity;
-      const impulse = {
-        x: v.x * CONFIG.arrow.mass,
-        y: v.y * CONFIG.arrow.mass,
-        z: v.z * CONFIG.arrow.mass,
-      };
-      if (isDynamic) {
-        otherBody.applyImpulseAtPoint(
-          impulse,
-          { x: impact.x, y: impact.y, z: impact.z },
-          true,
-        );
-      }
-      const result = target.registerHit(impact);
-      if (this.onScore) {
-        this.onScore(target, result, arrow);
-      }
-    } else {
-      this.spawnPuff(impact, normal);
-      if (this.onMiss) this.onMiss(arrow, other?.name ?? "chão");
+    if (result?.kind === "character" && this.onCharacterHit) {
+      this.onCharacterHit(result.entityId, arrow);
     }
-
-    arrow.stick(otherBody, isDynamic);
-    this.retire(arrow);
   }
 
   retire(arrow) {

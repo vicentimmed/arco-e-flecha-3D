@@ -13,6 +13,8 @@ import * as THREE from "three";
 import { CONFIG, drawSpeed, drawFraction } from "./config.js";
 import { initPhysics, PhysicsWorld } from "./core/physics.js";
 import { BodySync } from "./core/sync.js";
+import { entityRegistry } from "./core/entityRegistry.js";
+import { gameEvents, EventType, vec3Payload } from "./core/events.js";
 import { Renderer } from "./core/renderer.js";
 import { createEnvironment } from "./entities/environment.js";
 import { Player } from "./entities/player.js";
@@ -23,6 +25,9 @@ import { CameraRig } from "./systems/camera.js";
 import { AimSolver } from "./systems/aim.js";
 import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
+import { PlayerPhysics } from "./systems/playerPhysics.js";
+import { AudioSystem } from "./systems/audio.js";
+import { BoarManager } from "./systems/boarManager.js";
 import { HUD } from "./ui/hud.js";
 import { DebugPanel } from "./ui/debug.js";
 
@@ -48,7 +53,13 @@ class Game {
     this.targets = createTargets(this.scene, physics, this.sync, this.terrain);
 
     this.wind = new Wind();
-    this.player = new Player(this.terrain);
+
+    const playerEntityId = entityRegistry.createId();
+    this.player = new Player(this.terrain, playerEntityId);
+    this.playerPhysics = new PlayerPhysics(physics, this.player, playerEntityId);
+    this.player.physicsBody = this.playerPhysics;
+    entityRegistry.register(playerEntityId, this.player);
+
     this.scene.add(this.player.root);
 
     this.trails = new TrailManager(this.scene);
@@ -59,14 +70,19 @@ class Game {
       this.wind,
       this.trails,
     );
+    this.boars = new BoarManager(this.scene, physics, this.terrain);
     this.aim = new AimSolver(physics);
+    this.aim.setExcludedCollider(this.playerPhysics.collider);
     this.rig = new CameraRig(this.renderer.camera);
+    this.audio = new AudioSystem(this.renderer.camera, this.scene);
 
     this.hud = new HUD(document.getElementById("ui"));
     this.input = new Input(
       document.getElementById("scene"),
       this.hud.el.lockHint,
     );
+    this.input.onEngage = () => this.audio.unlock();
+
     this.debug = new DebugPanel(document.getElementById("ui"), {
       physics,
       arrows: this.arrows,
@@ -85,12 +101,14 @@ class Game {
     this.fps = 60;
     this.stepsLastFrame = 0;
     this.elapsed = 0;
+    this.simTick = 0;
 
     this._muzzle = new THREE.Vector3();
     this._spawn = new THREE.Vector3();
     this._forward = new THREE.Vector3();
     this._shadowFocus = new THREE.Vector3();
     this._eye = new THREE.Vector3();
+    this._cameraPivot = new THREE.Vector3();
 
     this.arrows.onScore = (target, result) => {
       if (result.score > 0) {
@@ -100,6 +118,9 @@ class Game {
       }
     };
     this.arrows.onMiss = (_arrow, what) => this.hud.miss(what);
+    this.arrows.onCharacterHit = () => {
+      this.hud.toast("flecha cravada no personagem", "miss");
+    };
 
     window.addEventListener("resize", () =>
       this.trails.setResolution(this.renderer.width, this.renderer.height),
@@ -133,20 +154,20 @@ class Game {
     const dt = Math.min(rawDt, 0.1);
     this.elapsed += dt;
     this.fps = this.fps * 0.92 + (1 / Math.max(rawDt, 1e-4)) * 0.08;
+    gameEvents.setTick(this.simTick);
 
     const actions = this.input.consume();
     this.handleActions(actions);
 
-    // Ordem importa: a pose define o ponto de disparo, a câmera se posiciona a
-    // partir dele, e só então a linha de tiro converge no que está sob a mira.
-    this.updateAimAndPose(dt);
-    this.updateCamera(dt);
+    this.updateAimAndPose(dt, actions);
     this.solveAim();
+    this.updateCamera(dt);
     if (actions.release) this.shoot();
 
     this.wind.update(dt);
     this.stepPhysics(dt);
     this.arrows.update(dt);
+    this.boars.update(dt, this.player.position);
     this.trails.update(dt);
     this.environment.update(dt, this.wind.vector);
 
@@ -158,10 +179,10 @@ class Game {
       stuck: this.arrows.stuck.length,
     });
 
-    // A sombra segue a área jogável à frente da arqueira.
-    this._shadowFocus
-      .copy(this.player.position)
-      .addScaledVector(this._forward, 28);
+    // O frustum de sombras deve seguir o jogador, não a direção da mira.
+    // Deslocá-lo a cada mousemove fazia o shadow map "nadar" sobre o chão,
+    // efeito muito mais perceptível na câmera de terceira pessoa.
+    this._shadowFocus.copy(this.player.position);
     this._shadowFocus.y += 2;
     this.renderer.updateShadowFocus(this._shadowFocus);
 
@@ -192,19 +213,28 @@ class Game {
         "miss",
       );
     }
+    if (a.spawnBoar) {
+      const boar = this.boars.spawnNear(this.player.position);
+      this.hud.toast(
+        boar ? "porco adicionado" : "sem espaço para spawn",
+        boar ? "" : "miss",
+      );
+    }
+    if (a.toggleMusic) {
+      const on = this.audio.toggleMusic();
+      this.hud.toast(on ? "música ligada" : "música desligada", "miss");
+    }
     if (a.toggleDebug) this.debug.toggle();
     if (a.toggleHelp) this.hud.toggleHelp();
   }
 
-  updateAimAndPose(dt) {
-    // Enquanto a câmera acompanha a flecha, o clique serve para voltar à visão
-    // da arqueira — não para tensionar o arco.
+  updateAimAndPose(dt, actions) {
     this.input.blockDraw = this.rig.isArrowCam;
 
-    // Tensão do arco.
     if (this.input.drawing) this.drawTime += dt;
 
-    // Segurar demais cansa: o tremor cresce e some ao soltar.
+    if (actions.jump) this.player.jump();
+
     let yaw = this.input.yaw;
     let pitch = this.input.pitch;
     const overhold = Math.max(0, this.drawTime - CONFIG.bow.holdBeforeShake);
@@ -228,18 +258,13 @@ class Game {
     this.player.update(dt, moving);
     this.player.getMuzzle(this._muzzle);
 
-    // Eixo da mira (para onde a câmera olha). A linha de tiro real é resolvida
-    // depois, em solveAim(), quando a câmera já estiver posicionada.
     this._forward.copy(this.aim.solveAxis(yaw, this.player.pitch));
     this.player.getEye(this._eye, this._forward);
+    this.player.getCameraPivot(this._cameraPivot);
   }
 
-  /**
-   * Converge a linha de tiro no ponto do cenário que está sob o retículo.
-   * Roda depois da câmera porque o raio parte de onde a câmera está.
-   */
   solveAim() {
-    this.aim.solve(this.renderer.camera.position, this._muzzle);
+    this.aim.solve(this._eye, this._muzzle);
   }
 
   shoot() {
@@ -250,17 +275,31 @@ class Game {
     const speed = drawSpeed(this.drawTime);
     const direction = this.aim.direction;
 
-    // A flecha nasce logo à frente do repouso, sobre a mesma linha de tiro.
     this._spawn.copy(this._muzzle).addScaledVector(direction, 0.3);
 
-    const arrow = this.arrows.spawn(this._spawn, direction, speed);
+    const arrow = this.arrows.spawn(
+      this._spawn,
+      direction,
+      speed,
+      this.player.entityId,
+    );
     this.rig.onShoot(arrow);
     this.hud.addShot();
     this.drawTime = 0;
     this.player.setDraw(0);
+
+    gameEvents.emit(EventType.ARROW_SHOT, {
+      arrowId: arrow.id,
+      ownerId: this.player.entityId,
+      origin: vec3Payload(this._spawn),
+      direction: vec3Payload(direction),
+      speed,
+    });
   }
 
   stepPhysics(dt) {
+    this.playerPhysics.step(dt);
+
     const h = CONFIG.physics.fixedStep;
     this.accumulator += dt;
     let steps = 0;
@@ -270,9 +309,8 @@ class Game {
       this.sync.captureState();
       this.accumulator -= h;
       steps++;
+      this.simTick++;
     }
-    // Se estourou o orçamento, descarta o resto: melhor perder tempo simulado
-    // do que entrar na espiral da morte.
     if (steps === CONFIG.physics.maxSubSteps) this.accumulator = 0;
     this.stepsLastFrame = steps;
     this.sync.apply(this.accumulator / h);
@@ -280,19 +318,20 @@ class Game {
 
   updateCamera(dt) {
     this.rig.setFirstPerson(this.input.firstPerson);
-    this.rig.update(dt, this._muzzle, this._forward, this._eye);
+    this.rig.update(
+      dt,
+      this._forward,
+      this._eye,
+      this.aim.focus,
+      this._cameraPivot,
+    );
 
-    // Em primeira pessoa a câmera fica DENTRO da cabeça: escondê-la evita ver
-    // o interior do crânio ocupando a tela inteira.
     this.player.setHeadVisible(!this.rig.isFirstPerson);
 
-    // O raycast da mira parte da câmera, então ela precisa estar com a matriz
-    // de mundo em dia antes de solveAim().
     const camera = this.renderer.camera;
     camera.updateMatrixWorld();
     camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
 
-    // Sem retículo enquanto acompanhamos a flecha: não há tiro para mirar.
     this.hud.setReticleVisible(!this.rig.isArrowCam);
   }
 
@@ -311,6 +350,8 @@ class Game {
         target.distanceTo(this.player.position),
       );
     }
+    const bc = this.boars.counts;
+    this.hud.setBoarCounts(bc.alive, bc.dead);
   }
 
   start() {
@@ -335,7 +376,6 @@ async function main() {
 
   game.start();
 
-  // Útil no console do navegador para inspecionar a simulação.
   window.game = game;
 }
 

@@ -36,6 +36,10 @@ export class HUD {
       <div class="chip" id="target-chip">
         <span class="label">Alvo</span><span class="value" id="target-dist">—</span>
       </div>
+      <div class="chip" id="boar-chip">
+        <span class="label">Porcos</span>
+        <span class="value" id="boar-count">0 vivos / 0 mortos</span>
+      </div>
 
       <div id="reticle">
         <i class="h1"></i><i class="h2"></i><i class="v1"></i><i class="v2"></i>
@@ -55,8 +59,8 @@ export class HUD {
       <div id="help">
         <div><kbd>Mouse</kbd> mirar · <kbd>Clique</kbd> segurar e soltar para atirar</div>
         <div><kbd>Dir.</kbd> segurar 1ª pessoa · soltar volta à 3ª · <kbd>Clique</kbd> sai da câmera da flecha</div>
-        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> andar · <kbd>Shift</kbd> correr · <kbd>Tab</kbd> alvo</div>
-        <div><kbd>T</kbd> traçado · <kbd>V</kbd> vento na flecha · <kbd>R</kbd> limpar · <kbd>~</kbd> depuração · <kbd>H</kbd> ocultar</div>
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> andar · <kbd>Shift</kbd> correr · <kbd>Space</kbd> pular · <kbd>Tab</kbd> alvo</div>
+        <div><kbd>T</kbd> traçado · <kbd>V</kbd> vento · <kbd>P</kbd> porco · <kbd>M</kbd> música · <kbd>R</kbd> limpar · <kbd>~</kbd> depuração · <kbd>H</kbd> ocultar</div>
       </div>
 
       <div id="lock-hint">
@@ -74,6 +78,7 @@ export class HUD {
       windSpeed: root.querySelector("#wind-speed"),
       focus: root.querySelector("#focus"),
       targetDist: root.querySelector("#target-dist"),
+      boarCount: root.querySelector("#boar-count"),
       power: root.querySelector("#power"),
       powerFill: root.querySelector("#power-fill"),
       powerMark: root.querySelector("#power-mark"),
@@ -119,6 +124,10 @@ export class HUD {
   setTarget(index, distance) {
     this.el.targetDist.textContent =
       index === null ? "—" : `#${index + 1} · ${distance.toFixed(0)} m`;
+  }
+
+  setBoarCounts(alive, dead) {
+    this.el.boarCount.textContent = `${alive} vivos / ${dead} mortos`;
   }
 
   addShot() {

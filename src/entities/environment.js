@@ -160,15 +160,17 @@ export class Terrain {
   /**
    * A arqueira pode pisar aqui?
    *
-   * Duas condições: não passou muito da borda da arena, e o chão não é íngreme
-   * demais para se subir. É o que substitui o antigo clamp retangular — e,
-   * junto com o terreno que se estende por centenas de metros, é o que torna
-   * impossível "andar para fora do mundo".
+   * Só bloqueamos as bordas reais da malha. A inclinação não cria mais paredes
+   * invisíveis: troncos, rochas e cercas são os obstáculos físicos de verdade.
    */
   isWalkable(x, z) {
-    const A = CONFIG.world.arena;
-    if (this.arenaDistance(x, z) > A.walkMargin) return false;
-    return this.normalAt(x, z, 0.7, _n1).y >= A.minWalkNormal;
+    const W = CONFIG.world;
+    // O limite anterior seguia o contorno da arena e coincidia com o anel de
+    // árvores. Isso parecia uma colisão enorme antes dos troncos. Agora o
+    // jogador pode atravessar a mata; só o tronco/rocha/cerca real bloqueia.
+    if (x <= W.minX + 1 || x >= W.maxX - 1) return false;
+    if (z <= W.minZ + 1 || z >= W.maxZ - 1) return false;
+    return true;
   }
 
   /** Constrói malha visual + colisor trimesh a partir da mesma geometria. */
@@ -764,7 +766,15 @@ function scatterTrees(scene, physics, terrain, random) {
     if (Math.abs(x - pathCenterX(z)) < 9 && z > -114 && z < 26) continue;
     terrain.normalAt(x, z, 1.2, up);
     if (up.y < 0.84) continue;
-    ring.push({ x, z, scale: 0.85 + random() * 0.75 });
+    const scale = 0.85 + random() * 0.75;
+    // Garante um corredor físico entre os troncos. A folga considera os raios
+    // visuais dos dois troncos mais a largura da cápsula do jogador.
+    const overlaps = ring.some((tree) => {
+      const required = 0.24 * (scale + tree.scale) + 0.9;
+      return Math.hypot(x - tree.x, z - tree.z) < required;
+    });
+    if (overlaps) continue;
+    ring.push({ x, z, scale });
   }
 
   // --- encosta: coníferas até a linha das árvores -------------------------
@@ -849,7 +859,7 @@ function instance(group, list, geo, material, tints, shadow) {
 
 /* -------------------------------------------------------------- cercas ----- */
 
-function buildFences(scene, terrain, random) {
+function buildFences(scene, physics, terrain, random) {
   const group = new THREE.Group();
   group.name = "fences";
   const wood = new THREE.MeshStandardMaterial({
@@ -880,6 +890,17 @@ function buildFences(scene, terrain, random) {
       post.castShadow = true;
       post.receiveShadow = true;
       group.add(post);
+
+      if (physics) {
+        const body = physics.createBody(
+          RAPIER.RigidBodyDesc.fixed().setTranslation(x, y + 0.575, z),
+        );
+        const pc = physics.createCollider(
+          RAPIER.ColliderDesc.cuboid(0.06, 0.575, 0.06),
+          body,
+        );
+        physics.register(pc, { kind: "scenery", name: "cerca" });
+      }
 
       if (i < s.count - 1) {
         const z2 = z - spacing;
@@ -1091,7 +1112,7 @@ export function createEnvironment(scene, physics) {
 
   scatterBoulders(scene, physics, terrain, random);
   scatterTrees(scene, physics, terrain, random);
-  buildFences(scene, terrain, random);
+  buildFences(scene, physics, terrain, random);
   scatterGrass(scene, terrain, random, sway);
 
   const flags = [

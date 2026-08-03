@@ -63,8 +63,12 @@ const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const TAU = Math.PI * 2;
 
 export class Player {
-  constructor(terrain) {
+  constructor(terrain, entityId = 1) {
     this.terrain = terrain;
+    this.entityId = entityId;
+    this.isLocal = true;
+    this.physicsBody = null;
+    this.airborne = false;
     this.root = new THREE.Group();
     this.root.name = "archer";
 
@@ -304,8 +308,14 @@ export class Player {
       if (step > 1e-6) {
         const sin = Math.sin(this.yaw);
         const cos = Math.cos(this.yaw);
-        // Frente do jogador = -Z rotacionado por yaw.
-        this.stepTo((-sin * fx + cos * sx) * step, (-cos * fx - sin * sx) * step);
+        const wdx = (-sin * fx + cos * sx) * step;
+        const wdz = (-cos * fx - sin * sx) * step;
+        if (this.physicsBody) {
+          const cur = this.physicsBody.desiredHorizontal;
+          this.physicsBody.setHorizontalMove(cur.x + wdx, cur.z + wdz);
+        } else {
+          this.stepTo(wdx, wdz);
+        }
       }
     }
 
@@ -328,9 +338,30 @@ export class Player {
 
     this.bobPhase += dt * 1.3; // respiração — independe da marcha
 
-    this.position.y = this.terrain.heightAt(this.position.x, this.position.z);
+    if (!this.physicsBody) {
+      this.position.y = this.terrain.heightAt(this.position.x, this.position.z);
+    }
     return moving;
   }
+
+  jump() {
+    this.physicsBody?.queueJump();
+  }
+
+  getHitBody() {
+    return this.physicsBody?.getHitBody() ?? null;
+  }
+
+  onArrowHit(_impact, _arrow) {
+    /* Futuro: dano, animação de impacto */
+  }
+
+  getPosition() {
+    return this.position;
+  }
+
+  /** Stub para sync multiplayer futuro. */
+  applyNetworkState(_state) {}
 
   /**
    * Avança o passo respeitando os limites da arena — e DESLIZANDO neles.
@@ -376,11 +407,10 @@ export class Player {
 
     const stepBob = Math.sin(this.gaitPhase * 2) * g.bobAmplitude * amp * w;
     const breath = Math.sin(this.bobPhase) * 0.006 * (1 - w);
-    // Agacho constante enquanto anda: além de ser o que o corpo faz de verdade,
-    // é ele que dá curso ao joelho para a perna alcançar a passada sem esticar.
-    // Guardado porque o alvo do pé precisa descontá-lo: o corpo sobe e desce,
-    // o pé plantado NÃO — senão ele afundaria e flutuaria junto com o quique.
-    this.rootLift = stepBob + breath - g.crouch * w;
+    const jumpLift = this.airborne
+      ? Math.sin(Math.min(1, (this.physicsBody?.verticalVelocity ?? 0) / CONFIG.player.jumpSpeed + 0.5) * Math.PI) * 0.06
+      : 0;
+    this.rootLift = stepBob + breath - g.crouch * w * (1 - this.airborne * 0.8) + jumpLift;
 
     this.root.position.set(
       this.position.x,
@@ -561,6 +591,14 @@ export class Player {
     const w = this.gaitBlend;
     const amp = this.strideScale * w;
 
+    if (this.airborne) {
+      const stance = side * (1 - g.stanceNarrow * 0.4);
+      let x = Math.cos(BODY.stanceYaw) * stance;
+      let z = -Math.sin(BODY.stanceYaw) * stance;
+      const tuck = 0.28 + Math.sin(this.gaitPhase * 2) * 0.04;
+      return out.set(x, BODY.ankleY + tuck, z);
+    }
+
     // Andando, a base de arqueiro se fecha: pés tão abertos só fazem sentido
     // plantada, e fechá-los ainda dá alcance de sobra para a passada.
     const stance = side * (1 - g.stanceNarrow * w);
@@ -659,6 +697,17 @@ export class Player {
   /** Ponto de disparo (repouso da flecha) em coordenadas de mundo. */
   getMuzzle(out) {
     return this.bow.getMuzzleWorld(out);
+  }
+
+  /**
+   * Pivô da câmera em terceira pessoa: altura do ombro, só o yaw do corpo.
+   * A inclinação da mira não entra aqui — senão girar o mouse lateralmente
+   * empurra a câmera para frente e para trás.
+   */
+  getCameraPivot(out) {
+    this._tmp.set(0, BODY.shoulderY, 0);
+    out.copy(this._tmp).applyMatrix4(this.root.matrixWorld);
+    return out;
   }
 
   /**

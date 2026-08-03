@@ -89,11 +89,12 @@ export class CameraRig {
   }
 
   /**
-   * @param {THREE.Vector3} muzzle ponto de disparo
    * @param {THREE.Vector3} aimDirection eixo da mira
    * @param {THREE.Vector3} eye posição do olho da arqueira
+   * @param {THREE.Vector3} aimFocus ponto do mundo sob o retículo
+   * @param {THREE.Vector3} cameraPivot ombro da arqueira (só yaw) para terceira pessoa
    */
-  update(dt, muzzle, aimDirection, eye) {
+  update(dt, aimDirection, eye, aimFocus, cameraPivot) {
     if (this.mode === CameraMode.ARROW) {
       const arrow = this.followArrow;
       // Se a flecha sumiu de vez, não prende o jogador numa câmera órfã.
@@ -109,41 +110,49 @@ export class CameraRig {
       }
     }
 
-    if (this.mode === CameraMode.FIRST) this.updateFirstPerson(eye, aimDirection);
-    else this.updateArcherCam(dt, muzzle, aimDirection);
+    if (this.mode === CameraMode.FIRST) this.updateFirstPerson(eye, aimFocus);
+    else this.updateArcherCam(aimDirection, cameraPivot, aimFocus);
   }
 
-  updateFirstPerson(eye, aimDirection) {
+  updateFirstPerson(eye, aimFocus) {
     // Sem suavização: a cabeça é a câmera, qualquer atraso vira enjoo.
     this.position.copy(eye);
     this.camera.position.copy(this.position);
-    this.lookAt.copy(this.position).add(aimDirection);
+    this.lookAt.copy(aimFocus);
     this.camera.lookAt(this.lookAt);
     this.initialized = true;
   }
 
-  updateArcherCam(dt, muzzle, aimDirection) {
+  updateArcherCam(aimDirection, pivot, aimFocus) {
     const c = CONFIG.camera;
-    this._right.crossVectors(aimDirection, this._up).normalize();
+
+    // Só o yaw posiciona a câmera. Incluir pitch no recuo lateral fazia ela
+    // avançar e recuar ao mirar para os lados com inclinação.
+    this._tmp.copy(aimDirection);
+    this._tmp.y = 0;
+    if (this._tmp.lengthSq() < 1e-8) this._tmp.set(0, 0, -1);
+    else this._tmp.normalize();
+
+    this._right.crossVectors(this._tmp, this._up).normalize();
 
     this._desired
-      .copy(muzzle)
-      .addScaledVector(aimDirection, -c.distance)
+      .copy(pivot)
+      .addScaledVector(this._tmp, -c.distance)
       .addScaledVector(this._right, c.right)
       .addScaledVector(this._up, c.up);
 
-    if (!this.initialized) {
-      this.position.copy(this._desired);
-      this.initialized = true;
-    } else {
-      const k = c.smoothing;
-      this.position.x = damp(this.position.x, this._desired.x, k, dt);
-      this.position.y = damp(this.position.y, this._desired.y, k, dt);
-      this.position.z = damp(this.position.z, this._desired.z, k, dt);
-    }
+    // Não amortecer a órbita da câmera. O alvo do retículo responde no mesmo
+    // frame ao mouse; atrasar só a posição criava duas respostas diferentes e
+    // uma sensação de stutter exclusiva da terceira pessoa.
+    this.position.copy(this._desired);
 
     this.camera.position.copy(this.position);
-    this.lookAt.copy(muzzle).addScaledVector(aimDirection, c.convergence);
+    // Olhar para o ponto físico sob o retículo (aimFocus), não para um ponto
+    // reconstruído a partir do olho + distância. Com a câmera lateral, qualquer
+    // erro nessa distância desloca o retículo na tela — a flecha obedece o
+    // raycast (aimFocus), então a câmera tem de olhar exatamente para lá.
+    this.lookAt.copy(aimFocus);
+    this.initialized = true;
     this.camera.lookAt(this.lookAt);
   }
 

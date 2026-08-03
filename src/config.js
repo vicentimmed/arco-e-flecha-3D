@@ -39,6 +39,7 @@ export const CONFIG = {
     angularDamping: 1.1, // amortece a oscilação residual da empena
     maxStuck: 30, // flechas cravadas simultâneas (pool FIFO)
     maxLifetime: 25, // s — some se nunca acertar nada
+    ignoreOwner: true, // ignora colisão com quem disparou (desligar em PvP)
   },
 
   bow: {
@@ -74,6 +75,8 @@ export const CONFIG = {
     pitchMin: -0.42, // rad (olhando para baixo)
     pitchMax: 0.62, // rad (olhando para cima)
     start: { x: 1.2, z: 12.0 },
+    jumpSpeed: 4.2, // m/s — impulso vertical
+    colliderRadius: 0.35, // m — cápsula do character controller
     // O ponto de disparo NÃO é configurado aqui: ele sai da postura (ombro do
     // braço do arco + extensão do braço), em entities/player.js.
   },
@@ -237,6 +240,24 @@ export const CONFIG = {
     // Critério de aceite nº 1: sem arrasto e sem vento, 45° a 60 m/s deve bater
     // com v₀²·sen(2θ)/g dentro de 1 %.
     selfTest: { speed: 60, angleDeg: 45, tolerance: 0.01 },
+  },
+
+  boar: {
+    visionRange: 25, // m — distância para detectar jogador e fugir
+    walkSpeed: 1.4, // m/s
+    fleeSpeed: 4.5, // m/s
+    scareRadius: 6, // m — flecha cai perto e assusta
+    scareDuration: 4, // s — fuga após flecha perto
+    fleeDuration: 5, // s — fuga ao ver jogador
+    eatDuration: 3, // s — animação de comer
+    wanderMaxTime: 8, // s — tempo andando antes de comer
+    calmDuration: 3, // s — acalmar após fugir
+    wanderRadius: 12, // m
+    spawnMinDist: 30, // m — spawn longe do jogador
+    spawnMaxDist: 50, // m
+    colliderHalfHeight: 0.28, // m
+    colliderRadius: 0.32, // m
+    bodyHeight: 0.75, // m
   },
 };
 

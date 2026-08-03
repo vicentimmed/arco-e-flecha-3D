@@ -59,6 +59,9 @@ export class Input {
       toggleHelp: false,
       toggleTrace: false,
       toggleWindInfluence: false,
+      jump: false,
+      spawnBoar: false,
+      toggleMusic: false,
     };
 
     this.bind();
@@ -70,6 +73,7 @@ export class Input {
     this.active = true;
     this.firstPerson = false;
     this.lockHint.classList.add("hidden");
+    this.onEngage?.();
 
     if (this.canvas.requestPointerLock) {
       try {
@@ -201,6 +205,16 @@ export class Input {
         case "KeyV":
           this.actions.toggleWindInfluence = true;
           break;
+        case "Space":
+          e.preventDefault();
+          this.actions.jump = true;
+          break;
+        case "KeyP":
+          this.actions.spawnBoar = true;
+          break;
+        case "KeyM":
+          this.actions.toggleMusic = true;
+          break;
         case "KeyH":
           this.actions.toggleHelp = true;
           break;
@@ -255,6 +269,9 @@ export class Input {
     a.toggleHelp = false;
     a.toggleTrace = false;
     a.toggleWindInfluence = false;
+    a.jump = false;
+    a.spawnBoar = false;
+    a.toggleMusic = false;
     return snapshot;
   }
 }

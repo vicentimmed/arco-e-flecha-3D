@@ -8,6 +8,31 @@
      mirando de verdade.
    • ARROW  — atrás da flecha em voo. Entra sozinha a cada disparo e só sai
      quando o jogador clica.
+
+   REGRA DE OURO: a pose da câmera é função EXCLUSIVA dos ângulos de mira e da
+   posição da arqueira — nunca do raycast. E é essa pose que DEFINE a mira.
+
+   Duas coisas dependiam do raycast e as duas tremiam:
+
+   1. A câmera olhava direto para o ponto devolvido pelo raio. Como ela fica 4 m
+      atrás e 1,25 m ao lado da linha de tiro, a distância desse ponto entrava na
+      conta do ângulo: varrer o mouse sobre a borda de um alvo fazia o raio pular
+      de 10 m para 60 m e a câmera girava graus num único frame — o "shuttering".
+   2. Corrigido isso, o retículo é que passou a pular: mirando pelo OLHO da
+      arqueira, o ponto de impacto não está sobre o eixo óptico, então sua
+      posição na tela também depende da distância.
+
+   A saída é uma só: quem manda na mira é o eixo óptico. `aimOrigin`/`aimForward`
+   são o centro óptico e a direção do retículo, calculados só a partir de
+   yaw/pitch, e o raio de mira sai dali (ver systems/aim.js). O ponto de impacto
+   fica então SEMPRE sobre o eixo óptico — retículo cravado no centro da tela e
+   flecha convergindo exatamente nele, sem amortecimento e sem histerese.
+
+   Em terceira pessoa a câmera ainda faz "toe-in": aponta para um ponto fixo da
+   linha de tiro (`camera.convergence`). Isso mantém o enquadramento de origem e
+   faz a flecha sair praticamente alinhada com o arco na faixa dos alvos de meia
+   distância. Na primeira pessoa o centro óptico É o olho, então mira e olhar
+   coincidem exatamente.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -24,6 +49,8 @@ export class CameraRig {
   constructor(camera) {
     this.camera = camera;
     this.mode = CameraMode.ARCHER;
+    /** Modo que o jogador está pedindo (botão direito/C), mesmo durante o voo. */
+    this.wantFirstPerson = false;
     this.followArrow = null;
     /** Câmera da flecha congelada no impacto (não segue alvo balançando). */
     this.arrowCamFrozen = false;
@@ -32,6 +59,15 @@ export class CameraRig {
 
     this.position = new THREE.Vector3();
     this.lookAt = new THREE.Vector3();
+
+    /* Ponto de vista da MIRA — centro óptico e direção do retículo. É daqui que
+       sai o raio de mira (systems/aim.js). Fora da câmera da flecha, a câmera
+       de apresentação é exatamente este ponto de vista. */
+    this.aimOrigin = new THREE.Vector3();
+    this.aimForward = new THREE.Vector3(0, 0, -1);
+    /** Metros à frente do centro óptico onde o raio de mira começa a valer. */
+    this.aimSkip = 0;
+
     this._desired = new THREE.Vector3();
     this._look = new THREE.Vector3();
     this._right = new THREE.Vector3();
@@ -54,6 +90,9 @@ export class CameraRig {
 
   /** Terceira pessoa é o padrão; botão direito/C segura a primeira pessoa. */
   setFirstPerson(on) {
+    // O pedido é registrado mesmo durante a câmera da flecha: é ele que decide
+    // para onde voltar quando o voo acaba.
+    this.wantFirstPerson = on;
     if (this.mode === CameraMode.ARROW) return;
     const next = on ? CameraMode.FIRST : CameraMode.ARCHER;
     if (this.mode === next) return;
@@ -70,14 +109,25 @@ export class CameraRig {
     this.applyLens();
   }
 
-  /** Clique: volta para a visão da arqueira. */
-  returnToArcher() {
-    if (this.mode !== CameraMode.ARROW) return false;
-    this.mode = CameraMode.ARCHER;
+  /**
+   * Encerra a câmera da flecha no modo que o jogador está pedindo AGORA.
+   *
+   * Voltar sempre para um modo fixo custava um frame de imagem errada: se ele
+   * estivesse segurando o botão direito, a tela piscava em terceira pessoa antes
+   * de `setFirstPerson` corrigir no frame seguinte.
+   */
+  _leaveArrowCam() {
+    this.mode = this.wantFirstPerson ? CameraMode.FIRST : CameraMode.ARCHER;
     this.followArrow = null;
     this.arrowCamFrozen = false;
     this.initialized = false;
     this.applyLens();
+  }
+
+  /** Clique: volta para a visão da arqueira. */
+  returnToArcher() {
+    if (this.mode !== CameraMode.ARROW) return false;
+    this._leaveArrowCam();
     return true;
   }
 
@@ -88,72 +138,92 @@ export class CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Modo que manda na MIRA — a câmera da flecha não desvia a linha de tiro. */
+  get aimMode() {
+    if (this.mode !== CameraMode.ARROW) return this.mode;
+    return this.wantFirstPerson ? CameraMode.FIRST : CameraMode.ARCHER;
+  }
+
   /**
-   * @param {THREE.Vector3} aimDirection eixo da mira
+   * Centro óptico e direção do retículo, só a partir de yaw/pitch.
+   *
+   * Depende só dos argumentos e do modo, e não toca na câmera — assim o main
+   * pode avaliá-la com ângulos hipotéticos ao trocar de modo.
+   *
+   * @param {THREE.Vector3} aimAxis eixo do corpo (unitário, saindo do olho)
    * @param {THREE.Vector3} eye posição do olho da arqueira
-   * @param {THREE.Vector3} aimFocus ponto do mundo sob o retículo
-   * @param {THREE.Vector3} cameraPivot ombro da arqueira (só yaw) para terceira pessoa
+   * @param {THREE.Vector3} pivot ombro da arqueira (sem quique do passo)
    */
-  update(dt, aimDirection, eye, aimFocus, cameraPivot) {
-    if (this.mode === CameraMode.ARROW) {
-      const arrow = this.followArrow;
-      // Se a flecha sumiu de vez, não prende o jogador numa câmera órfã.
-      if (!arrow || arrow.dead) {
-        this.mode = CameraMode.FIRST;
-        this.followArrow = null;
-        this.arrowCamFrozen = false;
-        this.initialized = false;
-        this.applyLens();
-      } else {
-        this.updateArrowCam(dt, arrow);
-        return;
-      }
+  updateAimViewpoint(aimAxis, eye, pivot) {
+    if (this.aimMode === CameraMode.FIRST) {
+      this.aimOrigin.copy(eye);
+      this.aimForward.copy(aimAxis);
+      this.aimSkip = 0;
+      return;
     }
 
-    if (this.mode === CameraMode.FIRST) this.updateFirstPerson(eye, aimFocus);
-    else this.updateArcherCam(aimDirection, cameraPivot, aimFocus);
-  }
-
-  updateFirstPerson(eye, aimFocus) {
-    // Sem suavização: a cabeça é a câmera, qualquer atraso vira enjoo.
-    this.position.copy(eye);
-    this.camera.position.copy(this.position);
-    this.lookAt.copy(aimFocus);
-    this.camera.lookAt(this.lookAt);
-    this.initialized = true;
-  }
-
-  updateArcherCam(aimDirection, pivot, aimFocus) {
     const c = CONFIG.camera;
 
     // Só o yaw posiciona a câmera. Incluir pitch no recuo lateral fazia ela
     // avançar e recuar ao mirar para os lados com inclinação.
-    this._tmp.copy(aimDirection);
+    this._tmp.copy(aimAxis);
     this._tmp.y = 0;
     if (this._tmp.lengthSq() < 1e-8) this._tmp.set(0, 0, -1);
     else this._tmp.normalize();
 
     this._right.crossVectors(this._tmp, this._up).normalize();
 
-    this._desired
+    this.aimOrigin
       .copy(pivot)
       .addScaledVector(this._tmp, -c.distance)
       .addScaledVector(this._right, c.right)
       .addScaledVector(this._up, c.up);
 
-    // Não amortecer a órbita da câmera. O alvo do retículo responde no mesmo
-    // frame ao mouse; atrasar só a posição criava duas respostas diferentes e
-    // uma sensação de stutter exclusiva da terceira pessoa.
-    this.position.copy(this._desired);
+    // Toe-in: a câmera aponta para um ponto FIXO da linha de tiro. É o que
+    // preserva o enquadramento e o que deixa a flecha sair quase alinhada com o
+    // arco na faixa de `convergence`.
+    this._look.copy(eye).addScaledVector(aimAxis, c.convergence);
+    this.aimForward.copy(this._look).sub(this.aimOrigin).normalize();
 
+    // O raio de mira só começa a valer na altura da arqueira: senão um tronco
+    // ou uma pedra ENTRE a câmera e ela viraria o alvo da flecha.
+    this.aimSkip = Math.max(
+      0,
+      this._desired.copy(pivot).sub(this.aimOrigin).dot(this.aimForward),
+    );
+  }
+
+  /**
+   * @param {THREE.Vector3} aimAxis eixo do corpo (unitário, saindo do olho)
+   * @param {THREE.Vector3} eye posição do olho da arqueira
+   * @param {THREE.Vector3} cameraPivot ombro da arqueira (só yaw) para terceira pessoa
+   */
+  update(dt, aimAxis, eye, cameraPivot) {
+    // A mira é resolvida SEMPRE, inclusive durante o voo da flecha: assim o HUD
+    // e o retorno da câmera não dependem de um estado que ficou para trás.
+    this.updateAimViewpoint(aimAxis, eye, cameraPivot);
+
+    if (this.mode === CameraMode.ARROW) {
+      const arrow = this.followArrow;
+      // Se a flecha sumiu de vez, não prende o jogador numa câmera órfã.
+      if (!arrow || arrow.dead) {
+        // `aimMode` já valia o modo de destino, então a mira não muda aqui.
+        this._leaveArrowCam();
+      } else {
+        this.updateArrowCam(dt, arrow);
+        return;
+      }
+    }
+
+    // A câmera de apresentação É o ponto de vista da mira — sem amortecimento
+    // nem correção posterior, que é o que garante retículo cravado no centro.
+    this.position.copy(this.aimOrigin);
     this.camera.position.copy(this.position);
-    // Olhar para o ponto físico sob o retículo (aimFocus), não para um ponto
-    // reconstruído a partir do olho + distância. Com a câmera lateral, qualquer
-    // erro nessa distância desloca o retículo na tela — a flecha obedece o
-    // raycast (aimFocus), então a câmera tem de olhar exatamente para lá.
-    this.lookAt.copy(aimFocus);
-    this.initialized = true;
+    this.lookAt
+      .copy(this.aimOrigin)
+      .addScaledVector(this.aimForward, CONFIG.camera.convergence);
     this.camera.lookAt(this.lookAt);
+    this.initialized = true;
   }
 
   updateArrowCam(dt, arrow) {

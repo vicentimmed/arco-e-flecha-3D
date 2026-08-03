@@ -11,6 +11,7 @@ import "./style.css";
 import * as THREE from "three";
 
 import { CONFIG, drawSpeed, drawFraction } from "./config.js";
+import { clamp } from "./utils/math.js";
 import { initPhysics, PhysicsWorld } from "./core/physics.js";
 import { BodySync } from "./core/sync.js";
 import { entityRegistry } from "./core/entityRegistry.js";
@@ -109,6 +110,8 @@ class Game {
     this._shadowFocus = new THREE.Vector3();
     this._eye = new THREE.Vector3();
     this._cameraPivot = new THREE.Vector3();
+    this._reAxis = new THREE.Vector3();
+    this._reWanted = new THREE.Vector3();
 
     this.arrows.onScore = (target, result) => {
       if (result.score > 0) {
@@ -159,9 +162,12 @@ class Game {
     const actions = this.input.consume();
     this.handleActions(actions);
 
+    // A ORDEM importa: a câmera define a mira (systems/aim.js), então ela é
+    // posicionada ANTES do raycast, e o raycast antes do disparo.
+    this.syncCameraMode();
     this.updateAimAndPose(dt, actions);
-    this.solveAim();
     this.updateCamera(dt);
+    this.solveAim();
     if (actions.release) this.shoot();
 
     this.wind.update(dt);
@@ -263,8 +269,59 @@ class Game {
     this.player.getCameraPivot(this._cameraPivot);
   }
 
+  /**
+   * Troca de modo SEM mover o ponto mirado.
+   *
+   * O centro óptico muda de lugar ao alternar terceira ↔ primeira pessoa (são
+   * ~1,3 m de diferença), e o retículo é o eixo óptico. Manter os mesmos ângulos
+   * jogaria a mira para outro ponto do mundo — que era a queixa de "a mira não
+   * está no mesmo lugar". Então giramos os ângulos o tanto que for preciso para
+   * que o novo eixo óptico passe pelo MESMO ponto de antes.
+   *
+   * É um ponto fixo: mudar o yaw também move a câmera em terceira pessoa. A
+   * iteração converge rápido porque cada volta reduz o erro na proporção
+   * (raio da órbita / distância do alvo).
+   *
+   * Roda ANTES da pose do frame, então usa o olho e o ombro do frame anterior —
+   * 16 ms de defasagem que valem milímetros no ponto mirado.
+   */
+  syncCameraMode() {
+    const before = this.rig.wantFirstPerson;
+    this.rig.setFirstPerson(this.input.firstPerson);
+    if (this.rig.wantFirstPerson === before || !this.aim.hasFocus) return;
+
+    const p = CONFIG.player;
+    let yaw = this.input.yaw;
+    let pitch = this.input.pitch;
+
+    for (let i = 0; i < 5; i++) {
+      this.aim.axisFrom(yaw, pitch, this._reAxis);
+      this.rig.updateAimViewpoint(this._reAxis, this._eye, this._cameraPivot);
+      this._reWanted.copy(this.aim.focus).sub(this.rig.aimOrigin).normalize();
+
+      const f = this.rig.aimForward;
+      let dYaw =
+        Math.atan2(-this._reWanted.x, -this._reWanted.z) - Math.atan2(-f.x, -f.z);
+      if (dYaw > Math.PI) dYaw -= Math.PI * 2;
+      if (dYaw < -Math.PI) dYaw += Math.PI * 2;
+      const dPitch = Math.asin(clamp(this._reWanted.y, -1, 1)) - Math.asin(clamp(f.y, -1, 1));
+
+      if (Math.abs(dYaw) < 1e-5 && Math.abs(dPitch) < 1e-5) break;
+      yaw += dYaw;
+      pitch = clamp(pitch + dPitch, p.pitchMin, p.pitchMax);
+    }
+
+    this.input.yaw = yaw;
+    this.input.pitch = pitch;
+  }
+
   solveAim() {
-    this.aim.solve(this._eye, this._muzzle);
+    this.aim.solve(
+      this.rig.aimOrigin,
+      this.rig.aimForward,
+      this.rig.aimSkip,
+      this._muzzle,
+    );
   }
 
   shoot() {
@@ -317,14 +374,8 @@ class Game {
   }
 
   updateCamera(dt) {
-    this.rig.setFirstPerson(this.input.firstPerson);
-    this.rig.update(
-      dt,
-      this._forward,
-      this._eye,
-      this.aim.focus,
-      this._cameraPivot,
-    );
+    // O modo já foi resolvido em `syncCameraMode`, antes da pose.
+    this.rig.update(dt, this._forward, this._eye, this._cameraPivot);
 
     this.player.setHeadVisible(!this.rig.isFirstPerson);
 

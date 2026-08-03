@@ -700,14 +700,20 @@ export class Player {
   }
 
   /**
-   * Pivô da câmera em terceira pessoa: altura do ombro, só o yaw do corpo.
+   * Pivô da câmera em terceira pessoa: altura do ombro sobre os pés.
+   *
    * A inclinação da mira não entra aqui — senão girar o mouse lateralmente
-   * empurra a câmera para frente e para trás.
+   * empurra a câmera para frente e para trás. `rootLift` também não: o quique
+   * do passo, o agacho e a respiração são animação do CORPO, e passá-los para a
+   * câmera é o que fazia a imagem balançar ao andar mirando. O pulo continua
+   * sendo acompanhado, porque ele está em `position.y`.
    */
   getCameraPivot(out) {
-    this._tmp.set(0, BODY.shoulderY, 0);
-    out.copy(this._tmp).applyMatrix4(this.root.matrixWorld);
-    return out;
+    return out.set(
+      this.position.x,
+      this.position.y + BODY.shoulderY,
+      this.position.z,
+    );
   }
 
   /**

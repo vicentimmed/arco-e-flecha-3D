@@ -1,8 +1,13 @@
 /* ---------------------------------------------------------------------------
    HUD: placar, vento, pino de mira, barra de força e mira.
 
-   A mira é um retículo fixo no centro, sem nenhuma assistência: não segue
-   alvos, não indica o ponto de queda e não muda de cor ao passar sobre um alvo.
+   O retículo é fixo no centro da tela, e é fixo por construção: a linha de tiro
+   sai do centro óptico da câmera (systems/aim.js), então o ponto de impacto está
+   sempre sobre o eixo óptico. Ele não precisa ser reposicionado a cada frame —
+   se precisasse, pularia junto com a distância do raycast.
+
+   Não existe assistência nenhuma: ele não segue alvos, não indica o ponto de
+   queda e não muda de cor ao passar sobre um alvo.
    --------------------------------------------------------------------------- */
 
 import { radToDeg } from "../utils/math.js";

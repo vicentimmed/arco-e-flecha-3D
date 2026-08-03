@@ -120,8 +120,12 @@ export const CONFIG = {
     distance: 4.15, // m atrás do ponto de disparo
     right: 1.25, // m à direita da linha de tiro
     up: 0.5, // m acima
-    convergence: 40, // m — ponto da linha de tiro para onde a câmera olha
-    smoothing: 14, // 1/s — constante de suavização
+    // Ponto da linha de tiro para onde a câmera olha (toe-in). É FIXO de
+    // propósito: usar a distância do raycast fazia a imagem tremer a cada troca
+    // de superfície sob a mira (ver systems/camera.js). Como a mira sai do eixo
+    // óptico, este valor decide a distância em que a flecha sai mais alinhada
+    // com o arco — daí estar na faixa dos alvos de meia distância.
+    convergence: 40, // m
     arrowCam: {
       distance: 2.6, // m atrás da flecha
       up: 0.5, // m acima
@@ -130,9 +134,10 @@ export const CONFIG = {
   },
 
   aim: {
-    // A mira é o centro da tela. A linha de tiro converge exatamente para o
-    // ponto do cenário que está sob o retículo (encontrado por raycast na
-    // engine de física), então a flecha sai apontada para lá.
+    // O retículo é o centro da tela e a linha de tiro nasce no EIXO ÓPTICO da
+    // câmera. A flecha converge no ponto de cenário que o raio encontra, então
+    // ela acerta exatamente onde o retículo está — e o retículo não se mexe,
+    // porque o ponto está sempre sobre o eixo (ver systems/aim.js).
     //
     // Isso resolve só a GEOMETRIA (a câmera não fica no mesmo lugar que o
     // arco). Gravidade e vento continuam agindo no voo: mirar no alvo acerta

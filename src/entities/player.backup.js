@@ -65,17 +65,6 @@ function createMaterials() {
     hair: new THREE.MeshStandardMaterial({ color: "#392015", roughness: 0.62 }),
     shoe: new THREE.MeshStandardMaterial({ color: "#efe9df", roughness: 0.7 }),
     shoeRed: new THREE.MeshStandardMaterial({ color: "#cc2f2b", roughness: 0.7 }),
-    // Rosto e equipamento.
-    eyeWhite: new THREE.MeshStandardMaterial({ color: "#f7f4ee", roughness: 0.35 }),
-    eyeDark: new THREE.MeshStandardMaterial({ color: "#2a1a12", roughness: 0.25 }),
-    mouth: new THREE.MeshStandardMaterial({ color: "#a8564d", roughness: 0.7 }),
-    leather: new THREE.MeshStandardMaterial({ color: "#6b4526", roughness: 0.82 }),
-    leatherDark: new THREE.MeshStandardMaterial({ color: "#4a2f19", roughness: 0.85 }),
-    metal: new THREE.MeshStandardMaterial({
-      color: "#b9bcc2",
-      roughness: 0.35,
-      metalness: 0.7,
-    }),
   };
 }
 
@@ -203,68 +192,6 @@ export class Player {
     waistBand.position.y = BODY.waistY - BODY.hipY - 0.09;
     this.spine.add(waistBand);
 
-    /* Cinto de couro com fivela. Junto com a bandoleira e a aljava, é o que
-       transforma a silhueta de "boneco de primitivas" em "alguém equipada para
-       atirar": o olho lê equipamento como intenção. */
-    const cinto = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.142, 0.142, 0.055, 16),
-      this.mat.leather,
-    );
-    cinto.scale.set(1, 1, 0.7);
-    cinto.position.y = 0.055;
-    this.spine.add(cinto);
-
-    const fivela = new THREE.Mesh(
-      new THREE.BoxGeometry(0.055, 0.048, 0.02),
-      this.mat.metal,
-    );
-    fivela.position.set(0, 0.055, -0.1);
-    this.spine.add(fivela);
-
-    // Bandoleira cruzando o peito — a alça da aljava.
-    const bandoleira = new THREE.Mesh(
-      new THREE.BoxGeometry(0.052, 0.42, 0.016),
-      this.mat.leatherDark,
-    );
-    bandoleira.position.set(0.02, (BODY.shoulderY - BODY.hipY) * 0.55, -0.1);
-    bandoleira.rotation.z = 0.42;
-    this.spine.add(bandoleira);
-
-    /* Aljava nas costas, com as empenas aparecendo. */
-    const aljava = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.052, 0.044, 0.34, 10),
-      this.mat.leather,
-    );
-    aljava.position.set(-0.11, (BODY.shoulderY - BODY.hipY) * 0.62, 0.13);
-    aljava.rotation.set(0.34, 0, -0.3);
-    aljava.castShadow = true;
-    this.spine.add(aljava);
-
-    for (let i = 0; i < 4; i++) {
-      const haste = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.005, 0.005, 0.26, 5),
-        new THREE.MeshStandardMaterial({ color: "#c9b58c", roughness: 0.6 }),
-      );
-      const dx = (i % 2 ? 1 : -1) * 0.018;
-      const dz = i < 2 ? 0.016 : -0.016;
-      haste.position.set(-0.11 + dx, (BODY.shoulderY - BODY.hipY) * 0.62 + 0.2, 0.13 + dz);
-      haste.rotation.set(0.34, 0, -0.3);
-      this.spine.add(haste);
-
-      const empena = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.02, 0.07),
-        new THREE.MeshStandardMaterial({
-          color: "#d6483c",
-          roughness: 0.85,
-          side: THREE.DoubleSide,
-        }),
-      );
-      empena.position.copy(haste.position);
-      empena.position.y += 0.1;
-      empena.rotation.set(0.34, i * 0.8, -0.3);
-      this.spine.add(empena);
-    }
-
     // Ombros arredondados.
     for (const s of [-1, 1]) {
       const sh = makeJoint(0.062, this.mat.top);
@@ -288,64 +215,6 @@ export class Player {
     const skull = makeJoint(BODY.headR, this.mat.skin, 18);
     skull.scale.set(0.94, 1.06, 1.0);
     this.head.add(skull);
-
-    /* Rosto.
-       Sem olhos, a cabeça é uma bola e o personagem não tem para onde olhar —
-       e é justamente a direção do olhar que dá leitura de "ela está mirando
-       ali". A face olha para -Z no espaço da cabeça, que já é girada pela pose. */
-    const R = BODY.headR;
-    for (const lado of [-1, 1]) {
-      const olho = new THREE.Mesh(
-        new THREE.SphereGeometry(R * 0.155, 10, 8),
-        this.mat.eyeWhite,
-      );
-      olho.position.set(lado * R * 0.38, R * 0.1, -R * 0.86);
-      olho.scale.set(1, 1.15, 0.62);
-      this.head.add(olho);
-
-      const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(R * 0.085, 8, 6),
-        this.mat.eyeDark,
-      );
-      iris.position.set(lado * R * 0.38, R * 0.1, -R * 0.95);
-      iris.scale.set(1, 1, 0.55);
-      this.head.add(iris);
-
-      // Sobrancelha: dá expressão e ancora o olho na testa.
-      const sobrancelha = new THREE.Mesh(
-        new THREE.BoxGeometry(R * 0.3, R * 0.07, R * 0.09),
-        this.mat.hair,
-      );
-      sobrancelha.position.set(lado * R * 0.38, R * 0.34, -R * 0.87);
-      sobrancelha.rotation.z = lado * 0.14;
-      this.head.add(sobrancelha);
-    }
-
-    const nariz = new THREE.Mesh(
-      new THREE.ConeGeometry(R * 0.11, R * 0.26, 6),
-      this.mat.skin,
-    );
-    nariz.rotation.x = -Math.PI / 2;
-    nariz.position.set(0, -R * 0.08, -R * 0.95);
-    this.head.add(nariz);
-
-    const boca = new THREE.Mesh(
-      new THREE.BoxGeometry(R * 0.3, R * 0.055, R * 0.06),
-      this.mat.mouth,
-    );
-    boca.position.set(0, -R * 0.42, -R * 0.86);
-    this.head.add(boca);
-
-    // Orelhas: fecham a silhueta da cabeça de perfil.
-    for (const lado of [-1, 1]) {
-      const orelha = new THREE.Mesh(
-        new THREE.SphereGeometry(R * 0.2, 8, 6),
-        this.mat.skin,
-      );
-      orelha.position.set(lado * R * 0.92, -R * 0.02, 0);
-      orelha.scale.set(0.42, 1, 0.72);
-      this.head.add(orelha);
-    }
 
     // Cabelo: calota + franja, com a testa livre.
     const hairCap = new THREE.Mesh(
@@ -402,50 +271,13 @@ export class Player {
     const upper = makeSegment(0.057, this.mat.skin, true, 12);
     const fore = makeSegment(0.047, this.mat.skin, true, 12);
     const elbow = makeJoint(0.052, this.mat.skin, 12);
-
-    /* A mão ganha dedos.
-       Uma esfera na ponta do braço some assim que a câmera chega perto — e em
-       primeira pessoa a mão do arco fica a meio metro do olho. Não é anatomia:
-       são quatro dedos e um polegar em caixas, o suficiente para o cérebro
-       parar de ver uma bola. */
-    const hand = new THREE.Group();
-    const palma = new THREE.Mesh(
-      new THREE.BoxGeometry(0.062, 0.088, 0.038),
-      this.mat.skinDark,
-    );
-    palma.castShadow = true;
-    hand.add(palma);
-
-    for (let i = 0; i < 4; i++) {
-      const dedo = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.0105, 0.05 - Math.abs(i - 1.5) * 0.008, 3, 6),
-        this.mat.skinDark,
-      );
-      // +Y é a direção cotovelo→mão: os dedos seguem ADIANTE do punho.
-      dedo.position.set(-0.021 + i * 0.014, 0.062, 0.002);
-      dedo.rotation.x = -0.25;
-      hand.add(dedo);
-    }
-    const polegar = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.012, 0.036, 3, 6),
-      this.mat.skinDark,
-    );
-    polegar.position.set(0.034, 0.022, -0.016);
-    polegar.rotation.set(-0.2, 0, 0.9);
-    hand.add(polegar);
-
-    // Bracelete de couro no antebraço (a proteção contra a corda).
+    const hand = makeJoint(0.055, this.mat.skinDark, 12);
+    hand.scale.set(1, 1.15, 0.72);
     const band = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.058, 0.055, 0.085, 12),
-      this.mat.leather,
+      new THREE.CylinderGeometry(0.058, 0.058, 0.06, 12),
+      this.mat.top,
     );
     band.castShadow = true;
-    const fita = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.057, 0.014, 12),
-      this.mat.leatherDark,
-    );
-    band.add(fita);
-
     group.add(upper, fore, elbow, hand, band);
     return { group, upper, fore, elbow, hand, band };
   }
@@ -806,9 +638,6 @@ export class Player {
     orientSegment(arm.fore, this._elbow, hand);
     arm.elbow.position.copy(this._elbow);
     arm.hand.position.copy(hand);
-    // A mão deixou de ser uma esfera: sem orientar, os dedos apontariam para
-    // uma direção fixa do mundo enquanto o braço gira.
-    arm.hand.quaternion.copy(arm.fore.quaternion);
     // Punheira logo antes da mão.
     arm.band.position.copy(hand).lerp(this._elbow, 0.22);
     arm.band.quaternion.copy(arm.fore.quaternion);

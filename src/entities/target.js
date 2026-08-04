@@ -77,6 +77,8 @@ const MAT = {
 
 export class Target {
   constructor(scene, physics, sync, terrain, spec, index) {
+    /** Todos os colisores deste alvo — permite desligá-lo por inteiro. */
+    this.colliders = [];
     this.physics = physics;
     this.sync = sync;
     this.kind = spec.kind;
@@ -188,6 +190,7 @@ export class Target {
       .setRestitution(kind.restitution)
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     this.faceCollider = physics.createCollider(faceDesc, this.body);
+    this.colliders.push(this.faceCollider);
     physics.register(this.faceCollider, { kind: "target", target: this });
 
     for (const leg of this.legSpecs) {
@@ -199,6 +202,7 @@ export class Target {
         .setRestitution(0.05)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
       const collider = physics.createCollider(desc, this.body);
+      this.colliders.push(collider);
       physics.register(collider, { kind: "target", target: this, isLeg: true });
     }
   }
@@ -244,6 +248,7 @@ export class Target {
         .setTranslation(s * 0.92, beamY / 2, 0)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
       const collider = physics.createCollider(desc, frameBody);
+      this.colliders.push(collider);
       physics.register(collider, { kind: "scenery", name: "poste" });
     }
     this.frameBody = frameBody;
@@ -275,6 +280,7 @@ export class Target {
       .setRestitution(kind.restitution)
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     this.faceCollider = physics.createCollider(faceDesc, this.body);
+    this.colliders.push(this.faceCollider);
     physics.register(this.faceCollider, { kind: "target", target: this });
 
     // Eixo X: o alvo balança para frente e para trás em relação ao tiro.
@@ -320,6 +326,18 @@ export class Target {
       this.lastScore = score;
     }
     return { score, radius, onFace, distance: this.distance, target: this };
+  }
+
+  /**
+   * Some com o alvo — visual E fisicamente.
+   *
+   * Esconder só a malha não basta: uma flecha ainda cravaria num alvo
+   * invisível, e no modo de alvos em série o campo precisa estar realmente
+   * vazio para "o próximo está mais longe" significar alguma coisa.
+   */
+  setActive(on) {
+    this.group.visible = on;
+    for (const c of this.colliders) c.setEnabled(on);
   }
 
   /** Distância real do arqueiro (o jogador anda, então não é fixa). */

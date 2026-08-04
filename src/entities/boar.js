@@ -1,5 +1,14 @@
 /* ---------------------------------------------------------------------------
-   Porco selvagem — alvo móvel com IA de medo e animações procedurais.
+   Porco selvagem — o corpo, a animação e o colisor.
+
+   A INTELIGÊNCIA NÃO MORA AQUI. Vagar, comer, se assustar e fugir são decididos
+   em `server/boarSim.js`, porque essas escolhas sorteiam: rodar a mesma IA em
+   cada navegador daria, em segundos, um bando diferente por tela — você atiraria
+   num porco que, para o seu amigo, já tinha saído dali.
+
+   O que chega são posição, ângulo, velocidade e estado, a 10 Hz. Esta classe
+   persegue essa pose e calcula a animação — pernas, cabeça, rabo — a partir da
+   velocidade, porque animação é função do estado e não precisa trafegar.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -7,6 +16,7 @@ import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 import { entityRegistry } from "../core/entityRegistry.js";
+import { damp } from "../utils/math.js";
 
 const MAT = {
   body: new THREE.MeshStandardMaterial({ color: "#6b4a2f", roughness: 0.88 }),
@@ -22,15 +32,15 @@ export class Boar {
   constructor(scene, physics, terrain, entityId, x, z) {
     this.scene = scene;
     this.physics = physics;
-    this.terrain = terrain;
     this.entityId = entityId;
+    /** Última pose vinda do servidor. Até a primeira chegar, ele fica parado. */
+    this.netTarget = null;
     this.dead = false;
+    /** Vem do servidor; a animação lê daqui (comer abaixa a cabeça, fugir corre). */
     this.state = "wander";
-    this.stateTimer = 0;
+    // A fase começa espalhada para que dois porcos lado a lado não andem em
+    // sincronia perfeita, o que denuncia na hora que são cópias.
     this.animPhase = Math.random() * Math.PI * 2;
-    this.fleeTimer = 0;
-    this.wanderTarget = new THREE.Vector3();
-    this.pickWanderTarget(x, z);
 
     const y = terrain.heightAt(x, z);
     this.position = new THREE.Vector3(x, y, z);
@@ -223,31 +233,6 @@ export class Boar {
     this.visualRoot = root;
   }
 
-  pickWanderTarget(x, z) {
-    const cfg = CONFIG.boar;
-    const angle = Math.random() * Math.PI * 2;
-    const dist = cfg.wanderRadius * (0.4 + Math.random() * 0.6);
-    this.wanderTarget.set(
-      x + Math.cos(angle) * dist,
-      0,
-      z + Math.sin(angle) * dist,
-    );
-  }
-
-  scare(from) {
-    if (this.dead) return;
-    this.state = "flee";
-    this.fleeTimer = CONFIG.boar.scareDuration;
-    this._fleeFrom = new THREE.Vector3(from.x, from.y, from.z);
-  }
-
-  fleeFromPlayer(playerPos) {
-    if (this.dead) return;
-    this.state = "flee";
-    this.fleeTimer = CONFIG.boar.fleeDuration;
-    this._fleeFrom = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
-  }
-
   registerHit(impact, arrow) {
     if (this.dead) return;
     this.dead = true;
@@ -257,100 +242,66 @@ export class Boar {
       boarId: this.entityId,
       impact: vec3Payload(impact),
       arrowId: arrow?.id,
+      ownerId: arrow?.ownerEntityId ?? null,
+      // A distância do disparo é o que decide os pontos: porco longe vale mais.
+      distance: arrow ? arrow.launchPosition.distanceTo(impact) : 0,
     });
   }
 
-  onArrowHit(_impact, _arrow) {
-    /* registerHit já tratou morte */
+  /* -------------------------------------------------------------- em rede -- */
+
+  /** Última pose vinda do servidor. A animação continua sendo calculada aqui. */
+  setNetworkTarget(p, yaw, speed, state) {
+    this.netTarget = { x: p[0], y: p[1], z: p[2], yaw, speed, state };
   }
 
-  update(dt, playerPos) {
+  /** Morte anunciada pelo servidor (ou pelo próprio acerto). */
+  killLocal() {
+    if (this.dead) return;
+    this.dead = true;
+    this.state = "dead";
+    this.speed = 0;
+  }
+
+  dispose() {
+    this.physics.unregister(this.collider);
+    this.physics.removeBody(this.body);
+    entityRegistry.unregister(this.entityId);
+    this.scene.remove(this.group);
+    this.group.traverse((o) => o.geometry?.dispose());
+  }
+
+  /**
+   * Um passo: persegue a pose recebida em vez de decidir sozinho.
+   *
+   * A 10 Hz, um amortecimento simples já dá movimento liso — um javali vagando
+   * não precisa do buffer de interpolação que os jogadores usam, porque ninguém
+   * mira nele com a precisão com que mira numa pessoa.
+   */
+  update(dt) {
     if (this.dead) {
       this.deathRoll = Math.min(Math.PI / 2, this.deathRoll + dt * 2.2);
       this.visualRoot.rotation.z = this.deathRoll;
       this.visualRoot.position.y = -0.15 * (this.deathRoll / (Math.PI / 2));
       return;
     }
-
-    const cfg = CONFIG.boar;
-    const distPlayer = this.position.distanceTo(playerPos);
-
-    if (distPlayer < cfg.visionRange) {
-      this.fleeFromPlayer(playerPos);
+    const alvo = this.netTarget;
+    if (alvo) {
+      const k = 14;
+      this.position.x = damp(this.position.x, alvo.x, k, dt);
+      this.position.y = damp(this.position.y, alvo.y, k, dt);
+      this.position.z = damp(this.position.z, alvo.z, k, dt);
+      // Ângulo pelo caminho curto: sem isso o porco dá meia-volta ao cruzar ±π.
+      let d = alvo.yaw - this.yaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      this.yaw += d * (1 - Math.exp(-k * dt));
+      this.speed = damp(this.speed, alvo.speed, k, dt);
+      this.state = alvo.state;
     }
-
-    this.stateTimer += dt;
     this.animPhase += dt * (this.state === "flee" ? 14 : 6);
-
-    switch (this.state) {
-      case "wander":
-        this.speed = cfg.walkSpeed;
-        this.moveToward(this.wanderTarget, dt);
-        if (this.stateTimer > cfg.wanderMaxTime) {
-          this.state = "eat";
-          this.stateTimer = 0;
-          this.speed = 0;
-        }
-        if (this.position.distanceTo(this.wanderTarget) < 1.2) {
-          this.pickWanderTarget(this.position.x, this.position.z);
-        }
-        break;
-      case "eat":
-        this.speed = 0;
-        if (this.stateTimer > cfg.eatDuration) {
-          this.state = "wander";
-          this.stateTimer = 0;
-          this.pickWanderTarget(this.position.x, this.position.z);
-        }
-        break;
-      case "flee":
-        this.speed = cfg.fleeSpeed;
-        if (this._fleeFrom) {
-          const away = this.position.clone().sub(this._fleeFrom).normalize();
-          this.yaw = Math.atan2(away.x, away.z);
-          this.moveDirection(away.x, away.z, dt);
-        }
-        this.fleeTimer -= dt;
-        if (this.fleeTimer <= 0) {
-          this.state = "calm";
-          this.stateTimer = 0;
-          this.speed = cfg.walkSpeed * 0.5;
-        }
-        break;
-      case "calm":
-        this.speed = cfg.walkSpeed * 0.4;
-        this.moveToward(this.wanderTarget, dt);
-        if (this.stateTimer > cfg.calmDuration) {
-          this.state = "wander";
-          this.stateTimer = 0;
-          this.pickWanderTarget(this.position.x, this.position.z);
-        }
-        break;
-    }
-
     this.animate(dt);
     this.syncPhysics();
-  }
-
-  moveToward(target, dt) {
-    const dx = target.x - this.position.x;
-    const dz = target.z - this.position.z;
-    const len = Math.hypot(dx, dz) || 1;
-    this.yaw = Math.atan2(dx / len, dz / len);
-    this.moveDirection(dx / len, dz / len, dt);
-  }
-
-  moveDirection(fx, fz, dt) {
-    const step = this.speed * dt;
-    let nx = this.position.x + fx * step;
-    let nz = this.position.z + fz * step;
-    if (!this.terrain.isWalkable(nx, nz)) {
-      this.pickWanderTarget(this.position.x, this.position.z);
-      return;
-    }
-    this.position.x = nx;
-    this.position.z = nz;
-    this.position.y = this.terrain.heightAt(nx, nz);
   }
 
   animate(dt) {
@@ -380,9 +331,5 @@ export class Boar {
       { x: this.position.x, y, z: this.position.z },
       true,
     );
-  }
-
-  get counts() {
-    return this.dead ? "dead" : "alive";
   }
 }

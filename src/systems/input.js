@@ -49,6 +49,18 @@ export class Input {
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
     this.blockDraw = false;
 
+    /** Placar aberto (Tab segurado). */
+    this.scoreboard = false;
+
+    /**
+     * Quando há um diálogo de confirmação aberto, Enter e Esc pertencem a ele.
+     *
+     * Sem isso o `Esc` de "cancelar" também soltaria o ponteiro e tiraria o
+     * jogador da mira — dois efeitos numa tecla só, e um deles indesejado.
+     */
+    this.dialogOpen = false;
+    this.onDialogKey = null;
+
     /** Eventos de uma só vez, consumidos pelo main a cada frame. */
     this.actions = {
       release: false, // soltou a corda
@@ -62,6 +74,9 @@ export class Input {
       jump: false,
       spawnBoar: false,
       toggleMusic: false,
+      askRespawn: false, // K — renascer noutro lugar
+      askResetScores: false, // Y — zerar o placar de todos
+      setMode: null, // "free" | "duel" | "boarHunt"
     };
 
     this.bind();
@@ -182,6 +197,14 @@ export class Input {
 
     window.addEventListener("keydown", (e) => {
       if (e.repeat) return;
+
+      // Diálogo aberto: Enter e Esc são dele, e mais nada é processado.
+      if (this.dialogOpen && (e.code === "Enter" || e.code === "Escape")) {
+        e.preventDefault();
+        this.onDialogKey?.(e.code === "Enter");
+        return;
+      }
+
       this.keys.add(e.code);
       switch (e.code) {
         case "Escape":
@@ -190,8 +213,30 @@ export class Input {
           if (this.active) this.disengage();
           break;
         case "Tab":
+          // Convenção de FPS. A troca de alvo, que morava aqui, foi para o Q.
           e.preventDefault();
+          this.scoreboard = true;
+          break;
+        case "KeyQ":
           this.actions.cycleTarget = true;
+          break;
+        case "KeyK":
+          this.actions.askRespawn = true;
+          break;
+        case "KeyY":
+          this.actions.askResetScores = true;
+          break;
+        case "Digit1":
+          this.actions.setMode = "free";
+          break;
+        case "Digit2":
+          this.actions.setMode = "duel";
+          break;
+        case "Digit3":
+          this.actions.setMode = "boarHunt";
+          break;
+        case "Digit4":
+          this.actions.setMode = "series";
           break;
         case "KeyC":
           this.firstPerson = true;
@@ -215,6 +260,11 @@ export class Input {
         case "KeyM":
           this.actions.toggleMusic = true;
           break;
+        case "F1":
+          // Sem isto o navegador abre a ajuda DELE por cima do jogo.
+          e.preventDefault();
+          this.actions.toggleHelp = true;
+          break;
         case "KeyH":
           this.actions.toggleHelp = true;
           break;
@@ -229,6 +279,7 @@ export class Input {
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.code);
       if (e.code === "KeyC") this.firstPerson = false;
+      if (e.code === "Tab") this.scoreboard = false;
       this.updateMovement(e);
     });
 
@@ -272,6 +323,9 @@ export class Input {
     a.jump = false;
     a.spawnBoar = false;
     a.toggleMusic = false;
+    a.askRespawn = false;
+    a.askResetScores = false;
+    a.setMode = null;
     return snapshot;
   }
 }

@@ -99,10 +99,32 @@ export class PlayerPhysics {
     const feetGround =
       terrain.heightAt(nx, nz) + CONFIG.player.height / 2;
 
-    // Só aterrissa quando está descendo. Antes, o primeiro avanço do pulo
-    // (~7 cm) caía dentro desta tolerância e era cancelado imediatamente.
-    if (this.verticalVelocity <= 0 && ny <= feetGround + 0.08) {
+    /* Existem DUAS formas de estar no chão, e antes só uma contava.
+     *
+     * A primeira é o terreno, que é uma função analítica de altura. A segunda é
+     * qualquer COLISOR sob os pés — pedra, tronco caído, cerca —, e quem
+     * responde por ela é o próprio controlador de personagem, que acabou de
+     * resolver o movimento contra a cena inteira.
+     *
+     * Sem a segunda, quem pulava em cima de uma pedra ficava para sempre na
+     * pose de salto: o corpo parava sobre a rocha, mas continuava "no ar" para
+     * o resto do jogo, com as pernas encolhidas.
+     *
+     * Só aterrissa descendo: o primeiro avanço do pulo (~7 cm) cai dentro da
+     * tolerância e seria cancelado na hora.
+     */
+    const descendo = this.verticalVelocity <= 0;
+    const sobreTerreno = descendo && ny <= feetGround + 0.08;
+    const sobreColisor = descendo && this.controller.computedGrounded();
+
+    if (sobreTerreno) {
       ny = feetGround;
+      this.verticalVelocity = 0;
+      this.grounded = true;
+      p.airborne = false;
+    } else if (sobreColisor) {
+      // Em cima de um obstáculo: o controlador já parou a queda na altura
+      // certa; aqui só registramos que há chão embaixo.
       this.verticalVelocity = 0;
       this.grounded = true;
       p.airborne = false;
@@ -139,5 +161,24 @@ export class PlayerPhysics {
     const p = this.player;
     const y = p.position.y + CONFIG.player.height / 2;
     this.body.setTranslation({ x: p.position.x, y, z: p.position.z }, true);
+  }
+
+  /**
+   * Teleporta e deixa no ar — o caminho de nascer.
+   *
+   * A queda de 10 m não ganha física própria: é este mesmo controlador, só com
+   * a altura inicial trocada. Por isso ela já acerta o relevo, escorrega em
+   * encosta e para no chão sem uma linha nova.
+   */
+  teleport(x, y, z) {
+    this.player.position.set(x, y, z);
+    this.body.setTranslation(
+      { x, y: y + CONFIG.player.height / 2, z },
+      true,
+    );
+    this.verticalVelocity = 0;
+    this.grounded = false;
+    this.player.airborne = true;
+    this.desiredHorizontal.set(0, 0, 0);
   }
 }

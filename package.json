@@ -4,17 +4,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "start": "node server/index.js",
+    "preview": "npm run build && npm start"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "Jogo 3D de arco e flecha em Three.js com simulação balística realista (Rapier).",
   "dependencies": {
-    "@dimforge/rapier3d-compat": "^0.19.3",
-    "three": "^0.185.1"
+    "ws": "^8.18.3"
   },
+  "//dependencies": "O runtime é só o `ws`. Three.js e Rapier viram bundle no build do Vite e não precisam existir na imagem de produção — por isso estão em devDependencies, e o `npm ci --omit=dev` do Dockerfile deixa a imagem em ~60 MB.",
   "devDependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "three": "^0.185.1",
     "vite": "^8.2.0"
   },
   "private": true,

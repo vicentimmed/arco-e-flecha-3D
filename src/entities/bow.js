@@ -47,6 +47,10 @@ export class Bow {
       roughness: 0.7,
       metalness: 0.0,
     });
+    /* Exposto para o dono: cada arqueiro tem o SEU arco, e o piscar da
+       invencibilidade precisa apagar o arco junto com o corpo — senão sobra um
+       arco sólido flutuando sobre um corpo semitransparente. */
+    this.materials = [black, grip, stringMat];
 
     /* riser --------------------------------------------------------------- */
     const riser = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.36, 0.072), black);

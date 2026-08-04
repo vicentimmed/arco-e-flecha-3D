@@ -31,6 +31,9 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "boar") {
     return resolveBoarHit(ctx);
   }
+  if (other.kind === "seriesTarget") {
+    return resolveSeriesHit(ctx);
+  }
   return resolveSceneryHit(ctx);
 }
 
@@ -46,6 +49,11 @@ function resolveCharacterHit({ arrow, other, impact, normal, deps }) {
     return null;
   }
 
+  /* Quem acabou de nascer está piscando e é intocável. A flecha ATRAVESSA em
+     vez de cravar — cravar numa pessoa imune daria o retorno visual de acerto
+     sem o acerto, que é pior que errar limpo. */
+  if (character.invulnerable) return null;
+
   character.onArrowHit?.(impact, arrow);
 
   const body = character.getHitBody?.();
@@ -60,7 +68,9 @@ function resolveCharacterHit({ arrow, other, impact, normal, deps }) {
     ownerId: arrow.ownerEntityId,
     impact: vec3Payload(impact),
   });
-  emitImpact(arrow, "character", character.entityId, impact, normal);
+  emitImpact(arrow, "character", character.entityId, impact, normal, {
+    label: character.displayName ?? "personagem",
+  });
 
   deps.spawnPuff?.(impact, null);
   arrow.stick(body, isDynamic);
@@ -83,7 +93,10 @@ function resolveTargetHit({ arrow, other, impact, deps }) {
   }
 
   const result = target.registerHit(impact);
-  emitImpact(arrow, "target", target.index, impact, null);
+  emitImpact(arrow, "target", target.index, impact, null, {
+    score: result.score,
+    label: result.score > 0 ? null : "armação do alvo",
+  });
   deps.onScore?.(target, result, arrow);
   arrow.stick(body, isDynamic);
   deps.retireArrow?.(arrow);
@@ -95,13 +108,32 @@ function resolveBoarHit({ arrow, other, impact, deps }) {
   if (!boar || boar.dead) return null;
 
   boar.registerHit(impact, arrow);
-  emitImpact(arrow, "boar", boar.entityId, impact, null);
+  emitImpact(arrow, "boar", boar.entityId, impact, null, { label: "porco" });
   deps.spawnPuff?.(impact, null);
 
   const body = boar.body;
   arrow.stick(body, true);
   deps.retireArrow?.(arrow);
   return { kind: "boar", entityId: boar.entityId };
+}
+
+/**
+ * Alvo da série: ele não crava a flecha, ele EXPLODE.
+ *
+ * A flecha é retirada em vez de ficar espetada porque o alvo some no mesmo
+ * instante — uma flecha pendurada no ar onde havia um alvo seria pior que
+ * nenhuma. A explosão e o próximo alvo vêm do servidor, que é quem decide se
+ * este acerto valeu (dois jogadores podem acertar quase juntos).
+ */
+function resolveSeriesHit({ arrow, other, impact, deps }) {
+  emitImpact(arrow, "seriesTarget", other.seq, impact, null, {
+    label: "alvo",
+    seriesTarget: other.series,
+  });
+  deps.spawnPuff?.(impact, null);
+  arrow.stick(null, false);
+  deps.retireArrow?.(arrow);
+  return { kind: "seriesTarget", seq: other.seq };
 }
 
 function resolveSceneryHit({ arrow, other, impact, normal, deps }) {
@@ -111,6 +143,7 @@ function resolveSceneryHit({ arrow, other, impact, normal, deps }) {
     other?.name ?? "chão",
     impact,
     normal,
+    { label: other?.name ?? "chão" },
   );
   deps.spawnPuff?.(impact, normal);
   deps.onMiss?.(arrow, other?.name ?? "chão");
@@ -119,13 +152,36 @@ function resolveSceneryHit({ arrow, other, impact, normal, deps }) {
   return { kind: "scenery" };
 }
 
-function emitImpact(arrow, targetKind, targetId, impact, normal) {
+/**
+ * Anuncia um impacto. É o ÚNICO ponto por onde todo acerto passa — cenário,
+ * alvo, porco ou personagem — e por isso é aqui que a distância do tiro é
+ * medida: um lugar só, e vale igual em primeira e em terceira pessoa.
+ *
+ * @param {object} [detail] campos específicos do tipo de alvo (pontos, rótulo)
+ */
+function emitImpact(arrow, targetKind, targetId, impact, normal, detail = {}) {
+  // A POSE do corpo, não só o ponto de contato. É ela que os outros clientes
+  // usam para encaixar a cópia da flecha, e ela precisa ser lida agora: daqui a
+  // uma linha `stick()` congela o corpo e, se o alvo tombar, tudo se move.
+  const t = arrow.body.translation();
+  const r = arrow.body.rotation();
+  const v = arrow.lastVelocity;
+
   gameEvents.emit(EventType.ARROW_IMPACT, {
     arrowId: arrow.id,
     ownerId: arrow.ownerEntityId,
     targetKind,
     targetId,
+    pose: { p: [t.x, t.y, t.z], q: [r.x, r.y, r.z, r.w] },
+    // Velocidade no instante do impacto: é com ela que o alvo tomba igual em
+    // todas as telas, em vez de cada máquina inventar o próprio tombo.
+    velocity: [v.x, v.y, v.z],
+    // Distância em LINHA RETA do disparo ao impacto — a medida que um arqueiro
+    // usa ao dizer "acertei a 60 m". O caminho percorrido é um pouco maior (a
+    // flecha cai e deriva), mas não é ele que se anuncia num campo de tiro.
+    distance: arrow.launchPosition.distanceTo(impact),
     impact: vec3Payload(impact),
     normal: normal ? vec3Payload(normal) : null,
+    ...detail,
   });
 }

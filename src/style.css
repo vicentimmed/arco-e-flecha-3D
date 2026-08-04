@@ -108,6 +108,33 @@ body {
   font-weight: 700;
 }
 
+/* Aviso de conexão caída: centralizado no topo, onde o olho passa, e pulsando
+   para não ser confundido com um dos indicadores fixos. */
+#net-chip {
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: var(--red);
+  color: var(--red);
+  font-size: 13px;
+  font-weight: 800;
+  animation: net-pulse 1.1s ease-in-out infinite;
+}
+
+#net-chip[hidden] {
+  display: none;
+}
+
+@keyframes net-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* ---------------------------------------------------------------- vento ---- */
 
 #wind-chip {
@@ -327,6 +354,17 @@ body {
   color: var(--gold);
 }
 
+/* Quantos metros a flecha percorreu. Numerais tabulares para o valor não
+   "dançar" na horizontal enquanto os dígitos mudam de tiro para tiro. */
+.toast .distance {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.toast .dim {
+  color: var(--text-dim);
+}
+
 .toast.miss {
   color: var(--text-dim);
   font-size: 15px;
@@ -353,45 +391,116 @@ body {
 
 /* -------------------------------------------------------------- ajuda ------ */
 
+/* Painel de atalhos: colunas por finalidade, não uma lista corrida.
+   Em coluna, o olho procura o GRUPO ("isto é sobre modo de jogo") e só depois a
+   linha — muito mais rápido que varrer cinco frases separadas por pontos. */
 #help {
   position: absolute;
   left: 18px;
   bottom: 18px;
-  max-width: 320px;
-  padding: 12px 16px;
+  display: grid;
+  /* Três colunas: cinco grupos cabem em duas fileiras baixas. Em duas colunas o
+     painel ficava com quase 460 px de altura — dois terços da tela só de ajuda. */
+  grid-template-columns: repeat(3, auto);
+  gap: 9px 18px;
+  padding: 10px 13px 8px;
   background: var(--ui-bg);
   border: 1px solid var(--ui-stroke);
-  border-radius: 16px;
+  border-radius: 14px;
   box-shadow: var(--shadow);
-  font-size: 12.5px;
-  line-height: 1.85;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--text-dim);
   backdrop-filter: blur(6px);
-  transition: opacity 200ms ease;
+  transition: opacity 180ms ease;
 }
 
-#help b {
-  color: var(--text);
-  font-weight: 800;
+/* Cada grupo é uma grade de duas colunas: teclas | ação. A coluna das teclas se
+   mede pela combinação mais larga do próprio grupo, então as descrições ficam
+   alinhadas e a lista é lida de cima a baixo, sem ziguezague. */
+.help-grupo {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 1px 7px;
+  align-content: start;
 }
 
-#help kbd {
-  display: inline-block;
-  min-width: 20px;
-  padding: 1px 6px;
+.help-grupo h4 {
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--gold);
+  opacity: 0.75;
+}
+
+.help-teclas {
+  white-space: nowrap;
+}
+
+.help-acao {
+  color: var(--text-dim);
+}
+
+/* O rodapé atravessa as duas colunas. */
+.help-rodape {
+  grid-column: 1 / -1;
+  padding-top: 5px;
+  border-top: 1px solid var(--ui-stroke);
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.help-rodape span {
   margin-right: 4px;
+}
+
+/* Pista de reabertura, no lugar exato onde o painel estava. */
+#help-hint {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-stroke);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+  backdrop-filter: blur(6px);
+}
+
+#help-hint[hidden] {
+  display: none;
+}
+
+#help kbd,
+#help-hint kbd {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  margin-right: 2px;
   text-align: center;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid var(--ui-stroke);
-  border-radius: 6px;
+  border-radius: 4px;
   color: var(--text);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 10px;
   font-weight: 800;
 }
 
+/* Some de verdade: só `opacity: 0` deixaria o painel roubando cliques por cima
+   do canvas, e ele ocupa um canto inteiro da tela. */
 #help.hidden {
   opacity: 0;
+  visibility: hidden;
 }
 
 /* ------------------------------------------------------------- overlay ----- */
@@ -561,9 +670,224 @@ body {
   color: #ff7d6e;
 }
 
-/* ------------------------------------------------------------ carregando -- */
+/* -------------------------------------------------------- faixa do modo ---- */
 
-#loading {
+#mode-banner {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 20px;
+  border-radius: 999px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-stroke);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+#mode-banner[hidden] {
+  display: none;
+}
+
+#mode-banner .forte {
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: var(--gold);
+}
+
+#mode-banner.duel {
+  border-color: var(--red);
+}
+
+#mode-banner.duel .forte {
+  color: var(--red);
+}
+
+/* O convite pulsa: é uma chamada para uma ação, não um rótulo de estado. */
+#mode-banner.convite {
+  border-color: var(--gold);
+  animation: net-pulse 1.4s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------- placar (Tab) */
+
+#scoreboard {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.45);
+  pointer-events: none;
+}
+
+#scoreboard[hidden] {
+  display: none;
+}
+
+.sb-card {
+  min-width: min(92vw, 520px);
+  padding: 18px 22px 14px;
+  border-radius: 16px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-stroke);
+  box-shadow: var(--shadow);
+}
+
+.sb-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.sb-modo {
+  font-size: 17px;
+  font-weight: 900;
+  color: var(--gold);
+}
+
+.sb-contagem {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+#scoreboard table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+#scoreboard th {
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: right;
+  border-bottom: 1px solid var(--ui-stroke);
+}
+
+#scoreboard th:nth-child(2) {
+  text-align: left;
+}
+
+/* A coluna que manda no modo atual fica acesa; as outras continuam ali, para a
+   tabela não mudar de forma debaixo dos olhos de quem está lendo. */
+#scoreboard th.ativa,
+#scoreboard td.ativa {
+  color: var(--gold);
+}
+
+#scoreboard td {
+  padding: 5px 8px;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+}
+
+#scoreboard tr.eu td {
+  background: rgba(245, 196, 81, 0.09);
+}
+
+.sb-nome {
+  text-align: left !important;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-cor {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+
+/* ----------------------------------------------------------- kill feed ----- */
+
+#killfeed {
+  position: absolute;
+  top: 108px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  pointer-events: none;
+}
+
+.kf-linha {
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-stroke);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+  animation: kf-in 240ms ease;
+}
+
+.kf-linha .forte {
+  font-weight: 900;
+}
+
+@keyframes kf-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+/* ------------------------------------------------------------ confirmação -- */
+
+#confirm {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.55);
+}
+
+#confirm[hidden] {
+  display: none;
+}
+
+.confirm-card {
+  padding: 22px 28px;
+  border-radius: 16px;
+  text-align: center;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-stroke);
+  box-shadow: var(--shadow);
+}
+
+.confirm-title {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.confirm-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------- entrada (e carregamento) --
+   A mesma tela faz as duas coisas: enquanto o mundo é preparado, a linha de
+   status conta em que passo está; quando termina, ela some e sobra o campo de
+   nome. Quem chega nunca fica olhando uma barra de progresso sem ter o que
+   fazer. */
+
+#lobby {
   position: absolute;
   inset: 0;
   display: flex;
@@ -574,18 +898,24 @@ body {
   transition: opacity 500ms ease;
 }
 
-#loading.done {
+#lobby.done {
   opacity: 0;
   pointer-events: none;
 }
 
-.loading-card {
+.lobby-card {
+  width: min(92vw, 360px);
   text-align: center;
+  padding: 30px 28px 26px;
+  border-radius: 20px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-stroke);
+  box-shadow: var(--shadow);
 }
 
-.loading-bow {
+.lobby-bow {
   font-size: 46px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   animation: sway 1.8s ease-in-out infinite;
 }
 
@@ -599,41 +929,95 @@ body {
   }
 }
 
-.loading-title {
-  font-size: 17px;
-  font-weight: 800;
-  margin-bottom: 14px;
+.lobby-card h1 {
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
 }
 
-.loading-bar {
-  width: 220px;
-  height: 5px;
-  margin: 0 auto;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
+.lobby-sub {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
-.loading-bar i {
+.lobby-field {
   display: block;
-  width: 40%;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--gold);
-  animation: slide 1.2s ease-in-out infinite;
+  margin: 22px 0 14px;
+  text-align: left;
 }
 
-@keyframes slide {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(250%);
-  }
+.lobby-field span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
 }
 
-.loading-step {
+#lobby-name {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--ui-stroke);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+
+#lobby-name:focus {
+  border-color: var(--gold);
+}
+
+#lobby-name::placeholder {
+  color: rgba(244, 241, 234, 0.32);
+  font-weight: 500;
+}
+
+#lobby-enter {
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  border-radius: 11px;
+  background: linear-gradient(180deg, var(--gold), var(--gold-deep));
+  color: #211703;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    filter 140ms ease,
+    transform 90ms ease;
+}
+
+#lobby-enter:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+#lobby-enter:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+#lobby-enter:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.lobby-status {
+  min-height: 17px;
   margin-top: 12px;
   font-size: 12px;
   color: var(--text-dim);
+}
+
+.lobby-status.error {
+  color: var(--red);
+  font-weight: 700;
 }

@@ -1,0 +1,9 @@
+# O `npm ci` do Dockerfile reinstala tudo; copiar node_modules do host além de
+# inútil quebra binários nativos compilados para outro sistema.
+node_modules
+dist
+.git
+.claude
+docs
+*.log
+.DS_Store

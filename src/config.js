@@ -37,9 +37,18 @@ export const CONFIG = {
     // aplicada atrás do CM, gera torque restaurador. Isso é a fletching real.
     centerOfPressureOffset: 0.13, // m
     angularDamping: 1.1, // amortece a oscilação residual da empena
-    maxStuck: 30, // flechas cravadas simultâneas (pool FIFO)
+    // O pool de flechas cravadas é POR DONO, não global. Com um pool único, o
+    // jogador que atira mais rápido apaga as flechas de todo mundo — e ver a
+    // própria flecha sumir porque um amigo disparou é o tipo de coisa que passa
+    // por bug. O teto total continua existindo, só para a memória não crescer.
+    maxStuckPerPlayer: 24, // flechas cravadas simultâneas por arqueiro
+    maxStuckTotal: 200, // teto absoluto de flechas cravadas na cena
     maxLifetime: 25, // s — some se nunca acertar nada
-    ignoreOwner: true, // ignora colisão com quem disparou (desligar em PvP)
+    // Teto de altitude. Um tiro reto para cima com tensão máxima chega a ~150 m,
+    // então isto não corta nenhuma parábola legítima — é só a rede de segurança
+    // para a flecha que sai do mundo por cima.
+    maxAltitude: 400, // m
+    ignoreOwner: true, // ignora colisão com quem disparou (nunca em quem atirou)
   },
 
   bow: {
@@ -56,9 +65,13 @@ export const CONFIG = {
     maxSpeed: 12.0, // m/s
     directionDrift: 0.055, // Hz — velocidade de giro da direção
     speedDrift: 0.09, // Hz — velocidade de variação da intensidade
-    gustChance: 0.16, // probabilidade por segundo de uma rajada
+    // A rajada NÃO é sorteada: ela sai de um canal de ruído próprio, função pura
+    // do relógio. Isso é o que permite dois jogadores verem a mesma flecha
+    // derivar do mesmo jeito sem trocar um único byte sobre a trajetória — o
+    // vento é a única entrada do voo que não viaja no evento de disparo.
+    gustRate: 0.2, // Hz — velocidade do canal de rajada
+    gustThreshold: 0.45, // -1..1 — acima disso venta forte; maior = mais raro
     gustStrength: 5.0, // m/s adicionais no pico da rajada
-    gustDuration: 2.4, // s
   },
 
   player: {
@@ -72,8 +85,15 @@ export const CONFIG = {
     runSmoothing: 4.5, // 1/s — mistura andar↔correr da animação
     height: 1.72, // m
     mouseSensitivity: 0.0022, // rad por pixel
-    pitchMin: -0.42, // rad (olhando para baixo)
-    pitchMax: 0.62, // rad (olhando para cima)
+    // Mira livre: praticamente a vertical para cima e para baixo. Os ±0,5 rad
+    // de antes travavam justamente o tiro alto, que é o que um arco faz de mais
+    // característico — a parábola longa depende de poder apontar para cima.
+    //
+    // Para em 86°, e não em 90°, porque na vertical exata a câmera perde a
+    // referência de "para cima" e a imagem gira sozinha. Os 4° que faltam não
+    // dão para mirar em nada que já não estivesse ao alcance.
+    pitchMin: -1.5, // rad ≈ -86° (olhando para baixo)
+    pitchMax: 1.5, // rad ≈ +86° (olhando para cima)
     start: { x: 1.2, z: 12.0 },
     jumpSpeed: 4.2, // m/s — impulso vertical
     colliderRadius: 0.35, // m — cápsula do character controller
@@ -149,12 +169,15 @@ export const CONFIG = {
   trail: {
     enabled: true, // traçado ligado por padrão
     width: 4.0, // px — espessura na tela
-    color: 0xffd873,
+    color: 0xffd873, // usado quando o dono não tem cor (jogo local)
     holdTime: 15, // s totalmente visível depois de completo
     fadeTime: 5, // s de desaparecimento gradual
     minSegment: 0.3, // m entre pontos registrados
     maxPoints: 700,
-    maxTrails: 24,
+    // Como o pool de flechas, o de traçados é POR DONO: o traçado do amigo não
+    // pode desaparecer porque VOCÊ atirou.
+    maxTrailsPerPlayer: 10,
+    maxTrailsTotal: 90,
   },
 
   firstPerson: {
@@ -203,15 +226,21 @@ export const CONFIG = {
     // termina numa borda e o jogador vê o vazio.
     minX: -175, // m
     maxX: 175, // m
-    minZ: -300, // m
+    minZ: -400, // m
     maxZ: 120, // m
     segmentsX: 176,
-    segmentsZ: 200,
+    // Mais segmentos porque o vale ficou 100 m mais longo: com a contagem
+    // antiga a célula esticaria e o relevo perto do novo fundo ficaria facetado.
+    segmentsZ: 244,
     // Concentração da malha: 0 = tudo no centro, 1 = grade uniforme. Com 0.34 a
     // célula tem ~0,7 m dentro da arena e ~4,5 m nos cumes distantes — detalhe
     // onde se joga, triângulos baratos onde só se olha.
     gridFocus: 0.34,
-    fogDensity: 0.0031,
+    // Névoa atmosférica. Subiu porque a serra vinha nítida demais e chapada
+    // contra o céu: sem perspectiva aérea, uma montanha a 300 m tem o mesmo
+    // contraste que a pedra ao lado do pé, e o cérebro lê as duas à mesma
+    // distância. O campo de tiro (até ~120 m) mal sente.
+    fogDensity: 0.0046,
 
     // ------------------------------------------------------------- arena ---
     // A área jogável é uma bacia fechada: piso plano cercado por sopé gramado
@@ -220,15 +249,22 @@ export const CONFIG = {
     arena: {
       halfX: 34, // m — meia-largura do piso
       zBack: 32, // m — borda atrás da arqueira (que começa em z = +12)
-      zFront: -126, // m — borda além do alvo mais distante (z ≈ -88)
+      // O vale se estende ~100 m além do que era. A trilha acompanha sozinha:
+      // `pathCenterX(z)` é função pura de z e o rebaixo da estrada é esculpido
+      // por `heightAt` em qualquer ponto — a estrada não "acaba", ela continua.
+      // É este comprimento que dá espaço para os alvos progressivos irem até a
+      // encosta da serra.
+      zFront: -226, // m
       edgeNoise: 11, // m — serpenteio da borda; sem isso a arena é um retângulo
       footBand: 16, // m — largura da encosta gramada
       footHeight: 8.5, // m — altura do sopé
       wallStart: 10, // m — onde a serra começa a subir
       rampLength: 34, // m — comprimento característico da subida (satura)
       peak: 82, // m — altura de referência das cristas
-      snowLine: 62, // m — cota média da neve
-      treeLine: 44, // m — cota acima da qual não nasce conífera
+      snowLine: 74, // m — cota média da neve (subiu junto com o verde)
+      // As coníferas sobem mais: é a vegetação que dá escala à serra, e um
+      // limite baixo deixava dois terços da montanha pelados.
+      treeLine: 62, // m — cota acima da qual não nasce conífera
       walkMargin: 12, // m — até onde a arqueira pode subir no sopé
       minWalkNormal: 0.72, // cos da inclinação máxima que ela escala (~44°)
     },
@@ -239,6 +275,109 @@ export const CONFIG = {
     shadowRange: 46, // m — meia-largura do frustum de sombra que segue o jogador
     exposure: 1.0,
     maxPixelRatio: 2,
+  },
+
+  /* ------------------------------------------------------------------ rede --
+     O jogo é para jogar com amigos. O teto de 12 não é técnico — é o número em
+     que um jogo de arco continua fazendo sentido, com espaço para mirar e
+     distância para a flecha voar. */
+  net: {
+    url: "", // vazio = mesma origem, em /ws
+    maxPlayers: 12,
+    stateHz: 20, // envio do próprio estado
+    boarHz: 10, // envio das transformações dos porcos
+    // Quanto o mundo dos OUTROS fica no passado. É este atraso que absorve o
+    // jitter da rede: com ele, dois pacotes atrasados ainda têm um par de
+    // amostras para interpolar, e o boneco alheio anda liso em vez de teleportar.
+    interpDelay: 0.1, // s
+    nameMaxLength: 16,
+    heartbeat: 15, // s entre pings (também impede timeout de proxy ocioso)
+    // Silêncio de heartbeat × (1 + faltas) = 45 s ⇒ conexão morta e vaga
+    // liberada. Sem isso, uma aba fechada à força seguraria lugar para sempre.
+    deadAfterMissed: 2,
+    // Sem isto, uma queda de rede de cinco segundos apagaria a sessão inteira
+    // de quem estava jogando sozinho.
+    emptyRoomGrace: 30, // s antes de destruir a sala vazia
+    // Quantas flechas cravadas quem entra atrasado recebe. É o que faz o campo
+    // de tiro aparecer como está, com as flechas nos alvos.
+    snapshotStuckArrows: 60,
+    // Folga entre o impacto declarado e onde a vítima estava de fato. Precisa
+    // ser generosa: quem atira vê o alvo 100 ms no passado, e correndo isso já
+    // vale quase um metro. Serve para o jogo não se contradizer, não para
+    // impedir trapaça.
+    hitTolerance: 4, // m
+    reconnectDelays: [0.4, 0.8, 1.6, 3, 5], // s — backoff, depois repete o último
+    cull: {
+      shadow: 25, // m — além disso o jogador remoto para de projetar sombra
+      hide: 160, // m — além disso nem é desenhado
+    },
+  },
+
+  /* ---------------------------------------------------------------- nascer --
+     Todo mundo nasce igual: caindo de 10 m, piscando, num ponto plano perto do
+     centro. Vale para quem entra na sala e para quem acabou de morrer. */
+  spawn: {
+    centerX: 0, // centro da bacia jogável
+    centerZ: -40,
+    radius: 38, // m — raio máximo do sorteio
+    minRadius: 6, // m — não nasce colado no centro exato
+    dropHeight: 10, // m acima do chão
+    invulnerability: 4, // s piscando e imune
+    blinkHz: 6,
+    minSeparation: 14, // m entre dois nascimentos simultâneos
+    manualCooldown: 10, // s entre renascimentos pedidos na mão (tecla K)
+    maxAttempts: 60, // tentativas de sorteio antes de relaxar o critério
+    deathDuration: 1.4, // s — o corpo tomba antes de renascer
+    respawnDelay: 2.4, // s entre morrer e nascer de novo
+  },
+
+  /* ----------------------------------------------------------------- modos - */
+  modes: {
+    duel: {
+      minPlayers: 2, // quantos precisam aceitar para começar
+      ringRadius: 46, // m — anel onde os duelistas são postos
+      minSeparation: 45, // m entre duelistas: é jogo de arco, precisa de espaço
+      inviteTimeout: 20, // s até o convite expirar
+      respawnDelay: 2.5, // s entre morrer e renascer
+    },
+    /* ------------------------------------------------------- alvos em série --
+       Um alvo por vez, cada um mais longe, subindo a estrada até a encosta da
+       serra. Some ao ser acertado e nasce outro adiante.
+
+       As distâncias crescem em PROGRESSÃO GEOMÉTRICA: de 25 m para 32 m o tiro
+       muda pouco; de 220 m para 300 m muda tudo. Um passo fixo faria os
+       primeiros alvos parecerem repetidos e os últimos, um salto no escuro. */
+    series: {
+      firstDistance: 25, // m — o primeiro alvo, logo à frente
+      lastDistance: 300, // m — o último, na encosta da serra
+      steps: 12, // quantos alvos até chegar ao mais distante
+      pointsBase: 50, // pontos do primeiro alvo
+      pointsPerStep: 1.32, // multiplicador de pontos a cada alvo vencido
+      markerHeight: 5.0, // m — altura da seta indicadora sobre o alvo
+      explosionTime: 1.0, // s de explosão ao acertar
+      startZ: 26, // m — a linha de tiro, no começo da estrada
+      lineSpread: 6, // m — afastamento lateral entre jogadores na linha
+    },
+
+    boarHunt: {
+      initialBoars: 5, // quantos aparecem ao ativar o modo
+      waveInterval: 8, // s entre ondas
+      waveSize: 2, // porcos por onda
+      waveGrowth: 1, // +N porcos a cada onda que passa
+      maxAlive: 30, // teto de porcos vivos ao mesmo tempo
+      corpseLifetime: 25, // s até o corpo sumir
+      minDistFromPlayers: 28, // m — não nasce no colo de ninguém
+      maxDistFromCenter: 70, // m
+      // Porco longe vale mais. A distância é a mesma do texto flutuante: do
+      // ponto de disparo ao impacto.
+      score: {
+        minPoints: 10, // abate colado
+        maxPoints: 200, // abate no alcance máximo pontuado
+        nearDistance: 10, // m — daqui para baixo vale o mínimo
+        farDistance: 120, // m — daqui para cima vale o máximo
+        curve: 1.6, // > 1 ⇒ a recompensa cresce mais rápido no fim
+      },
+    },
   },
 
   debug: {

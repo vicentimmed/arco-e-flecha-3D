@@ -100,9 +100,30 @@ function buildArrowMesh() {
 let nextArrowId = 1;
 
 export class Arrow {
-  constructor(scene, physics, sync, origin, direction, speed, trail = null, ownerEntityId = null) {
+  constructor(
+    scene,
+    physics,
+    sync,
+    origin,
+    direction,
+    speed,
+    trail = null,
+    ownerEntityId = null,
+    visualOnly = false,
+  ) {
     this.id = nextArrowId++;
     this.ownerEntityId = ownerEntityId;
+    /**
+     * Flecha de outro jogador: voa, desenha o traçado e não resolve colisão
+     * nenhuma.
+     *
+     * Quem atirou é a autoridade sobre o próprio acerto. Se esta cópia também
+     * resolvesse contatos, ela cravaria onde a simulação DESTA máquina achou —
+     * alguns centímetros à frente ou atrás — e o mesmo tiro teria dois destinos
+     * diferentes em duas telas. Ela voa só para ser vista, e o `impact` do dono
+     * diz onde ela para.
+     */
+    this.visualOnly = visualOnly;
     this.physics = physics;
     this.sync = sync;
     this.scene = scene;
@@ -142,10 +163,19 @@ export class Arrow {
     )
       .setMass(CONFIG.arrow.mass)
       .setFriction(0.6)
-      .setRestitution(0.0)
-      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-    this.collider = physics.createCollider(colliderDesc, this.body);
-    physics.register(this.collider, { kind: "arrow", arrow: this });
+      .setRestitution(0.0);
+
+    if (visualOnly) {
+      // Grupo 0: não colide com nada. A massa e o arrasto continuam valendo, e
+      // é isso que importa — a curva precisa ser a mesma, só o desfecho é que
+      // vem do dono.
+      colliderDesc.setCollisionGroups(0);
+      this.collider = physics.createCollider(colliderDesc, this.body);
+    } else {
+      colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+      this.collider = physics.createCollider(colliderDesc, this.body);
+      physics.register(this.collider, { kind: "arrow", arrow: this });
+    }
 
     this.syncEntry = sync.add(this.body, this.mesh);
 
@@ -317,6 +347,26 @@ export class Arrow {
     }
   }
 
+  /**
+   * Encaixa a flecha na pose exata que o DONO reportou e crava.
+   *
+   * É o fecho do modelo: a curva foi recalculada aqui e chegou perto, mas os
+   * últimos centímetros vêm de quem atirou — senão a mesma flecha ficaria em
+   * dois lugares diferentes em duas telas. O salto é de centímetros e acontece
+   * meio ping depois do impacto: ninguém vê.
+   */
+  snapTo(position, rotation, otherBody = null, isDynamic = false) {
+    if (this.stuck || this.dead) return;
+    this.body.setTranslation(position, true);
+    if (rotation) this.body.setRotation(rotation, true);
+    this.mesh.position.set(position.x, position.y, position.z);
+    if (rotation) {
+      this.mesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+    }
+    this.stick(otherBody, isDynamic);
+    this.sync.snap(this.body);
+  }
+
   dispose() {
     if (this.dead) return;
     this.dead = true;
@@ -373,10 +423,26 @@ export class ArrowManager {
     this.impactPuffs = [];
   }
 
-  spawn(origin, direction, speed, ownerEntityId = null) {
-    // Modo treino: a tela mostra somente a trajetória do disparo atual.
-    // As flechas cravadas continuam no mundo; só o desenho do caminho some.
-    if (this.trails) this.trails.clear();
+  /**
+   * @param {THREE.Vector3} origin
+   * @param {THREE.Vector3} direction unitário
+   * @param {number} speed m/s
+   * @param {object} [options]
+   * @param {number|string|null} [options.ownerEntityId] quem atirou
+   * @param {number} [options.trailColor] cor do traçado (a do dono, em rede)
+   * @param {boolean} [options.visualOnly] flecha de outro jogador: só voa
+   */
+  spawn(origin, direction, speed, options = {}) {
+    const {
+      ownerEntityId = null,
+      trailColor = CONFIG.trail.color,
+      visualOnly = false,
+    } = options;
+
+    // Cada tiro ganha o SEU traçado e não mexe nos anteriores. Antes daqui saía
+    // um `trails.clear()` — "modo treino", uma trajetória por vez. Com mais de
+    // um arqueiro em cena isso apagaria o traçado dos outros a cada disparo,
+    // que é exatamente o que se quer enxergar.
     const arrow = new Arrow(
       this.scene,
       this.physics,
@@ -384,11 +450,13 @@ export class ArrowManager {
       origin,
       direction,
       speed,
-      this.trails ? this.trails.create() : null,
+      this.trails ? this.trails.create(ownerEntityId, trailColor) : null,
       ownerEntityId,
+      visualOnly,
     );
     this.live.push(arrow);
-    this.lastArrow = arrow;
+    // A câmera de acompanhamento só segue as SUAS flechas.
+    if (!visualOnly) this.lastArrow = arrow;
     return arrow;
   }
 
@@ -432,13 +500,30 @@ export class ArrowManager {
     }
   }
 
+  /**
+   * Passa a flecha de "em voo" para "cravada" e faz a reciclagem do pool.
+   *
+   * A cota é POR DONO: quem atira mais rápido não apaga as flechas de ninguém.
+   * O teto global é só uma trava de memória, não o critério normal de descarte.
+   */
   retire(arrow) {
     const i = this.live.indexOf(arrow);
     if (i >= 0) this.live.splice(i, 1);
     this.stuck.push(arrow);
-    while (this.stuck.length > CONFIG.arrow.maxStuck) {
-      this.stuck.shift().dispose();
+
+    const { maxStuckPerPlayer, maxStuckTotal } = CONFIG.arrow;
+    const owner = arrow.ownerEntityId;
+
+    let mine = 0;
+    for (const a of this.stuck) if (a.ownerEntityId === owner) mine++;
+    for (let k = 0; k < this.stuck.length && mine > maxStuckPerPlayer; k++) {
+      if (this.stuck[k].ownerEntityId !== owner) continue;
+      this.stuck.splice(k, 1)[0].dispose();
+      k--;
+      mine--;
     }
+
+    while (this.stuck.length > maxStuckTotal) this.stuck.shift().dispose();
   }
 
   update(dt) {
@@ -448,7 +533,19 @@ export class ArrowManager {
       arrow.recordTrace();
       const t = arrow.body.translation();
       const tooOld = arrow.age > CONFIG.arrow.maxLifetime;
-      const tooFar = Math.abs(t.x) > 130 || t.z < -240 || t.z > 90 || t.y < -30;
+      /* Os limites saem do TAMANHO DO MUNDO, não de números soltos: se o
+         cenário cresce, o descarte cresce junto, e uma flecha nunca é apagada
+         ainda por cima de terreno que existe.
+         O teto em Y é o que faltava — sem ele, um tiro para o céu ficava vivo
+         o tempo de vida inteiro. */
+      const W = CONFIG.world;
+      const tooFar =
+        t.x < W.minX ||
+        t.x > W.maxX ||
+        t.z < W.minZ ||
+        t.z > W.maxZ ||
+        t.y < -30 ||
+        t.y > CONFIG.arrow.maxAltitude;
       if (tooOld || tooFar) {
         this.live.splice(i, 1);
         arrow.dispose();
@@ -520,12 +617,21 @@ export class ArrowManager {
     puff.userData.geometry.dispose();
   }
 
-  clearAll() {
-    for (const a of this.stuck) a.dispose();
-    this.stuck.length = 0;
-    for (const a of this.live) a.dispose();
-    this.live.length = 0;
-    this.lastArrow = null;
-    if (this.trails) this.trails.clear();
+  /**
+   * Limpa flechas e traçados. Sem argumento limpa tudo; com um dono, só as
+   * dele — é assim que a tecla de limpar se comporta no multiplayer, para você
+   * arrumar a sua bagunça sem apagar o tiro que o amigo acabou de dar.
+   */
+  clearAll(ownerId = undefined) {
+    const mine = (a) => ownerId === undefined || a.ownerEntityId === ownerId;
+
+    for (let i = this.stuck.length - 1; i >= 0; i--) {
+      if (mine(this.stuck[i])) this.stuck.splice(i, 1)[0].dispose();
+    }
+    for (let i = this.live.length - 1; i >= 0; i--) {
+      if (mine(this.live[i])) this.live.splice(i, 1)[0].dispose();
+    }
+    if (this.lastArrow?.dead) this.lastArrow = null;
+    if (this.trails) this.trails.clear(ownerId);
   }
 }

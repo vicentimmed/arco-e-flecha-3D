@@ -3,20 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Arco &amp; Flecha — Simulação Balística</title>
+    <title>Arco &amp; Flecha — Campo de Tiro Online</title>
   </head>
   <body>
     <div id="app">
       <canvas id="scene"></canvas>
       <div id="ui"></div>
-      <div id="loading">
-        <div class="loading-card">
-          <div class="loading-bow">🏹</div>
-          <div class="loading-title">Preparando o campo de tiro</div>
-          <div class="loading-bar"><i></i></div>
-          <div class="loading-step" id="loading-step">carregando física…</div>
-        </div>
-      </div>
+      <!-- A tela de entrada monta a si mesma em src/ui/lobby.js. Ela também faz
+           o papel da antiga tela de carregamento: enquanto a pessoa digita o
+           nome, o mundo já está sendo preparado atrás dela. -->
+      <div id="lobby"></div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

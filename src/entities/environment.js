@@ -23,8 +23,11 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
-import { ValueNoise } from "../utils/noise.js";
+import { TerrainField, pathCenterX } from "../shared/terrainField.js";
 import { clamp, smoothstep, makeRandom } from "../utils/math.js";
+
+// Reexportado porque metade do jogo importa `pathCenterX` daqui.
+export { pathCenterX };
 
 /* Paleta alpina: gramado no fundo do vale, granito acinzentado nas paredes,
    talude claro no pé das falésias e neve nos cumes. O tom cinza-esverdeado é
@@ -37,9 +40,14 @@ const PALETTE = {
   dirt: new THREE.Color("#b18e60"),
   dirtDark: new THREE.Color("#8a6a44"),
   scree: new THREE.Color("#9c9280"),
-  rockLight: new THREE.Color("#8d867b"),
-  rockWarm: new THREE.Color("#897a63"),
-  rockDark: new THREE.Color("#4f4a43"),
+  // Pasto de altitude: o verde que sobe pelas encostas suaves da serra.
+  alpine: new THREE.Color("#6f9145"),
+  // A rocha puxa para o musgo e para o oliva em vez do cinza puro. Granito
+  // exposto de verdade quase nunca é cinza limpo numa serra com chuva — e o
+  // cinza limpo era o que fazia a montanha parecer concreto.
+  rockLight: new THREE.Color("#84876d"),
+  rockWarm: new THREE.Color("#7d7a54"),
+  rockDark: new THREE.Color("#464b3c"),
   snow: new THREE.Color("#e8eef5"),
   snowShade: new THREE.Color("#b4c6da"),
 };
@@ -47,11 +55,6 @@ const PALETTE = {
 const _c1 = new THREE.Color();
 const _c2 = new THREE.Color();
 const _n1 = new THREE.Vector3();
-
-/** Centro da trilha em função de z: uma curva suave, não uma reta. */
-export function pathCenterX(z) {
-  return 3.0 * Math.sin(z * 0.016) + 1.6 * Math.sin(z * 0.0052 + 1.1);
-}
 
 /**
  * Reparametrização da malha: leva t ∈ [-1,1] em [-1,1] concentrando amostras
@@ -63,116 +66,16 @@ function focusWarp(t, a) {
 
 /* ------------------------------------------------------------- terreno ----- */
 
-export class Terrain {
-  constructor(seed = 20260731) {
-    this.noise = new ValueNoise(seed);
-    const A = CONFIG.world.arena;
-    this.centerZ = (A.zBack + A.zFront) * 0.5;
-    this.halfZ = (A.zBack - A.zFront) * 0.5;
-  }
-
-  /**
-   * Distância com sinal até a borda do piso da arena (negativo = dentro).
-   *
-   * É um retângulo arredondado (SDF de caixa) somado a um ruído de baixa
-   * frequência. O ruído é o que impede que a arena leia como "um retângulo":
-   * a borda ganha enseadas e esporões de até ~7 m, e como TODO o relevo da
-   * serra é função desta distância, os contrafortes herdam essa irregularidade
-   * de graça.
-   */
-  arenaDistance(x, z) {
-    const A = CONFIG.world.arena;
-    const qx = Math.abs(x) - A.halfX;
-    const qz = Math.abs(z - this.centerZ) - this.halfZ;
-    const ox = Math.max(qx, 0);
-    const oz = Math.max(qz, 0);
-    const box = Math.hypot(ox, oz) + Math.min(Math.max(qx, qz), 0);
-    return box + A.edgeNoise * this.noise.fbm2(x * 0.0072, z * 0.0072, 3);
-  }
-
-  /** Altura do terreno (m) em qualquer ponto do plano. */
-  heightAt(x, z) {
-    const n = this.noise;
-    const A = CONFIG.world.arena;
-
-    /* --- piso da bacia: ondulação suave, trilha plana e escavada --------- */
-    const dPath = Math.abs(x - pathCenterX(z));
-    let h =
-      0.52 * n.fbm2(x * 0.021, z * 0.021, 3) + 0.19 * n.fbm2(x * 0.082, z * 0.082, 2);
-    const onPath = 1 - smoothstep(3.0, 7.5, dPath);
-    h *= 1 - 0.8 * onPath;
-    h -= 0.14 * onPath;
-
-    const ad = this.arenaDistance(x, z);
-    if (ad <= -A.footBand) return h;
-
-    /* --- sopé gramado: a bacia fecha antes de virar rocha ---------------- */
-    h += A.footHeight * smoothstep(-A.footBand, A.footBand * 0.5, ad);
-
-    const w = ad - A.wallStart;
-    if (w <= 0) return h;
-
-    /* --- serra ------------------------------------------------------------
-       Domain warping: distorcer o espaço ANTES de amostrar o ruído é o que
-       transforma manchas genéricas em espigões e vales com direção coerente.
-       Sem isto, ruído fractal produz "morros de bolha" — exatamente o que a
-       versão anterior parecia. */
-    const wx = x + 30 * n.fbm2(x * 0.0052 + 5.2, z * 0.0052 - 2.1, 2);
-    const wz = z + 30 * n.fbm2(x * 0.0052 - 8.7, z * 0.0052 + 4.4, 2);
-
-    // Três escalas de crista: maciço → contrafortes → rugosidade.
-    const r1 = 0.5 + 0.5 * n.ridged2(wx * 0.0068, wz * 0.0068, 3);
-    const r2 = 0.5 + 0.5 * n.ridged2(wx * 0.018, wz * 0.018, 3);
-    const r3 = 0.5 + 0.5 * n.ridged2(wx * 0.044, wz * 0.044, 2);
-    // O expoente > 1 afina os cumes e alarga os vales. É a diferença entre um
-    // perfil de montanha e um perfil de duna.
-    const ridge = Math.pow(0.6 * r1 + 0.27 * r2 + 0.13 * r3, 1.5);
-
-    // A altura do maciço varia ao longo da serra: cumes e colos, não muralha.
-    const massif =
-      0.55 + 0.7 * (0.5 + 0.5 * n.fbm2(x * 0.0036 - 17.3, z * 0.0036 + 9.1, 2));
-    const rise = 1 - Math.exp(-w / A.rampLength);
-
-    h += A.peak * massif * rise * (0.22 + 0.9 * ridge);
-
-    // Estratos: degraus horizontais de rocha sedimentar nas encostas médias,
-    // atenuados perto dos cumes (onde o topo é erodido, não estratificado).
-    const bench =
-      Math.min(1, w / 14) * (1 - smoothstep(0.55, 1.0, h / (A.peak * 1.15)));
-    h += 1.5 * bench * Math.sin(h * 0.32 + n.noise2(x * 0.03, z * 0.03) * 2.4);
-
-    // Rugosidade fina só perto da arena: lá fora a malha é rala e não a
-    // resolveria — só produziria cintilação.
-    h += 2.2 * n.fbm2(x * 0.075, z * 0.075, 3) * Math.min(1, w / 8) * Math.exp(-w / 90);
-
-    return h;
-  }
-
-  /** Normal analítica por diferenças finitas. */
-  normalAt(x, z, eps = 0.6, out = new THREE.Vector3()) {
-    const hL = this.heightAt(x - eps, z);
-    const hR = this.heightAt(x + eps, z);
-    const hD = this.heightAt(x, z - eps);
-    const hU = this.heightAt(x, z + eps);
-    return out.set(hL - hR, 2 * eps, hD - hU).normalize();
-  }
-
-  /**
-   * A arqueira pode pisar aqui?
-   *
-   * Só bloqueamos as bordas reais da malha. A inclinação não cria mais paredes
-   * invisíveis: troncos, rochas e cercas são os obstáculos físicos de verdade.
-   */
-  isWalkable(x, z) {
-    const W = CONFIG.world;
-    // O limite anterior seguia o contorno da arena e coincidia com o anel de
-    // árvores. Isso parecia uma colisão enorme antes dos troncos. Agora o
-    // jogador pode atravessar a mata; só o tronco/rocha/cerca real bloqueia.
-    if (x <= W.minX + 1 || x >= W.maxX - 1) return false;
-    if (z <= W.minZ + 1 || z >= W.maxZ - 1) return false;
-    return true;
-  }
-
+/**
+ * O terreno visível.
+ *
+ * A matemática do relevo — altura, distância à arena, inclinação, onde se pode
+ * pisar — mora em `shared/terrainField.js`, sem Three.js, porque o SERVIDOR
+ * precisa das mesmas respostas para escolher onde os jogadores nascem e para
+ * fazer os porcos andarem no chão certo. Aqui fica só o que é de cliente:
+ * malha, cores e colisor.
+ */
+export class Terrain extends TerrainField {
   /** Constrói malha visual + colisor trimesh a partir da mesma geometria. */
   build(scene, physics) {
     const W = CONFIG.world;
@@ -321,10 +224,26 @@ export class Terrain {
       out.lerp(_c1.copy(PALETTE.dirt).lerp(PALETTE.dirtDark, 0.5 + 0.5 * grain), pathMix);
     }
 
+    /* Pasto de altitude: o verde não para no fundo do vale.
+       Numa serra de verdade a vegetação sobe pelas encostas suaves e só cede
+       onde o terreno fica íngreme ou alto demais. Sem esta camada, tudo acima
+       de ~30 m virava pedra cinza de uma vez e a serra lia como concreto. */
+    const alpino =
+      smoothstep(6, 26, h) * (1 - smoothstep(0.2, 0.52, slope)) *
+      (1 - smoothstep(A.treeLine + 14, A.snowLine, h));
+    if (alpino > 0.001) {
+      out.lerp(
+        _c1.copy(PALETTE.alpine).lerp(PALETTE.grassDeep, clamp(0.35 + 0.4 * patch, 0, 1)),
+        alpino * 0.85,
+      );
+    }
+
     // Rocha: aflora tanto pela inclinação quanto pela altitude — o mesmo
-    // granito não pode ficar gramado só porque um cume é achatado.
+    // granito não pode ficar gramado só porque um cume é achatado. Os limiares
+    // de altitude subiram: a pedra agora aparece de verdade só nas paredes e
+    // perto dos cumes, não em toda encosta média.
     const rockMix = clamp(
-      Math.max(smoothstep(0.16, 0.42, slope), smoothstep(16, 40, h)) + 0.12 * grain,
+      Math.max(smoothstep(0.34, 0.62, slope), smoothstep(38, 74, h)) + 0.1 * grain,
       0,
       1,
     );

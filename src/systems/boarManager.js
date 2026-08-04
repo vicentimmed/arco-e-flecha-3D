@@ -1,77 +1,91 @@
 /* ---------------------------------------------------------------------------
-   Gerenciador de porcos — spawn, IA, contagem, susto por flecha.
+   Gerenciador de porcos.
+
+   Os porcos são do SERVIDOR. Aqui só existe a casca: criar, remover e alimentar
+   cada bicho com a pose que chega a 10 Hz. A máquina de estados vive em
+   `server/boarSim.js` porque ela sorteia — e IA sorteada rodando em cada
+   navegador daria, em segundos, um bando diferente por tela: você atiraria num
+   porco que, para o seu amigo, já tinha saído dali.
+
+   O susto por flecha também é do servidor: `Room` avisa `BoarHunt.scareNear()`
+   a cada impacto, para que o bando inteiro reaja igual em todas as telas.
    --------------------------------------------------------------------------- */
 
-import { CONFIG } from "../config.js";
 import { Boar } from "../entities/boar.js";
-import { gameEvents, EventType, vec3Payload } from "../core/events.js";
-import { entityRegistry } from "../core/entityRegistry.js";
+import { boarEntity } from "../shared/protocol.js";
 
 export class BoarManager {
   constructor(scene, physics, terrain) {
     this.scene = scene;
     this.physics = physics;
     this.terrain = terrain;
-    this.boars = [];
+    /** @type {Map<number, Boar>} id do servidor → casca local */
+    this.byNetId = new Map();
+  }
 
-    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
-      if (e.impact) this.onArrowImpact(e.impact);
-    });
+  get boars() {
+    return [...this.byNetId.values()];
   }
 
   get counts() {
     let alive = 0;
     let dead = 0;
-    for (const b of this.boars) {
+    for (const b of this.byNetId.values()) {
       if (b.dead) dead++;
       else alive++;
     }
     return { alive, dead };
   }
 
-  spawnNear(playerPos) {
-    const cfg = CONFIG.boar;
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = cfg.spawnMinDist + Math.random() * (cfg.spawnMaxDist - cfg.spawnMinDist);
-      const x = playerPos.x + Math.cos(angle) * dist;
-      const z = playerPos.z + Math.sin(angle) * dist;
-      if (!this.terrain.isWalkable(x, z)) continue;
+  /** A lista completa de porcos, como o servidor a vê. */
+  applyNetwork(lista) {
+    const vistos = new Set();
 
-      const entityId = entityRegistry.createId();
-      const boar = new Boar(this.scene, this.physics, this.terrain, entityId, x, z);
-      this.boars.push(boar);
+    for (const item of lista) {
+      vistos.add(item.id);
+      let porco = this.byNetId.get(item.id);
 
-      gameEvents.emit(EventType.BOAR_SPAWN, {
-        boarId: entityId,
-        position: vec3Payload({ x, y: this.terrain.heightAt(x, z), z }),
-      });
-      return boar;
-    }
-    return null;
-  }
-
-  onArrowImpact(impact) {
-    const cfg = CONFIG.boar;
-    const p = { x: impact.x, y: impact.y, z: impact.z };
-    for (const boar of this.boars) {
-      if (boar.dead) continue;
-      const dx = boar.position.x - p.x;
-      const dz = boar.position.z - p.z;
-      const dy = boar.position.y - p.y;
-      if (Math.hypot(dx, dz, dy) < cfg.scareRadius) {
-        boar.scare(p);
-        gameEvents.emit(EventType.BOAR_SCARED, {
-          boarId: boar.entityId,
-          scareOrigin: vec3Payload(p),
-        });
+      // `d` = morto. Pode ser a primeira notícia que temos deste porco (entrei
+      // depois de ele já ter caído), então nem sempre existe um local para matar.
+      if (item.d) {
+        porco?.killLocal();
+        continue;
       }
+
+      if (!porco) {
+        porco = new Boar(
+          this.scene,
+          this.physics,
+          this.terrain,
+          boarEntity(item.id),
+          item.p[0],
+          item.p[2],
+        );
+        this.byNetId.set(item.id, porco);
+      }
+      porco.setNetworkTarget(item.p, item.y, item.v, item.s);
+    }
+
+    // Sumiu da lista do servidor: o corpo expirou e sai da cena.
+    for (const [id, porco] of [...this.byNetId]) {
+      if (vistos.has(id)) continue;
+      this.byNetId.delete(id);
+      porco.dispose();
     }
   }
 
-  update(dt, playerPos) {
-    for (const boar of this.boars) {
-      boar.update(dt, playerPos);
-    }
+  /** Morte anunciada pelo servidor. */
+  kill(id) {
+    this.byNetId.get(id)?.killLocal();
+  }
+
+  /** Sai do modo caçada: todo o bando some. */
+  clear() {
+    for (const porco of this.byNetId.values()) porco.dispose();
+    this.byNetId.clear();
+  }
+
+  update(dt) {
+    for (const porco of this.byNetId.values()) porco.update(dt);
   }
 }

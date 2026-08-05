@@ -11,12 +11,26 @@ import { gameEvents, EventType } from "../core/events.js";
 import roncoUrl from "../assets/audio/porco_ronco.mp3";
 import morrendoUrl from "../assets/audio/porco_morrendo.mp3";
 import trilhaUrl from "../assets/audio/trilha_do_javali.mp3";
+import trilhaZumbiUrl from "../assets/audio/lua_de_ossos.mp3";
 import berroUrl from "../assets/audio/alce_berro.mp3";
+import passarosUrl from "../assets/audio/passaros_dia.mp3";
+import grilosUrl from "../assets/audio/grilos_noite.mp3";
+import lobosUrl from "../assets/audio/lobos_uivo.mp3";
+import loboAlcateiaUrl from "../assets/audio/lobo_alcateia_uivo.mp3";
+import loboMorteUrl from "../assets/audio/lobo_morte_uivo.mp3";
 
 const TAU = Math.PI * 2;
 
-/** Volume da trilha de fundo. Ver o comentário em `AudioSystem` para o porquê. */
-const MUSIC_VOLUME = 0.1;
+/** Volume da trilha de fundo. Um pouco abaixo para os ambientes respirarem. */
+const MUSIC_VOLUME_DAY = 0.09;
+/** Noite dos zumbis: a trilha sobe um pouco — é ela que carrega o clima. */
+const MUSIC_VOLUME_ZOMBIE = 0.11;
+const BIRDS_VOLUME = 0.5;
+const CRICKETS_VOLUME = 0.22;
+/** Uivos distantes de matilha — espaçados, só para o clima aterrorizante. */
+const AMBIENT_HOWL_MIN_INTERVAL = 22;
+const AMBIENT_HOWL_MAX_INTERVAL = 55;
+const AMBIENT_HOWL_VOLUME = 0.62;
 
 function makeNoiseBuffer(ctx, duration, type = "impact") {
   const sampleRate = ctx.sampleRate;
@@ -318,7 +332,7 @@ export class AudioSystem {
        um `PositionalAudio` cria um nó de panner no contexto de áudio, e quem
        nunca entrar no modo zumbi não deve pagar por oito deles. */
     this.dedicated = new Map();
-    this.dedicatedSize = { zombieMoan: 8, elkVoice: 4 };
+    this.dedicatedSize = { zombieMoan: 8, elkVoice: 4, wolfHowl: 6 };
 
     this._initBuffers();
 
@@ -335,10 +349,30 @@ export class AudioSystem {
      * que importam. */
     this.music = new THREE.Audio(this.listener);
     this.music.setLoop(true);
-    this.music.setVolume(MUSIC_VOLUME);
+    this.music.setVolume(MUSIC_VOLUME_DAY);
+    /* Duas trilhas no mesmo `Audio`: a do dia (`trilha_do_javali`) e a da noite
+       dos zumbis (`lua_de_ossos`). Só uma toca por vez — a troca é em
+       `setAmbientNight`, que também cala os pássaros e deixa os grilos. */
+    this._musicTrack = "day"; // "day" | "zombie"
+    this._musicBuffers = { day: null, zombie: null };
     // Só toca quando o arquivo chegar; `startMusic` é chamado de novo por conta
     // disso, porque o desbloqueio do áudio costuma acontecer antes do download.
-    this._loadMusic();
+    this._loadMusic("day", trilhaUrl);
+    this._loadMusic("zombie", trilhaZumbiUrl);
+
+    /* Ambientes de natureza — em paralelo com a trilha, trocam com o modo. */
+    this.birds = new THREE.Audio(this.listener);
+    this.birds.setLoop(true);
+    this.birds.setVolume(BIRDS_VOLUME);
+    this.crickets = new THREE.Audio(this.listener);
+    this.crickets.setLoop(true);
+    this.crickets.setVolume(CRICKETS_VOLUME);
+    this._ambientMode = "day"; // "day" | "night"
+    this._ambientHowlTimer = 0;
+    this.howlClips = null;
+    this._loadAmbient(this.birds, passarosUrl, () => this._syncAmbient());
+    this._loadAmbient(this.crickets, grilosUrl, () => this._syncAmbient());
+    this._loadAmbientHowls();
 
     gameEvents.on(EventType.ARROW_SHOT, (e) => {
       if (e.origin) this.play3D("bow", e.origin, 0.85);
@@ -348,7 +382,9 @@ export class AudioSystem {
       const pos = e.impact;
       if (e.targetKind === "target") this.play3D("hitTarget", pos, 1);
       else if (e.targetKind === "boar") this.play3D("hitBoar", pos, 1.1);
-      else if (e.targetKind === "elk") this.play3D("elkHit", pos, 1.2);
+      // Alce: nenhum baque sintético no impacto — o berro MP3 sai só do
+      // evento da sala (ELK_HIT), para todo mundo ouvir o mesmo grito.
+      else if (e.targetKind === "elk") return;
       else if (e.targetKind === "bird") this.play3D("hitBoar", pos, 0.5);
       else if (e.targetKind === "character") this.play3D("hitCharacter", pos, 1);
       else this.play3D("hitScenery", pos, 0.7);
@@ -389,7 +425,7 @@ export class AudioSystem {
       rasp: 0.18,
       growl: 0.6,
     });
-    this.buffers.elkHit = makeToneBuffer(this.ctx, 70, 0.26);
+    // `elkHit` sintético removido: no acerto só toca o MP3 (`elkVoice`).
     // Pássaro: guincho curto e agudo, sem rosnado.
     this.buffers.birdDeath = makeCryBuffer(this.ctx, {
       duration: 0.42,
@@ -436,6 +472,24 @@ export class AudioSystem {
       growl: 0.8,
     });
 
+    /* Lobo: fallback sintetizado até os MP3 chegarem. */
+    this.buffers.wolfHowl = makeCryBuffer(this.ctx, {
+      duration: 1.05,
+      from: 780,
+      to: 420,
+      vibrato: 38,
+      rasp: 0.1,
+      growl: 0.15,
+    });
+    this.buffers.wolfDeath = makeCryBuffer(this.ctx, {
+      duration: 0.78,
+      from: 1100,
+      to: 380,
+      vibrato: 55,
+      rasp: 0.12,
+      growl: 0.1,
+    });
+
     // A cabeçada: pancada seca, sem altura definida. Galhada em corpo.
     this.buffers.elkGore = makeThumpBuffer(this.ctx);
 
@@ -449,6 +503,8 @@ export class AudioSystem {
     // no caso do ronco, que não tem substituto — melhor mudo que errado).
     this._loadFile("boarDeath", morrendoUrl);
     this._loadFile("boarIdle", roncoUrl);
+    this._loadFile("wolfHowl", loboAlcateiaUrl);
+    this._loadFile("wolfDeath", loboMorteUrl);
     this._loadElkVoice();
   }
 
@@ -521,10 +577,14 @@ export class AudioSystem {
   unlock() {
     if (this.unlocked) {
       this.startMusic();
+      this._syncAmbient();
       return;
     }
     this.unlocked = true;
-    const start = () => this.startMusic();
+    const start = () => {
+      this.startMusic();
+      this._syncAmbient();
+    };
     if (this.ctx.state === "suspended") {
       this.ctx.resume().then(start).catch(() => {});
     } else {
@@ -533,31 +593,136 @@ export class AudioSystem {
   }
 
   /**
-   * Baixa e instala a trilha.
+   * Baixa e guarda uma trilha (`day` ou `zombie`).
    *
    * Corre em paralelo com o resto da partida: o jogo entra em campo sem esperar
-   * por seis megabytes de música, e ela começa a tocar quando chegar. Falhou o
+   * por megabytes de música, e ela começa a tocar quando chegar. Falhou o
    * download? O jogo continua, sem trilha — som de fundo nunca é motivo para
    * segurar ou quebrar uma partida.
    */
-  async _loadMusic() {
+  async _loadMusic(track, url) {
     try {
-      const resposta = await fetch(trilhaUrl);
+      const resposta = await fetch(url);
       const bytes = await resposta.arrayBuffer();
-      this.music.setBuffer(await this.ctx.decodeAudioData(bytes));
-      this.startMusic();
+      this._musicBuffers[track] = await this.ctx.decodeAudioData(bytes);
+      // Só reaplica se esta for a trilha ativa — carregar a do zumbi no meio
+      // do dia não pode trocar o que está tocando.
+      if (this._musicTrack === track) this._applyMusicTrack();
     } catch {
       /* sem trilha; o jogo não sente */
     }
   }
 
+  async _loadAmbient(audio, url, onReady) {
+    try {
+      const resposta = await fetch(url);
+      const bytes = await resposta.arrayBuffer();
+      audio.setBuffer(await this.ctx.decodeAudioData(bytes));
+      onReady?.();
+    } catch {
+      /* sem ambiente */
+    }
+  }
+
+  /**
+   * Noite dos zumbis: grilos + `lua_de_ossos` em loop.
+   * Dia (qualquer outro modo): pássaros + trilha original.
+   */
+  setAmbientNight(noite) {
+    this._ambientMode = noite ? "night" : "day";
+    this._musicTrack = noite ? "zombie" : "day";
+    this.music.setVolume(noite ? MUSIC_VOLUME_ZOMBIE : MUSIC_VOLUME_DAY);
+    this._ambientHowlTimer = noite ? this._nextAmbientHowlDelay() : 0;
+    this._syncAmbient();
+    this._applyMusicTrack();
+  }
+
+  /** Uivos de matilha distante — só no modo zumbi, entre um e outro com folga. */
+  tickAmbient(dt, listenerPos) {
+    if (this._ambientMode !== "night" || !this.unlocked || !listenerPos) return;
+    this._ambientHowlTimer -= dt;
+    if (this._ambientHowlTimer > 0) return;
+    this._ambientHowlTimer = this._nextAmbientHowlDelay();
+    this._playAmbientHowl(listenerPos);
+  }
+
+  _nextAmbientHowlDelay() {
+    return (
+      AMBIENT_HOWL_MIN_INTERVAL +
+      Math.random() * (AMBIENT_HOWL_MAX_INTERVAL - AMBIENT_HOWL_MIN_INTERVAL)
+    );
+  }
+
+  /**
+   * Fatia o gravado de lobos em uivos isolados (mesma lógica do berro do alce).
+   * Falhou? Fica mudo — os uivos posicionais dos lobos vivos ainda funcionam.
+   */
+  async _loadAmbientHowls() {
+    try {
+      const resposta = await fetch(lobosUrl);
+      const bytes = await resposta.arrayBuffer();
+      const inteiro = await this.ctx.decodeAudioData(bytes);
+      const trechos = sliceByEnergy(this.ctx, inteiro, 6);
+      if (trechos.length) this.howlClips = trechos;
+    } catch {
+      /* sem uivos ambientais */
+    }
+  }
+
+  _playAmbientHowl(listenerPos) {
+    const clips = this.howlClips;
+    if (!clips?.length) return;
+    const buffer = clips[Math.floor(Math.random() * clips.length)];
+    const ang = Math.random() * TAU;
+    const dist = 42 + Math.random() * 38;
+    this._playClip3D(buffer, {
+      x: listenerPos.x + Math.cos(ang) * dist,
+      y: listenerPos.y + (Math.random() - 0.25) * 10,
+      z: listenerPos.z + Math.sin(ang) * dist,
+    }, AMBIENT_HOWL_VOLUME);
+  }
+
+  _syncAmbient() {
+    if (!this.unlocked) return;
+    const dia = this._ambientMode !== "night";
+    this._playOrStop(this.birds, dia);
+    this._playOrStop(this.crickets, !dia);
+  }
+
+  /**
+   * Coloca no `Audio` o buffer da trilha ativa e (re)inicia se a música
+   * estiver ligada. Trocar buffer com o som tocando estala — por isso para,
+   * troca e só então toca de novo.
+   */
+  _applyMusicTrack() {
+    const buffer = this._musicBuffers[this._musicTrack];
+    if (!buffer) return;
+
+    const precisaTrocar = this.music.buffer !== buffer;
+    if (precisaTrocar) {
+      if (this.music.isPlaying) this.music.stop();
+      this.music.setBuffer(buffer);
+    }
+
+    if (!this.unlocked || !this.musicEnabled) return;
+    if (!this.music.isPlaying) this.music.play();
+  }
+
+  _playOrStop(audio, play) {
+    if (!audio?.buffer) return;
+    if (play) {
+      if (!audio.isPlaying) audio.play();
+    } else if (audio.isPlaying) {
+      audio.stop();
+    }
+  }
+
   startMusic() {
-    // `music.buffer` ainda é null enquanto o mp3 não chegou — tocar sem buffer
-    // lança, e este método é chamado tanto pelo desbloqueio quanto pelo fim do
-    // download, sem ordem garantida entre os dois.
-    if (!this.unlocked || !this.musicEnabled || !this.music.buffer) return;
-    if (this.music.isPlaying) return;
-    this.music.play();
+    // O buffer da trilha ativa ainda pode ser null enquanto o mp3 não chegou —
+    // tocar sem buffer lança, e este método é chamado tanto pelo desbloqueio
+    // quanto pelo fim do download, sem ordem garantida entre os dois.
+    this._applyMusicTrack();
+    this._syncAmbient();
   }
 
   toggleMusic() {
@@ -630,8 +795,17 @@ export class AudioSystem {
     if (!buffer) return;
 
     const dedicado = this.dedicatedSize[soundId] !== undefined;
+    this._playClip3D(buffer, position, volume, dedicado ? soundId : null);
+  }
+
+  /**
+   * Toca um buffer já decodificado num ponto 3D.
+   * @param {string|null} dedicatedId quando setado, usa o anel dedicado desse som.
+   */
+  _playClip3D(buffer, position, volume = 1, dedicatedId = null) {
+    const dedicado = dedicatedId != null;
     const audio = dedicado
-      ? this._dedicatedVoice(soundId)
+      ? this._dedicatedVoice(dedicatedId)
       : (this.pool.pop() ?? this._newVoice());
 
     const holder = new THREE.Object3D();

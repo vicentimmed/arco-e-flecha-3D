@@ -103,13 +103,16 @@ class Game {
     this.birds = new BirdManager(this.scene, physics, this.terrain, (x, z) =>
       this.environment.nearestPerch(x, z),
     );
-    this.zombies = new ZombieManager(this.scene, physics, this.terrain);
+    this.zombies = new ZombieManager(this.scene, physics, this.terrain, this.arrows);
     this.torches = new TorchRing(this.scene, physics, this.terrain);
     /** 0 = dia, 1 = noite. Persegue `nightTarget` — ver `updateNight`. */
     this.night = 0;
     this.nightTarget = 0;
     /** Último estado do modo zumbi vindo da sala (vidas, horda, caídos). */
     this.zombieState = null;
+    /** Estado da caçada ao alce (caídos / fim de partida). */
+    this.elkState = null;
+    this._elkHudCountdown = false;
     /** A tela de vitória da caçada está na tela, esperando o Enter que a fecha. */
     this.huntVictoryOpen = false;
 
@@ -153,7 +156,7 @@ class Game {
     this.debug.ctx.net = this.net;
     this.remotes = new RemotePlayers(this.scene, physics, this.terrain);
     this.remoteArrows = new RemoteArrows(this.arrows, () => this.targets);
-    this.series = new TargetSeriesView(this.scene, physics, this.terrain);
+    this.series = new TargetSeriesView(this.scene, physics, this.terrain, this.arrows);
     this.respawn = new Respawn(this.player, this.playerPhysics);
     this.death = new Death(this.player, this.terrain);
     this.lastStateSent = -Infinity;
@@ -256,11 +259,15 @@ class Game {
       if (e.ownerId !== this.player.entityId) return;
       const id = zombieIdFrom(e.zombieId);
       if (id == null) return;
-      if (e.head) this.zombies.kill(id, true);
+      const limiar = CONFIG.modes.zombie.fullDrawKillSpeed ?? CONFIG.bow.maxSpeed * 0.98;
+      const fullDraw = (e.speed ?? 0) >= limiar;
+      // Lobo, headshot ou tensão máxima: caem na hora.
+      if (e.wolf || e.head || fullDraw) this.zombies.kill(id, e.head === true);
       this.net.send(C2S.ZOMBIE_HIT, {
         id,
         head: e.head === true,
         d: Math.round(e.distance * 100) / 100,
+        v: Math.round((e.speed ?? 0) * 10) / 10,
       });
     });
 
@@ -355,6 +362,7 @@ class Game {
       if (msg.snapshot.zombies?.length) this.zombies.applyNetwork(msg.snapshot.zombies);
       this.torches.setStates(msg.snapshot.torches);
       this.zombieState = msg.snapshot.zombieStatus ?? null;
+      this.elkState = msg.snapshot.elkStatus ?? null;
       this.series.setTarget(msg.snapshot.series ?? null);
       this.applyMode(msg.snapshot.mode);
       this.scoreboard.setScores(msg.snapshot.scores);
@@ -384,6 +392,13 @@ class Game {
       if (msg.id === net.me?.id) {
         this.death.revive();
         this.respawn.begin(msg);
+        /* O rumo da câmera pode vir do servidor. Na caçada ao alce ele vem
+           sempre, apontado para o bicho: nascer de costas para o único alvo do
+           modo transformava o primeiro segundo num giro de mouse às cegas. */
+        if (msg.yaw != null) {
+          this.input.yaw = msg.yaw;
+          this.input.pitch = 0;
+        }
         this.reloadTimer = 0;
         this.drawTime = 0;
         this.input.drawing = false;
@@ -484,11 +499,15 @@ class Game {
       const alce = this.elks.byNetId.get(msg.id);
       if (!alce) return;
       alce.health = msg.health;
+      // Só o berro gravado (MP3 fatiado) — sem tom sintético de impacto/dor.
       gameEvents.emit(EventType.AUDIO_PLAY, {
-        sound: "elkPain",
+        sound: "elkVoice",
+        variant: "hit",
         position: vec3Payload(alce.position),
-        volume: 1.25,
+        volume: 1.35,
       });
+      // A segunda flecha no meio da investida quebrou a coragem do bicho.
+      if (msg.scared) this.hud.toast("o alce desistiu da investida");
     });
 
     net.on(S2C.ELK_DEATH, (msg) => {
@@ -499,6 +518,25 @@ class Game {
         { text: "  \u{1F98C}  " },
         { text: `+${msg.points}`, forte: true },
       ]);
+    });
+
+    net.on(S2C.ELK_STATUS, (msg) => {
+      this.elkState = msg;
+    });
+
+    net.on(S2C.ELK_OVER, (msg) => {
+      this.elkState = { ...(this.elkState ?? {}), over: true, reason: msg.reason };
+      if (msg.reason === "win") {
+        this.huntVictoryOpen = true;
+        this.hud.showElkVictory(msg.ranking ?? [], this.net.me?.id, msg.finisher ?? null);
+        gameEvents.emit(EventType.AUDIO_PLAY, {
+          sound: "victoryFanfare",
+          position: vec3Payload(this.player.position),
+          volume: 1.0,
+        });
+      } else {
+        this.hud.showZombieCenter("GAME OVER", "o alce derrubou a caçada", "gameover");
+      }
     });
 
     net.on(S2C.BIRDS, (msg) => this.birds.applyNetwork(msg.k));
@@ -525,6 +563,9 @@ class Game {
       this.hud.hideZombieCenter();
       this.huntVictoryOpen = false;
       this.hud.hideHuntVictory();
+      this.zombieState = null;
+      this.elkState = null;
+      this._elkHudCountdown = false;
       this.rig.returnToArcher();
     });
 
@@ -576,7 +617,13 @@ class Game {
       this.zombies.kill(msg.id, msg.head);
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
-        { text: msg.head ? "  \u{1F525}  " : "  \u{1F3F9}  " },
+        {
+          text: msg.wolf
+            ? "  \u{1F43A}  "
+            : msg.head
+              ? "  \u{1F525}  "
+              : "  \u{1F3F9}  ",
+        },
         { text: `+${msg.points}`, forte: true },
         ...(msg.distance ? [{ text: `   ${msg.distance.toFixed(0)} m` }] : []),
       ]);
@@ -711,6 +758,7 @@ class Game {
     this.zombies.update(dt, this.renderer.camera);
     this.torches.update(dt);
     this.updateNight(dt);
+    if (this._zombieOn) this.audio.tickAmbient(dt, this.renderer.camera.position);
     this.trails.update(dt);
     this.particles.update(dt);
     this.environment.update(dt, this.wind.vector);
@@ -777,6 +825,9 @@ class Game {
     if (a.spawnBoar) this.net.send(C2S.SPAWN_BOAR);
     // Um alce avulso, em qualquer modo. Como o porco do P, não vale ponto.
     if (a.spawnElk) this.net.send(C2S.SPAWN_ELK);
+    if (a.spawnElkWolves && this.mode === "elkHunt") {
+      this.net.send(C2S.SPAWN_ELK_WOLVES);
+    }
 
     if (a.setMode) this.net.send(C2S.MODE, { mode: a.setMode });
     if (a.toggleMusic) {
@@ -834,6 +885,10 @@ class Game {
     }
 
     this.applyZombieMode(msg.mode === "zombie");
+    if (msg.mode !== "elkHunt") {
+      this.elkState = null;
+      this._elkHudCountdown = false;
+    }
   }
 
   /** Aplica o vento na flecha localmente (já decidido pela sala). */
@@ -867,6 +922,7 @@ class Game {
 
     this.nightTarget = ligado ? 1 : 0;
     this.arrows.fireArrows = ligado;
+    this.audio.setAmbientNight(ligado);
 
     /* A câmera da flecha atrapalha o cerco: ela tira o olho do resto da horda
        bem no momento em que ela se aproxima por todos os lados. Por isso o
@@ -945,9 +1001,25 @@ class Game {
     this.player.setReload(recarregando && dur > 0 ? 1 - this.reloadTimer / dur : 0);
 
     this.input.blockDraw = this.rig.isArrowCam || morto || recarregando;
+    this.input.blockDrawReason = morto
+      ? "dead"
+      : this.rig.isArrowCam
+        ? "arrowCam"
+        : recarregando
+          ? "reload"
+          : null;
     if (recarregando) {
-      this.input.drawing = false;
       this.drawTime = 0;
+      if (!this.input.primaryDown) this.input.drawing = false;
+    } else if (
+      this.input.primaryDown &&
+      !morto &&
+      !this.rig.isArrowCam &&
+      !this.input.drawing
+    ) {
+      // Clique segurado durante o reload (ou câmera da flecha): assim que o
+      // bloqueio some, começa a tensionar sem exigir um segundo clique.
+      this.input.drawing = true;
     }
 
     if (this.input.drawing && !morto && !recarregando) this.drawTime += dt;
@@ -1272,6 +1344,35 @@ class Game {
     }
   }
 
+  /**
+   * Countdown de respawn no modo alce — mesma faixa central do zumbi.
+   * Enquanto o número está na tela, o jogador está morto (espectador: só
+   * olha ao redor; movimento e tiro já estão bloqueados por `death.dying`).
+   */
+  updateElkHud() {
+    if (this.mode !== "elkHunt") {
+      if (this._elkHudCountdown) {
+        this.hud.hideZombieCenter();
+        this._elkHudCountdown = false;
+      }
+      return;
+    }
+    const st = this.elkState;
+    if (!st || st.over) return;
+
+    const eu = st.downs?.find((d) => d.id === this.net.me?.id);
+    const falta = (eu?.until ?? 0) - this.net.serverTime;
+    if (falta <= 0) {
+      if (this._elkHudCountdown) {
+        this.hud.hideZombieCenter();
+        this._elkHudCountdown = false;
+      }
+      return;
+    }
+    this._elkHudCountdown = true;
+    this.hud.showZombieCenter(String(Math.ceil(falta / 1000)), "renascendo…");
+  }
+
   updateHud() {
     const fraction = drawFraction(this.drawTime);
     this.hud.setDraw(fraction, fraction > 0 ? drawSpeed(this.drawTime) : 0);
@@ -1293,6 +1394,7 @@ class Game {
     this.hud.setElk(alce ? alce.health : null, alce?.state ?? null);
 
     this.updateZombieHud();
+    this.updateElkHud();
   }
 
   start() {

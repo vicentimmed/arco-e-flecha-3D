@@ -553,14 +553,14 @@ export class Elk {
         const antes = this.state;
         this.state = alvo.state;
         if (
-          (alvo.state === "flee" && antes !== "charge") ||
-          alvo.state === "charge"
+          (alvo.state === "flee" && antes !== "charge" && antes !== "dodge") ||
+          alvo.state === "charge" ||
+          alvo.state === "dodge"
         ) {
           gameEvents.emit(EventType.AUDIO_PLAY, {
             sound: "elkVoice",
-            variant: alvo.state,
+            variant: alvo.state === "dodge" ? "flee" : alvo.state,
             position: vec3Payload(this.position),
-            // A investida berra mais alto que a fuga: é uma ameaça, não um susto.
             volume: alvo.state === "charge" ? 1.5 : 1.05,
           });
         }
@@ -667,44 +667,44 @@ export class Elk {
       flee: 0.12,
       charge: 0.55,
       recover: -0.15,
+      dodge: 0.05,
     }[this.state] ?? 0.05;
     this.neck.rotation.x += (alvoNeck - this.neck.rotation.x) * 0.12;
 
     const investindo = this.state === "charge";
     const atento = this.state === "alert";
+    const desviando = this.state === "dodge";
     this.head.rotation.x = investindo
       ? -0.2
       : atento
         ? -0.15
-        : Math.sin(this.animPhase * 0.7) * 0.05;
-    // Atento, ele vira a cabeça devagar de um lado para o outro — vigiando.
+        : desviando
+          ? -0.05
+          : Math.sin(this.animPhase * 0.7) * 0.05;
     this.head.rotation.y = atento ? Math.sin(this.animPhase * 0.5) * 0.28 : 0;
 
-    const abertura = 0.7 * Math.min(1, this.speed / 7);
-    const andando = this.speed > 0.1;
-    const swing = andando ? Math.sin(this.animPhase) * abertura : 0;
+    const abertura = desviando
+      ? 0.95
+      : 0.7 * Math.min(1, this.speed / 7);
+    const andando = this.speed > 0.1 || desviando;
+    const swing = andando ? Math.sin(this.animPhase * (desviando ? 1.8 : 1)) * abertura : 0;
     for (let i = 0; i < this.legs.length; i++) {
       const perna = this.legs[i];
       const fase = i === 0 || i === 3 ? 1 : -1;
       perna.group.rotation.x = fase * swing;
 
-      /* O JOELHO DOBRA (Fase 5B.3).
-       *
-       * A dobra acompanha a fase de BALANÇO — o meio ciclo em que o pé está no
-       * ar —, e não o ciclo inteiro: uma perna que dobra enquanto sustenta o
-       * peso enterra o casco no chão. `max(0, ±sen)` isola essa metade.
-       *
-       * A dianteira dobra para TRÁS e a traseira para a FRENTE, porque o
-       * jarrete é um tornozelo e o joelho é um joelho — eles são articulações
-       * anatomicamente opostas. Dobrar as quatro para o mesmo lado é o erro que
-       * faz um quadrúpede animado parecer de brinquedo.
-       */
-      const balanco = andando ? Math.max(0, fase * Math.sin(this.animPhase)) : 0;
+      const balanco = andando ? Math.max(0, fase * Math.sin(this.animPhase * (desviando ? 1.8 : 1))) : 0;
       perna.joelho.rotation.x = (perna.frente ? -1 : 1) * balanco * abertura * 1.15;
     }
 
-    this.bodyMesh.position.y =
-      Math.abs(Math.sin(this.animPhase)) * Math.min(0.06, this.speed * 0.008);
+    // No dodge o servidor já sobe o Y; o bounce local reforça o galope.
+    const bounceBase = desviando
+      ? 0.12 + Math.abs(Math.sin(this.animPhase * 2)) * 0.08
+      : Math.abs(Math.sin(this.animPhase)) * Math.min(0.06, this.speed * 0.008);
+    this.bodyMesh.position.y = bounceBase;
+    if (this.visualRoot) {
+      this.visualRoot.rotation.x = desviando ? -0.18 : this.visualRoot.rotation.x * 0.9;
+    }
   }
 
   /**

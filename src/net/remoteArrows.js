@@ -19,6 +19,8 @@
 import * as THREE from "three";
 import { CONFIG } from "../config.js";
 import { vecFrom } from "../shared/protocol.js";
+import { entityRegistry } from "../core/entityRegistry.js";
+import { RAPIER } from "../core/physics.js";
 
 const _origem = new THREE.Vector3();
 const _direcao = new THREE.Vector3();
@@ -67,9 +69,12 @@ export class RemoteArrows {
 
     const pose = vecFrom(msg.p);
     const contato = msg.c ? vecFrom(msg.c) : pose;
-    const alvo = msg.k === "target" ? this.getTargets()?.[msg.ti] : null;
+    const alvo =
+      msg.k === "target"
+        ? this.getTargets()?.[msg.ti]
+        : entityRegistry.get(msg.ti);
 
-    if (alvo && msg.v) {
+    if (msg.k === "target" && alvo && msg.v) {
       const corpo = alvo.body;
       _impulso.x = msg.v[0] * CONFIG.arrow.mass;
       _impulso.y = msg.v[1] * CONFIG.arrow.mass;
@@ -92,13 +97,17 @@ export class RemoteArrows {
       return;
     }
 
-    const corpoAlvo = alvo?.body ?? null;
-    const dinamico = corpoAlvo ? corpoAlvo.bodyType() === 0 : false;
+    const corpoAlvo = alvo?.body ?? alvo?.getHitBody?.() ?? null;
+    const tipo = corpoAlvo?.bodyType?.();
+    const dinamico =
+      tipo === RAPIER.RigidBodyType.Dynamic ||
+      tipo === RAPIER.RigidBodyType.KinematicPositionBased;
     flecha.snapTo(
       pose,
       msg.q ? { x: msg.q[0], y: msg.q[1], z: msg.q[2], w: msg.q[3] } : null,
       corpoAlvo,
       dinamico,
+      alvo,
     );
     this.arrows.retire(flecha);
   }

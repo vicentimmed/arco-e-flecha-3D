@@ -18,7 +18,7 @@ const COLUNAS = [
   { chave: "kills", titulo: "Abates", modo: "duel" },
   { chave: "deaths", titulo: "Mortes", modo: "duel" },
   { chave: "boars", titulo: "Porcos", modo: "boarHunt" },
-  { chave: "elks", titulo: "Alces", modo: "elkHunt" },
+  { chave: "elkHits", titulo: "Flechas", modo: "elkHunt" },
   // Os pássaros não têm modo: eles voam em todas as partidas, e a coluna nunca
   // se destaca por isso mesmo — ela é um extra, não um objetivo.
   { chave: "birds", titulo: "Aves", modo: null },
@@ -110,7 +110,7 @@ export class Scoreboard {
       duel: "kills",
       boarHunt: "points",
       series: "points",
-      elkHunt: "points",
+      elkHunt: "elkHits",
     }[this.mode];
     const linhas = [...this.scores];
     if (chave) linhas.sort((a, b) => (b[chave] ?? 0) - (a[chave] ?? 0));

@@ -70,6 +70,7 @@ const ATALHOS = [
       [["Y"], "zerar placar"],
       [["P"], "soltar porco"],
       [["L"], "soltar alce"],
+      [["O"], "lobos do alce (teste)"],
     ],
   },
   {
@@ -232,10 +233,10 @@ export class HUD {
       <div id="toasts"></div>
 
       <!-- Preenchido por montarAtalhos(), a partir da tabela ATALHOS. -->
-      <div id="help"></div>
+      <div id="help" class="hidden"></div>
 
       <!-- Com o painel fechado, esta é a única pista de como reabri-lo. -->
-      <div id="help-hint" hidden><kbd>F1</kbd><span>atalhos</span></div>
+      <div id="help-hint"><kbd>F1</kbd><span>atalhos</span></div>
 
       <div id="lock-hint">
         <div class="card">
@@ -538,12 +539,15 @@ export class HUD {
     if (!ranking.length) return;
     const {
       title = "CAÇADA CONCLUÍDA",
+      winnerLabel = "Vencedor",
       statLabel = (p) => `${p.boars ?? 0} ${p.boars === 1 ? "porco abatido" : "porcos abatidos"}`,
     } = opts;
     const [vencedor, ...resto] = ranking;
     const cor = (c) => `#${(c ?? 0xffffff).toString(16).padStart(6, "0")}`;
 
     this.el.huntVictoryTitle.textContent = title;
+    const labelEl = this.el.huntVictory.querySelector(".hv-winner-label");
+    if (labelEl) labelEl.textContent = winnerLabel;
     this.el.huntVictoryWinnerName.textContent = vencedor.name;
     this.el.huntVictoryWinnerName.style.color = cor(vencedor.color);
     this.el.huntVictoryWinnerCount.textContent = statLabel(vencedor);
@@ -590,6 +594,25 @@ export class HUD {
     };
     this.showHuntVictory(ranking, selfId, {
       title: "SÉRIE CONCLUÍDA",
+      statLabel: rotulo,
+    });
+  }
+
+  /**
+   * Vitória da caçada ao alce: flechas cravadas por jogador e quem deu o
+   * golpe final. O vencedor em destaque é quem derrubou o bicho; o placar
+   * lista as flechas de todos.
+   */
+  showElkVictory(ranking, selfId = null, finisherId = null) {
+    const rotulo = (p) => {
+      const h = p.elkHits ?? 0;
+      const flechas = `${h} ${h === 1 ? "flecha" : "flechas"}`;
+      if (p.id === finisherId || p.finisher) return `${flechas} · golpe final`;
+      return flechas;
+    };
+    this.showHuntVictory(ranking, selfId, {
+      title: "ALCE DERROTADO",
+      winnerLabel: "Golpe final",
       statLabel: rotulo,
     });
   }

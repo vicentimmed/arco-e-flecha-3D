@@ -120,6 +120,7 @@ class RemotePlayer {
     this.player.deathFall = 0;
     const y = spawn.y + (spawn.drop ?? CONFIG.spawn.dropHeight);
     this.player.position.set(spawn.x, y, spawn.z);
+    if (spawn.yaw != null) this.player.setAim(spawn.yaw, 0);
     this.player.airborne = true;
     this.player.gaitBlend = 0;
     this.player.runBlend = 0;

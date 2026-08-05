@@ -37,6 +37,9 @@ export class Input {
     /** Terceira pessoa por padrão; botão direito (ou C) segurado: primeira pessoa. */
     this.firstPerson = false;
     this.drawing = false;
+    /** Botão esquerdo fisicamente pressionado — distinto de `drawing`, que pode
+     *  ficar false durante o reload mesmo com o clique segurado. */
+    this.primaryDown = false;
 
     /** true assim que o jogador engatou a mira (travada OU livre). */
     this.active = false;
@@ -51,6 +54,8 @@ export class Input {
     /** Quando true, o clique não tensiona o arco — ele só encerra a câmera da
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
     this.blockDraw = false;
+    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | null */
+    this.blockDrawReason = null;
 
     /**
      * Placar aberto (0 segurado).
@@ -88,6 +93,7 @@ export class Input {
       jump: false,
       spawnBoar: false,
       spawnElk: false,
+      spawnElkWolves: false,
       toggleMusic: false,
       askRespawn: false, // K — renascer noutro lugar
       askResetScores: false, // Y — zerar o placar de todos
@@ -127,6 +133,7 @@ export class Input {
     this.hadLock = false;
     this.lockHint.classList.remove("hidden");
     this.drawing = false;
+    this.primaryDown = false;
     this.forward = 0;
     this.strafe = 0;
     this.run = false;
@@ -192,10 +199,14 @@ export class Input {
         return;
       }
       if (e.button !== 0) return;
+      this.primaryDown = true;
       if (this.blockDraw) {
-        // Estamos vendo a flecha voar (ou recarregando): este clique só traz a
-        // câmera de volta, sem começar a tensionar o arco.
-        this.actions.dismissArrowCam = true;
+        // Câmera da flecha: clique traz a visão de volta. Durante o reload o
+        // clique é guardado em `primaryDown` — o main inicia o draw quando a
+        // animação terminar, se o botão ainda estiver pressionado.
+        if (this.blockDrawReason !== "reload") {
+          this.actions.dismissArrowCam = true;
+        }
         return;
       }
       this.drawing = true;
@@ -204,6 +215,7 @@ export class Input {
     document.addEventListener("mouseup", (e) => {
       if (e.button === 2) this.firstPerson = false;
       if (e.button !== 0) return;
+      this.primaryDown = false;
       if (this.drawing) this.actions.release = true;
       this.drawing = false;
     });
@@ -305,6 +317,9 @@ export class Input {
         case "KeyL":
           this.actions.spawnElk = true;
           break;
+        case "KeyO":
+          this.actions.spawnElkWolves = true;
+          break;
         case "KeyM":
           this.actions.toggleMusic = true;
           break;
@@ -333,6 +348,7 @@ export class Input {
 
     window.addEventListener("blur", () => {
       this.keys.clear();
+      this.primaryDown = false;
       this.drawing = false;
       // O keyup do zero se perde junto com o foco; sem isto o placar ficaria
       // aberto para sempre ao voltar para a aba.
@@ -376,6 +392,7 @@ export class Input {
     a.jump = false;
     a.spawnBoar = false;
     a.spawnElk = false;
+    a.spawnElkWolves = false;
     a.toggleMusic = false;
     a.askRespawn = false;
     a.askResetScores = false;

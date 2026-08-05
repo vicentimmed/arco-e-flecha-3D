@@ -1,35 +1,8 @@
 /* ---------------------------------------------------------------------------
    O alce, no servidor.
 
-   Pelo mesmo motivo dos porcos (`boarSim.js`): a IA sorteia, e uma IA sorteada
-   rodando em cada navegador daria um bicho por tela. Aqui é ainda mais grave —
-   o alce MATA. Se cada cliente decidisse sozinho para onde ele investe, um
-   jogador morreria de uma cabeçada que, na tela do amigo, passou a três metros
-   de distância. Existe um simulador só, e o que ele decide é o que aconteceu.
-
-   O BICHO É ARISCO, NÃO AGRESSIVO.
-
-   Ele foge. É o que um herbívoro de meia tonelada faz quando gente se aproxima,
-   e é o que torna a caçada uma caçada: você precisa alcançá-lo. A investida
-   existe, mas é EXCEÇÃO — nasce de uma flechada, acontece só parte das vezes, e
-   termina de um jeito ou de outro em fuga. Um alce que persegue sem parar não é
-   um animal, é um míssil, e transformava o modo numa corrida perdida.
-
-   A máquina de estados:
-
-     pastar  → ninguém por perto; come e anda devagar, cabeça baixa.
-     alerta  → alguém entrou no anel de vigilância; PARA e levanta a cabeça.
-     fugir   → alguém chegou perto demais; corre para longe.
-     investe → levou uma flecha e resolveu revidar. Vem em linha reta.
-     recobra → acertou a cabeçada ou desistiu; respira e volta a fugir.
-     morto   → o corpo fica um tempo e some.
-
-   POR QUE A INVESTIDA É ESQUIVÁVEL. Três números fazem isso, e nenhum deles é
-   "deixar o bicho mais lento": ele corrige o rumo devagar (`turnRate`), PARA de
-   corrigir nos últimos metros (`commitDistance` — está comprometido, como um
-   animal que abaixou a cabeça), e desiste assim que percebe que passou reto
-   (`giveUpTicks`). O jogador ganha saindo de lado na hora certa, não correndo
-   mais rápido — porque correr mais rápido que ele não dá.
+   CHEFÃO: mira com lead, reinveste após miss, desvia flechas às vezes, e a
+   vida escala com o número de jogadores (20 flechas × N).
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
@@ -37,60 +10,76 @@ import { pickElkSpawn } from "./spawnPoints.js";
 
 let proximoId = 1;
 
-/** Desvios tentados quando a investida esbarra na borda do mundo. */
-const DEFLECTIONS = [0, 0.5, -0.5, 1.1, -1.1, 1.9, -1.9];
+const STEER_ANGLES = [
+  0, 0.28, -0.28, 0.55, -0.55, 0.9, -0.9, 1.35, -1.35, 1.9, -1.9, Math.PI,
+];
+
+function calcMaxHealth(nPlayers, fun) {
+  const E = CONFIG.elk;
+  const n = fun ? 1 : Math.max(1, nPlayers | 0);
+  return E.arrowDamage * E.arrowsToKillPerPlayer * n;
+}
 
 export class Elk {
-  /**
-   * @param {boolean} fun alce solto na mão por alguém, fora do modo. Anda e
-   *   ataca igual; só não vale ponto, pela mesma razão do porco avulso —
-   *   quem solta escolhe a distância.
-   */
-  constructor(terrain, x, z, fun = false) {
+  constructor(terrain, x, z, fun = false, nPlayers = 1) {
     this.id = proximoId++;
     this.fun = fun;
     this.terrain = terrain;
     this.x = x;
     this.z = z;
     this.y = terrain.heightAt(x, z);
+    this.baseY = this.y;
     this.yaw = Math.random() * Math.PI * 2;
     this.speed = 0;
     this.state = "graze";
     this.stateTimer = 0;
-    this.health = CONFIG.elk.maxHealth;
+    this.maxHealth = calcMaxHealth(nPlayers, fun);
+    this.health = this.maxHealth;
     this.hits = 0;
     this.dead = false;
     this.deadSince = 0;
-    /** Id do jogador na mira da investida. */
     this.targetId = null;
-    /** Distância ao alvo no passo anterior — é ela que detecta "passei reto". */
     this.lastTargetDist = Infinity;
-    /** Passos seguidos se afastando do alvo durante a investida. */
     this.awayTicks = 0;
+    this.stuckTime = 0;
+    this.lastX = x;
+    this.lastZ = z;
+    this.dodgeCooldownUntil = 0;
+    this.dodgeFx = 0;
+    this.dodgeFz = 0;
+    this.pendingRecharge = false;
+    /* Trava da investida: dentro de `commitDistance` o rumo congela e o bicho
+       vira um projétil. `commitRun` mede quanto ele já correu travado, e é o
+       que decide quando o embalo acaba. */
+    this.committed = false;
+    this.commitRun = 0;
+    /** Flechas levadas DESTA investida — duas e ele desiste. */
+    this.chargeHits = 0;
+    /** s de coragem em falta: enquanto > 0 ele não investe. */
+    this.spooked = 0;
+    /** @type {Map<number, {x:number,z:number,vx:number,vz:number}>} */
+    this.playerMotion = new Map();
+    this.aimX = x;
+    this.aimZ = z;
     this.pickWanderTarget();
   }
 
   pickWanderTarget() {
-    const ang = Math.random() * Math.PI * 2;
-    const d = 6 + Math.random() * 18;
-    this.targetX = this.x + Math.cos(ang) * d;
-    this.targetZ = this.z + Math.sin(ang) * d;
+    for (let i = 0; i < 12; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const d = 8 + Math.random() * 20;
+      const tx = this.x + Math.cos(ang) * d;
+      const tz = this.z + Math.sin(ang) * d;
+      if (this.isClear(tx, tz)) {
+        this.targetX = tx;
+        this.targetZ = tz;
+        return;
+      }
+    }
+    this.targetX = this.x * 0.4;
+    this.targetZ = this.z * 0.4;
   }
 
-  /**
-   * Levou uma flecha.
-   *
-   * É o ÚNICO caminho para uma investida. Sem flecha, o alce nunca ataca — ele
-   * foge, pasta e observa. Mas nem toda flechada vira investida: `chargeChance`
-   * decide, e o resto das vezes ele simplesmente dispara em fuga.
-   *
-   * A dúvida é o ponto. Se toda flechada trouxesse o bicho para cima, o jogador
-   * aprenderia a contar os tiros e a briga viraria coreografia; se nenhuma
-   * trouxesse, ele viraria um alvo grande e manso. Sem saber qual das duas vem,
-   * cada tiro é uma decisão de verdade.
-   *
-   * @param {{x, z, id}|null} atiradorPos quem atirou, para virar-se contra ele
-   */
   hit(atiradorId, atiradorPos, jogadores = []) {
     if (this.dead) return null;
     const E = CONFIG.elk;
@@ -99,37 +88,59 @@ export class Elk {
 
     if (this.health <= 0) return { morreu: true };
 
-    this.stateTimer = 0;
-    if (Math.random() < E.chargeChance) {
-      // Revida. O alvo costuma ser quem atirou, mas não sempre — ver
-      // `pickChargeTarget`.
-      const alvo = this.pickChargeTarget(jogadores, atiradorId, atiradorPos);
-      this.targetId = alvo?.id ?? atiradorId;
-      this.state = "charge";
-      this.awayTicks = 0;
-      this.lastTargetDist = Infinity;
-      if (alvo) this.faceToward(alvo.x, alvo.z);
-      else if (atiradorPos) this.faceToward(atiradorPos.x, atiradorPos.z);
+    /* ACERTAR QUEM VEM EM CIMA.
+       A primeira flecha durante a investida não muda nada — o bicho está
+       comprometido e a dor não vence a inércia. A segunda quebra: ele gira,
+       foge e passa uns segundos sem coragem de voltar. Isso dá ao modo uma
+       saída que não é correr, e recompensa quem consegue mirar com meia
+       tonelada de alce crescendo na tela. */
+    if (this.state === "charge") {
+      this.chargeHits++;
+      if (this.chargeHits >= (E.chargeBreakHits ?? 2)) {
+        this.spooked = E.scaredRecoverTime ?? 4.5;
+        this.targetId = null;
+        this.startFlee(atiradorPos);
+        return { morreu: false, investiu: false, assustou: true };
+      }
       return { morreu: false, investiu: true };
     }
 
-    // Não revidou: corre. E corre PARA LONGE de quem atirou, não em rumo
-    // sorteado — levar uma flechada e sair na direção do arqueiro seria o
-    // oposto do que assusta um bicho.
+    // Assustado ainda: a flecha dói, mas não faz ele virar para trás.
+    if (this.spooked > 0) {
+      if (atiradorPos) this.fleeFrom = { x: atiradorPos.x, z: atiradorPos.z };
+      this.state = "flee";
+      this.stateTimer = 0;
+      return { morreu: false, investiu: false };
+    }
+
+    this.stateTimer = 0;
+    const chance = Math.min(0.95, E.chargeChance + E.chargeChancePerHit * this.hits);
+    if (Math.random() < chance) {
+      const alvo = this.pickChargeTarget(jogadores, atiradorId, atiradorPos);
+      this.beginCharge(alvo?.id ?? atiradorId, alvo ?? atiradorPos);
+      return { morreu: false, investiu: true };
+    }
+
     this.state = "flee";
     this.fleeFrom = atiradorPos ? { x: atiradorPos.x, z: atiradorPos.z } : null;
+    this.pendingRecharge = false;
     return { morreu: false, investiu: false };
   }
 
-  /**
-   * Contra quem investir.
-   *
-   * Quase sempre o mais próximo — é o alvo que qualquer animal escolheria. Mas
-   * `nearestBias` deixa uma fatia para os outros, e é ela que impede o modo de
-   * virar uma regra decorada numa sala com gente: se o alce fosse SEMPRE no
-   * mais perto, o grupo aprenderia a usar uma isca fixa e ninguém mais correria
-   * perigo. Quem atirou entra na conta com peso extra, porque é dele a flecha.
-   */
+  beginCharge(targetId, pos) {
+    this.targetId = targetId;
+    this.state = "charge";
+    this.stateTimer = 0;
+    this.awayTicks = 0;
+    this.lastTargetDist = Infinity;
+    this.stuckTime = 0;
+    this.pendingRecharge = false;
+    this.committed = false;
+    this.commitRun = 0;
+    this.chargeHits = 0;
+    if (pos) this.faceToward(pos.x, pos.z);
+  }
+
   pickChargeTarget(jogadores, atiradorId, atiradorPos) {
     const E = CONFIG.elk;
     const candidatos = jogadores.filter(
@@ -140,8 +151,6 @@ export class Elk {
     }
 
     candidatos.sort((a, b) => this.distanceTo(a) - this.distanceTo(b));
-    // O atirador conta como "o mais próximo" mesmo estando longe: foi ele que
-    // provocou, e ir atrás de quem provocou é a leitura óbvia da cena.
     const preferido =
       candidatos.find((p) => p.id === atiradorId) ?? candidatos[0];
     if (candidatos.length === 1 || Math.random() < E.nearestBias) return preferido;
@@ -150,10 +159,14 @@ export class Elk {
     return outros[Math.floor(Math.random() * outros.length)];
   }
 
-  /** Velocidade da investida AGORA: cresce com o número de flechas levadas. */
   get chargeSpeed() {
     const E = CONFIG.elk;
     return Math.min(E.chargeSpeedMax, E.chargeSpeed + E.chargeSpeedPerHit * this.hits);
+  }
+
+  get currentLeadTime() {
+    const E = CONFIG.elk;
+    return E.leadTime + E.leadTimePerHit * this.hits;
   }
 
   faceToward(x, z) {
@@ -163,32 +176,55 @@ export class Elk {
     this.yaw = Math.atan2(dx, dz);
   }
 
-  /**
-   * Um passo. Devolve o id do jogador chifrado neste instante, ou null.
-   *
-   * A cabeçada é decidida AQUI e não no cliente pelo mesmo motivo de tudo o
-   * mais neste arquivo: é uma morte, e uma morte não pode depender de qual
-   * navegador estava desenhando o alce mais adiantado.
-   */
-  update(dt, jogadores) {
+  /** Atualiza estimativa de velocidade dos jogadores (tick ~10 Hz). */
+  samplePlayerMotion(jogadores, dt) {
+    const inv = 1 / Math.max(dt, 0.05);
+    for (const p of jogadores) {
+      const prev = this.playerMotion.get(p.id);
+      if (prev) {
+        this.playerMotion.set(p.id, {
+          x: p.x,
+          z: p.z,
+          vx: (p.x - prev.x) * inv,
+          vz: (p.z - prev.z) * inv,
+        });
+      } else {
+        this.playerMotion.set(p.id, { x: p.x, z: p.z, vx: 0, vz: 0 });
+      }
+    }
+  }
+
+  leadPoint(alvo) {
+    const m = this.playerMotion.get(alvo.id);
+    const lead = this.currentLeadTime;
+    if (!m) return { x: alvo.x, z: alvo.z };
+    return {
+      x: alvo.x + m.vx * lead,
+      z: alvo.z + m.vz * lead,
+    };
+  }
+
+  update(dt, jogadores, agora = 0) {
     if (this.dead) return null;
     const E = CONFIG.elk;
     this.stateTimer += dt;
+    this.spooked = Math.max(0, this.spooked - dt);
+    this.samplePlayerMotion(jogadores, dt);
 
     const alvo = this.pickTarget(jogadores);
-
     const perto = alvo ? this.distanceTo(alvo) : Infinity;
+
+    // Altura base do terreno; o dodge sobe o Y temporariamente.
+    this.baseY = this.terrain.heightAt(this.x, this.z);
+    if (this.state !== "dodge") this.y = this.baseY;
 
     switch (this.state) {
       case "graze": {
         this.speed = E.walkSpeed;
         this.moveToward(this.targetX, this.targetZ, dt);
-        if (perto < E.fleeRange) {
-          this.startFlee(alvo);
-        } else if (perto < E.alertRange) {
-          this.state = "alert";
-          this.stateTimer = 0;
-          this.targetId = alvo.id;
+        if (perto < E.fleeRange) this.startFlee(alvo);
+        else if (perto < E.alertRange) {
+          this.enterAlert(alvo);
         } else if (this.stateTimer > 7) {
           this.stateTimer = 0;
           this.pickWanderTarget();
@@ -196,10 +232,6 @@ export class Elk {
         break;
       }
 
-      /* Atento: PARADO, cabeça erguida, encarando.
-         Ele não ronda nem se aproxima — a versão anterior fazia isso e lia como
-         "vem me pegar", exatamente o contrário do bicho arisco. Aqui ele
-         congela e olha, que é o aviso de que a próxima aproximação o espanta. */
       case "alert": {
         this.speed = 0;
         if (!alvo) {
@@ -209,7 +241,13 @@ export class Elk {
         }
         this.targetId = alvo.id;
         this.faceToward(alvo.x, alvo.z);
-        if (perto < E.fleeRange) this.startFlee(alvo);
+        const aproximou =
+          this.alertDist != null && this.alertDist - perto > E.alertApproach;
+        const andou =
+          this.alertPlayerX != null &&
+          Math.hypot(alvo.x - this.alertPlayerX, alvo.z - this.alertPlayerZ) >
+            E.alertMoveDist;
+        if (perto < E.fleeRange || aproximou || andou) this.startFlee(alvo);
         else if (perto > E.alertRange || this.stateTimer > E.alertDuration) {
           this.state = "graze";
           this.stateTimer = 0;
@@ -225,18 +263,41 @@ export class Elk {
           const dx = this.x - de.x;
           const dz = this.z - de.z;
           const len = Math.hypot(dx, dz) || 1;
-          this.yaw = Math.atan2(dx / len, dz / len);
+          let fx = dx / len;
+          let fz = dz / len;
+          const ad = this.terrain.arenaDistance(this.x, this.z);
+          if (ad > -2) {
+            const paraDentroX = -this.x;
+            const paraDentroZ = -this.z;
+            const pl = Math.hypot(paraDentroX, paraDentroZ) || 1;
+            fx = fx * 0.45 + (paraDentroX / pl) * 0.55;
+            fz = fz * 0.45 + (paraDentroZ / pl) * 0.55;
+            const fl = Math.hypot(fx, fz) || 1;
+            fx /= fl;
+            fz /= fl;
+          }
+          this.yaw = Math.atan2(fx, fz);
         }
         this.stepForward(dt);
-        // Só volta a pastar quando ficou um tempo longe de todo mundo: parar de
-        // correr no instante em que o jogador sai do raio dá um bicho que
-        // liga e desliga a fuga a cada passo dele.
+
+        // Ferido: fuga curta e volta a caçar — desde que a coragem já tenha
+        // voltado (levar duas flechas na investida custa alguns segundos).
+        if (
+          this.hits >= E.woundedHuntMinHits &&
+          alvo &&
+          this.spooked <= 0 &&
+          perto < E.visionRange &&
+          this.stateTimer > E.woundedFleeTime
+        ) {
+          this.beginCharge(alvo.id, alvo);
+          break;
+        }
+
         if (perto > E.alertRange && this.stateTimer > E.grazeSettle) {
           this.state = "graze";
           this.stateTimer = 0;
           this.pickWanderTarget();
-        } else if (perto < E.fleeRange) {
-          // Continua com alguém colado: renova o rumo e o cronômetro.
+        } else if (perto < E.fleeRange && alvo) {
           this.fleeFrom = { x: alvo.x, z: alvo.z };
           this.stateTimer = 0;
         }
@@ -247,74 +308,212 @@ export class Elk {
         this.speed = this.chargeSpeed;
         const perseguido = this.byId(jogadores, this.targetId);
         if (!perseguido) {
-          this.endCharge(alvo);
+          this.endCharge(alvo, false, jogadores);
           break;
         }
 
+        const lead = this.leadPoint(perseguido);
+        this.aimX = lead.x;
+        this.aimZ = lead.z;
         const d = this.distanceTo(perseguido);
 
-        /* O COMPROMISSO. Longe do alvo ele ainda corrige o rumo, devagar; dentro
-           de `commitDistance` ele para de corrigir e vai reto no que mirou.
-           É esta linha que torna a esquiva possível: nos últimos metros, sair de
-           lado não é acompanhado, porque o bicho já abaixou a cabeça. */
-        if (d > E.commitDistance) {
-          this.turnToward(perseguido.x, perseguido.z, E.turnRate * dt);
+        /* O INSTANTE DA TRAVA.
+           Cruzou `commitDistance`: o rumo congela no ponto de lead e acabou a
+           perseguição. Daqui até o fim do embalo ele só corre reto — e é essa
+           reta que dá ao jogador o mesmo recurso de quem enfrenta um touro:
+           esperar o compromisso e sair de lado. */
+        if (!this.committed && d <= E.commitDistance) {
+          this.committed = true;
+          this.commitRun = 0;
+          this.yaw = Math.atan2(lead.x - this.x, lead.z - this.z);
         }
-        this.stepForward(dt);
 
+        if (this.committed) {
+          const antesX = this.x;
+          const antesZ = this.z;
+          // Sem `lead`: `stepForward` só desvia de pedra e barranco, não persegue.
+          this.stepForward(dt);
+          this.commitRun += Math.hypot(this.x - antesX, this.z - antesZ);
+        } else {
+          const desejado = Math.atan2(lead.x - this.x, lead.z - this.z);
+          this.steerToward(desejado, E.turnRate * dt);
+          this.stepForward(dt, lead);
+        }
+
+        /* A galhada continua matando durante toda a passagem, inclusive na
+           sobra de embalo. Sair da frente é a esquiva; voltar para a frente é
+           o mesmo erro de antes. */
         if (d < E.goreRadius) {
-          // Acertou. E, tendo acertado, FOGE — não sai procurando o próximo.
-          this.endCharge(perseguido, true);
+          this.endCharge(perseguido, true, jogadores);
           return perseguido.id;
         }
 
-        /* Desistência por afastamento: se a distância cresce vários passos
-           seguidos, ele passou reto. Um único passo não serve de critério
-           (a correção de rumo produz oscilações de centímetros), mas quatro
-           seguidos só acontecem quando o alvo saiu mesmo da linha. */
+        if (this.committed) {
+          const total = E.commitDistance + (E.overshootDistance ?? 14);
+          if (this.commitRun >= total || this.stateTimer > E.chargeDuration) {
+            // Passou direto. Perde o fôlego e foge — a esquiva foi paga.
+            this.spooked = Math.max(this.spooked, E.missRecoverTime ?? 2.0);
+            this.targetId = null;
+            this.startFlee(perseguido);
+          }
+          break;
+        }
+
         if (d > this.lastTargetDist) this.awayTicks++;
         else this.awayTicks = 0;
         this.lastTargetDist = d;
 
         if (this.awayTicks >= E.giveUpTicks || this.stateTimer > E.chargeDuration) {
-          this.endCharge(perseguido);
+          this.endCharge(perseguido, false, jogadores);
         }
         break;
       }
 
-      /* Recobrando: parado, ofegante. Termina SEMPRE em fuga — foi por isso que
-         a investida acabou, tendo acertado ou não. */
       case "recover": {
         this.speed = 0;
         if (this.stateTimer < E.chargeCooldown) break;
-        this.startFlee(alvo);
+        if (this.pendingRecharge && alvo && this.spooked <= 0) {
+          this.beginCharge(alvo.id, alvo);
+        } else {
+          this.startFlee(alvo);
+        }
+        break;
+      }
+
+      case "dodge": {
+        this.speed = E.dodgeSpeed;
+        const t = Math.min(1, this.stateTimer / E.dodgeDuration);
+        // Arco de pulo: sobe e desce.
+        this.y = this.baseY + Math.sin(t * Math.PI) * E.dodgeJumpHeight;
+        this.step(this.dodgeFx, this.dodgeFz, dt);
+        if (this.stateTimer >= E.dodgeDuration) {
+          this.y = this.terrain.heightAt(this.x, this.z);
+          if (this.hits >= E.woundedHuntMinHits && alvo && this.spooked <= 0) {
+            this.beginCharge(alvo.id, alvo);
+          } else {
+            this.startFlee(alvo);
+          }
+        }
         break;
       }
     }
+
+    this.trackStuck(dt);
     return null;
   }
 
-  /** Entra em fuga, correndo para longe de quem o incomodou. */
+  /**
+   * Avalia se uma flecha ameaça o alce e, às vezes, entra em dodge.
+   * @param {number[]} o origem [x,y,z]
+   * @param {number[]} d direção [x,y,z]
+   * @param {number} v velocidade
+   * @param {number} agora ms
+   */
+  maybeDodgeShot(o, d, v, agora) {
+    if (this.dead || this.state === "dodge" || this.state === "dead") return false;
+    // Travado na investida ele não desvia de nada: o compromisso é total, e é
+    // justamente isso que dá ao jogador uma janela limpa para acertar.
+    if (this.committed && this.state === "charge") return false;
+    const E = CONFIG.elk;
+    if (agora < this.dodgeCooldownUntil) return false;
+    if (!o || !d || !(v > 0)) return false;
+
+    // Trajetória em XZ (aprox. sem gravidade — janela curta).
+    const ox = o[0];
+    const oz = o[2];
+    const dx = d[0];
+    const dz = d[2];
+    const horiz = Math.hypot(dx, dz) || 1e-6;
+    const fx = dx / horiz;
+    const fz = dz / horiz;
+    // Distância do ponto (elk) à reta da flecha.
+    const wx = this.x - ox;
+    const wz = this.z - oz;
+    const proj = wx * fx + wz * fz;
+    if (proj < 0) return false; // flecha para trás do alce
+    const cx = ox + fx * proj;
+    const cz = oz + fz * proj;
+    const dist = Math.hypot(this.x - cx, this.z - cz);
+    if (dist > E.dodgeRadius) return false;
+
+    const eta = proj / Math.max(v * (horiz / Math.hypot(dx, dz, d[1] || 0)), 1);
+    if (eta > E.dodgeLeadTime || eta < 0.05) return false;
+
+    const wound = 1 - this.health / Math.max(1, this.maxHealth);
+    const chance = Math.min(
+      0.92,
+      E.dodgeChance + (E.dodgeChanceAtDeath - E.dodgeChance) * wound,
+    );
+    if (Math.random() > chance) return false;
+
+    // Lateral perpendicular à flecha, escolhendo o lado com mais espaço.
+    const px = -fz;
+    const pz = fx;
+    const sideA = this.isClear(this.x + px * 4, this.z + pz * 4);
+    const sideB = this.isClear(this.x - px * 4, this.z - pz * 4);
+    const sign = sideA && !sideB ? 1 : sideB && !sideA ? -1 : Math.random() < 0.5 ? 1 : -1;
+    // Mistura lateral + avanço.
+    let sx = px * sign * 0.75 + fx * 0.35;
+    let sz = pz * sign * 0.75 + fz * 0.35;
+    const sl = Math.hypot(sx, sz) || 1;
+    this.dodgeFx = sx / sl;
+    this.dodgeFz = sz / sl;
+    this.yaw = Math.atan2(this.dodgeFx, this.dodgeFz);
+    this.state = "dodge";
+    this.stateTimer = 0;
+    const cooldown =
+      E.dodgeCooldown + (E.dodgeCooldownAtDeath - E.dodgeCooldown) * wound;
+    this.dodgeCooldownUntil = agora + cooldown * 1000;
+    return true;
+  }
+
+  enterAlert(alvo) {
+    this.state = "alert";
+    this.stateTimer = 0;
+    this.targetId = alvo.id;
+    this.alertPlayerX = alvo.x;
+    this.alertPlayerZ = alvo.z;
+    this.alertDist = this.distanceTo(alvo);
+  }
+
+  scare(x, z) {
+    if (this.dead) return;
+    if (this.state === "charge" || this.state === "dodge") return;
+    this.startFlee({ x, z });
+  }
+
   startFlee(de) {
     this.state = "flee";
     this.stateTimer = 0;
+    this.stuckTime = 0;
+    this.pendingRecharge = false;
+    this.committed = false;
+    this.commitRun = 0;
     if (de) this.fleeFrom = { x: de.x, z: de.z };
   }
 
-  /** Fim da investida: respira e depois foge. */
-  endCharge(de, acertou = false) {
+  endCharge(de, acertou, jogadores = []) {
+    const E = CONFIG.elk;
     this.state = "recover";
     this.stateTimer = 0;
     this.awayTicks = 0;
     this.lastTargetDist = Infinity;
     this.targetId = null;
-    // Acertou: o corpo do arqueiro fica para trás e o alce dispara na direção
-    // oposta. Não acertou: ele se afasta de quem estava perseguindo.
+    this.stuckTime = 0;
+    this.committed = false;
+    this.commitRun = 0;
     if (de) this.fleeFrom = { x: de.x, z: de.z };
-    if (acertou) this.faceToward(this.x * 2 - (de?.x ?? this.x), this.z * 2 - (de?.z ?? this.z));
+    if (acertou) {
+      this.pendingRecharge = false;
+      this.faceToward(this.x * 2 - (de?.x ?? this.x), this.z * 2 - (de?.z ?? this.z));
+    } else {
+      this.pendingRecharge =
+        this.hits >= E.rechargeOnMissMinHits &&
+        Math.random() < E.rechargeOnMissChance &&
+        !!this.pickTarget(jogadores);
+    }
   }
 
-  /** O jogador vivo mais próximo. */
   pickTarget(jogadores) {
     let melhor = null;
     let melhorD = Infinity;
@@ -339,9 +538,11 @@ export class Elk {
     return Math.hypot(p.x - this.x, p.z - this.z);
   }
 
-  /** Gira até `maxDelta` radianos na direção do ponto, pelo caminho curto. */
   turnToward(x, z, maxDelta) {
-    const querido = Math.atan2(x - this.x, z - this.z);
+    this.steerToward(Math.atan2(x - this.x, z - this.z), maxDelta);
+  }
+
+  steerToward(querido, maxDelta) {
     let d = querido - this.yaw;
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
@@ -349,33 +550,92 @@ export class Elk {
   }
 
   moveToward(tx, tz, dt) {
-    this.faceToward(tx, tz);
+    this.steerToward(Math.atan2(tx - this.x, tz - this.z), 2.5 * dt);
     this.stepForward(dt);
-    if (Math.hypot(tx - this.x, tz - this.z) < 2) this.pickWanderTarget();
+    if (Math.hypot(tx - this.x, tz - this.z) < 2.5) this.pickWanderTarget();
   }
 
-  /** Anda para onde está virado, desviando quando a borda do mundo barra. */
-  stepForward(dt) {
-    for (const desvio of DEFLECTIONS) {
+  isClear(x, z) {
+    const E = CONFIG.elk;
+    if (!this.terrain.isWalkable(x, z)) return false;
+    if (this.terrain.arenaDistance(x, z) > E.maxArenaDist) return false;
+    if (this.terrain.slopeAt(x, z, 1.0) < E.minSlope) return false;
+    return true;
+  }
+
+  stepForward(dt, lead = null) {
+    const E = CONFIG.elk;
+    const passo = Math.max(0.4, this.speed * dt);
+    const look = E.lookAhead;
+
+    let melhor = null;
+    let melhorNota = -Infinity;
+
+    for (const desvio of STEER_ANGLES) {
       const ang = this.yaw + desvio;
-      if (this.step(Math.sin(ang), Math.cos(ang), dt)) {
-        this.yaw = ang;
-        return true;
+      const fx = Math.sin(ang);
+      const fz = Math.cos(ang);
+      const nx = this.x + fx * passo;
+      const nz = this.z + fz * passo;
+      if (!this.isClear(nx, nz)) continue;
+      const lx = this.x + fx * look;
+      const lz = this.z + fz * look;
+      const lookOk = this.isClear(lx, lz);
+
+      const ad = this.terrain.arenaDistance(nx, nz);
+      let nota = -Math.abs(desvio) * 1.4;
+      if (lookOk) nota += 2.5;
+      nota -= Math.max(0, ad + 4) * 0.35;
+
+      // Em charge: premia headings que aproximam do ponto de lead.
+      if (lead) {
+        const d0 = Math.hypot(lead.x - this.x, lead.z - this.z);
+        const d1 = Math.hypot(lead.x - nx, lead.z - nz);
+        nota += (d0 - d1) * 1.8;
+      }
+
+      if (nota > melhorNota) {
+        melhorNota = nota;
+        melhor = ang;
       }
     }
-    return false;
+
+    if (melhor == null) {
+      this.stuckTime += dt;
+      if (this.stuckTime >= E.stuckEscapeTime) this.escapeStuck();
+      return false;
+    }
+
+    this.yaw = melhor;
+    return this.step(Math.sin(melhor), Math.cos(melhor), dt);
+  }
+
+  escapeStuck() {
+    this.stuckTime = 0;
+    this.yaw = Math.atan2(-this.x, -this.z) + (Math.random() - 0.5) * 0.8;
+    if (this.state === "graze") this.pickWanderTarget();
+  }
+
+  trackStuck(dt) {
+    const moved = Math.hypot(this.x - this.lastX, this.z - this.lastZ);
+    if (this.speed > 0.5 && moved < this.speed * dt * 0.25) {
+      this.stuckTime += dt;
+      if (this.stuckTime >= CONFIG.elk.stuckEscapeTime) this.escapeStuck();
+    } else if (moved > 0.05) {
+      this.stuckTime = Math.max(0, this.stuckTime - dt * 2);
+    }
+    this.lastX = this.x;
+    this.lastZ = this.z;
   }
 
   step(fx, fz, dt) {
     const passo = this.speed * dt;
     const nx = this.x + fx * passo;
     const nz = this.z + fz * passo;
-    if (!this.terrain.isWalkable(nx, nz) || this.terrain.arenaDistance(nx, nz) > 6) {
-      return false;
-    }
+    if (!this.isClear(nx, nz)) return false;
     this.x = nx;
     this.z = nz;
-    this.y = this.terrain.heightAt(nx, nz);
+    if (this.state !== "dodge") this.y = this.terrain.heightAt(nx, nz);
     return true;
   }
 
@@ -386,40 +646,26 @@ export class Elk {
       y: r3(this.yaw),
       v: r3(this.speed),
       s: this.state,
-      // Fração de vida, não o valor absoluto: a barra na tela quer 0..1 e o
-      // cliente não precisa saber quanto vale uma flechada.
-      h: Math.round((this.health / CONFIG.elk.maxHealth) * 100) / 100,
+      h: Math.round((this.health / this.maxHealth) * 100) / 100,
       f: this.fun ? 1 : 0,
     };
   }
 }
 
-/* ------------------------------------------------------------------ o modo -- */
-
-/**
- * A caçada ao alce.
- *
- * Um bicho por vez. Morto, outro entra depois de `respawnDelay` — o modo não
- * termina, ele recomeça, e o placar é que conta a história.
- *
- * Como `BoarHunt`, os alces SOLTOS NA MÃO (tecla avulsa) sobrevivem ao
- * desligamento do modo: quem largou um alce para brincar não deveria perdê-lo
- * porque outro jogador trocou de modo.
- */
 export class ElkHunt {
   constructor(terrain) {
     this.terrain = terrain;
     /** @type {Elk[]} */
     this.elks = [];
     this.active = false;
-    this.respawnTimer = 0;
+    this.over = false;
+    this.overReason = null;
   }
 
   get vivos() {
     return this.elks.reduce((n, e) => n + (e.dead ? 0 : 1), 0);
   }
 
-  /** Alces do modo (não os avulsos): é a existência deles que o modo garante. */
   get vivosDoModo() {
     return this.elks.reduce((n, e) => n + (!e.dead && !e.fun ? 1 : 0), 0);
   }
@@ -427,19 +673,29 @@ export class ElkHunt {
   start(jogadores) {
     if (this.active) return;
     this.active = true;
-    this.respawnTimer = 0;
+    this.over = false;
+    this.overReason = null;
     this.spawnOne(jogadores, false);
   }
 
   stop() {
     this.active = false;
+    this.over = false;
+    this.overReason = null;
     this.elks = this.elks.filter((e) => e.fun && !e.dead);
+  }
+
+  gameOver(reason) {
+    this.over = true;
+    this.overReason = reason;
+    this.active = false;
   }
 
   spawnOne(jogadores, fun = false) {
     const ponto = pickElkSpawn(this.terrain, jogadores);
     if (!ponto) return null;
-    const e = new Elk(this.terrain, ponto.x, ponto.z, fun);
+    const n = fun ? 1 : Math.max(1, jogadores?.length ?? 1);
+    const e = new Elk(this.terrain, ponto.x, ponto.z, fun, n);
     this.elks.push(e);
     return e;
   }
@@ -448,20 +704,11 @@ export class ElkHunt {
     return this.elks.find((e) => e.id === id) ?? null;
   }
 
-  /**
-   * Uma flecha acertou. Devolve `{ elk, morreu, investiu }`, ou null se o alce
-   * não existe ou já estava morto.
-   *
-   * A lista de jogadores vai junto porque a escolha do alvo da investida é
-   * feita AQUI, no instante do acerto — e não a cada passo. Um bicho que
-   * reavalia o alvo a cada décimo de segundo troca de vítima no meio da corrida
-   * e nunca chega em ninguém.
-   */
   hit(id, atiradorId, atiradorPos, jogadores = []) {
     const elk = this.byId(id);
     if (!elk || elk.dead) return null;
     const r = elk.hit(atiradorId, atiradorPos, jogadores);
-    return { elk, morreu: r.morreu, investiu: r.investiu };
+    return { elk, morreu: r.morreu, investiu: r.investiu, assustou: r.assustou };
   }
 
   kill(id, agora) {
@@ -474,14 +721,38 @@ export class ElkHunt {
     return elk;
   }
 
-  /**
-   * Um passo do mundo dos alces.
-   * @returns {number[]} ids dos jogadores chifrados neste passo
-   */
+  noticeShot(shot, agora) {
+    if (this.over) return;
+    for (const e of this.elks) {
+      if (e.dead || e.fun) continue;
+      if (e.maybeDodgeShot(shot.o, shot.d, shot.v, agora)) break;
+    }
+  }
+
+  scareNear(x, z) {
+    const raio = CONFIG.elk.scareRadius ?? 8;
+    for (const e of this.elks) {
+      if (e.dead) continue;
+      if (Math.hypot(e.x - x, e.z - z) < raio) e.scare(x, z);
+    }
+  }
+
+  /** Alce do modo (não divertido) ainda vivo. */
+  bossElk() {
+    return this.elks.find((e) => !e.dead && !e.fun) ?? null;
+  }
+
   update(dt, jogadores, agora) {
+    if (this.over) {
+      this.elks = this.elks.filter(
+        (e) => !e.dead || agora - e.deadSince < CONFIG.elk.corpseLifetime * 1000,
+      );
+      return [];
+    }
+
     const chifrados = [];
     for (const e of this.elks) {
-      const vitima = e.update(dt, jogadores);
+      const vitima = e.update(dt, jogadores, agora);
       if (vitima != null) chifrados.push(vitima);
     }
 
@@ -489,14 +760,6 @@ export class ElkHunt {
       (e) => !e.dead || agora - e.deadSince < CONFIG.elk.corpseLifetime * 1000,
     );
 
-    // O modo garante que sempre haja um alce em pé.
-    if (this.active && this.vivosDoModo === 0) {
-      this.respawnTimer += dt;
-      if (this.respawnTimer >= CONFIG.modes.elkHunt.respawnDelay) {
-        this.respawnTimer = 0;
-        this.spawnOne(jogadores, false);
-      }
-    }
     return chifrados;
   }
 

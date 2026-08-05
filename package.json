@@ -20,6 +20,9 @@
     "three": "^0.185.1",
     "vite": "^8.2.0"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "private": true,
   "type": "module"
 }

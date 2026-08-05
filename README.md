@@ -28,8 +28,21 @@ Abre em `http://localhost:5173`. Para gerar a versão estática:
 npm run build
 ```
 
-O `dist/` resultante é autocontido (o WASM do Rapier vem embutido) e funciona em
-qualquer hospedagem de arquivos estáticos.
+O `dist/` resultante é autocontido (o WASM do Rapier vem embutido). Em produção
+o servidor Node (`npm start`) serve o `dist/` **e** o WebSocket multiplayer na
+mesma porta.
+
+## Deploy no EasyPanel
+
+O repositório já traz um `Dockerfile` multi-stage pronto para o EasyPanel
+(porta **3000**, healthcheck em `/healthz`, HTTPS + WSS pelo Traefik).
+
+Guia completo, do VPS até jogar online:
+
+→ **[docs/easypanel.md](docs/easypanel.md)**
+
+Resumo: App service → Source GitHub → Builder **Dockerfile** → Domain na
+porta **3000** → **Deploy** → abrir o domínio e entrar na sala.
 
 ## Controles
 

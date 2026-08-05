@@ -13,6 +13,15 @@ const SHAFT_RADIUS = 0.004; // m — raio do tubo da flecha
 // mudar — `runSpeed` nunca sai de sincronia com `walkSpeed`.
 const WALK_SPEED = 3.2; // m/s
 const SPRINT_MULTIPLIER = 3.0; // Shift: quantas vezes a caminhada
+/** Velocidade original do lobo (1,5× caminhada). */
+const WOLF_SPEED_LEGACY = WALK_SPEED * 1.5;
+const WOLF_LEAP_LEGACY = 12.0;
+/** Modo zumbi: legacy −30%. Alce/demais: 3× legacy (via WOLF_SPEED_FAST). */
+const WOLF_SLOW_SCALE = 0.7;
+const WOLF_SPEED_SLOW = WOLF_SPEED_LEGACY * WOLF_SLOW_SCALE; // ≈ 3,36 m/s
+const WOLF_LEAP_SLOW = WOLF_LEAP_LEGACY * WOLF_SLOW_SCALE; // ≈ 8,4 m/s
+const WOLF_SPEED_FAST = WALK_SPEED * 4.5; // ≈ 14,4 m/s
+const WOLF_LEAP_FAST = 36.0;
 
 // Centro da bacia jogável. Mora aqui em cima porque DOIS blocos precisam dele —
 // o sorteio de nascimento e a arena de tochas do modo zumbi — e um deles não
@@ -544,12 +553,22 @@ export const CONFIG = {
 
        Os arqueiros são postos num extremo e o alce no oposto: é essa distância
        que dá tempo de um primeiro tiro antes de ele chegar, e é ela que torna a
-       investida uma ameaça em vez de uma surpresa. Morto o alce, outro entra
-       depois de `respawnDelay` — o modo não acaba, ele recomeça. */
+       investida uma ameaça em vez de uma surpresa. Morto o alce, a partida
+       acaba em vitória — um chefão, não uma onda infinita. */
     elkHunt: {
       arenaRadius: 60, // m — raio em que alce e arqueiros são postos
       lineSpread: 7, // m entre arqueiros na linha
-      respawnDelay: 8, // s até o próximo alce entrar
+      /* Uma partida = um alce. Morto, vitória; sem respawn automático do bicho.
+         O jogador caído espera `playerRespawnDelay` (igual à lógica do zumbi
+         caído: countdown + espectador). Se todos caírem ao mesmo tempo, derrota. */
+      playerRespawnDelay: 15, // s até o arqueiro voltar após a cabeçada
+      invulnerability: 2.5, // s de graça ao renascer
+      /* SOZINHO NA SALA a regra é outra: não existe "todo mundo caiu" quando
+         só existe uma pessoa, e declarar derrota ali seria terminar a partida
+         no primeiro erro. O arqueiro solitário volta em poucos segundos e a
+         vida do alce continua onde estava — a caçada é uma queda de braço,
+         não uma corrida de vida única. */
+      soloRespawnDelay: 3, // s até voltar quando se joga sozinho
     },
 
     /* ----------------------------------------------------------- os zumbis --
@@ -606,14 +625,21 @@ export const CONFIG = {
       hordeDelay: 3.0, // s entre a última morte e a horda seguinte
       // Raio em que os zumbis entram em cena: fora do alcance das tochas, para
       // eles nascerem no breu e aparecerem primeiro como um par de olhos.
-      spawnRadius: 36, // m
-      spawnJitter: 5, // m de sorteio dentro do setor
+      spawnRadius: 36, // m — centro da faixa (legado; min/max abaixo)
+      spawnRadiusMin: 28, // m — alguns nascem mais perto (chegam antes)
+      spawnRadiusMax: 50, // m — outros mais longe (demoram mais)
+      spawnJitter: 4, // m de sorteio extra por indivíduo
+      // Intervalo entre cada zumbi da horda — evita que todos nasçam juntos
+      // e cheguem ao centro ao mesmo tempo.
+      spawnStagger: 0.85, // s entre cada entrada na horda
 
       // ------------------------------------------------------------- bicho --
       // Fallback se hordeSpeeds não cobrir a horda (não deve acontecer).
       speed: 1.15, // m/s
       speedVariation: 0.18, // fração de variação individual, para não andarem juntos
       bodyHits: 2, // flechas no corpo para derrubar
+      // Tensão máxima do arco: uma flecha solta a esta velocidade mata no corpo.
+      fullDrawKillSpeed: 118, // m/s — folga sobre bow.maxSpeed 120
       // Altura do impacto, medida da base do zumbi, a partir da qual conta como
       // cabeça. O corpo tem 1,8 m; o pescoço começa em ~1,45 m.
       headMinY: 1.45, // m
@@ -632,6 +658,49 @@ export const CONFIG = {
       // ------------------------------------------------------------ pontos --
       bodyPoints: 40, // por derrubar no corpo
       headPoints: 100, // na cabeça: paga mais porque é alvo pequeno
+
+      // ------------------------------------------------------------- lobos --
+      /* Misturados na horda: mais rápidos, 1 flecha, uivam ao aproximar.
+         Sempre em menor número que os zumbis (a massa do cerco continua). */
+      wolfCounts: [1, 2, 3, 4, 5, 7, 10],
+      // Lobos não nascem todos no start: 1 a cada N zumbis mortos nesta horda.
+      wolfEveryZombieKills: 3,
+      wolfSpawnDelay: 1.0, // s de espera antes do lobo entrar (após gatilho)
+      wolfSpawnRadiusBonus: 6, // m a mais que zumbis — chegam depois, de longe
+      wolfSpawnStagger: 1.4, // s entre lobos da mesma horda
+      // Modo zumbi: mais lento (legacy −30%).
+      wolfSpeed: WOLF_SPEED_SLOW,
+      wolfSpeedVariation: 0.08,
+      wolfAttackRadius: 1.4, // m
+      wolfAttackInterval: 1.0, // s
+      wolfLeapRange: 5.0, // m — inicia o salto-ataque
+      wolfLeapDuration: 0.45, // s
+      wolfLeapHeight: 1.2, // m
+      wolfLeapSpeed: WOLF_LEAP_SLOW,
+      /* Motor de locomoção: giro limitado, aceleração, curva sustentada. */
+      wolfAI: {
+        turnRateMax: 3.2, // rad/s — giro no trote
+        turnRateMin: 1.1, // rad/s — giro na disparada
+        accel: 7.0 * WOLF_SLOW_SCALE,
+        brake: 11.0 * WOLF_SLOW_SCALE,
+        speedApproach: 0.65, // fração de wolfSpeed longe do alvo
+        speedChase: 1.0, // fração perto / antes do salto
+        separationRadius: 1.8, // m — repulsão entre lobos
+        whiskerAngle: 0.61, // rad (~35°) — sondas laterais de terreno
+        bearingOffsetMin: 0.26, // rad (~15°) — curva de aproximação
+        bearingOffsetMax: 0.61, // rad (~35°)
+        bearingHoldMin: 3.0, // s — quanto sustenta o lado da curva
+        bearingHoldMax: 6.0,
+        approachFadeDist: 18, // m — offset decai até zero nesta distância
+        leapAlignCone: 0.61, // rad (~35°) — alinhamento exigido para saltar
+        leapLandSpeedFrac: 0.55, // fração da vel. do salto mantida ao pousar
+      },
+      wolfPoints: 60,
+      wolfHowlMinInterval: 2.5, // s
+      wolfHowlMaxInterval: 6.0, // s
+      wolfHowlVolume: 1.05,
+      wolfBodyHeight: 1.45, // m — cernelha de lobo, não de cachorro
+      wolfEyeColor: 0xff8c28, // laranja assustador (diferente dos zumbis)
     },
   },
 
@@ -712,59 +781,127 @@ export const CONFIG = {
      investida a tempo. É por isso que ele acumula flechas cravadas no corpo em
      vez de morrer no primeiro acerto: a barra de vida é o cronômetro da briga. */
   elk: {
-    maxHealth: 100,
-    arrowDamage: 14, // ⇒ ~8 flechas para derrubar
+    /* Vida base = 20 flechas × 1 jogador. No spawn do modo multiplica por N. */
+    arrowsToKillPerPlayer: 20,
+    arrowDamage: 5, // ⇒ 20 flechas por jogador (vida = damage × 20 × N)
+    maxHealth: 100, // fallback / alce fun (1 jogador)
 
-    /* ------------------------------------------------------------- ritmo ---
-       O alce é ARISCO, não agressivo. O padrão dele é fugir; a investida é
-       exceção, e só existe porque alguém o feriu. */
-    walkSpeed: 2.2, // m/s — pastando
-    fleeSpeed: 9.5, // m/s — fugindo
-    chargeSpeed: 10.5, // m/s — investida
-    // Cada acerto o deixa mais rápido. Satura para a investida não virar
-    // teletransporte — e o teto fica perto o bastante da corrida do arqueiro
-    // (9,6 m/s) para que sair de lado continue funcionando.
-    chargeSpeedPerHit: 0.4, // m/s a mais por flecha levada
-    chargeSpeedMax: 13.0, // m/s
+    /* ------------------------------------------------------------- ritmo --- */
+    walkSpeed: 2.6, // m/s — pastando
+    fleeSpeed: 15.0, // m/s — fugindo
+    chargeSpeed: 12.5, // m/s — investida
+    chargeSpeedPerHit: 0.3, // m/s a mais por flecha levada
+    chargeSpeedMax: 14.5, // m/s
 
-    /* --------------------------------------------------------- percepção ---
-       Três anéis. De longe ele nem percebe; a `alertRange` levanta a cabeça e
-       encara; a `fleeRange` sai correndo. É a leitura de um herbívoro real, e
-       dá ao jogador dois avisos antes de perder o alvo. */
-    visionRange: 60, // m
-    alertRange: 34, // m — levanta a cabeça e fica atento
-    fleeRange: 18, // m — daqui ele foge
-    alertDuration: 3.0, // s encarando antes de voltar a pastar
-    grazeSettle: 6.0, // s longe de todos até voltar a pastar depois de fugir
+    /* --------------------------------------------------------- percepção --- */
+    visionRange: 70, // m
+    alertRange: 60, // m
+    fleeRange: 48, // m
+    alertDuration: 4.5, // s — cabeça levantada se o player ficar parado
+    alertApproach: 2.5, // m mais perto após o alerta → foge
+    alertMoveDist: 1.8, // m de deslocamento do player após o alerta → foge
+    grazeSettle: 4.5, // s
+    scareRadius: 8, // m — flecha no chão perto assusta (como o porco)
+    woundedFleeTime: 1.5, // s de fuga curta quando já ferido (≥5 hits)
 
-    /* --------------------------------------------------------- investida ---
-       Só depois de levar flecha, e nem sempre. O resto dos números existe para
-       que a investida seja ESQUIVÁVEL: ele se compromete com uma linha e passa
-       reto se você sair dela. */
-    chargeChance: 0.55, // fração das flechadas que viram investida
-    chargeDuration: 5.0, // s de investida antes de desistir
-    chargeCooldown: 1.6, // s recuperando o fôlego
-    // Dentro desta distância ele NÃO corrige mais o rumo: está comprometido.
-    // É a janela em que sair de lado funciona.
-    commitDistance: 8, // m
-    turnRate: 0.45, // rad/s de correção antes de se comprometer
-    // Quantos passos seguidos de afastamento contam como "passou reto".
-    giveUpTicks: 4,
-    goreRadius: 1.5, // m — cabeçada: acertou, o arqueiro morre
-    // Quem ele escolhe: quase sempre o mais próximo, às vezes outro — um bicho
-    // que sempre vai no mais perto é previsível demais numa sala com gente.
-    nearestBias: 0.7,
+    /* ----------------------------------------------------- lobos do alce --- */
+    wolfSummonHealth: 0.7, // fração de vida: chama a primeira horda
+    wolfPackBase: 4,
+    wolfPackPerPlayer: 2, // total = base + perPlayer × (N − 1)
+    wolfWaveGap: 8, // s entre ondas se a pack foi limpa e vida ≤ limiar
+    /* Limpar a matilha não basta para chamar a próxima: o alce precisa levar
+       mais flechas. Sem isso, quem matasse os lobos e recuasse via matilha nova
+       nascer sozinha a cada 8 s — a caçada virava um moedor de lobos em que o
+       alce nunca era o problema. Agora a onda seguinte é resposta ao dano. */
+    wolfWaveHits: 6, // flechadas no alce entre uma matilha e a seguinte
+    wolfSpawnRadius: 6, // m ao redor do alce (centro da faixa)
+    wolfSpawnRadiusMin: 5, // m — alguns mais perto do alce
+    wolfSpawnRadiusMax: 14, // m — outros nascem longe e demoram a chegar
+    wolfSpawnStagger: 1.2, // s entre cada lobo da onda
+    // Modo alce (e demais fora do zumbi): mais rápido (3× legacy).
+    wolfSpeed: WOLF_SPEED_FAST,
+    wolfLeapSpeed: WOLF_LEAP_FAST,
+    wolfAI: {
+      turnRateMax: 3.2,
+      turnRateMin: 1.1,
+      accel: 21.0,
+      brake: 33.0,
+      speedApproach: 0.65,
+      speedChase: 1.0,
+      separationRadius: 1.8,
+      whiskerAngle: 0.61,
+      bearingOffsetMin: 0.26,
+      bearingOffsetMax: 0.61,
+      bearingHoldMin: 3.0,
+      bearingHoldMax: 6.0,
+      approachFadeDist: 18,
+      leapAlignCone: 0.61,
+      leapLandSpeedFrac: 0.55,
+    },
+    wolfPoints: 60,
 
-    bodyHeight: 2.1, // m
-    colliderHalfHeight: 0.62, // m
-    colliderRadius: 0.62, // m
+    /* --------------------------------------------------------- investida --- */
+    chargeChance: 0.65,
+    chargeChancePerHit: 0.015,
+    chargeDuration: 7.0, // s
+    chargeCooldown: 0.7, // s
+    /* A TRAVA DA INVESTIDA — é o que torna a esquiva possível.
+       Dentro deste raio o alce para de corrigir o rumo: fixa a mira (já com o
+       lead à frente do jogador) e vem em linha reta, como um touro. A 5,5 m e
+       12,5 m/s são ~0,45 s de janela, e cada metro aqui muda o jogo inteiro:
+       a 4,5 m só a quebra perfeita salva, a 7 m até correr em linha reta para
+       longe basta. Antes da trava nada mudou — ele persegue e corrige, e é por
+       isso que sair de lado CEDO não adianta: o lead acompanha. */
+    commitDistance: 5.5, // m — a partir daqui o rumo está travado
+    // Passou do jogador e não acertou: ainda leva a tonelada por mais alguns
+    // metros antes de conseguir parar. É o preço do embalo, e é a recompensa
+    // visível de quem desviou.
+    overshootDistance: 14, // m de rolagem depois do ponto travado
+    turnRate: 1.15, // rad/s
+    giveUpTicks: 8,
+    goreRadius: 1.85, // m
+    nearestBias: 0.65,
+    leadTime: 0.45, // s — mira à frente do jogador
+    leadTimePerHit: 0.008, // s a mais por flecha (ferido = mais preciso)
+    rechargeOnMissChance: 0.7, // após miss com hits≥3
+    rechargeOnMissMinHits: 3,
+    woundedHuntMinHits: 5,
+
+    /* ------------------------------------------------------- quebrar o susto --
+       Duas flechas NO MEIO da investida e ele desiste: gira, foge e fica um
+       tempo sem coragem de voltar. É a única defesa que não depende de correr —
+       quem tem sangue frio para acertar o bicho que vem em cima paga menos que
+       quem só desvia. Uma flecha só não resolve: seria fácil demais. */
+    chargeBreakHits: 2, // flechas durante a investida que a interrompem
+    scaredRecoverTime: 4.5, // s sem investir depois do susto
+    missRecoverTime: 2.0, // s sem investir depois de passar direto
+
+    /* --------------------------------------------------- desvio de flecha --- */
+    // Gradual com a vida: quase não desvia intacto; perto da morte esquiva muito.
+    dodgeChance: 0.08,
+    dodgeChanceAtDeath: 0.88,
+    dodgeRadius: 2.5, // m — distância mínima da trajetória ao corpo
+    dodgeLeadTime: 0.9, // s — ETA máxima para considerar ameaça
+    dodgeDuration: 0.65, // s
+    dodgeCooldown: 4.5, // s — espaçado com vida cheia
+    dodgeCooldownAtDeath: 1.2, // s — frequente quando ferido
+    dodgeSpeed: 11.0, // m/s no pulo lateral
+    dodgeJumpHeight: 1.1, // m
+
+    /* Navegação */
+    maxArenaDist: 3.5,
+    minSlope: 0.82,
+    lookAhead: 3.5,
+    stuckEscapeTime: 0.35,
+
+    bodyHeight: 2.7, // m
+    colliderHalfHeight: 0.82, // m
+    colliderRadius: 0.82, // m
     corpseLifetime: 30, // s
-    strideLength: 1.9, // m por ciclo de perna, pastando
-    runStrideGain: 1.1, // quanto a passada cresce na investida (ver `boar`)
-    // Pontos por derrubar o alce. Não varia com a distância como o porco: aqui
-    // o mérito é aguentar a investida, não acertar de longe.
+    strideLength: 2.3,
+    runStrideGain: 1.15,
     killPoints: 400,
-    hitPoints: 25, // por flechada que acerta
+    hitPoints: 25,
   },
 
   /* -------------------------------------------------------------- pássaros --

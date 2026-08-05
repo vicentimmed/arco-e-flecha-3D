@@ -37,6 +37,7 @@ import { ColorPool } from "./colors.js";
 import { pickSpawnPoint, duelPositions, elkHuntPositions } from "./spawnPoints.js";
 import { BoarHunt, boarPoints } from "./boarSim.js";
 import { ElkHunt } from "./elkSim.js";
+import { ElkWolfPack } from "./elkWolves.js";
 import { BirdFlock } from "./birdSim.js";
 import { ZombieNight } from "./zombieSim.js";
 import { TargetSeries } from "./targetSeries.js";
@@ -66,6 +67,7 @@ export class Room {
 
     this.hunt = new BoarHunt(this.terrain);
     this.elks = new ElkHunt(this.terrain);
+    this.elkWolves = new ElkWolfPack(this.terrain);
     this.series = new TargetSeries(this.terrain);
     /* Os pássaros não pertencem a modo nenhum: eles existem enquanto a sala
        existir. É o que os separa dos porcos e do alce — antes de serem alvo,
@@ -209,7 +211,11 @@ export class Room {
       // escolhe o ponto mais longe de todo mundo, então ele só sabe onde é "o
       // lado oposto" depois que todos já foram postos na linha — e precisa
       // receber os pontos NOVOS, não os que os clientes reportaram até agora.
-      this.elks.start(this.lineUpForElk());
+      for (const p of this.players.values()) p.elkDownUntil = 0;
+      const postos = this.lineUpForElk();
+      this.elks.start(postos);
+      this.broadcastElkLineUp(postos);
+      this.broadcastElkStatus();
     } else if (modo === "zombie") {
       /* A noite cai e a partida começa na hora — sem convite e sem espera.
          Diferente do duelo, aqui não há por que pedir licença: o modo é
@@ -257,6 +263,7 @@ export class Room {
     this.hunt.boars = [];
     this.elks.stop();
     this.elks.elks = [];
+    this.elkWolves.clear();
     this.birds.reset();
     this.zombies.stop();
     // As tochas voltam acesas: a partida seguinte não herda o escuro que a
@@ -325,24 +332,47 @@ export class Room {
       p.invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
       postos.push({ id: p.id, alive: true, x: ponto.x, y: ponto.y, z: ponto.z });
       this.stampSpawnState(p, ponto.x, ponto.z);
-      this.broadcastAll({
-        t: S2C.SPAWN,
-        id: p.id,
-        x: round(ponto.x),
-        z: round(ponto.z),
-        y: round(ponto.y),
-        drop: CONFIG.spawn.dropHeight,
-        invulnUntil: p.invulnUntil,
-      });
     });
 
-    /* Devolve os pontos ATRIBUÍDOS, e é por isso que este método devolve algo.
+    /* O pacote de nascimento NÃO sai daqui, e é essa a diferença: ele só pode
+       sair depois que o alce existir, porque é o alce que decide para onde a
+       arqueira olha. Ver `broadcastElkLineUp`.
+
+       Devolve os pontos ATRIBUÍDOS, e é por isso que este método devolve algo.
        `playerPositions()` lê a última pose REPORTADA por cada cliente, e neste
        instante ela ainda é a de antes do teleporte — o pacote de spawn acabou
        de sair e a pose nova só volta no próximo envio, 50 ms depois. Escolher o
        ponto do alce por ela punha o bicho ao lado dos arqueiros em vez de no
        extremo oposto, que é exatamente o contrário do que o modo pede. */
     return postos;
+  }
+
+  /**
+   * Manda a linha nascer OLHANDO PARA O ALCE.
+   *
+   * A caçada começa com o bicho a sessenta metros, no extremo oposto do vale.
+   * Nascer com a câmera no rumo antigo punha metade da sala de costas para o
+   * único ponto de interesse do modo — e o primeiro segundo, que devia ser
+   * "lá está ele", virava um giro de mouse procurando o cenário.
+   */
+  broadcastElkLineUp(postos) {
+    const alce = this.elks.bossElk();
+    for (const posto of postos) {
+      const p = this.playerById(posto.id);
+      if (!p) continue;
+      const yaw = alce ? faceYaw(posto, alce) : 0;
+      if (p.state) p.state.y = round(yaw);
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: p.id,
+        x: round(posto.x),
+        z: round(posto.z),
+        y: round(posto.y),
+        yaw: round(yaw),
+        drop: CONFIG.spawn.dropHeight,
+        invulnUntil: p.invulnUntil,
+      });
+    }
   }
 
   /** Alguém acertou o alvo da vez. */
@@ -483,6 +513,15 @@ export class Room {
     if (this.elks.active || this.elks.elks.length) {
       const chifrados = this.elks.update(this.boarStep, jogadores, agora);
       for (const id of chifrados) this.registerGore(id);
+
+      if (this.mode === "elkHunt" && !this.elks.over) {
+        const boss = this.elks.bossElk();
+        this.elkWolves.tickSummon(boss, this.players.size, agora);
+        const wr = this.elkWolves.update(this.boarStep, jogadores, agora);
+        for (const atk of wr.ataques) this.registerWolfKill(atk.playerId);
+        this.broadcastAll({ t: S2C.ZOMBIES, time: agora, z: this.elkWolves.view() });
+      }
+
       this.broadcastAll({ t: S2C.ELKS, time: agora, e: this.elks.view() });
     }
 
@@ -504,6 +543,8 @@ export class Room {
    * declaradas por quem atirou, porque quem atirou é quem viu o acerto e o tiro
    * precisa parecer instantâneo. Aqui não existe "quem viu": o alce é do
    * servidor, a investida é do servidor, e a cabeçada também.
+   *
+   * Na caçada, o que vem depois da morte é assunto de `downOnElkHunt`.
    */
   registerGore(victimId) {
     const vitima = this.playerById(victimId);
@@ -546,10 +587,85 @@ export class Room {
     });
     this.broadcastScores();
 
+    if (this.mode === "elkHunt" && !this.elks.over) {
+      this.downOnElkHunt(vitima);
+      return;
+    }
+
     const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
     setTimeout(() => {
       if (this.players.has(vitima.conn)) this.spawn(vitima);
     }, espera).unref?.();
+  }
+
+  /**
+   * O arqueiro caiu na caçada: countdown, espectador e volta.
+   *
+   * SOZINHO NA SALA a espera é curta e a partida não acaba nunca por morte.
+   * A regra do wipe existe para o grupo — é ela que dá peso a "não deixe o
+   * último cair". Com uma pessoa só, ela vira outra coisa: reiniciar o modo
+   * inteiro toda vez que a cabeçada acerta, jogando fora quinze flechas de
+   * progresso. Aqui a vida do alce é o placar, e ela não volta a cheia porque
+   * o caçador escorregou — o bicho continua exatamente onde estava.
+   */
+  downOnElkHunt(vitima) {
+    const M = CONFIG.modes.elkHunt;
+    const sozinho = this.players.size <= 1;
+    const espera = (sozinho ? M.soloRespawnDelay : M.playerRespawnDelay) * 1000;
+
+    vitima.elkDownUntil = this.now() + espera;
+    this.broadcastElkStatus();
+    if (!sozinho) this.checkElkWipe();
+
+    setTimeout(() => {
+      if (!this.players.has(vitima.conn)) return;
+      if (this.mode !== "elkHunt" || this.elks.over) return;
+      vitima.elkDownUntil = 0;
+      this.spawn(vitima);
+      // Invulnerabilidade extra do modo, além do spawn padrão.
+      vitima.invulnUntil = Math.max(
+        vitima.invulnUntil,
+        this.now() + M.invulnerability * 1000,
+      );
+      this.broadcastElkStatus();
+    }, espera).unref?.();
+  }
+
+  /**
+   * Todo mundo caído na caçada ao alce ao mesmo tempo: derrota.
+   *
+   * Enquanto houver alguém vivo (ou ainda no timer de respawn com outro vivo),
+   * a caçada continua. Só acaba quando NÃO sobra ninguém em pé — o mesmo
+   * critério do wipe do modo zumbi, sem sistema de vidas. Não vale para quem
+   * joga sozinho: ver `downOnElkHunt`.
+   */
+  checkElkWipe() {
+    if (this.mode !== "elkHunt" || this.elks.over || this.players.size <= 1) return;
+    for (const p of this.players.values()) {
+      if (p.alive) return;
+    }
+
+    this.elks.gameOver("wipe");
+    this.elkWolves.clear();
+    this.broadcastAll({ t: S2C.ZOMBIES, z: [], clear: true });
+    this.broadcastAll({ t: S2C.ELK_OVER, reason: "wipe" });
+    this.broadcastElkStatus();
+    this.log("modo alce: derrota — todos caídos");
+  }
+
+  elkStatus() {
+    return {
+      over: this.elks.over,
+      reason: this.elks.overReason,
+      downs: [...this.players.values()].map((p) => ({
+        id: p.id,
+        until: p.elkDownUntil ?? 0,
+      })),
+    };
+  }
+
+  broadcastElkStatus() {
+    this.broadcastAll({ t: S2C.ELK_STATUS, ...this.elkStatus() });
   }
 
   /* ---------------------------------------------------------------- zumbis - */
@@ -750,15 +866,25 @@ export class Room {
     this.log(`modo zumbi: game over na horda ${this.zombies.horde}`);
   }
 
-  /** Uma flecha entrou num zumbi. Quem atirou declara se foi na cabeça. */
+  /** Uma flecha entrou num zumbi ou lobo. Quem atirou declara se foi na cabeça. */
   registerZombieHit(player, msg) {
+    // Lobos da caçada ao alce usam o mesmo canal de hit.
+    if (this.mode === "elkHunt" && !this.elks.over) {
+      this.registerElkWolfHit(player, msg);
+      return;
+    }
     if (this.mode !== "zombie" || this.zombies.over) return;
     const Z = CONFIG.modes.zombie;
-    const r = this.zombies.hit(msg.id, msg.head === true);
+    const r = this.zombies.hit(msg.id, msg.head === true, msg.v ?? 0);
     if (!r || !r.morreu) return;
 
+    const isWolf = r.zombie.kind === "wolf";
     this.zombies.kill(msg.id, this.now());
-    const pontos = r.head ? Z.headPoints : Z.bodyPoints;
+    const pontos = isWolf
+      ? (Z.wolfPoints ?? 60)
+      : r.head
+        ? Z.headPoints
+        : Z.bodyPoints;
     player.score.points += pontos;
     player.score.kills++;
 
@@ -769,10 +895,59 @@ export class Room {
       killerName: player.name,
       killerColor: player.color,
       points: pontos,
-      head: r.head,
+      head: isWolf ? false : r.head,
+      wolf: isWolf,
       distance: msg.d ?? 0,
     });
     this.broadcastScores();
+  }
+
+  registerElkWolfHit(player, msg) {
+    const r = this.elkWolves.hit(msg.id);
+    if (!r || !r.morreu) return;
+    this.elkWolves.kill(msg.id, this.now());
+    const pontos = CONFIG.elk.wolfPoints ?? 60;
+    player.score.points += pontos;
+    player.score.kills++;
+    this.broadcastAll({
+      t: S2C.ZOMBIE_DEATH,
+      id: msg.id,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      points: pontos,
+      head: false,
+      wolf: true,
+      distance: msg.d ?? 0,
+    });
+    this.broadcastScores();
+  }
+
+  /** Lobo da caçada ao alce matou um jogador. */
+  registerWolfKill(victimId) {
+    const vitima = this.playerById(victimId);
+    if (!vitima || !vitima.alive) return;
+    if (this.now() < vitima.invulnUntil) return;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      victimColor: vitima.color,
+      killer: 0,
+      killerName: "Lobo",
+      killerColor: "#6a5a4a",
+      distance: null,
+      c: null,
+      v: null,
+      cause: "wolf",
+    });
+    this.broadcastScores();
+
+    if (this.mode === "elkHunt" && !this.elks.over) this.downOnElkHunt(vitima);
   }
 
   /** Uma flecha apagou uma tocha. */
@@ -806,6 +981,8 @@ export class Room {
 
   /** Uma flecha entrou no alce. A vida e a morte são contadas aqui. */
   registerElkHit(player, msg) {
+    if (this.mode === "elkHunt" && this.elks.over) return;
+
     const pos = player.state
       ? { x: player.state.p[0], z: player.state.p[2] }
       : null;
@@ -813,13 +990,21 @@ export class Room {
     if (!r) return; // alce já morto, ou id desconhecido
 
     const E = CONFIG.elk;
+    if (!r.elk.fun) {
+      player.score.elkHits = (player.score.elkHits ?? 0) + 1;
+    }
+
     if (!r.morreu) {
       if (!r.elk.fun) player.score.points += E.hitPoints;
       this.broadcastAll({
         t: S2C.ELK_HIT,
         id: r.elk.id,
-        health: r.elk.health / E.maxHealth,
+        health: r.elk.health / r.elk.maxHealth,
         killer: player.id,
+        // A investida foi quebrada por esta flecha. Vira aviso na tela: sem
+        // ele, o bicho girar e sair correndo parece bug de IA, e não a regra
+        // funcionando.
+        scared: r.assustou ? 1 : 0,
       });
       if (!r.elk.fun) this.broadcastScores();
       return;
@@ -843,6 +1028,43 @@ export class Room {
       fun: morto.fun,
     });
     if (!morto.fun) this.broadcastScores();
+
+    // Vitória da caçada: um alce do modo caiu — a partida acaba.
+    if (!morto.fun && this.mode === "elkHunt" && !this.elks.over) {
+      this.elks.gameOver("win");
+      this.elkWolves.clear();
+      this.broadcastAll({ t: S2C.ZOMBIES, z: [], clear: true });
+      // Quem ainda esperava respawn volta agora: a caçada acabou, não faz
+      // sentido deixar alguém no chão olhando o placar de longe.
+      for (const p of this.players.values()) {
+        if (!p.alive) {
+          p.elkDownUntil = 0;
+          this.spawn(p);
+        }
+      }
+      const ranking = [...this.players.values()]
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          elkHits: p.score.elkHits ?? 0,
+          finisher: p.id === player.id,
+        }))
+        .sort((a, b) => {
+          // Quem deu o golpe final fica em destaque; depois, por flechas.
+          if (a.finisher !== b.finisher) return a.finisher ? -1 : 1;
+          return b.elkHits - a.elkHits;
+        });
+      this.broadcastAll({
+        t: S2C.ELK_OVER,
+        reason: "win",
+        finisher: player.id,
+        finisherName: player.name,
+        ranking,
+      });
+      this.broadcastElkStatus();
+      this.log(`modo alce: vitória — golpe final de ${player.name}`);
+    }
   }
 
   /** Uma flecha acertou um pássaro. */
@@ -1006,6 +1228,7 @@ export class Room {
       zombies: this.zombies.zombies.length ? this.zombies.view() : [],
       torches: this.torches,
       zombieStatus: this.mode === "zombie" ? this.zombieStatus() : null,
+      elkStatus: this.mode === "elkHunt" ? this.elkStatus() : null,
       series: this.series.view(),
       mode: this.modeView(),
       scores: this.scores(),
@@ -1119,6 +1342,10 @@ export class Room {
           },
           player.id,
         );
+        // O alce do modo pode ver a flecha a caminho e tentar desviar.
+        if (this.mode === "elkHunt" && !this.elks.over) {
+          this.elks.noticeShot({ o: msg.o, d: msg.d, v: msg.v }, this.now());
+        }
         break;
 
       case C2S.IMPACT: {
@@ -1144,6 +1371,7 @@ export class Room {
            segundo tiro é sempre mais difícil que o primeiro. */
         if (msg.p) {
           if (this.hunt.active) this.hunt.scareNear(msg.p[0], msg.p[2]);
+          this.elks.scareNear(msg.p[0], msg.p[2]);
           this.birds.scareNear(msg.p[0], msg.p[2]);
         }
 
@@ -1200,6 +1428,22 @@ export class Room {
             e: this.elks.view(),
           });
           this.log(`${player.name} soltou um alce`);
+        }
+        break;
+      }
+
+      case C2S.SPAWN_ELK_WOLVES: {
+        if (this.mode !== "elkHunt" || this.elks.over) break;
+        const boss = this.elks.bossElk();
+        if (!boss) break;
+        const n = this.elkWolves.spawnAround(boss, this.players.size);
+        if (n) {
+          this.broadcastAll({
+            t: S2C.ZOMBIES,
+            time: this.now(),
+            z: this.elkWolves.view(),
+          });
+          this.log(`${player.name} soltou lobos do alce (${n})`);
         }
         break;
       }
@@ -1338,12 +1582,20 @@ export class Room {
     player.invulnUntil = invulnUntil;
     this.stampSpawnState(player, ponto.x, ponto.z);
 
+    // Na caçada, voltar à vida também é voltar a encarar o bicho: o ponto de
+    // renascimento é sorteado no vale inteiro, e sem isso a pessoa reaparece
+    // olhando para qualquer lado enquanto o alce vem.
+    const alce = this.mode === "elkHunt" ? this.elks.bossElk() : null;
+    const yaw = alce ? faceYaw(ponto, alce) : null;
+    if (yaw != null && player.state) player.state.y = round(yaw);
+
     this.broadcastAll({
       t: S2C.SPAWN,
       id: player.id,
       x: round(ponto.x),
       z: round(ponto.z),
       y: round(ponto.y),
+      ...(yaw != null ? { yaw: round(yaw) } : {}),
       drop: CONFIG.spawn.dropHeight,
       invulnUntil,
     });
@@ -1533,7 +1785,7 @@ export class RoomHost {
  * tabela até a pessoa reentrar na sala.
  */
 function emptyScore() {
-  return { kills: 0, deaths: 0, boars: 0, elks: 0, birds: 0, targets: 0, points: 0 };
+  return { kills: 0, deaths: 0, boars: 0, elks: 0, elkHits: 0, birds: 0, targets: 0, points: 0 };
 }
 
 function publicView(p) {
@@ -1553,6 +1805,20 @@ function raw(conn, data) {
 }
 
 const round = (v) => Math.round(v * 1000) / 1000;
+
+/**
+ * Yaw da arqueira para encarar um ponto.
+ *
+ * A convenção do corpo é a do cliente: yaw 0 olha para −Z, e a frente é
+ * (−sen yaw, −cos yaw). Daí o sinal invertido — não é engano de conta, é a
+ * mesma fórmula que `Player.setAim` desfaz do outro lado.
+ */
+function faceYaw(de, para) {
+  const dx = para.x - de.x;
+  const dz = para.z - de.z;
+  if (Math.hypot(dx, dz) < 1e-4) return 0;
+  return Math.atan2(-dx, -dz);
+}
 
 /**
  * Prende um instante vindo do cliente a uma janela plausível em torno de agora.

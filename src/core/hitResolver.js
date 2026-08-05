@@ -43,6 +43,9 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "zombie") {
     return resolveZombieHit(ctx);
   }
+  if (other.kind === "wolf") {
+    return resolveWolfHit(ctx);
+  }
   if (other.kind === "torch") {
     return resolveTorchHit(ctx);
   }
@@ -86,7 +89,7 @@ function resolveCharacterHit({ arrow, other, impact, normal, deps }) {
   });
 
   deps.spawnPuff?.(impact, null);
-  arrow.stick(body, isDynamic);
+  arrow.stick(body, isDynamic, character);
   deps.retireArrow?.(arrow);
   return { kind: "character", entityId: character.entityId };
 }
@@ -111,7 +114,7 @@ function resolveTargetHit({ arrow, other, impact, deps }) {
     label: result.score > 0 ? null : "armação do alvo",
   });
   deps.onScore?.(target, result, arrow);
-  arrow.stick(body, isDynamic);
+  arrow.stick(body, isDynamic, target);
   deps.retireArrow?.(arrow);
   return { kind: "target", result };
 }
@@ -125,7 +128,7 @@ function resolveBoarHit({ arrow, other, impact, deps }) {
   deps.spawnPuff?.(impact, null);
 
   const body = boar.body;
-  arrow.stick(body, true);
+  arrow.stick(body, true, boar);
   deps.retireArrow?.(arrow);
   return { kind: "boar", entityId: boar.entityId };
 }
@@ -147,7 +150,7 @@ function resolveElkHit({ arrow, other, impact, deps }) {
   emitImpact(arrow, "elk", elk.entityId, impact, null, { label: "alce", hit: true });
   deps.spawnPuff?.(impact, null);
 
-  arrow.stick(elk.body, true);
+  arrow.stick(elk.body, true, elk);
   deps.retireArrow?.(arrow);
   return { kind: "elk", entityId: elk.entityId };
 }
@@ -219,9 +222,32 @@ function resolveZombieHit({ arrow, other, impact, deps }) {
   });
   deps.spawnPuff?.(impact, null);
 
-  arrow.stick(zombie.body, true);
+  arrow.stick(zombie.body, true, zombie);
   deps.retireArrow?.(arrow);
-  return { kind: "zombie", entityId: zombie.entityId, head };
+  return {
+    kind: "zombie",
+    entityId: zombie.entityId,
+    head,
+    speed: arrow.launchSpeed ?? 0,
+  };
+}
+
+/** Lobo: uma flecha em qualquer lugar. */
+function resolveWolfHit({ arrow, other, impact, deps }) {
+  const wolf = other.wolf;
+  if (!wolf || wolf.dead) return null;
+
+  wolf.registerHit(impact, arrow);
+  emitImpact(arrow, "zombie", wolf.entityId, impact, null, {
+    label: "lobo",
+    head: false,
+    hit: true,
+  });
+  deps.spawnPuff?.(impact, null);
+
+  arrow.stick(wolf.body, true, wolf);
+  deps.retireArrow?.(arrow);
+  return { kind: "wolf", entityId: wolf.entityId };
 }
 
 /**

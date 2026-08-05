@@ -25,6 +25,15 @@ import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 
 const UP = new THREE.Vector3(0, 1, 0);
 
+/*
+ * A flecha pertence ao grupo 1 e aceita todos os grupos, EXCETO o próprio
+ * grupo 1. Assim ela continua acertando cenário, alvos e criaturas, mas duas
+ * flechas nunca entram no mesmo par de colisão.
+ *
+ * Rapier codifica membership nos 16 bits altos e filter nos 16 baixos.
+ */
+const ARROW_COLLISION_GROUPS = 0x0001fffe;
+
 /* ------------------------------------------------------------- geometria -- */
 
 let sharedArrowGeometry = null;
@@ -197,6 +206,8 @@ export class Arrow {
     this.trail = trail;
     this.stuck = false;
     this.dead = false;
+    /** Entidade que acompanha a flecha enquanto ela está cravada. */
+    this.attachedTo = null;
     this.age = 0;
 
     // Telemetria para HUD e depuração.
@@ -239,6 +250,7 @@ export class Arrow {
       colliderDesc.setCollisionGroups(0);
       this.collider = physics.createCollider(colliderDesc, this.body);
     } else {
+      colliderDesc.setCollisionGroups(ARROW_COLLISION_GROUPS);
       colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
       this.collider = physics.createCollider(colliderDesc, this.body);
       physics.register(this.collider, { kind: "arrow", arrow: this });
@@ -347,9 +359,10 @@ export class Arrow {
    * dinâmica e é presa por um FixedJoint — assim ela acompanha o balanço do
    * alvo. Congelá-la travaria o alvo junto.
    */
-  stick(otherBody, isDynamic) {
+  stick(otherBody, isDynamic, attachment = null) {
     if (this.stuck) return;
     this.stuck = true;
+    this.attachedTo = attachment;
 
     const t = this.body.translation();
     this.stickCamAnchor = new THREE.Vector3(t.x, t.y, t.z);
@@ -422,7 +435,13 @@ export class Arrow {
    * dois lugares diferentes em duas telas. O salto é de centímetros e acontece
    * meio ping depois do impacto: ninguém vê.
    */
-  snapTo(position, rotation, otherBody = null, isDynamic = false) {
+  snapTo(
+    position,
+    rotation,
+    otherBody = null,
+    isDynamic = false,
+    attachment = null,
+  ) {
     if (this.stuck || this.dead) return;
     this.body.setTranslation(position, true);
     if (rotation) this.body.setRotation(rotation, true);
@@ -430,7 +449,7 @@ export class Arrow {
     if (rotation) {
       this.mesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
     }
-    this.stick(otherBody, isDynamic);
+    this.stick(otherBody, isDynamic, attachment);
     this.sync.snap(this.body);
   }
 
@@ -672,6 +691,25 @@ export class ArrowManager {
     if (j >= 0) this.stuck.splice(j, 1);
     if (this.lastArrow === arrow) this.lastArrow = null;
     arrow.dispose();
+  }
+
+  /**
+   * Remove flechas presas a uma entidade que está saindo do mundo.
+   *
+   * É importante fazer isso antes de remover o corpo do alvo: uma flecha
+   * dinâmica presa por joint não pode continuar viva depois que o outro corpo
+   * desaparece, senão ela cai ou fica suspensa no ponto do último frame.
+   */
+  removeAttachedTo(target) {
+    if (!target) return;
+    for (const lista of [this.stuck, this.live]) {
+      for (let i = lista.length - 1; i >= 0; i--) {
+        if (lista[i].attachedTo !== target) continue;
+        const arrow = lista.splice(i, 1)[0];
+        if (this.lastArrow === arrow) this.lastArrow = null;
+        arrow.dispose();
+      }
+    }
   }
 
   update(dt) {

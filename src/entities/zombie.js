@@ -7,9 +7,9 @@
 
    DUAS DECISÕES DE CONSTRUÇÃO, as duas por causa do número deles:
 
-   1. O corpo nasce MESCLADO POR MATERIAL — 7 meshes, não os 21 do porco. Na
-      horda 10 são 21 zumbis vivos ao mesmo tempo; a 21 meshes cada, seriam 441
-      draw calls só de bicho, mais o passe de sombra. Mesclado, são 147.
+   1. O corpo nasce MESCLADO POR MATERIAL — poucos meshes, não dezenas. Na
+      horda grande são dezenas de zumbis vivos ao mesmo tempo; meshes demais
+      virariam centenas de draw calls só de bicho, mais o passe de sombra.
 
    2. Os OLHOS usam `MeshBasicMaterial`, que ignora a iluminação da cena.
       Não é economia — é o modo inteiro. À noite, fora do alcance das tochas, o
@@ -39,10 +39,27 @@ const COS_EYE_CULL = Math.cos(Math.PI * 0.55);
 /* Materiais de módulo: ao contrário do arqueiro, nenhum zumbi é tingido
    individualmente, então compartilhar é economia pura. */
 const MAT = {
-  // Carne acinzentada e roupa em farrapos: dois tons próximos, porque à noite o
-  // que separa o zumbi do fundo é a silhueta, não a cor.
-  flesh: new THREE.MeshStandardMaterial({ color: "#7d8a6e", roughness: 0.95 }),
-  cloth: new THREE.MeshStandardMaterial({ color: "#3b3f36", roughness: 1.0 }),
+  // Carne podre esverdeada — tom frio, quase sem saturação, para ler como
+  // cadáver e não como personagem de plástico.
+  flesh: new THREE.MeshStandardMaterial({
+    color: "#5a6348",
+    roughness: 0.98,
+    metalness: 0.02,
+  }),
+  // Feridas e vísceras escuras: contraste na silhueta sem material extra caro.
+  wound: new THREE.MeshStandardMaterial({
+    color: "#2a1814",
+    roughness: 0.85,
+    metalness: 0.05,
+  }),
+  // Farrapos encharcados, quase pretos.
+  cloth: new THREE.MeshStandardMaterial({ color: "#1e221c", roughness: 1.0 }),
+  // Osso exposto (costelas, articulação).
+  bone: new THREE.MeshStandardMaterial({
+    color: "#c4b89a",
+    roughness: 0.7,
+    metalness: 0.08,
+  }),
   /* Os olhos. `MeshBasicMaterial` não recebe luz: eles brilham igual no escuro
      total e é isso que anuncia a horda. `fog: false` para a névoa da noite não
      apagá-los à distância — é justamente de longe que eles precisam ser vistos. */
@@ -67,63 +84,110 @@ let SHARED = null;
 function buildShared() {
   if (SHARED) return SHARED;
 
-  // --- tronco + cabeça + quadril, numa peça só ---------------------------
-  const torso = new THREE.CapsuleGeometry(0.19, 0.44, 4, 10);
-  torso.scale(1.0, 1.0, 0.72); // achatado: um corpo seco, não um barril
-  torso.translate(0, 1.16, 0);
+  // --- tronco assimétrico + ombros + quadril (não um tubo) ---------------
+  // Peito largo e achatado, costas caído — silhueta de cadáver curvado.
+  const peito = new THREE.BoxGeometry(0.42, 0.38, 0.26);
+  peito.translate(0.02, 1.22, -0.02);
 
-  const quadril = new THREE.CapsuleGeometry(0.16, 0.1, 3, 8);
-  quadril.translate(0, 0.86, 0);
+  const abdomen = new THREE.BoxGeometry(0.34, 0.28, 0.22);
+  abdomen.translate(-0.01, 0.98, 0.01);
 
-  const pescoco = new THREE.CylinderGeometry(0.055, 0.065, 0.1, 6);
-  pescoco.translate(0, 1.5, 0);
+  const ombroL = new THREE.SphereGeometry(0.09, 7, 5);
+  ombroL.scale(1.15, 0.85, 1.0);
+  ombroL.translate(-0.24, 1.38, 0);
 
-  const cranio = new THREE.SphereGeometry(0.13, 10, 8);
-  cranio.scale(0.92, 1.06, 1.0);
-  cranio.translate(0, 1.62, 0);
+  const ombroR = new THREE.SphereGeometry(0.1, 7, 5);
+  ombroR.scale(1.2, 0.9, 1.05);
+  ombroR.translate(0.26, 1.36, -0.02);
 
-  // A mandíbula caída é o que faz a cabeça ler como zumbi em silhueta.
-  const mandibula = new THREE.BoxGeometry(0.11, 0.07, 0.09);
-  mandibula.translate(0, 1.52, -0.07);
+  const quadril = new THREE.BoxGeometry(0.3, 0.16, 0.2);
+  quadril.translate(0, 0.82, 0);
 
-  const corpo = mergeGeometries([torso, quadril, pescoco, cranio, mandibula]);
+  // Corcova / coluna saliente: quebra a leitura de "cápsula".
+  const coluna = new THREE.BoxGeometry(0.08, 0.42, 0.1);
+  coluna.translate(0, 1.15, 0.11);
+
+  const corpo = mergeGeometries([peito, abdomen, ombroL, ombroR, quadril, coluna]);
+
+  // --- feridas: costelas expostas + rasgo no peito -----------------------
+  const costelas = [];
+  for (let i = 0; i < 4; i++) {
+    const c = new THREE.BoxGeometry(0.02, 0.018, 0.14);
+    c.translate(-0.06 + i * 0.04, 1.18 - i * 0.04, -0.12);
+    costelas.push(c);
+  }
+  const rasgo = new THREE.BoxGeometry(0.14, 0.22, 0.04);
+  rasgo.translate(0.06, 1.12, -0.13);
+  const feridas = mergeGeometries([...costelas, rasgo]);
+
+  // --- crânio descarnado + mandíbula caída ------------------------------
+  const cranio = new THREE.SphereGeometry(0.125, 9, 7);
+  cranio.scale(0.88, 1.12, 0.95);
+  cranio.translate(0, 1.64, -0.02);
+
+  const maxila = new THREE.BoxGeometry(0.1, 0.05, 0.08);
+  maxila.translate(0, 1.54, -0.1);
+
+  const mandibula = new THREE.BoxGeometry(0.1, 0.045, 0.09);
+  mandibula.translate(0, 1.48, -0.12);
+
+  const pescoco = new THREE.CylinderGeometry(0.045, 0.06, 0.12, 6);
+  pescoco.translate(0, 1.48, 0.02);
+
+  const cabeca = mergeGeometries([cranio, maxila, mandibula, pescoco]);
+
+  // Dentes / osso da mandíbula — detalhe barato que lê de perto.
+  const denteL = new THREE.BoxGeometry(0.018, 0.035, 0.018);
+  denteL.translate(-0.03, 1.505, -0.15);
+  const denteR = new THREE.BoxGeometry(0.018, 0.04, 0.018);
+  denteR.translate(0.028, 1.5, -0.15);
+  const osso = mergeGeometries([denteL, denteR]);
 
   // --- os dois olhos, numa peça só --------------------------------------
   const olhos = mergeGeometries(
     [-1, 1].map((lado) => {
-      const g = new THREE.SphereGeometry(0.028, 7, 5);
-      g.translate(lado * 0.052, 1.655, -0.108);
+      const g = new THREE.SphereGeometry(0.03, 6, 5);
+      g.translate(lado * 0.048, 1.67, -0.1);
       return g;
     }),
   );
 
-  // --- braço: ombro → mão, esticado para a frente ------------------------
-  // A geometria nasce com o ombro na ORIGEM para o grupo poder girá-la pelo
-  // ombro; o `translate` de posição vive no grupo, não aqui.
-  const bracoSup = new THREE.CapsuleGeometry(0.058, 0.24, 3, 7);
+  // --- braço: ombro → cotovelo → antebraço → mão com garras -------------
+  const bracoSup = new THREE.CapsuleGeometry(0.055, 0.22, 3, 6);
   bracoSup.rotateX(Math.PI / 2);
-  bracoSup.translate(0, 0, -0.17);
-  const bracoInf = new THREE.CapsuleGeometry(0.05, 0.22, 3, 7);
-  bracoInf.rotateX(Math.PI / 2);
-  bracoInf.translate(0, -0.02, -0.46);
-  const mao = new THREE.BoxGeometry(0.075, 0.05, 0.11);
-  mao.translate(0, -0.03, -0.63);
-  const braco = mergeGeometries([bracoSup, bracoInf, mao]);
+  bracoSup.translate(0, 0, -0.16);
+  const cotovelo = new THREE.SphereGeometry(0.05, 6, 4);
+  cotovelo.translate(0, -0.02, -0.34);
+  const bracoInf = new THREE.CapsuleGeometry(0.045, 0.2, 3, 6);
+  bracoInf.rotateX(Math.PI / 2 + 0.15);
+  bracoInf.translate(0, -0.04, -0.5);
+  const mao = new THREE.BoxGeometry(0.08, 0.045, 0.1);
+  mao.translate(0, -0.05, -0.66);
+  // Três garras — o detalhe que tira a leitura de "tubo com luva".
+  const garras = [0, 1, 2].map((i) => {
+    const g = new THREE.ConeGeometry(0.012, 0.07, 4);
+    g.rotateX(Math.PI / 2);
+    g.translate((i - 1) * 0.025, -0.06, -0.74);
+    return g;
+  });
+  const braco = mergeGeometries([bracoSup, cotovelo, bracoInf, mao, ...garras]);
 
-  // --- perna: quadril → pé ----------------------------------------------
-  const coxa = new THREE.CapsuleGeometry(0.075, 0.3, 3, 7);
-  coxa.translate(0, -0.22, 0);
-  const canela = new THREE.CapsuleGeometry(0.06, 0.28, 3, 7);
+  // --- perna: coxa irregular + joelho + canela magra + pé ---------------
+  const coxa = new THREE.CapsuleGeometry(0.07, 0.26, 3, 6);
+  coxa.translate(0, -0.2, 0);
+  const joelho = new THREE.SphereGeometry(0.055, 6, 4);
+  joelho.translate(0, -0.4, 0.02);
+  const canela = new THREE.CapsuleGeometry(0.048, 0.26, 3, 6);
   canela.translate(0, -0.58, 0);
-  const pe = new THREE.BoxGeometry(0.1, 0.07, 0.2);
-  pe.translate(0, -0.83, -0.04);
-  const perna = mergeGeometries([coxa, canela, pe]);
+  const pe = new THREE.BoxGeometry(0.09, 0.055, 0.2);
+  pe.translate(0, -0.82, -0.05);
+  const perna = mergeGeometries([coxa, joelho, canela, pe]);
 
   // --- a labareda -------------------------------------------------------
   const chama = new THREE.ConeGeometry(0.42, 1.5, 7, 1, true);
   chama.translate(0, 1.0, 0);
 
-  SHARED = { corpo, olhos, braco, perna, chama };
+  SHARED = { corpo, feridas, cabeca, osso, olhos, braco, perna, chama };
   return SHARED;
 }
 
@@ -192,6 +256,20 @@ export class Zombie {
     root.add(this.corpo);
     this.lodBulk.push(this.corpo);
 
+    this.feridas = new THREE.Mesh(S.feridas, MAT.wound);
+    this.feridas.castShadow = true;
+    root.add(this.feridas);
+    this.lodBulk.push(this.feridas);
+
+    this.cabeca = new THREE.Mesh(S.cabeca, MAT.flesh);
+    this.cabeca.castShadow = true;
+    root.add(this.cabeca);
+    this.lodBulk.push(this.cabeca);
+
+    this.osso = new THREE.Mesh(S.osso, MAT.bone);
+    root.add(this.osso);
+    this.lodBulk.push(this.osso);
+
     this.olhos = new THREE.Mesh(S.olhos, MAT.eye);
     // Nunca descartado pelo frustum: os olhos são pontos de 3 cm a 40 m de
     // distância, e o teste por caixa envolvente os elimina em ângulos rasantes
@@ -203,14 +281,14 @@ export class Zombie {
     this.bracos = [];
     for (const lado of [-1, 1]) {
       const b = new THREE.Group();
-      b.position.set(lado * 0.21, 1.36, 0);
+      b.position.set(lado * 0.24, 1.36, 0);
       const m = new THREE.Mesh(S.braco, MAT.cloth);
       m.castShadow = true;
       b.add(m);
       // Braços esticados para a frente, um pouco abertos: a pose que se lê como
       // zumbi mesmo em silhueta contra o escuro.
       b.rotation.x = -1.35;
-      b.rotation.z = lado * 0.12;
+      b.rotation.z = lado * 0.18;
       root.add(b);
       this.bracos.push(b);
       this.lodBulk.push(b);
@@ -258,6 +336,7 @@ export class Zombie {
       arrowId: arrow?.id,
       ownerId: arrow?.ownerEntityId ?? null,
       distance: arrow ? arrow.launchPosition.distanceTo(impact) : 0,
+      speed: arrow?.launchSpeed ?? 0,
     });
   }
 
@@ -452,8 +531,8 @@ export class Zombie {
 
     // O tronco pende e balança: o zumbi não tem tônus, ele se joga para a frente
     // e o corpo acompanha meio passo atrasado.
-    this.visualRoot.rotation.x = 0.13 + Math.sin(this.animPhase * 2) * 0.035;
-    this.visualRoot.rotation.z = Math.sin(this.animPhase) * 0.07;
+    this.visualRoot.rotation.x = 0.18 + Math.sin(this.animPhase * 2) * 0.04;
+    this.visualRoot.rotation.z = Math.sin(this.animPhase) * 0.08;
 
     // Os braços oscilam pouco e fora de fase com as pernas.
     const bracoSwing = Math.sin(this.animPhase + 0.9) * (andando ? 0.16 : 0.04);

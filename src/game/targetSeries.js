@@ -31,10 +31,11 @@ import { pathCenterX } from "../shared/terrainField.js";
 const _cam = new THREE.Vector3();
 
 export class TargetSeriesView {
-  constructor(scene, physics, terrain) {
+  constructor(scene, physics, terrain, arrows = null) {
     this.scene = scene;
     this.physics = physics;
     this.terrain = terrain;
+    this.arrows = arrows;
     this.target = null; // { seq, group, body, collider, ... }
     this.explosions = [];
     this.marker = null;
@@ -124,6 +125,9 @@ export class TargetSeriesView {
 
   removeTarget() {
     if (!this.target) return;
+    // Uma flecha presa ao alvo precisa desaparecer junto com ele. A remoção
+    // vem antes do corpo físico para não deixar o joint sem alvo.
+    this.arrows?.removeAttachedTo(this.target);
     this.physics.unregister(this.target.collider);
     this.physics.removeBody(this.target.body);
     this.scene.remove(this.target.group);

@@ -38,8 +38,16 @@
  * 4 — vento na flecha sincronizado pela sala, fim da série com placar de
  * vitória, e hordas de zumbi por tabela. Uma aba antiga divergiria na física
  * da flecha e reiniciaria a série no último alvo.
+ *
+ * 5 — caçada ao alce com fim de partida (vitória/derrota), respawn longo do
+ * jogador e placar de flechas/golpe final. Uma aba antiga não mostraria a
+ * tela de vitória nem o countdown de renascimento.
+ *
+ * 6 — `spawn` passou a poder trazer o rumo da câmera (`yaw`) e `elkHit` avisa
+ * quando a investida foi quebrada. Uma aba antiga nasceria de costas para o
+ * alce e não explicaria por que o bicho desistiu no meio da corrida.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 6;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -66,6 +74,8 @@ export const C2S = {
   ELK_HIT: "elkHit",
   /** Soltar um alce avulso (tecla L), em qualquer modo. */
   SPAWN_ELK: "spawnElk",
+  /** Antecipar horda de lobos na caçada ao alce (tecla O, teste). */
+  SPAWN_ELK_WOLVES: "spawnElkWolves",
   /** "Acertei este pássaro": `{ id }`. */
   BIRD_HIT: "birdHit",
   /** "Acertei o alvo da série": `{ seq }`. */
@@ -101,7 +111,8 @@ export const S2C = {
   IMPACT: "impact",
   /** Morte confirmada: `{ victim, killer }`. */
   KILL: "kill",
-  /** Onde nascer: `{ id, x, z, drop, invulnUntil }`. */
+  /** Onde nascer: `{ id, x, z, y, drop, invulnUntil, yaw? }`. `yaw` só vem
+   *  quando a sala quer decidir para onde a pessoa olha (caçada ao alce). */
   SPAWN: "spawn",
   /** Estado dos modos: `{ mode, members, invites, until }`. */
   MODE: "mode",
@@ -125,6 +136,14 @@ export const S2C = {
   ELK_DEATH: "elkDeath",
   /** Alce chifrou alguém: a morte vem pela mensagem `KILL`, esta é o aviso. */
   ELK_GORE: "elkGore",
+  /** Caídos e fim da caçada ao alce. Ver `Room.elkStatus()`. */
+  ELK_STATUS: "elkStatus",
+  /**
+   * A caçada ao alce acabou.
+   * `{ reason: "win"|"wipe", ranking?, finisher? }`.
+   * Vitória carrega o placar de flechas e quem deu o golpe final.
+   */
+  ELK_OVER: "elkOver",
   /** Transformações dos pássaros, 10 Hz. */
   BIRDS: "birds",
   /** Pássaro abatido: `{ id, killer, points }`. */

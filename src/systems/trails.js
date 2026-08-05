@@ -6,13 +6,13 @@
    prevista. Por isso o traçado mostra o efeito do arrasto e do vento em vez de
    uma parábola ideal.
 
-   Os traçados de tiros anteriores ficam na cena: 15 s totalmente visíveis
-   depois que a flecha para, e então 5 s desaparecendo gradualmente. Cada
-   flecha tem o SEU traçado — atirar uma nova nunca apaga o das anteriores.
+   O traçado do tiro anterior desaparece gradualmente assim que o mesmo dono
+   dispara outra flecha. O traçado da flecha atual permanece visível; os
+   anteriores ficam apenas durante a animação de saída.
 
-   E o limite é POR DONO. Um pool único faria o jogador que atira mais rápido
-   apagar o traçado dos amigos, que é justamente o que se quer ver no
-   multiplayer: a linha da flecha do outro cruzando o vale.
+   A regra é POR DONO. Um pool único faria o jogador que atira apagar o traçado
+   atual dos amigos, em vez de cada jogador manter visível apenas seu último
+   disparo no multiplayer.
 
    O buffer é PRÉ-ALOCADO uma vez e escrito no lugar.
 
@@ -228,6 +228,12 @@ class Trail {
     this.age = 0;
   }
 
+  /** Começa imediatamente o fade de um traçado substituído por outro tiro. */
+  fadeOut() {
+    this.finished = true;
+    this.age = Math.max(this.age, CONFIG.trail.holdTime);
+  }
+
   get opacity() {
     if (!this.finished) return 1;
     const { holdTime, fadeTime } = CONFIG.trail;
@@ -336,12 +342,15 @@ export class TrailManager {
   }
 
   /**
-   * Um traçado novo por flecha — nunca substitui nem esconde os anteriores.
+   * Cria o traçado do novo disparo e inicia o fade do anterior do mesmo dono.
    *
-   * @param {number|string|null} ownerId quem atirou; decide de quem é a cota
+   * @param {number|string|null} ownerId quem atirou
    * @param {number} color cor da linha (a do dono, no multiplayer)
    */
   create(ownerId = null, color = CONFIG.trail.color) {
+    for (const previous of this.trails) {
+      if (previous.ownerId === ownerId) previous.fadeOut();
+    }
     const trail = new Trail(ownerId, color);
     this.trails.push(trail);
     this.evict(ownerId);

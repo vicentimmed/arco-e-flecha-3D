@@ -39,6 +39,7 @@ const ATALHOS = [
       [["Clique"], "segurar e soltar"],
       [["Dir.", "C"], "1ª pessoa"],
       [["F"], "câmera da flecha liga/desliga"],
+      [["E"], "golpe de faca"],
     ],
   },
   {

@@ -584,10 +584,9 @@ export class ArrowManager {
       visualOnly = false,
     } = options;
 
-    // Cada tiro ganha o SEU traçado e não mexe nos anteriores. Antes daqui saía
-    // um `trails.clear()` — "modo treino", uma trajetória por vez. Com mais de
-    // um arqueiro em cena isso apagaria o traçado dos outros a cada disparo,
-    // que é exatamente o que se quer enxergar.
+    // O novo tiro ganha o seu traçado e o `TrailManager` inicia o fade do
+    // traçado anterior do mesmo dono. O disparo de um jogador não apaga o
+    // traçado atual dos outros jogadores.
     const arrow = new Arrow(
       this.scene,
       this.physics,

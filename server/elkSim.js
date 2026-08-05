@@ -343,7 +343,7 @@ export class Elk {
         /* A galhada continua matando durante toda a passagem, inclusive na
            sobra de embalo. Sair da frente é a esquiva; voltar para a frente é
            o mesmo erro de antes. */
-        if (d < E.goreRadius) {
+        if (d < (E.goreRadius ?? 1.5)) {
           this.endCharge(perseguido, true, jogadores);
           return perseguido.id;
         }

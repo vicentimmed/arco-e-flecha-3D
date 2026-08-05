@@ -21,7 +21,8 @@ const WOLF_SLOW_SCALE = 0.7;
 const WOLF_SPEED_SLOW = WOLF_SPEED_LEGACY * WOLF_SLOW_SCALE; // ≈ 3,36 m/s
 const WOLF_LEAP_SLOW = WOLF_LEAP_LEGACY * WOLF_SLOW_SCALE; // ≈ 8,4 m/s
 const WOLF_SPEED_FAST = WALK_SPEED * 4.5 * 0.9; // ≈ 12,96 m/s
-const WOLF_LEAP_FAST = 36.0 * 0.9; // 32,4 m/s
+/** Salto: independente da corrida — arco telegrafado de 0,45 s / 1,2 m. */
+const WOLF_LEAP_FAST = WOLF_LEAP_LEGACY; // 12 m/s
 
 // Centro da bacia jogável. Mora aqui em cima porque DOIS blocos precisam dele —
 // o sorteio de nascimento e a arena de tochas do modo zumbi — e um deles não
@@ -79,6 +80,14 @@ export const CONFIG = {
        o arco vira metralhadora. Desligável no painel ~. */
     reloadAnimation: true,
     reloadTime: 1.0, // s
+  },
+
+  knife: {
+    duration: 0.5, // s — golpe completo, da preparação ao retorno
+    range: 2.4, // m — alcance máximo da lâmina
+    coneCos: 0.18, // cone frontal de aproximadamente 80°
+    hitStart: 0.18, // fração da animação em que a lâmina começa a acertar
+    hitEnd: 0.68, // fração da animação em que a lâmina ainda pode acertar
   },
 
   wind: {
@@ -643,7 +652,7 @@ export const CONFIG = {
       // Altura do impacto, medida da base do zumbi, a partir da qual conta como
       // cabeça. O corpo tem 1,8 m; o pescoço começa em ~1,45 m.
       headMinY: 1.45, // m
-      attackRadius: 1.7, // m — daqui ele alcança e mata
+      attackRadius: 1.1, // m — alcance dos braços (~ raio zumbi + player + agarrão)
       attackInterval: 1.4, // s entre ataques do mesmo zumbi
       burnTime: 1.5, // s pegando fogo depois de um tiro na cabeça
       corpseLifetime: 7, // s até o corpo sumir
@@ -671,7 +680,8 @@ export const CONFIG = {
       // Modo zumbi: mais lento (legacy −30%).
       wolfSpeed: WOLF_SPEED_SLOW,
       wolfSpeedVariation: 0.08,
-      wolfAttackRadius: 1.4, // m
+      wolfAttackRadius: 1.0, // m — mordida corpo a corpo (~ raio lobo + player + focinho)
+      wolfLeapHitRadius: 1.2, // m — contato no salto (não 3 m de tolerância)
       wolfAttackInterval: 1.0, // s
       wolfLeapRange: 5.0, // m — inicia o salto-ataque
       wolfLeapDuration: 0.45, // s
@@ -857,7 +867,7 @@ export const CONFIG = {
     overshootDistance: 14, // m de rolagem depois do ponto travado
     turnRate: 0.9, // rad/s
     giveUpTicks: 8,
-    goreRadius: 1.85, // m
+    goreRadius: 1.5, // m — galhada (~ raio alce 0,82 + player 0,35 + ponta)
     nearestBias: 0.65,
     leadTime: 0.22, // s — antecipação moderada antes da trava
     leadTimePerHit: 0.008, // s a mais por flecha (ferido = mais preciso)

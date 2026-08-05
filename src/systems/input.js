@@ -54,7 +54,7 @@ export class Input {
     /** Quando true, o clique não tensiona o arco — ele só encerra a câmera da
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
     this.blockDraw = false;
-    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | null */
+    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | `"knife"` | null */
     this.blockDrawReason = null;
 
     /**
@@ -81,6 +81,7 @@ export class Input {
     /** Eventos de uma só vez, consumidos pelo main a cada frame. */
     this.actions = {
       release: false, // soltou a corda
+      knifeAttack: false, // E — golpe com a faca
       dismissArrowCam: false, // clique para voltar à visão da arqueira
       cycleTarget: false,
       clearArrows: false,
@@ -199,16 +200,22 @@ export class Input {
         return;
       }
       if (e.button !== 0) return;
-      this.primaryDown = true;
       if (this.blockDraw) {
         // Câmera da flecha: clique traz a visão de volta. Durante o reload o
         // clique é guardado em `primaryDown` — o main inicia o draw quando a
         // animação terminar, se o botão ainda estiver pressionado.
         if (this.blockDrawReason !== "reload") {
+          // O clique que fecha a câmera não pode virar um novo draw quando o
+          // main processar `dismissArrowCam` e liberar o bloqueio no frame.
+          this.primaryDown = false;
+          this.drawing = false;
           this.actions.dismissArrowCam = true;
+        } else {
+          this.primaryDown = true;
         }
         return;
       }
+      this.primaryDown = true;
       this.drawing = true;
     });
 
@@ -264,6 +271,9 @@ export class Input {
           break;
         case "KeyK":
           this.actions.askRespawn = true;
+          break;
+        case "KeyE":
+          this.actions.knifeAttack = true;
           break;
         case "KeyY":
           this.actions.askResetScores = true;
@@ -380,6 +390,7 @@ export class Input {
     const a = this.actions;
     const snapshot = { ...a };
     a.release = false;
+    a.knifeAttack = false;
     a.dismissArrowCam = false;
     a.cycleTarget = false;
     a.clearArrows = false;

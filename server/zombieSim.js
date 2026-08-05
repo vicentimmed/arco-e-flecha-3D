@@ -59,7 +59,7 @@ export class Zombie {
 
     const d = Math.hypot(alvo.x - this.x, alvo.z - this.z);
 
-    if (d <= Z.attackRadius) {
+    if (d <= (Z.attackRadius ?? 1.1)) {
       this.state = "attack";
       this.faceToward(alvo.x, alvo.z);
       if (agora - this.lastAttack < Z.attackInterval * 1000) return null;
@@ -166,7 +166,6 @@ export class Wolf {
     this.leapTimer = 0;
     this.leapFx = 0;
     this.leapFz = 0;
-    this.leapRemain = 0;
 
     const base = tuning.wolfSpeed ?? Z.wolfSpeed;
     this.baseSpeed = base * (1 + (Math.random() * 2 - 1) * (Z.wolfSpeedVariation ?? 0.08));
@@ -199,6 +198,14 @@ export class Wolf {
     return aMin + Math.random() * (aMax - aMin);
   }
 
+  _attackReach() {
+    return CONFIG.modes.zombie.wolfAttackRadius ?? 1.0;
+  }
+
+  _leapHitReach() {
+    return CONFIG.modes.zombie.wolfLeapHitRadius ?? this._attackReach() * 1.2;
+  }
+
   maxTurnRate(v) {
     const AI = this._ai();
     const tMax = AI.turnRateMax ?? 3.2;
@@ -225,7 +232,7 @@ export class Wolf {
     }
 
     const d = Math.hypot(alvo.x - this.x, alvo.z - this.z);
-    const reach = Z.wolfAttackRadius ?? 1.4;
+    const reach = this._attackReach();
     const leapRange = Z.wolfLeapRange ?? 5;
 
     if (d <= reach) {
@@ -364,16 +371,11 @@ export class Wolf {
   }
 
   beginLeap(alvo) {
-    const Z = CONFIG.modes.zombie;
     const dx = alvo.x - this.x;
     const dz = alvo.z - this.z;
     const len = Math.hypot(dx, dz) || 1;
     this.leapFx = dx / len;
     this.leapFz = dz / len;
-    // O salto termina pouco depois do ponto onde foi disparado. Sem esse
-    // limite, o perfil rápido do alce atravessa o jogador e só verifica o hit
-    // muitos metros depois, já fora do raio de ataque.
-    this.leapRemain = len + 1.0;
     this.heading = Math.atan2(this.leapFx, this.leapFz);
     this.yaw = this.heading;
     this.state = "leap";
@@ -389,27 +391,24 @@ export class Wolf {
     const leapSpeed = this.leapSpeed;
     this.leapTimer += dt;
     const t = Math.min(1, this.leapTimer / dur);
-    const passo = Math.min(leapSpeed * dt, this.leapRemain);
+    const passo = leapSpeed * dt;
     const nx = this.x + this.leapFx * passo;
     const nz = this.z + this.leapFz * passo;
     if (this.terrain.isWalkable(nx, nz) && this.terrain.arenaDistance(nx, nz) <= 10) {
       this.x = nx;
       this.z = nz;
     }
-    this.leapRemain = Math.max(0, this.leapRemain - passo);
     this.baseY = this.terrain.heightAt(this.x, this.z);
     this.y = this.baseY + Math.sin(t * Math.PI) * (Z.wolfLeapHeight ?? 1.2);
     this.heading = Math.atan2(this.leapFx, this.leapFz);
     this.yaw = this.heading;
     this.vel = leapSpeed;
 
-    // O lobo pode atravessar o player durante o voo. O teste precisa ocorrer
-    // antes do pouso, e em cada tick, para que o salto seja uma colisão real.
+    // Colisão no ar: o lobo pode cruzar o jogador entre ticks.
     const alvoNoAr = this.pickTarget(jogadores);
     if (
       alvoNoAr &&
-      Math.hypot(alvoNoAr.x - this.x, alvoNoAr.z - this.z) <=
-        (Z.wolfAttackRadius ?? 1.4) * 2.2
+      Math.hypot(alvoNoAr.x - this.x, alvoNoAr.z - this.z) <= this._leapHitReach()
     ) {
       this.lastAttack = agora;
       this.y = this.baseY;
@@ -431,7 +430,7 @@ export class Wolf {
       return null;
     }
     const d = Math.hypot(alvo.x - this.x, alvo.z - this.z);
-    if (d <= (Z.wolfAttackRadius ?? 1.4) * 2.2) return alvo.id;
+    if (d <= this._leapHitReach()) return alvo.id;
     this.state = "walk";
     return null;
   }

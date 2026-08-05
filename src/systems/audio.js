@@ -50,6 +50,27 @@ function makeNoiseBuffer(ctx, duration, type = "impact") {
   return buffer;
 }
 
+/** Sopro curto de lâmina atravessando o ar. */
+function makeKnifeSwingBuffer(ctx) {
+  const duration = 0.28;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+  let phase = 0;
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const envelope = Math.sin(Math.PI * p) ** 1.35;
+    const frequency = 620 - 360 * p;
+    phase += (TAU * frequency) / sampleRate;
+    const hiss = (Math.random() * 2 - 1) * 0.34;
+    data[i] = (hiss + Math.sin(phase) * 0.16) * envelope;
+  }
+  return buffer;
+}
+
 function makeToneBuffer(ctx, freq, duration) {
   const sampleRate = ctx.sampleRate;
   const length = Math.floor(sampleRate * duration);
@@ -407,6 +428,7 @@ export class AudioSystem {
     this.buffers.boarDeath = makeBoarDeathBuffer(this.ctx);
     this.buffers.hitCharacter = makeToneBuffer(this.ctx, 120, 0.2);
     this.buffers.hitScenery = makeNoiseBuffer(this.ctx, 0.14, "impact");
+    this.buffers.knifeSwing = makeKnifeSwingBuffer(this.ctx);
 
     // Alce: berro de peito, grave e com rosnado. O de dor é curto e sobe de
     // volta; o de morte é longo e só desce.

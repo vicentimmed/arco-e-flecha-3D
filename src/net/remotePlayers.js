@@ -24,6 +24,7 @@ import { CONFIG } from "../config.js";
 import { Player, FACE_DETAIL_DISTANCE } from "../entities/player.js";
 import { entityRegistry } from "../core/entityRegistry.js";
 import { playerEntity, unpackState } from "../shared/protocol.js";
+import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 import { blinkOpacity } from "../game/respawn.js";
 import { Ragdoll } from "../game/ragdoll.js";
 import { NameTag } from "./nameTag.js";
@@ -70,6 +71,7 @@ class RemotePlayer {
     this.invulnUntil = 0;
     /** Instante do relógio da sala em que o tombo começou. 0 = vivo. */
     this.dyingSince = 0;
+    this.lastKnifeFraction = 0;
     /**
      * O corpo mole deste arqueiro.
      *
@@ -126,6 +128,8 @@ class RemotePlayer {
     this.player.runBlend = 0;
     this.player.setDraw(0);
     this.player.setReload(0);
+    this.player.setKnife(0);
+    this.lastKnifeFraction = 0;
   }
 
   /**
@@ -162,10 +166,19 @@ class RemotePlayer {
       p.runBlend = 0;
       p.setDraw(0);
       p.setReload(0);
+      p.setKnife(0);
     }
 
     p.bobPhase += dt * 1.3; // respiração: é local, não trafega
     p.update(dt, p.gaitBlend > 0.01);
+    if (p.knifeFraction > 0 && this.lastKnifeFraction <= 0) {
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "knifeSwing",
+        position: vec3Payload(p.position),
+        volume: 0.62,
+      });
+    }
+    this.lastKnifeFraction = p.knifeFraction;
     this.body.moveTo(p.position);
 
     // Rosto só de perto: acima de 12 m as nove peças da face não desenham nada
@@ -251,6 +264,7 @@ class RemotePlayer {
       p.airborne = a.airborne;
       p.setDraw(a.drawFraction);
       p.setReload(a.reloadFraction ?? 0);
+      p.setKnife(a.knifeFraction ?? 0);
       this.body.verticalVelocity = 0;
       return;
     }
@@ -268,6 +282,7 @@ class RemotePlayer {
     p.airborne = t < 0.5 ? a.airborne : b.airborne;
     p.setDraw(lerp(a.drawFraction, b.drawFraction, t));
     p.setReload(lerp(a.reloadFraction ?? 0, b.reloadFraction ?? 0, t));
+    p.setKnife(lerp(a.knifeFraction ?? 0, b.knifeFraction ?? 0, t));
 
     // Velocidade vertical estimada das amostras: é o que a pose de pulo usa
     // para encolher as pernas na subida.
@@ -309,6 +324,7 @@ class RemotePlayer {
     p.airborne = b.airborne;
     p.setDraw(b.drawFraction);
     p.setReload(b.reloadFraction ?? 0);
+    p.setKnife(b.knifeFraction ?? 0);
   }
 
   dispose(scene) {

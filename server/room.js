@@ -902,6 +902,148 @@ export class Room {
     this.broadcastScores();
   }
 
+  /** Golpe de faca: curto, frontal e instantâneo contra zumbis e lobos. */
+  registerKnifeHit(player, msg) {
+    if (!player.alive) return;
+    if ((player.state?.d ?? 0) > 0.05) return; // ainda está atirando
+
+    const id = Number(msg.id);
+    if (!Number.isFinite(id)) return;
+
+    let alvo = null;
+    if (this.mode === "zombie" && !this.zombies.over) {
+      alvo = this.zombies.byId(id);
+    } else if (this.mode === "elkHunt" && !this.elks.over) {
+      alvo = this.elkWolves.byId(id);
+    }
+    const pose = Array.isArray(msg.p) ? { p: msg.p, y: msg.y } : null;
+    if (!alvo || alvo.dead || !this.knifeCanReach(player, alvo, pose)) return;
+
+    const agora = this.now();
+    // Um mesmo alvo não pode receber vários acertos do mesmo golpe. Alvos
+    // diferentes ainda podem ser atingidos pela mesma varrida.
+    if (player.lastKnifeTarget === id && agora - player.lastKnifeAt < 500) return;
+    player.lastKnifeTarget = id;
+    player.lastKnifeAt = agora;
+
+    if (this.mode === "zombie") {
+      this.zombies.kill(id, agora);
+      const Z = CONFIG.modes.zombie;
+      const isWolf = alvo.kind === "wolf";
+      const pontos = isWolf ? (Z.wolfPoints ?? 60) : (Z.bodyPoints ?? 40);
+      player.score.points += pontos;
+      player.score.kills++;
+      this.broadcastAll({
+        t: S2C.ZOMBIE_DEATH,
+        id,
+        killer: player.id,
+        killerName: player.name,
+        killerColor: player.color,
+        points: pontos,
+        head: false,
+        wolf: isWolf,
+        distance: Number(msg.d) || 0,
+        knife: true,
+      });
+      this.broadcastScores();
+      return;
+    }
+
+    this.elkWolves.kill(id, agora);
+    const pontos = CONFIG.elk.wolfPoints ?? 60;
+    player.score.points += pontos;
+    player.score.kills++;
+    this.broadcastAll({
+      t: S2C.ZOMBIE_DEATH,
+      id,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      points: pontos,
+      head: false,
+      wolf: true,
+      distance: Number(msg.d) || 0,
+      knife: true,
+    });
+    this.broadcastScores();
+  }
+
+  knifeCanReach(player, alvo, pose = null) {
+    const state = pose ?? player.state;
+    if (!state?.p || state.p.length < 3) return false;
+
+    const dx = alvo.x - state.p[0];
+    const dz = alvo.z - state.p[2];
+    const distancia = Math.hypot(dx, dz);
+    // A posição do bicho já avançou no servidor enquanto o cliente recebia a
+    // pose anterior. A folga só vale quando a mensagem traz a pose capturada
+    // no instante do golpe; sem ela, permanece a validação estrita.
+    const alcance = CONFIG.knife.range + (pose ? 0.45 : 0);
+    if (distancia > alcance) return false;
+    if (distancia < 0.001) return true;
+
+    const yaw = Number(state.y) || 0;
+    const frenteX = -Math.sin(yaw);
+    const frenteZ = -Math.cos(yaw);
+    const alinhamento = (dx * frenteX + dz * frenteZ) / distancia;
+    return alinhamento >= CONFIG.knife.coneCos;
+  }
+
+  /** Abate um arqueiro vizinho com a mesma janela curta do golpe animal. */
+  registerKnifePlayerHit(player, msg) {
+    if (!player.alive || !player.state) return;
+    if ((player.state.d ?? 0) > 0.05) return;
+
+    const vitima = this.playerById(Number(msg.victim));
+    if (
+      !vitima ||
+      vitima === player ||
+      !vitima.alive ||
+      !vitima.state ||
+      this.now() < vitima.invulnUntil
+    ) {
+      return;
+    }
+
+    const alvo = { x: vitima.state.p[0], z: vitima.state.p[2] };
+    const pose = Array.isArray(msg.p) ? { p: msg.p, y: msg.y } : null;
+    if (!this.knifeCanReach(player, alvo, pose)) return;
+
+    const agora = this.now();
+    if (
+      player.lastKnifePlayerTarget === vitima.id &&
+      agora - player.lastKnifePlayerAt < 500
+    ) {
+      return;
+    }
+    player.lastKnifePlayerTarget = vitima.id;
+    player.lastKnifePlayerAt = agora;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+    player.score.kills++;
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      victimColor: vitima.color,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      distance: Number(msg.d) || 0,
+      c: null,
+      v: null,
+      cause: "knife",
+    });
+    this.broadcastScores();
+
+    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+    setTimeout(() => {
+      if (this.players.has(vitima.conn)) this.spawn(vitima);
+    }, espera).unref?.();
+  }
+
   registerElkWolfHit(player, msg) {
     const r = this.elkWolves.hit(msg.id);
     if (!r || !r.morreu) return;
@@ -1188,6 +1330,10 @@ export class Room {
          meio de uma noite já em andamento entra com as três, e não caído. */
       zLives: CONFIG.modes.zombie.lives,
       zDownUntil: 0,
+      lastKnifeAt: -Infinity,
+      lastKnifeTarget: null,
+      lastKnifePlayerAt: -Infinity,
+      lastKnifePlayerTarget: null,
       lastManualRespawn: -Infinity,
       ping: 0,
       lastSeen: Date.now(),
@@ -1413,6 +1559,14 @@ export class Room {
 
       case C2S.ZOMBIE_HIT:
         this.registerZombieHit(player, msg);
+        break;
+
+      case C2S.KNIFE_HIT:
+        this.registerKnifeHit(player, msg);
+        break;
+
+      case C2S.KNIFE_PLAYER_HIT:
+        this.registerKnifePlayerHit(player, msg);
         break;
 
       case C2S.TORCH_HIT:

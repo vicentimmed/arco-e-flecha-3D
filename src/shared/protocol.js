@@ -46,8 +46,12 @@
  * 6 — `spawn` passou a poder trazer o rumo da câmera (`yaw`) e `elkHit` avisa
  * quando a investida foi quebrada. Uma aba antiga nasceria de costas para o
  * alce e não explicaria por que o bicho desistiu no meio da corrida.
+ *
+ * 7 — entrou a pose curta do golpe de faca e o comando de melee.
+ *
+ * 8 — o golpe de faca também passou a ter um canal próprio para acertar players.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 8;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -86,6 +90,10 @@ export const C2S = {
   RESET_SCORES: "resetScores",
   /** "Acertei este zumbi": `{ id, head, d }`. `head` decide se morre na hora. */
   ZOMBIE_HIT: "zombieHit",
+  /** "Matei este zumbi/lobo com a faca": `{ id, d }`. */
+  KNIFE_HIT: "knifeHit",
+  /** "Acertei este player com a faca": `{ victim, p, d }`. */
+  KNIFE_PLAYER_HIT: "knifePlayerHit",
   /** "Acertei esta tocha": `{ i }`. Apaga a chama e a luz dela. */
   TORCH_HIT: "torchHit",
   /** Sincronismo de relógio: `{ c: clientClock }`. */
@@ -216,6 +224,7 @@ export function packState(player) {
     r: r3(player.runBlend),
     d: r3(player.drawFraction),
     l: r3(player.reloadFraction ?? 0),
+    k: r3(player.knifeFraction ?? 0),
     f: r3(player.moveF),
     s: r3(player.moveS),
     a: player.airborne ? 1 : 0,
@@ -234,6 +243,7 @@ export function unpackState(state, out) {
   out.runBlend = state.r;
   out.drawFraction = state.d;
   out.reloadFraction = state.l ?? 0;
+  out.knifeFraction = state.k ?? 0;
   out.moveF = state.f;
   out.moveS = state.s;
   out.airborne = state.a === 1;

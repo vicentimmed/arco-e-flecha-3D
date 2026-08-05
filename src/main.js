@@ -170,6 +170,9 @@ class Game {
     this.drawTime = 0;
     /** Segundos restantes da animação de buscar flecha na aljava (0 = pronta). */
     this.reloadTimer = 0;
+    /** Segundos restantes do golpe de faca (0 = sem golpe). */
+    this.knifeTimer = 0;
+    this.knifeHitIds = new Set();
     this.accumulator = 0;
     this.lastTime = performance.now();
     this.fps = 60;
@@ -400,6 +403,7 @@ class Game {
           this.input.pitch = 0;
         }
         this.reloadTimer = 0;
+        this.cancelKnifeAttack();
         this.drawTime = 0;
         this.input.drawing = false;
       } else {
@@ -408,7 +412,10 @@ class Game {
     });
 
     net.on(S2C.KILL, (msg) => {
-      if (msg.victim === net.me?.id) this.death.begin(net.serverTime, msg);
+      if (msg.victim === net.me?.id) {
+        this.cancelKnifeAttack();
+        this.death.begin(net.serverTime, msg);
+      }
       else this.remotes.kill(msg.victim, net.serverTime, msg);
 
       /* O som da morte, no lugar onde ela aconteceu.
@@ -434,7 +441,7 @@ class Game {
 
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
-        { text: "  🏹  " },
+        { text: msg.cause === "knife" ? "  🔪  " : "  🏹  " },
         { text: msg.victimName, color: msg.victimColor, forte: true },
         ...(msg.distance ? [{ text: `   ${msg.distance.toFixed(0)} m` }] : []),
       ]);
@@ -558,6 +565,7 @@ class Game {
       this.arrows.clearAll();
       this.remoteArrows.clear();
       this.zombies.clear();
+      this.cancelKnifeAttack();
       this.series.clear();
       this.hud.resetStats();
       this.hud.hideZombieCenter();
@@ -618,11 +626,13 @@ class Game {
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
         {
-          text: msg.wolf
-            ? "  \u{1F43A}  "
-            : msg.head
-              ? "  \u{1F525}  "
-              : "  \u{1F3F9}  ",
+          text: msg.knife
+            ? "  \u{1F52A}  "
+            : msg.wolf
+              ? "  \u{1F43A}  "
+              : msg.head
+                ? "  \u{1F525}  "
+                : "  \u{1F3F9}  ",
         },
         { text: `+${msg.points}`, forte: true },
         ...(msg.distance ? [{ text: `   ${msg.distance.toFixed(0)} m` }] : []),
@@ -736,7 +746,12 @@ class Game {
     this.updateFootDust();
     this.updateCamera(dt);
     this.solveAim();
-    if (actions.release && !this.death.dying && !this.player.isReloading) {
+    if (
+      actions.release &&
+      !this.death.dying &&
+      !this.player.isReloading &&
+      !this.player.isKnifeAttacking
+    ) {
       this.shoot();
     }
 
@@ -792,6 +807,7 @@ class Game {
   }
 
   handleActions(a) {
+    if (a.knifeAttack) this.beginKnifeAttack();
     if (a.dismissArrowCam) this.rig.returnToArcher();
     // Limpa só as SUAS flechas: em rede, varrer as dos outros da tela seria
     // apagar o tiro que o amigo acabou de dar.
@@ -859,6 +875,7 @@ class Game {
   applyMode(msg) {
     if (!msg) return;
     const mudouModo = this.mode !== msg.mode;
+    if (mudouModo) this.cancelKnifeAttack();
     this.mode = msg.mode;
     this.scoreboard.setMode(msg.mode);
 
@@ -993,12 +1010,98 @@ class Game {
     );
   }
 
+  /** Começa a estocada, preservando o ponto atual da recarga. */
+  beginKnifeAttack() {
+    if (
+      this.knifeTimer > 0 ||
+      this.death.dying ||
+      this.rig.isArrowCam ||
+      this.input.drawing ||
+      this.drawTime > 0.04
+    ) {
+      return;
+    }
+
+    this.knifeTimer = CONFIG.knife.duration;
+    this.knifeHitIds.clear();
+    this.input.drawing = false;
+    this.drawTime = 0;
+    this.player.setDraw(0);
+    this.player.setKnife(0.001);
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "knifeSwing",
+      position: vec3Payload(this.player.position),
+      volume: 0.72,
+    });
+  }
+
+  /** Resolve a varrida da lâmina contra os bichos próximos e em frente. */
+  resolveKnifeHits() {
+    const p = this.player.position;
+    const frenteX = -Math.sin(this.player.yaw);
+    const frenteZ = -Math.cos(this.player.yaw);
+    const range = CONFIG.knife.range;
+
+    for (const [id, alvo] of this.zombies.byNetId) {
+      const hitKey = `z:${id}`;
+      if (alvo.dead || this.knifeHitIds.has(hitKey)) continue;
+
+      const dx = alvo.position.x - p.x;
+      const dz = alvo.position.z - p.z;
+      const distancia = Math.hypot(dx, dz);
+      if (distancia > range) continue;
+      const alinhamento =
+        distancia > 0.001 ? (dx * frenteX + dz * frenteZ) / distancia : 1;
+      if (alinhamento < CONFIG.knife.coneCos) continue;
+
+      this.knifeHitIds.add(hitKey);
+      this.net.send(C2S.KNIFE_HIT, {
+        id,
+        p: [mm(p.x), mm(p.y), mm(p.z)],
+        y: this.player.yaw,
+        d: Math.round(distancia * 100) / 100,
+      });
+    }
+
+    for (const [id, remoto] of this.remotes.byId) {
+      const alvo = remoto.player;
+      const hitKey = `p:${id}`;
+      if (remoto.dyingSince || alvo.invulnerable || this.knifeHitIds.has(hitKey)) continue;
+
+      const dx = alvo.position.x - p.x;
+      const dz = alvo.position.z - p.z;
+      const distancia = Math.hypot(dx, dz);
+      if (distancia > range) continue;
+      const alinhamento =
+        distancia > 0.001 ? (dx * frenteX + dz * frenteZ) / distancia : 1;
+      if (alinhamento < CONFIG.knife.coneCos) continue;
+
+      this.knifeHitIds.add(hitKey);
+      this.net.send(C2S.KNIFE_PLAYER_HIT, {
+        victim: id,
+        p: [mm(p.x), mm(p.y), mm(p.z)],
+        y: this.player.yaw,
+        d: Math.round(distancia * 100) / 100,
+      });
+    }
+  }
+
+  cancelKnifeAttack() {
+    this.knifeTimer = 0;
+    this.knifeHitIds.clear();
+    this.player.setKnife(0);
+  }
+
   updateAimAndPose(dt, actions) {
     // Morto, o corpo cai e nada mais responde: não anda, não pula, não tensiona.
     // Sem isso o cadáver continuaria correndo pelo campo enquanto tomba.
     const morto = this.death.dying;
 
-    /* Timer do reload: avança mesmo andando/correndo. Se a chave do painel ~
+    /* Timer do reload: avança mesmo andando/correndo, mas fica congelado durante
+       a faca. Assim o golpe pode interromper a busca e ela continua depois. */
+    const estavaAtacando = this.knifeTimer > 0;
+
+    /* Se a chave do painel ~
        for desligada no meio, cancela na hora — senão a pessoa ficaria presa
        sem poder atirar com a animação "desligada". */
     if (!CONFIG.bow.reloadAnimation && this.reloadTimer > 0) {
@@ -1006,28 +1109,46 @@ class Game {
     }
     if (morto) {
       this.reloadTimer = 0;
-    } else if (this.reloadTimer > 0) {
+      this.knifeTimer = 0;
+    } else if (this.reloadTimer > 0 && !estavaAtacando) {
       this.reloadTimer = Math.max(0, this.reloadTimer - dt);
     }
+    if (!morto && estavaAtacando) {
+      this.knifeTimer = Math.max(0, this.knifeTimer - dt);
+    }
+
+    const atacando = this.knifeTimer > 0;
+    const knifeDuration = CONFIG.knife.duration;
+    const knifeFraction = atacando
+      ? 1 - this.knifeTimer / Math.max(0.001, knifeDuration)
+      : 0;
+    this.player.setKnife(knifeFraction);
+
     const recarregando = this.reloadTimer > 0;
     const dur = CONFIG.bow.reloadTime;
     this.player.setReload(recarregando && dur > 0 ? 1 - this.reloadTimer / dur : 0);
 
-    this.input.blockDraw = this.rig.isArrowCam || morto || recarregando;
+    this.input.blockDraw = this.rig.isArrowCam || morto || recarregando || atacando;
     this.input.blockDrawReason = morto
       ? "dead"
+      : atacando
+        ? "knife"
       : this.rig.isArrowCam
         ? "arrowCam"
         : recarregando
           ? "reload"
           : null;
-    if (recarregando) {
+    if (atacando) {
+      this.drawTime = 0;
+      this.input.drawing = false;
+    } else if (recarregando) {
       this.drawTime = 0;
       if (!this.input.primaryDown) this.input.drawing = false;
     } else if (
       this.input.primaryDown &&
       !morto &&
       !this.rig.isArrowCam &&
+      !atacando &&
       !this.input.drawing
     ) {
       // Clique segurado durante o reload (ou câmera da flecha): assim que o
@@ -1035,10 +1156,10 @@ class Game {
       this.input.drawing = true;
     }
 
-    if (this.input.drawing && !morto && !recarregando) this.drawTime += dt;
+    if (this.input.drawing && !morto && !recarregando && !atacando) this.drawTime += dt;
     else if (morto) this.drawTime = 0;
 
-    if (actions.jump && !morto) this.player.jump();
+    if (actions.jump && !morto && !atacando) this.player.jump();
 
     let yaw = this.input.yaw;
     let pitch = this.input.pitch;
@@ -1054,13 +1175,16 @@ class Game {
 
     const moving = this.player.move(
       dt,
-      morto ? 0 : this.input.forward,
-      morto ? 0 : this.input.strafe,
-      this.input.run,
+      morto || atacando ? 0 : this.input.forward,
+      morto || atacando ? 0 : this.input.strafe,
+      morto || atacando ? false : this.input.run,
     );
     this.player.setAim(yaw, pitch);
-    this.player.setDraw(drawFraction(this.drawTime));
+    this.player.setDraw(atacando ? 0 : drawFraction(this.drawTime));
     this.player.update(dt, moving);
+    if (atacando && knifeFraction >= CONFIG.knife.hitStart && knifeFraction <= CONFIG.knife.hitEnd) {
+      this.resolveKnifeHits();
+    }
     this.player.getMuzzle(this._muzzle);
 
     this._forward.copy(this.aim.solveAxis(yaw, this.player.pitch));
@@ -1158,7 +1282,9 @@ class Game {
        ancorado no rosto, e com o corpo mole rolando no chão a câmera rolaria
        junto — enjoativo e, pior, sem mostrar o que a pessoa quer ver, que é o
        próprio corpo caindo. */
-    this.rig.setFirstPerson(this.input.firstPerson && !this.death.dying);
+    this.rig.setFirstPerson(
+      this.input.firstPerson && !this.death.dying && !this.player.isKnifeAttacking,
+    );
     if (this.rig.wantFirstPerson === before || !this.aim.hasFocus) return;
 
     const p = CONFIG.player;

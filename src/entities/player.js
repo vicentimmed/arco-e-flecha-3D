@@ -282,6 +282,8 @@ export class Player {
     /* 0 = pronta para tensionar; (0,1] = mão da corda buscando flecha na
        aljava. Ver `setReload` / `updateReloadArm`. */
     this.reloadFraction = 0;
+    /** 0 = sem golpe; 0..1 = animação da faca em andamento. */
+    this.knifeFraction = 0;
     this.bobPhase = 0;
     this.ponytailLag = new THREE.Vector2();
     this.prevYaw = 0;
@@ -313,6 +315,9 @@ export class Player {
     this._nock = new THREE.Vector3();
     this._quiverGrab = new THREE.Vector3();
     this._reloadHand = new THREE.Vector3();
+    this._knifeHand = new THREE.Vector3();
+    this._knifeStart = new THREE.Vector3();
+    this._knifePeak = new THREE.Vector3();
     this._anchor = new THREE.Vector3();
     this._lateral = new THREE.Vector3();
     this._eye = new THREE.Vector3();
@@ -560,6 +565,11 @@ export class Player {
     this.armL.hand.add(this.heldArrow);
     this.heldArrow.visible = false;
 
+    /* A faca fica presa à mão livre e só aparece enquanto o golpe acontece. */
+    this.knife = this.buildKnife();
+    this.armL.hand.add(this.knife);
+    this.knife.visible = false;
+
     /* pernas -------------------------------------------------------------- */
     this.legR = this.buildLeg();
     this.legL = this.buildLeg();
@@ -686,6 +696,19 @@ export class Player {
     }
   }
 
+  /** Progresso do golpe de faca; a animação é vestida por `updateKnifeArm`. */
+  setKnife(fraction) {
+    this.knifeFraction = clamp(fraction, 0, 1);
+    if (this.knife) this.knife.visible = this.knifeFraction > 0;
+    if (this.knifeFraction > 0 && this.heldArrow) {
+      this.heldArrow.visible = false;
+    }
+  }
+
+  get isKnifeAttacking() {
+    return this.knifeFraction > 0;
+  }
+
   get isReloading() {
     return this.reloadFraction > 0;
   }
@@ -721,6 +744,35 @@ export class Player {
     // Orientação na palma: haste saindo para trás da mão.
     group.position.set(0.01, 0.02, -0.02);
     group.rotation.set(0.15, 0.4, 0.35);
+    return group;
+  }
+
+  /** Faca curta, presa à mão livre, invisível fora do golpe. */
+  buildKnife() {
+    const group = new THREE.Group();
+
+    const cabo = new THREE.Mesh(
+      new THREE.BoxGeometry(0.032, 0.12, 0.026),
+      this.mat.leatherDark,
+    );
+    cabo.position.y = 0.075;
+    cabo.castShadow = true;
+
+    const guarda = new THREE.Mesh(
+      new THREE.BoxGeometry(0.075, 0.018, 0.035),
+      this.mat.metal,
+    );
+    guarda.position.y = 0.145;
+    guarda.castShadow = true;
+
+    const lamina = new THREE.Mesh(
+      new THREE.BoxGeometry(0.038, 0.28, 0.012),
+      this.mat.metal,
+    );
+    lamina.position.y = 0.29;
+    lamina.castShadow = true;
+
+    group.add(cabo, guarda, lamina);
     return group;
   }
 
@@ -1094,6 +1146,11 @@ export class Player {
     this._pole.set(0.55, -1, 0.15).normalize();
     this.poseArm(this.armR, this._shoulderR, gripLocal, this._pole, 0.06);
 
+    if (this.knifeFraction > 0) {
+      this.updateKnifeArm();
+      return;
+    }
+
     if (this.reloadFraction > 0) {
       this.updateReloadArm();
       return;
@@ -1131,6 +1188,44 @@ export class Player {
       .addScaledVector(this._lateral, -0.55)
       .normalize();
     this.poseArm(this.armL, this._shoulderL, this._handTarget, this._pole, 0.0);
+  }
+
+  /** Estocada curta com a mão que não segura o arco. */
+  updateKnifeArm() {
+    const t = this.knifeFraction;
+
+    this._idleHand
+      .copy(this._hipL)
+      .add(this._tmp.set(-0.06, -0.16, 0.06));
+    this._knifeStart
+      .copy(this._idleHand)
+      .addScaledVector(this._aim, 0.08)
+      .addScaledVector(AXIS_Y, 0.05);
+    this._knifePeak
+      .copy(this._shoulderL)
+      .addScaledVector(this._aim, 0.42)
+      .addScaledVector(this._lateral, -0.14)
+      .addScaledVector(AXIS_Y, -0.1);
+
+    if (t < 0.2) {
+      const k = smoothstep(0, 0.2, t);
+      this._knifeHand.copy(this._knifeStart).lerp(this._knifePeak, k);
+    } else if (t < 0.45) {
+      this._knifeHand.copy(this._knifePeak);
+    } else {
+      const k = smoothstep(0.45, 1, t);
+      this._knifeHand.copy(this._knifePeak).lerp(this._knifeStart, k);
+    }
+
+    this._pole
+      .copy(this._aim)
+      .multiplyScalar(-0.45)
+      .addScaledVector(AXIS_Y, 0.6)
+      .addScaledVector(this._lateral, -0.8)
+      .normalize();
+    this.poseArm(this.armL, this._shoulderL, this._knifeHand, this._pole, 0.0);
+
+    if (this.heldArrow) this.heldArrow.visible = false;
   }
 
   /**

@@ -50,6 +50,7 @@ porta **3000** → **Deploy** → abrir o domínio e entrar na sala.
 |---|---|
 | **Mouse** | mirar (clique na tela para começar; `Esc` sai) |
 | **Botão esquerdo** | segurar tensiona o arco, soltar dispara |
+| **E** | golpeia com a faca usando a mão livre (0,5 s) |
 | **Clique** (durante o voo) | encerra a câmera da flecha e volta para a arqueira |
 | **Botão direito** / **C** | alterna primeira e terceira pessoa |
 | **W A S D** | andar · **Shift** correr |

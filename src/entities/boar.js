@@ -41,6 +41,8 @@ export class Boar {
     // A fase começa espalhada para que dois porcos lado a lado não andem em
     // sincronia perfeita, o que denuncia na hora que são cópias.
     this.animPhase = Math.random() * Math.PI * 2;
+    /** Contagem regressiva até o próximo ronco. Ver `CONFIG.boar.snort*`. */
+    this.snortTimer = this._nextSnortDelay();
 
     const y = terrain.heightAt(x, z);
     this.position = new THREE.Vector3(x, y, z);
@@ -78,6 +80,12 @@ export class Boar {
 
   buildMesh() {
     const root = new THREE.Group();
+    /* Listas de LOD (ver `utils/lod.js`). `lodDetail` some a ~27 m: são as
+       peças de 2 cm que a essa distância já não ocupam um pixel inteiro.
+       `lodBulk` some a ~60 m, deixando só corpo, ombro e crânio — a silhueta,
+       que é tudo o que se lê de um javali no fundo do vale. */
+    this.lodDetail = [];
+    this.lodBulk = [];
 
     this.bodyMesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 16, 12),
@@ -107,6 +115,7 @@ export class Boar {
     belly.position.set(0, 0.31, -0.15);
     belly.castShadow = true;
     root.add(belly);
+    this.lodBulk.push(belly);
 
     // Cerdas escuras formam uma crista irregular no dorso.
     for (let i = 0; i < 9; i++) {
@@ -121,6 +130,7 @@ export class Boar {
       );
       bristle.rotation.x = (i - 4) * 0.035;
       root.add(bristle);
+      this.lodDetail.push(bristle);
     }
 
     this.head = new THREE.Group();
@@ -152,6 +162,7 @@ export class Boar {
     snout.position.set(0, -0.055, 0.36);
     snout.castShadow = true;
     this.head.add(snout);
+    this.lodBulk.push(snout);
 
     for (const side of [-1, 1]) {
       const nostril = new THREE.Mesh(
@@ -161,6 +172,7 @@ export class Boar {
       nostril.position.set(side * 0.052, -0.035, 0.384);
       nostril.scale.set(1, 0.65, 0.4);
       this.head.add(nostril);
+      this.lodDetail.push(nostril);
 
       const eye = new THREE.Mesh(
         new THREE.SphereGeometry(0.025, 8, 6),
@@ -168,6 +180,7 @@ export class Boar {
       );
       eye.position.set(side * 0.175, 0.055, 0.105);
       this.head.add(eye);
+      this.lodDetail.push(eye);
 
       const ear = new THREE.Mesh(
         new THREE.ConeGeometry(0.075, 0.18, 5),
@@ -177,6 +190,7 @@ export class Boar {
       ear.rotation.z = side * 0.58;
       ear.rotation.x = -0.2;
       this.head.add(ear);
+      this.lodBulk.push(ear);
 
       const tusk = new THREE.Mesh(
         new THREE.ConeGeometry(0.026, 0.14, 8),
@@ -186,6 +200,7 @@ export class Boar {
       tusk.rotation.z = side * 0.55;
       tusk.rotation.x = -0.45;
       this.head.add(tusk);
+      this.lodDetail.push(tusk);
     }
 
     this.legs = [];
@@ -214,9 +229,13 @@ export class Boar {
       hoof.rotation.x = -0.08;
       hoof.castShadow = true;
       leg.add(hoof);
+      this.lodDetail.push(hoof);
 
       root.add(leg);
       this.legs.push(leg);
+      // A perna inteira sai da silhueta: a 60 m um javali é uma mancha escura
+      // que se move, e ninguém conta as patas dele.
+      this.lodBulk.push(leg);
     }
 
     this.tail = new THREE.Group();
@@ -228,6 +247,7 @@ export class Boar {
     tailA.rotation.y = Math.PI / 2;
     this.tail.add(tailA);
     root.add(this.tail);
+    this.lodDetail.push(this.tail);
 
     this.group.add(root);
     this.visualRoot = root;
@@ -299,9 +319,52 @@ export class Boar {
       this.speed = damp(this.speed, alvo.speed, k, dt);
       this.state = alvo.state;
     }
-    this.animPhase += dt * (this.state === "flee" ? 14 : 6);
+
+    /* A fase da marcha avança com a DISTÂNCIA percorrida: um ciclo completo a
+       cada `strideLength` metros. É a mesma regra do arqueiro, e pelo mesmo
+       motivo — antes eram 6 rad/s andando e 14 correndo, dois números fixos que
+       não sabiam nada da velocidade real. O bicho fugindo a 11 m/s mexia as
+       pernas quase no ritmo de quando pastava, e o corpo deslizava por baixo
+       delas. Com a distância no comando, a cadência acompanha sozinha, em
+       qualquer velocidade, sem nenhum multiplicador por estado. */
+    const c = CONFIG.boar;
+    this.animPhase +=
+      dt * (c.idleCadence + (Math.PI * 2 * this.speed) / this.strideLength);
+
+    this.updateSnort(dt);
     this.animate(dt);
     this.syncPhysics();
+  }
+
+  /** Comprimento da passada AGORA: ela cresce com a velocidade (ver CONFIG). */
+  get strideLength() {
+    const c = CONFIG.boar;
+    return c.strideLength * (1 + c.runStrideGain * Math.min(1, this.speed / c.fleeSpeed));
+  }
+
+  _nextSnortDelay() {
+    const c = CONFIG.boar;
+    return c.snortMinInterval + Math.random() * (c.snortMaxInterval - c.snortMinInterval);
+  }
+
+  /**
+   * O ronco ocasional, na posição do bicho.
+   *
+   * Só sai com ele de pé e em movimento: parado comendo ele fica quieto, e um
+   * cadáver, mais ainda. Vai pelo evento de áudio (e não por uma chamada direta
+   * ao `AudioSystem`) porque é assim que todo som deste jogo trafega — o porco
+   * não precisa conhecer o mixer para grunhir.
+   */
+  updateSnort(dt) {
+    if (this.dead || this.speed < 0.15) return;
+    this.snortTimer -= dt;
+    if (this.snortTimer > 0) return;
+    this.snortTimer = this._nextSnortDelay();
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "boarIdle",
+      position: vec3Payload(this.position),
+      volume: CONFIG.boar.snortVolume,
+    });
   }
 
   animate(dt) {
@@ -317,9 +380,17 @@ export class Boar {
       0.43 + Math.abs(Math.sin(this.animPhase)) * Math.min(0.035, this.speed * 0.01);
     this.tail.rotation.z = Math.sin(this.animPhase * 0.7) * 0.22;
 
-    const legSwing =
-      this.speed > 0.1 ? Math.sin(this.animPhase) * (this.state === "flee" ? 0.5 : 0.28) : 0;
+    /* A ABERTURA da perna cresce com a velocidade e satura; a CADÊNCIA já veio
+       da fase, que é função da distância. São duas coisas diferentes e antes
+       estavam coladas num degrau só ("está fugindo? 0,5; senão 0,28"), o que
+       fazia o bicho passar de passo curto a passo largo de um frame para o
+       outro no instante em que o estado mudava. */
+    const c = CONFIG.boar;
+    const abertura = c.legSwing * Math.min(1, this.speed / c.legSwingSpeed);
+    const legSwing = this.speed > 0.1 ? Math.sin(this.animPhase) * abertura : 0;
     for (let i = 0; i < this.legs.length; i++) {
+      // Diagonais em oposição: dianteira esquerda com traseira direita, como
+      // um quadrúpede trotando de verdade.
       const phase = i === 0 || i === 3 ? 1 : -1;
       this.legs[i].rotation.x = phase * legSwing;
     }

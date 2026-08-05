@@ -10,7 +10,7 @@
 import "./style.css";
 import * as THREE from "three";
 
-import { CONFIG, drawSpeed, drawFraction } from "./config.js";
+import { CONFIG, drawSpeed, drawFraction, applyQuality, savedQuality } from "./config.js";
 import { clamp } from "./utils/math.js";
 import { initPhysics, PhysicsWorld } from "./core/physics.js";
 import { BodySync } from "./core/sync.js";
@@ -28,7 +28,13 @@ import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
 import { PlayerPhysics } from "./systems/playerPhysics.js";
 import { AudioSystem } from "./systems/audio.js";
+import { ParticleSystem } from "./systems/particles.js";
+import { installImpactEffects } from "./systems/impactFx.js";
 import { BoarManager } from "./systems/boarManager.js";
+import { ElkManager } from "./systems/elkManager.js";
+import { BirdManager } from "./systems/birdManager.js";
+import { ZombieManager } from "./systems/zombieManager.js";
+import { TorchRing } from "./systems/torches.js";
 import { HUD } from "./ui/hud.js";
 import { DebugPanel } from "./ui/debug.js";
 import { Lobby } from "./ui/lobby.js";
@@ -47,6 +53,9 @@ import {
   playerEntity,
   playerIdFrom,
   boarIdFrom,
+  elkIdFrom,
+  birdIdFrom,
+  zombieIdFrom,
   round3,
 } from "./shared/protocol.js";
 
@@ -88,10 +97,31 @@ class Game {
       this.trails,
     );
     this.boars = new BoarManager(this.scene, physics, this.terrain);
+    this.elks = new ElkManager(this.scene, physics, this.terrain);
+    // O bando precisa saber onde ficam as copas, e só o ambiente sabe: o
+    // servidor manda "pouse por aqui" com um (x, z) e a árvore é achada aqui.
+    this.birds = new BirdManager(this.scene, physics, this.terrain, (x, z) =>
+      this.environment.nearestPerch(x, z),
+    );
+    this.zombies = new ZombieManager(this.scene, physics, this.terrain);
+    this.torches = new TorchRing(this.scene, physics, this.terrain);
+    /** 0 = dia, 1 = noite. Persegue `nightTarget` — ver `updateNight`. */
+    this.night = 0;
+    this.nightTarget = 0;
+    /** Último estado do modo zumbi vindo da sala (vidas, horda, caídos). */
+    this.zombieState = null;
+
     this.aim = new AimSolver(physics);
     this.aim.setExcludedCollider(this.playerPhysics.collider);
     this.rig = new CameraRig(this.renderer.camera);
     this.audio = new AudioSystem(this.renderer.camera, this.scene);
+    /* Um pool para TODAS as partículas do jogo — terra, lasca, pena, brasa,
+       poeira, bafo. Ele se inscreve sozinho em `EventType.PARTICLES`, então
+       ninguém precisa de uma referência a ele: quem quer soltar partícula manda
+       um evento, exatamente como quem quer tocar um som. */
+    this.particles = new ParticleSystem(this.scene);
+    // Traduz impacto e abate em receitas de partícula. Ver `systems/impactFx.js`.
+    installImpactEffects();
 
     this.hud = new HUD(document.getElementById("ui"));
     this.input = new Input(
@@ -106,6 +136,9 @@ class Game {
       wind: this.wind,
       rig: this.rig,
       scene: this.scene,
+      // Para o contador de draw calls e a chave do pós-processamento.
+      renderer: this.renderer,
+      particles: this.particles,
     });
 
     this.selectedTarget = 0;
@@ -118,7 +151,7 @@ class Game {
     this.remoteArrows = new RemoteArrows(this.arrows, () => this.targets);
     this.series = new TargetSeriesView(this.scene, physics, this.terrain);
     this.respawn = new Respawn(this.player, this.playerPhysics);
-    this.death = new Death(this.player);
+    this.death = new Death(this.player, this.terrain);
     this.lastStateSent = -Infinity;
 
     const ui = document.getElementById("ui");
@@ -170,6 +203,13 @@ class Game {
           this.net.send(C2S.KILL, {
             victim: vitima,
             p: e.pose.p.map(mm),
+            /* O ponto de contato e a velocidade da flecha viajam junto porque é
+               deles que sai o TOMBO: o ragdoll da vítima usa os dois para
+               decidir para onde o corpo é jogado e com que giro. Sem eles cada
+               cliente inventaria uma queda, e o corpo cairia de um jeito na
+               tela de quem atirou e de outro na de quem levou. */
+            c: [mm(e.impact.x), mm(e.impact.y), mm(e.impact.z)],
+            v: e.velocity.map(mm),
             d: Math.round(e.distance * 100) / 100,
           });
         }
@@ -191,6 +231,52 @@ class Game {
       const id = boarIdFrom(e.boarId);
       if (id == null) return;
       this.net.send(C2S.BOAR_HIT, { id, d: Math.round(e.distance * 100) / 100 });
+    });
+
+    /* Alce e pássaro: só o AVISO de acerto sai daqui. Quem conta a vida do alce
+       e quem decide se o pássaro morreu é o servidor — diferente do porco, que
+       cai no primeiro acerto e por isso pode ser resolvido aqui. */
+    gameEvents.on(EventType.ELK_HIT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      const id = elkIdFrom(e.elkId);
+      if (id != null) this.net.send(C2S.ELK_HIT, { id });
+    });
+
+    /* Zumbi: o corpo cai NA HORA, como o pássaro. Meio ping entre acertar a
+       cabeça e ver o bicho pegar fogo é o bastante para a pessoa achar que
+       errou — e num cerco ela atira de novo, gastando a flecha e o tempo que
+       não tem. O servidor confirma e distribui os pontos. */
+    gameEvents.on(EventType.ZOMBIE_HIT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      const id = zombieIdFrom(e.zombieId);
+      if (id == null) return;
+      if (e.head) this.zombies.kill(id, true);
+      this.net.send(C2S.ZOMBIE_HIT, {
+        id,
+        head: e.head === true,
+        d: Math.round(e.distance * 100) / 100,
+      });
+    });
+
+    /* Tocha acertada. Sai do impacto e não de um evento próprio porque não há
+       entidade nenhuma para avisar — a tocha é cenário, e o que interessa é só
+       o índice dela. Quem apaga de verdade é a sala: a tocha tem de estar
+       apagada em todas as telas. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (e.targetKind !== "torch") return;
+      this.net.send(C2S.TORCH_HIT, { i: e.targetId });
+    });
+
+    gameEvents.on(EventType.BIRD_HIT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      const id = birdIdFrom(e.birdId);
+      if (id == null) return;
+      // O pássaro cai NA HORA, sem esperar a confirmação: o alvo é pequeno e
+      // distante, e meio ping de silêncio entre acertar e ver o bicho cair é o
+      // suficiente para a pessoa achar que errou.
+      this.birds.kill(id);
+      this.net.send(C2S.BIRD_HIT, { id, d: Math.round(e.distance * 100) / 100 });
     });
 
     window.addEventListener("resize", () =>
@@ -250,6 +336,19 @@ class Game {
       );
       this.boars.clear();
       if (msg.snapshot.boars?.length) this.boars.applyNetwork(msg.snapshot.boars);
+      this.elks.clear();
+      if (msg.snapshot.elks?.length) this.elks.applyNetwork(msg.snapshot.elks);
+      this.birds.clear();
+      if (msg.snapshot.birds?.length) this.birds.applyNetwork(msg.snapshot.birds);
+      /* Quem entra no meio de uma noite já em andamento recebe a horda como ela
+         está — inclusive quais tochas já foram apagadas. Sem isto, o campo de
+         quem chegou depois estaria todo aceso e ele acharia que enxerga um
+         canto que, para os outros, está no escuro. */
+      this.zombies.clear();
+      this.applyZombieMode(msg.snapshot.mode?.mode === "zombie");
+      if (msg.snapshot.zombies?.length) this.zombies.applyNetwork(msg.snapshot.zombies);
+      this.torches.setStates(msg.snapshot.torches);
+      this.zombieState = msg.snapshot.zombieStatus ?? null;
       this.series.setTarget(msg.snapshot.series ?? null);
       this.applyMode(msg.snapshot.mode);
       this.scoreboard.setScores(msg.snapshot.scores);
@@ -285,8 +384,29 @@ class Game {
     });
 
     net.on(S2C.KILL, (msg) => {
-      if (msg.victim === net.me?.id) this.death.begin(net.serverTime);
-      else this.remotes.kill(msg.victim, net.serverTime);
+      if (msg.victim === net.me?.id) this.death.begin(net.serverTime, msg);
+      else this.remotes.kill(msg.victim, net.serverTime, msg);
+
+      /* O som da morte, no lugar onde ela aconteceu.
+         Vale para TODAS as mortes, de flecha ou de cabeçada: quem está de
+         costas só tem o som para saber que alguém caiu ali. E a cabeçada leva
+         a pancada junto, porque um baque seco e um grito contam uma história
+         diferente de um grito sozinho. */
+      const onde = this.deathPosition(msg.victim);
+      if (onde) {
+        if (msg.cause === "gore") {
+          gameEvents.emit(EventType.AUDIO_PLAY, {
+            sound: "elkGore",
+            position: onde,
+            volume: 1.3,
+          });
+        }
+        gameEvents.emit(EventType.AUDIO_PLAY, {
+          sound: "playerDeath",
+          position: onde,
+          volume: 1.1,
+        });
+      }
 
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
@@ -301,6 +421,20 @@ class Game {
       else this.boars.applyNetwork(msg.b);
     });
 
+    /* Onda nova. O aviso é ALTO de propósito — faixa no meio da tela e toque de
+       trompa. Sem ele, seis javalis simplesmente aparecem no campo e a pessoa
+       fica procurando de onde vieram; com ele, a leva é um acontecimento, que é
+       o que ela é. O som sai na posição do jogador (não no mundo): é um aviso
+       para ele, não algo que acontece num lugar. */
+    net.on(S2C.WAVE, (msg) => {
+      this.hud.announceWave(msg.n, msg.size);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "waveHorn",
+        position: vec3Payload(this.player.position),
+        volume: 0.9,
+      });
+    });
+
     net.on(S2C.BOAR_DEATH, (msg) => {
       this.boars.kill(msg.id);
       // Porco avulso não entra no feed de pontuação: ele é brincadeira.
@@ -311,6 +445,60 @@ class Game {
         { text: `+${msg.points}`, forte: true },
         { text: `   ${msg.distance.toFixed(0)} m` },
       ]);
+    });
+
+    net.on(S2C.ELKS, (msg) => {
+      if (msg.clear) this.elks.clear();
+      else this.elks.applyNetwork(msg.e);
+    });
+
+    /* O berro de dor sai do EVENTO DA SALA, não do impacto local. Só quem
+       atirou vê o impacto; o alce berrando é para todo mundo ouvir, inclusive
+       quem está do outro lado do vale tentando entender por que o bicho mudou
+       de direção. */
+    net.on(S2C.ELK_HIT, (msg) => {
+      const alce = this.elks.byNetId.get(msg.id);
+      if (!alce) return;
+      alce.health = msg.health;
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "elkPain",
+        position: vec3Payload(alce.position),
+        volume: 1.25,
+      });
+    });
+
+    net.on(S2C.ELK_DEATH, (msg) => {
+      this.elks.kill(msg.id);
+      if (msg.fun) return;
+      this.killFeed.push([
+        { text: msg.killerName, color: msg.killerColor, forte: true },
+        { text: "  \u{1F98C}  " },
+        { text: `+${msg.points}`, forte: true },
+      ]);
+    });
+
+    net.on(S2C.BIRDS, (msg) => this.birds.applyNetwork(msg.k));
+
+    net.on(S2C.BIRD_DEATH, (msg) => {
+      this.birds.kill(msg.id);
+      this.killFeed.push([
+        { text: msg.killerName, color: msg.killerColor, forte: true },
+        { text: "  \u{1F426}  " },
+        { text: `+${msg.points}`, forte: true },
+        { text: `   ${(msg.distance ?? 0).toFixed(0)} m` },
+      ]);
+    });
+
+    /* O mundo recomeçou (alguém trocou de modo). A limpeza do CENÁRIO vem em
+       mensagens próprias; o que sobra para cá é o que só existe nesta máquina:
+       as flechas cravadas e o contador local de acertos. */
+    net.on(S2C.WORLD_RESET, () => {
+      this.arrows.clearAll();
+      this.remoteArrows.clear();
+      this.zombies.clear();
+      this.hud.resetStats();
+      this.hud.hideZombieCenter();
+      this.rig.returnToArcher();
     });
 
     net.on(S2C.SERIES, (msg) => this.series.setTarget(msg.target));
@@ -327,6 +515,54 @@ class Game {
       ]);
     });
 
+    /* ------------------------------------------------------------ zumbis -- */
+
+    net.on(S2C.ZOMBIES, (msg) => {
+      if (msg.clear) this.zombies.clear();
+      else this.zombies.applyNetwork(msg.z);
+    });
+
+    net.on(S2C.ZOMBIE_DEATH, (msg) => {
+      this.zombies.kill(msg.id, msg.head);
+      this.killFeed.push([
+        { text: msg.killerName, color: msg.killerColor, forte: true },
+        { text: msg.head ? "  \u{1F525}  " : "  \u{1F3F9}  " },
+        { text: `+${msg.points}`, forte: true },
+        ...(msg.distance ? [{ text: `   ${msg.distance.toFixed(0)} m` }] : []),
+      ]);
+    });
+
+    net.on(S2C.HORDE, (msg) => {
+      this.hud.announceHorde(msg.n, msg.size);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "waveHorn",
+        position: vec3Payload(this.player.position),
+        volume: 0.8,
+      });
+    });
+
+    net.on(S2C.TORCHES, (msg) => {
+      this.torches.setStates(msg.t4);
+      if (msg.hit != null) this.hud.toast("uma tocha se apagou", "miss");
+    });
+
+    net.on(S2C.ZOMBIE_STATUS, (msg) => {
+      this.zombieState = msg;
+    });
+
+    net.on(S2C.ZOMBIE_OVER, (msg) => {
+      this.zombieState = { ...(this.zombieState ?? {}), over: true, reason: msg.reason };
+      if (msg.reason === "win") {
+        this.hud.showZombieCenter(
+          "SOBREVIVERAM",
+          `as ${msg.horde} hordas caíram`,
+          "vitoria",
+        );
+      } else {
+        this.hud.showZombieCenter("GAME OVER", `caíram na horda ${msg.horde}`, "gameover");
+      }
+    });
+
     net.on(S2C.MODE, (msg) => this.applyMode(msg));
 
     net.on(S2C.SCORES, (msg) => this.scoreboard.setScores(msg.scores));
@@ -336,6 +572,19 @@ class Game {
 
     net.on("disconnected", () => this.hud.setConnection(false));
     net.on("reconnecting", () => this.hud.setConnection(false));
+  }
+
+  /**
+   * Onde uma vítima está, para tocar o som da morte ali.
+   *
+   * Devolve `null` quando quem morreu não está em cena (longe demais e
+   * descartado, ou saiu da sala entre a morte e a mensagem chegar) — e aí não
+   * há som, que é melhor do que um grito vindo do nada.
+   */
+  deathPosition(victimId) {
+    if (victimId === this.net.me?.id) return vec3Payload(this.player.position);
+    const remoto = this.remotes.get(victimId);
+    return remoto ? vec3Payload(remoto.player.position) : null;
   }
 
   async connect(name) {
@@ -379,6 +628,9 @@ class Game {
     // posicionada ANTES do raycast, e o raycast antes do disparo.
     this.syncCameraMode();
     this.updateAimAndPose(dt, actions);
+    // Não recebe `dt`: os dois gatilhos são de ESTADO (tocou o chão, cruzou meio
+    // ciclo de passada), não de tempo decorrido. Ver `updateFootDust`.
+    this.updateFootDust();
     this.updateCamera(dt);
     this.solveAim();
     if (actions.release && !this.death.dying) this.shoot();
@@ -392,8 +644,17 @@ class Game {
 
     this.stepPhysics(dt);
     this.arrows.update(dt);
-    this.boars.update(dt);
+    /* A câmera vai a TODOS os bichos. Ela sempre foi necessária para o alce (é
+       ela que orienta a barra de vida); agora também decide o nível de detalhe
+       de cada corpo — ver `utils/lod.js`. */
+    this.boars.update(dt, this.renderer.camera);
+    this.elks.update(dt, this.renderer.camera);
+    this.birds.update(dt, this.renderer.camera);
+    this.zombies.update(dt, this.renderer.camera);
+    this.torches.update(dt);
+    this.updateNight(dt);
     this.trails.update(dt);
+    this.particles.update(dt);
     this.environment.update(dt, this.wind.vector);
     this.death.update(this.net.serverTime);
     this.respawn.update(this.net.serverTime);
@@ -418,7 +679,9 @@ class Game {
     this._shadowFocus.y += 2;
     this.renderer.updateShadowFocus(this._shadowFocus);
 
-    this.renderer.render();
+    // O vento vai junto: é ele que arrasta as duas camadas de nuvem, cada uma
+    // no seu ritmo (ver `CloudLayers` em `core/renderer.js`).
+    this.renderer.render(dt, this.wind.vector);
     requestAnimationFrame(this.frame.bind(this));
   }
 
@@ -450,6 +713,8 @@ class Game {
     // Qualquer um pode soltar um porco e todos veem. Não vale ponto: quem
     // solta escolheria a distância, e a caçada pontua justamente por distância.
     if (a.spawnBoar) this.net.send(C2S.SPAWN_BOAR);
+    // Um alce avulso, em qualquer modo. Como o porco do P, não vale ponto.
+    if (a.spawnElk) this.net.send(C2S.SPAWN_ELK);
 
     if (a.setMode) this.net.send(C2S.MODE, { mode: a.setMode });
     if (a.toggleMusic) {
@@ -487,10 +752,45 @@ class Game {
        alvo só, o da vez. Deixá-los na cena tiraria o sentido do modo: com alvos
        espalhados por toda parte, "o próximo está mais longe" não significa nada,
        e ainda por cima uma flecha perdida cravaria num alvo velho. */
-    const escondeFixos = msg.mode === "series";
+    /* Os alvos fixos somem na série (um alvo por vez é o modo) e na noite dos
+       zumbis — lá o pedido é campo limpo: nem mira, nem madeira, nem bicho. */
+    const escondeFixos = msg.mode === "series" || msg.mode === "zombie";
     for (const alvo of this.targets) alvo.setActive(!escondeFixos);
     this.marker.visible = !escondeFixos;
     this.hud.setMode(msg.mode, msg.invites ?? [], msg.needed ?? 2, this.net.me?.id);
+
+    this.applyZombieMode(msg.mode === "zombie");
+  }
+
+  /**
+   * Liga e desliga a noite.
+   *
+   * Um ponto só para a virada inteira: céu, tochas, flechas de fogo, bandeiras
+   * e o que sobrou de bicho em campo. Ter tudo aqui é o que garante que sair do
+   * modo desfaça exatamente o que entrar nele fez — espalhado por seis
+   * chamadas, alguma sobra ficaria (uma tocha acesa de dia, o vento invisível)
+   * e só apareceria três modos depois.
+   */
+  applyZombieMode(ligado) {
+    if (this._zombieOn === ligado) return;
+    this._zombieOn = ligado;
+
+    this.nightTarget = ligado ? 1 : 0;
+    this.arrows.fireArrows = ligado;
+
+    if (ligado) {
+      this.torches.build();
+    } else {
+      this.torches.clear();
+      this.zombies.clear();
+      this.zombieState = null;
+      this.hud.setZombie(null);
+      this.hud.hideZombieCenter();
+    }
+
+    // As bandeirolas de vento somem: são madeira e pano espalhados pelo vale, e
+    // o pedido do modo é campo limpo.
+    for (const f of this.environment.flags) f.group.visible = !ligado;
   }
 
   /* --------------------------------------------------------- confirmações -- */
@@ -567,6 +867,74 @@ class Game {
   }
 
   /**
+   * Poeira nos pés (Fase 4.3 do plano).
+   *
+   * Dois gatilhos, e os dois saem de estado que já existia:
+   *
+   * • CORRENDO — um sopro por passada. A fase da marcha (`gaitPhase`) avança com
+   *   a distância percorrida e um ciclo são dois passos, então cruzar π ou 2π é
+   *   exatamente o instante em que um pé toca o chão. Emitir por tempo daria
+   *   poeira fora do compasso com a perna, que é pior do que não ter poeira.
+   *
+   * • ATERRISSANDO — um estouro maior na transição de no-ar para no-chão.
+   *   É a única confirmação de peso que o pulo tem.
+   *
+   * Só correndo, nunca andando: uma caminhada não levanta terra, e poeira em
+   * todo passo transforma o campo num deserto.
+   */
+  updateFootDust() {
+    const p = this.player;
+    const noChao = !p.airborne;
+
+    if (this._eraAereo && noChao) {
+      gameEvents.emit(EventType.PARTICLES, {
+        position: vec3Payload(p.position),
+        count: 14,
+        color: 0xa8926a,
+        speed: 2.4,
+        spread: 0.95,
+        direction: { x: 0, y: 0.35, z: 0 },
+        size: 0.12,
+        grow: 1.8,
+        life: 0.7,
+        gravity: -1.6,
+        drag: 3.2,
+        alpha: 0.42,
+      });
+    }
+    this._eraAereo = !noChao;
+
+    if (!noChao || p.runBlend < 0.55 || p.speed < 4) {
+      this._gaitMark = p.gaitPhase;
+      return;
+    }
+
+    // Meio ciclo = um passo. Detecta a passagem por múltiplos de π mesmo quando
+    // a fase dá a volta em 2π (o `move()` a normaliza).
+    const antes = this._gaitMark ?? p.gaitPhase;
+    const agora = p.gaitPhase;
+    const cruzou =
+      Math.floor(antes / Math.PI) !== Math.floor(agora / Math.PI) || agora < antes;
+    this._gaitMark = agora;
+    if (!cruzou) return;
+
+    gameEvents.emit(EventType.PARTICLES, {
+      position: vec3Payload(p.position),
+      count: 5,
+      color: 0xa8926a,
+      speed: 1.3,
+      spread: 0.85,
+      direction: { x: 0, y: 0.5, z: 0 },
+      size: 0.09,
+      grow: 1.9,
+      life: 0.55,
+      gravity: -1.2,
+      drag: 3.6,
+      alpha: 0.3,
+    });
+  }
+
+  /**
    * Troca de modo SEM mover o ponto mirado.
    *
    * O centro óptico muda de lugar ao alternar terceira ↔ primeira pessoa (são
@@ -584,7 +952,11 @@ class Game {
    */
   syncCameraMode() {
     const before = this.rig.wantFirstPerson;
-    this.rig.setFirstPerson(this.input.firstPerson);
+    /* Morto, sempre em terceira pessoa. O olho da primeira pessoa é um ponto
+       ancorado no rosto, e com o corpo mole rolando no chão a câmera rolaria
+       junto — enjoativo e, pior, sem mostrar o que a pessoa quer ver, que é o
+       próprio corpo caindo. */
+    this.rig.setFirstPerson(this.input.firstPerson && !this.death.dying);
     if (this.rig.wantFirstPerson === before || !this.aim.hasFocus) return;
 
     const p = CONFIG.player;
@@ -715,6 +1087,67 @@ class Game {
     this.hud.setReticleVisible(!this.rig.isArrowCam);
   }
 
+  /**
+   * A virada dia ↔ noite, em ~1,2 s.
+   *
+   * É transição e não corte porque o corte lê como falha de render: a tela
+   * inteira mudando de cor num quadro só parece que o jogo quebrou. Um segundo
+   * de escurecimento, ao contrário, é o próprio anúncio do modo — dá tempo de
+   * ver as tochas acendendo antes de a primeira horda aparecer.
+   */
+  updateNight(dt) {
+    if (this.night === this.nightTarget) return;
+    const passo = dt / 1.2;
+    if (this.night < this.nightTarget) {
+      this.night = Math.min(this.nightTarget, this.night + passo);
+    } else {
+      this.night = Math.max(this.nightTarget, this.night - passo);
+    }
+    this.renderer.setNight(this.night);
+  }
+
+  /** Painel do modo zumbi: horda, restantes, vidas e o contador de renascimento. */
+  updateZombieHud() {
+    const st = this.zombieState;
+    if (!st || this.mode !== "zombie") {
+      if (this._zombieHudOn) {
+        this.hud.setZombie(null);
+        this._zombieHudOn = false;
+      }
+      return;
+    }
+    this._zombieHudOn = true;
+
+    const eu = st.lives?.find((l) => l.id === this.net.me?.id);
+    this.hud.setZombie({
+      horde: st.horde,
+      hordes: CONFIG.modes.zombie.hordes,
+      // O número de zumbis é contado DAQUI, da lista que chega a 10 Hz, e não do
+      // status: assim ele cai no instante em que o corpo cai na tela, em vez de
+      // esperar a próxima mensagem de estado.
+      remaining: this.zombies.counts.alive,
+      lives: eu?.lives ?? CONFIG.modes.zombie.lives,
+      maxLives: CONFIG.modes.zombie.lives,
+    });
+
+    if (st.over) return; // a faixa de fim já está na tela
+
+    // Contador de renascimento, só para quem está esperando.
+    const falta = (eu?.until ?? 0) - this.net.serverTime;
+    if (falta <= 0) {
+      this.hud.hideZombieCenter();
+      return;
+    }
+    {
+      const seg = Math.ceil(falta / 1000);
+      const semVidas = (eu?.lives ?? 0) === 0;
+      this.hud.showZombieCenter(
+        String(seg),
+        semVidas ? "sem vidas — voltando com três" : "voltando ao centro",
+      );
+    }
+  }
+
   updateHud() {
     const fraction = drawFraction(this.drawTime);
     this.hud.setDraw(fraction, fraction > 0 ? drawSpeed(this.drawTime) : 0);
@@ -730,8 +1163,19 @@ class Game {
         target.distanceTo(this.player.position),
       );
     }
+    /* Quantos bichos existem em campo AGORA, em qualquer modo. É informação de
+       situação, não de modo: saber que há doze porcos vivos muda o que se faz
+       em seguida, e não saber é ficar girando a câmera procurando. */
     const bc = this.boars.counts;
-    this.hud.setBoarCounts(bc.alive, bc.dead);
+    this.hud.setCreatureCounts(bc.alive, bc.dead, this.elks.counts.alive, this.birds.counts.alive);
+
+    // A barra de vida do alce mais próximo, fixa na tela: a do bicho fica sobre
+    // a cabeça dele e some quando ele está atrás de você — que é justamente
+    // quando você mais precisa saber se ele está quase caindo.
+    const alce = this.elks.nearestAlive(this.player.position);
+    this.hud.setElk(alce ? alce.health : null, alce?.state ?? null);
+
+    this.updateZombieHud();
   }
 
   start() {
@@ -751,6 +1195,12 @@ class Game {
    -------------------------------------------------------------------------- */
 
 async function main() {
+  /* A qualidade é resolvida ANTES de qualquer coisa ser construída.
+     Shadow map, densidade da grama, contagem de estrelas e o assado de AO do
+     terreno são decididos no build da cena — depois disso, mudar de preset
+     exigiria reconstruir o mundo. Daí ser a primeira linha. */
+  applyQuality(savedQuality());
+
   const lobby = new Lobby(document.getElementById("lobby"));
 
   let game;

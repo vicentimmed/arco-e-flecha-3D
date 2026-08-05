@@ -1,0 +1,238 @@
+/* ---------------------------------------------------------------------------
+   Os pássaros, no servidor.
+
+   Eles não pertencem a modo nenhum: existem sempre, em qualquer partida, porque
+   antes de serem alvo são cenário vivo — um vale sem nada se mexendo no céu
+   parece um cenário de teste.
+
+   O ciclo é o de um bando de verdade: voar em círculo lá em cima, descer numa
+   copa, ficar ali um tempo e levantar voo de novo. Uma flecha que caia perto
+   levanta quem estiver pousado, mesmo sem acertar — é o que impede o tiro fácil
+   no bicho parado e o que faz o segundo tiro ser mais difícil que o primeiro.
+
+   O POLEIRO É UM (x, z), NÃO UM PONTO NO ESPAÇO.
+
+   O servidor não tem árvore nenhuma: ele conhece o relevo (`TerrainField`), não
+   a vegetação, que é malha e vive só no cliente. Então ele não diz "pouse nesta
+   copa, a 6,4 m de altura" — ele diz "pouse por aqui", e cada cliente resolve
+   para a copa mais próxima que ele conhece. Como o cenário é determinístico
+   (mesma seed, mesmo sorteio), todos resolvem para a MESMA árvore. O alternativo
+   seria fazer o servidor recalcular a vegetação inteira só para saber onde ficam
+   os galhos — muito trabalho para uma informação que já está nas duas pontas.
+   --------------------------------------------------------------------------- */
+
+import { CONFIG } from "../src/config.js";
+
+let proximoId = 1;
+
+const faixa = (min, max) => min + Math.random() * (max - min);
+
+export class Bird {
+  constructor(terrain) {
+    this.id = proximoId++;
+    this.terrain = terrain;
+    const B = CONFIG.birds;
+    const S = CONFIG.spawn;
+
+    // Cada pássaro tem o SEU círculo e a SUA fase: um bando em que todos giram
+    // juntos no mesmo raio lê como uma engrenagem, não como bichos.
+    this.phase = Math.random() * Math.PI * 2;
+    this.radius = B.circleRadius * faixa(0.45, 1);
+    this.height = B.cruiseHeight + faixa(-0.5, 0.5) * B.heightSpread;
+    this.dir = Math.random() < 0.5 ? 1 : -1;
+
+    this.x = S.centerX + Math.cos(this.phase) * this.radius;
+    this.z = S.centerZ + Math.sin(this.phase) * this.radius;
+    this.y = terrain.heightAt(this.x, this.z) + this.height;
+    this.yaw = 0;
+    this.state = "fly";
+    this.timer = faixa(0, B.flyMaxTime);
+    this.stateTime = faixa(B.flyMinTime, B.flyMaxTime);
+    this.dead = false;
+    this.deadSince = 0;
+    /** Poleiro pedido: só (x, z). O cliente acha a copa (ver o cabeçalho). */
+    this.perch = null;
+  }
+
+  /**
+   * Escolhe um lugar para pousar: a faixa onde as folhosas nascem.
+   *
+   * O intervalo de `arenaDistance` é o mesmo que `scatterTrees` usa para
+   * espalhar o anel de árvores. Não é coincidência nem número mágico — é a
+   * garantia de que o cliente vai encontrar uma copa perto do ponto pedido.
+   */
+  pickPerch() {
+    for (let i = 0; i < 30; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = 18 + Math.random() * 55;
+      const x = CONFIG.spawn.centerX + Math.cos(ang) * r;
+      const z = CONFIG.spawn.centerZ + Math.sin(ang) * r;
+      const ad = this.terrain.arenaDistance(x, z);
+      if (ad < -11 || ad > 15) continue;
+      return { x, z };
+    }
+    return null;
+  }
+
+  /** Levantar voo — por susto ou por vontade. */
+  takeOff() {
+    if (this.dead || this.state === "fly") return;
+    this.state = "fly";
+    this.perch = null;
+    this.timer = 0;
+    this.stateTime = faixa(CONFIG.birds.flyMinTime, CONFIG.birds.flyMaxTime);
+    // Volta ao circuito pelo ponto do círculo mais próximo de onde ele está.
+    this.phase = Math.atan2(this.z - CONFIG.spawn.centerZ, this.x - CONFIG.spawn.centerX);
+  }
+
+  hit(agora) {
+    if (this.dead) return false;
+    this.dead = true;
+    this.deadSince = agora;
+    this.state = "dead";
+    return true;
+  }
+
+  update(dt) {
+    if (this.dead) {
+      // O corpo cai. Ele continua sendo transmitido durante a queda porque a
+      // queda é a confirmação do acerto: sem ela o pássaro simplesmente sumiria
+      // do céu e ninguém saberia se acertou.
+      const chao = this.terrain.heightAt(this.x, this.z);
+      this.y = Math.max(chao, this.y - CONFIG.birds.fallSpeed * dt);
+      return;
+    }
+
+    const B = CONFIG.birds;
+    this.timer += dt;
+
+    switch (this.state) {
+      case "fly": {
+        // Circuito: um ponto girando em torno do centro da arena.
+        this.phase += ((this.dir * B.flySpeed) / this.radius) * dt;
+        const S = CONFIG.spawn;
+        const nx = S.centerX + Math.cos(this.phase) * this.radius;
+        const nz = S.centerZ + Math.sin(this.phase) * this.radius;
+        this.yaw = Math.atan2(nx - this.x, nz - this.z);
+        this.x = nx;
+        this.z = nz;
+        const alvoY = this.terrain.heightAt(nx, nz) + this.height;
+        this.y += (alvoY - this.y) * Math.min(1, dt * 1.2);
+
+        if (this.timer > this.stateTime) {
+          const p = this.pickPerch();
+          if (p) {
+            this.perch = p;
+            this.state = "glide";
+            this.timer = 0;
+          } else {
+            this.timer = 0; // sem poleiro à vista: continua voando
+          }
+        }
+        break;
+      }
+
+      case "glide": {
+        const p = this.perch;
+        if (!p) {
+          this.takeOff();
+          break;
+        }
+        const dx = p.x - this.x;
+        const dz = p.z - this.z;
+        const dist = Math.hypot(dx, dz);
+        // A altura de pouso é uma ESTIMATIVA — a copa de verdade é o cliente
+        // que sabe onde está (ver o cabeçalho). Aqui basta descer.
+        const alvoY = this.terrain.heightAt(p.x, p.z) + 5.2;
+        if (dist < 0.6) {
+          this.x = p.x;
+          this.z = p.z;
+          this.y = alvoY;
+          this.state = "perch";
+          this.timer = 0;
+          this.stateTime = faixa(B.perchMinTime, B.perchMaxTime);
+          break;
+        }
+        const passo = Math.min(dist, B.diveSpeed * dt);
+        this.yaw = Math.atan2(dx, dz);
+        this.x += (dx / dist) * passo;
+        this.z += (dz / dist) * passo;
+        this.y += (alvoY - this.y) * Math.min(1, dt * 2.2);
+        // Desistiu de achar: se ficou tempo demais planando, volta a voar.
+        if (this.timer > 20) this.takeOff();
+        break;
+      }
+
+      case "perch": {
+        if (this.timer > this.stateTime) this.takeOff();
+        break;
+      }
+    }
+  }
+
+  view() {
+    return {
+      id: this.id,
+      p: [r3(this.x), r3(this.y), r3(this.z)],
+      y: r3(this.yaw),
+      s: this.state,
+      // O poleiro pedido viaja junto: é com ele que o cliente escolhe a copa.
+      k: this.perch ? [r3(this.perch.x), r3(this.perch.z)] : null,
+    };
+  }
+}
+
+export class BirdFlock {
+  constructor(terrain) {
+    this.terrain = terrain;
+    /** @type {Bird[]} */
+    this.birds = [];
+    for (let i = 0; i < CONFIG.birds.count; i++) this.birds.push(new Bird(terrain));
+  }
+
+  byId(id) {
+    return this.birds.find((b) => b.id === id) ?? null;
+  }
+
+  /** Uma flecha caiu por perto: quem estiver pousado ali levanta voo. */
+  scareNear(x, z) {
+    const r = CONFIG.birds.scareRadius;
+    for (const b of this.birds) {
+      if (b.dead || b.state === "fly") continue;
+      if (Math.hypot(b.x - x, b.z - z) < r) b.takeOff();
+    }
+  }
+
+  kill(id, agora) {
+    const b = this.byId(id);
+    if (!b || !b.hit(agora)) return null;
+    return b;
+  }
+
+  update(dt, agora) {
+    for (const b of this.birds) b.update(dt);
+
+    /* O bando tem tamanho fixo: quem morre é substituído. Sem isso o céu
+       esvaziaria em dez minutos de partida e o cenário morreria junto. */
+    for (let i = this.birds.length - 1; i >= 0; i--) {
+      const b = this.birds[i];
+      if (!b.dead) continue;
+      if (agora - b.deadSince < CONFIG.birds.corpseLifetime * 1000) continue;
+      this.birds.splice(i, 1, new Bird(this.terrain));
+    }
+  }
+
+  /** Reinício de mundo: um bando novo em folha. */
+  reset() {
+    this.birds = [];
+    for (let i = 0; i < CONFIG.birds.count; i++) {
+      this.birds.push(new Bird(this.terrain));
+    }
+  }
+
+  view() {
+    return this.birds.map((b) => b.view());
+  }
+}
+
+const r3 = (v) => Math.round(v * 1000) / 1000;

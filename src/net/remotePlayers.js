@@ -21,10 +21,11 @@
 import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
-import { Player } from "../entities/player.js";
+import { Player, FACE_DETAIL_DISTANCE } from "../entities/player.js";
 import { entityRegistry } from "../core/entityRegistry.js";
 import { playerEntity, unpackState } from "../shared/protocol.js";
 import { blinkOpacity } from "../game/respawn.js";
+import { Ragdoll } from "../game/ragdoll.js";
 import { NameTag } from "./nameTag.js";
 
 const TAU = Math.PI * 2;
@@ -69,6 +70,15 @@ class RemotePlayer {
     this.invulnUntil = 0;
     /** Instante do relógio da sala em que o tombo começou. 0 = vivo. */
     this.dyingSince = 0;
+    /**
+     * O corpo mole deste arqueiro.
+     *
+     * É criado com o jogador e reaproveitado a cada morte, em vez de nascer no
+     * `kill`: são quatro membros e dois pares de molas, e alocar isso no
+     * instante em que uma flecha acerta é justamente onde não se quer um
+     * soluço de coletor de lixo.
+     */
+    this.ragdoll = new Ragdoll(terrain);
     this.visible = true;
     this.shadowsOn = true;
     this.opacity = 1;
@@ -105,6 +115,8 @@ class RemotePlayer {
     this.buffer.length = 0;
     this.invulnUntil = spawn.invulnUntil ?? 0;
     this.dyingSince = 0;
+    this.ragdoll.stop();
+    this.player.ragdoll = null;
     this.player.deathFall = 0;
     const y = spawn.y + (spawn.drop ?? CONFIG.spawn.dropHeight);
     this.player.position.set(spawn.x, y, spawn.z);
@@ -152,6 +164,10 @@ class RemotePlayer {
     p.bobPhase += dt * 1.3; // respiração: é local, não trafega
     p.update(dt, p.gaitBlend > 0.01);
     this.body.moveTo(p.position);
+
+    // Rosto só de perto: acima de 12 m as nove peças da face não desenham nada
+    // que a cabeça já não desenhe. Ver `Player.setFaceDetail`.
+    p.setFaceDetail(distancia <= FACE_DETAIL_DISTANCE);
 
     // Sombra só de perto. Cada arqueiro são ~45 malhas com `castShadow`, e a
     // sombra de quem está a 40 m não é vista por ninguém.
@@ -385,10 +401,24 @@ export class RemotePlayers {
     return this.byId.get(id) ?? null;
   }
 
-  /** Alguém morreu: o corpo começa a tombar. */
-  kill(id, serverTime) {
+  /**
+   * Alguém morreu: o corpo começa a tombar.
+   *
+   * `msg` carrega o ponto de impacto e a velocidade da flecha. São eles que
+   * fazem o corpo cair PARA O LADO CERTO — sem eles o ragdoll ainda funciona,
+   * só não sabe de onde veio o tiro.
+   */
+  kill(id, serverTime, msg) {
     const remoto = this.byId.get(id);
-    if (remoto) remoto.dyingSince = serverTime;
+    if (!remoto) return;
+    remoto.dyingSince = serverTime;
+    remoto.player.ragdoll = remoto.ragdoll;
+    remoto.ragdoll.begin(
+      remoto.player.position,
+      remoto.player.yaw,
+      msg?.c ? { x: msg.c[0], y: msg.c[1], z: msg.c[2] } : null,
+      msg?.v ?? null,
+    );
   }
 
   /** Poses vindas do servidor. `selfId` é ignorado: o seu boneco é local. */

@@ -55,34 +55,178 @@ const BODY = {
  * piscar quem acabou de renascer faria a sala inteira piscar junto. O custo de
  * um punhado de materiais por jogador é irrelevante perto disso.
  */
+/* ESPECULAR SELETIVA E RIM LIGHT (Fases 1.5 e 5A.3 do plano).
+ *
+ * Cada material do corpo tem o SEU brilho, porque é a diferença entre eles que
+ * conta de que coisa cada peça é feita: pele tem um brilho largo e oleoso, pano
+ * quase nenhum, couro é fosco com um lustro nas dobras, metal é um ponto. Com
+ * todos no mesmo `roughness` médio, a arqueira lê como um boneco de resina
+ * pintado — que era exatamente o problema.
+ *
+ * O RIM LIGHT entra em todos eles, pelo mesmo enxerto. Ele acende só as bordas
+ * do corpo, onde a normal é perpendicular ao olhar, e serve a um propósito de
+ * jogo antes de ser bonito: na noite do modo zumbi e contra a serra escura, é a
+ * única coisa que separa a silhueta do arqueiro do fundo. */
+function withRimLight(material, forca = 0.22, tecido = 0) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.rimStrength = { value: forca };
+    shader.uniforms.fabric = { value: tecido };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vLocalPos;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+         vLocalPos = position;`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform float rimStrength;
+         uniform float fabric;
+         varying vec3 vLocalPos;`,
+      )
+      /* ESTRUTURA DE TECIDO (Fase 5A.4 do plano).
+       *
+       * O plano pedia normal maps em braços e pernas. Um normal map de verdade
+       * exigiria UVs — e as peças do arqueiro são cápsulas e caixas geradas em
+       * código, sem UV que faça sentido. A alternativa que dá o mesmo resultado
+       * pelo mesmo custo é gerar a trama NO FRAGMENTO, a partir da posição
+       * local do vértice: duas ondas cruzadas em alta frequência, moduladas
+       * muito de leve sobre o albedo.
+       *
+       * A amplitude é minúscula (±3 %) de propósito. Tecido não tem desenho —
+       * tem GRÃO —, e o que se quer é só que a superfície pare de ser
+       * perfeitamente lisa. Acima disso vira estampa xadrez.
+       *
+       * A coordenada é a LOCAL, não a de mundo: assim a trama acompanha a peça
+       * quando o braço gira, em vez de o corpo deslizar por dentro de um padrão
+       * fixo no espaço.
+       */
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+         if ( fabric > 0.0 ) {
+           vec3 p = vLocalPos * 220.0;
+           float trama = sin( p.x ) * sin( p.y ) + 0.6 * sin( p.z * 1.3 + p.y * 0.7 );
+           diffuseColor.rgb *= 1.0 + trama * 0.03 * fabric;
+         }`,
+      )
+      /* Entra no fim, DEPOIS da iluminação e antes da névoa: o rim é luz
+         somada, não uma propriedade da superfície. Somá-lo antes faria a névoa
+         não o cobrir, e o arqueiro a cem metros teria contorno neon. */
+      .replace(
+        "#include <opaque_fragment>",
+        `{
+           vec3 rimV = normalize( vViewPosition );
+           float rim = pow( 1.0 - abs( dot( normalize( normal ), rimV ) ), 3.0 );
+           // A cor do rim é a da luz do céu: ele representa o céu inteiro
+           // batendo de raspão na borda do corpo, e céu é azul.
+           outgoingLight += vec3( 0.62, 0.74, 1.0 ) * rim * rimStrength;
+         }
+         #include <opaque_fragment>`,
+      );
+  };
+  // Sem chave própria o Three reaproveitaria o programa de qualquer
+  // MeshStandardMaterial com as mesmas flags e o enxerto seria ignorado.
+  material.customProgramCacheKey = () => `archer-rim-${forca}-${tecido}`;
+  return material;
+}
+
+/** Preenche `color` = branco em toda geometria da subárvore que não tiver. */
+function fillNeutralVertexColors(root) {
+  root.traverse((o) => {
+    const geo = o.geometry;
+    if (!geo || geo.attributes.color) return;
+    const n = geo.attributes.position.count;
+    const brancos = new Float32Array(n * 3).fill(1);
+    geo.setAttribute("color", new THREE.BufferAttribute(brancos, 3));
+  });
+}
+
 function createMaterials() {
+  /* `vertexColors: true` liga o gradiente e o AO de junta que `makeSegment` e
+     `makeJoint` assaram na geometria (ver `utils/geometry.js`). As peças que
+     NÃO são segmento nem junta simplesmente não têm o atributo `color`, e o
+     Three trata a ausência dele como branco — então ligar a chave em todos os
+     materiais é seguro e evita ter duas famílias de material para manter. */
+  const pele = (cor, rough) =>
+    withRimLight(
+      new THREE.MeshStandardMaterial({
+        color: cor,
+        roughness: rough,
+        metalness: 0,
+        vertexColors: true,
+      }),
+      0.26,
+    );
+  // `tecido` = 1 liga a trama do fragmento; a pele e o metal ficam lisos.
+  const pano = (cor, rough, tecido = 1) =>
+    withRimLight(
+      new THREE.MeshStandardMaterial({
+        color: cor,
+        roughness: rough,
+        metalness: 0,
+        vertexColors: true,
+      }),
+      0.2,
+      tecido,
+    );
+
   return {
-    skin: new THREE.MeshStandardMaterial({ color: "#e6ab7d", roughness: 0.72 }),
-    skinDark: new THREE.MeshStandardMaterial({ color: "#d9995f", roughness: 0.75 }),
-    top: new THREE.MeshStandardMaterial({ color: "#cc2f2b", roughness: 0.78 }),
-    trim: new THREE.MeshStandardMaterial({ color: "#f3ede1", roughness: 0.8 }),
-    shorts: new THREE.MeshStandardMaterial({ color: "#bb2724", roughness: 0.8 }),
-    hair: new THREE.MeshStandardMaterial({ color: "#392015", roughness: 0.62 }),
-    shoe: new THREE.MeshStandardMaterial({ color: "#efe9df", roughness: 0.7 }),
-    shoeRed: new THREE.MeshStandardMaterial({ color: "#cc2f2b", roughness: 0.7 }),
+    // Pele: 0.6 é o brilho de uma pele ao ar livre — largo e fraco. Acima de
+    // 0.8 ela vira giz; abaixo de 0.5, plástico.
+    skin: pele("#e6ab7d", 0.6),
+    skinDark: pele("#d9995f", 0.64),
+    top: pano("#cc2f2b", 0.88),
+    trim: pano("#f3ede1", 0.9),
+    shorts: pano("#bb2724", 0.9),
+    // Cabelo: o único do corpo com brilho definido — é ele que dá o realce em
+    // faixa no alto da cabeça, e sem isso o cabelo é uma calota de feltro.
+    hair: pele("#392015", 0.48),
+    shoe: pano("#efe9df", 0.78),
+    shoeRed: pano("#cc2f2b", 0.78),
     // Rosto e equipamento.
-    eyeWhite: new THREE.MeshStandardMaterial({ color: "#f7f4ee", roughness: 0.35 }),
-    eyeDark: new THREE.MeshStandardMaterial({ color: "#2a1a12", roughness: 0.25 }),
-    mouth: new THREE.MeshStandardMaterial({ color: "#a8564d", roughness: 0.7 }),
-    leather: new THREE.MeshStandardMaterial({ color: "#6b4526", roughness: 0.82 }),
-    leatherDark: new THREE.MeshStandardMaterial({ color: "#4a2f19", roughness: 0.85 }),
-    metal: new THREE.MeshStandardMaterial({
-      color: "#b9bcc2",
-      roughness: 0.35,
-      metalness: 0.7,
-    }),
+    eyeWhite: pele("#f7f4ee", 0.28),
+    eyeDark: pele("#2a1a12", 0.18),
+    mouth: pele("#a8564d", 0.66),
+    // Couro: fosco, com um lustro de uso. Nada de metalness.
+    leather: pano("#6b4526", 0.86),
+    leatherDark: pano("#4a2f19", 0.9),
+    /* Fita do cabelo e empena da flecha: os dois HERDAM A COR DO JOGADOR
+       (Fase 5A.6). Eram castanho e vermelho fixos, e num duelo entre dois
+       arqueiros de cores diferentes as duas flechas na aljava eram idênticas.
+       São peças pequenas, e é justamente por isso que funcionam: um toque da
+       sua cor no alto da cabeça é reconhecível de longe sem chapar o corpo. */
+    tie: pano("#8a5a3c", 0.8),
+    fletch: (() => {
+      const m = pano("#d6483c", 0.85);
+      m.side = THREE.DoubleSide;
+      return m;
+    })(),
+    arrowShaft: pano("#c9b58c", 0.6),
+    metal: withRimLight(
+      new THREE.MeshStandardMaterial({
+        color: "#b9bcc2",
+        roughness: 0.28,
+        metalness: 0.85,
+      }),
+      0.18,
+    ),
   };
 }
 
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
 const TAU = Math.PI * 2;
 const _color = new THREE.Color();
+/** Branco de referência para clarear a cor do jogador (ver `setColor`). */
+const WHITE = new THREE.Color(1, 1, 1);
 /** Quanto o pé pode descer abaixo da base do corpo ao acompanhar o relevo (m). */
 const MAX_STEP_DOWN = 0.45;
 
@@ -112,8 +256,15 @@ export class Player {
      * relógio da sala.
      */
     this.invulnerable = false;
-    /** 0 = de pé, 1 = caído. Anima o tombo da morte. */
+    /** 0 = de pé, 1 = caído. Sobrevive como medida de progresso do tombo. */
     this.deathFall = 0;
+    /**
+     * O corpo mole, quando morto. `null` = vivo.
+     *
+     * Quem cria e alimenta é o `Death` (ou o `RemotePlayer`); aqui só se lê.
+     * O arqueiro não sabe simular um tombo — ele sabe VESTIR um.
+     */
+    this.ragdoll = null;
 
     this.position = new THREE.Vector3(
       CONFIG.player.start.x,
@@ -243,7 +394,7 @@ export class Player {
     for (let i = 0; i < 4; i++) {
       const haste = new THREE.Mesh(
         new THREE.CylinderGeometry(0.005, 0.005, 0.26, 5),
-        new THREE.MeshStandardMaterial({ color: "#c9b58c", roughness: 0.6 }),
+        this.mat.arrowShaft,
       );
       const dx = (i % 2 ? 1 : -1) * 0.018;
       const dz = i < 2 ? 0.016 : -0.016;
@@ -251,14 +402,7 @@ export class Player {
       haste.rotation.set(0.34, 0, -0.3);
       this.spine.add(haste);
 
-      const empena = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.02, 0.07),
-        new THREE.MeshStandardMaterial({
-          color: "#d6483c",
-          roughness: 0.85,
-          side: THREE.DoubleSide,
-        }),
-      );
+      const empena = new THREE.Mesh(new THREE.PlaneGeometry(0.02, 0.07), this.mat.fletch);
       empena.position.copy(haste.position);
       empena.position.y += 0.1;
       empena.rotation.set(0.34, i * 0.8, -0.3);
@@ -292,8 +436,14 @@ export class Player {
     /* Rosto.
        Sem olhos, a cabeça é uma bola e o personagem não tem para onde olhar —
        e é justamente a direção do olhar que dá leitura de "ela está mirando
-       ali". A face olha para -Z no espaço da cabeça, que já é girada pela pose. */
+       ali". A face olha para -Z no espaço da cabeça, que já é girada pela pose.
+
+       As nove peças do rosto entram em `faceDetail` e SOMEM acima de ~12 m
+       (ver `setFaceDetail`). A essa distância a íris tem meio pixel; o que se
+       vê é a cabeça, e ela continua ali. Com doze arqueiros numa sala são
+       ~100 chamadas de desenho a menos, sem que ninguém perceba a diferença. */
     const R = BODY.headR;
+    this.faceDetail = [];
     for (const lado of [-1, 1]) {
       const olho = new THREE.Mesh(
         new THREE.SphereGeometry(R * 0.155, 10, 8),
@@ -302,6 +452,7 @@ export class Player {
       olho.position.set(lado * R * 0.38, R * 0.1, -R * 0.86);
       olho.scale.set(1, 1.15, 0.62);
       this.head.add(olho);
+      this.faceDetail.push(olho);
 
       const iris = new THREE.Mesh(
         new THREE.SphereGeometry(R * 0.085, 8, 6),
@@ -310,6 +461,7 @@ export class Player {
       iris.position.set(lado * R * 0.38, R * 0.1, -R * 0.95);
       iris.scale.set(1, 1, 0.55);
       this.head.add(iris);
+      this.faceDetail.push(iris);
 
       // Sobrancelha: dá expressão e ancora o olho na testa.
       const sobrancelha = new THREE.Mesh(
@@ -319,6 +471,7 @@ export class Player {
       sobrancelha.position.set(lado * R * 0.38, R * 0.34, -R * 0.87);
       sobrancelha.rotation.z = lado * 0.14;
       this.head.add(sobrancelha);
+      this.faceDetail.push(sobrancelha);
     }
 
     const nariz = new THREE.Mesh(
@@ -328,6 +481,7 @@ export class Player {
     nariz.rotation.x = -Math.PI / 2;
     nariz.position.set(0, -R * 0.08, -R * 0.95);
     this.head.add(nariz);
+    this.faceDetail.push(nariz);
 
     const boca = new THREE.Mesh(
       new THREE.BoxGeometry(R * 0.3, R * 0.055, R * 0.06),
@@ -335,6 +489,7 @@ export class Player {
     );
     boca.position.set(0, -R * 0.42, -R * 0.86);
     this.head.add(boca);
+    this.faceDetail.push(boca);
 
     // Orelhas: fecham a silhueta da cabeça de perfil.
     for (const lado of [-1, 1]) {
@@ -345,6 +500,7 @@ export class Player {
       orelha.position.set(lado * R * 0.92, -R * 0.02, 0);
       orelha.scale.set(0.42, 1, 0.72);
       this.head.add(orelha);
+      this.faceDetail.push(orelha);
     }
 
     // Cabelo: calota + franja, com a testa livre.
@@ -371,7 +527,8 @@ export class Player {
     this.ponytailRoot.position.set(0, 0.055, BODY.headR * 0.95);
     this.head.add(this.ponytailRoot);
 
-    const tie = makeJoint(0.036, this.mat.hair, 10);
+    // A fita do rabo de cavalo: é ela que leva a cor do jogador na cabeça.
+    const tie = makeJoint(0.036, this.mat.tie, 10);
     this.ponytailRoot.add(tie);
 
     this.ponytailA = makeSegment(0.056, this.mat.hair, true, 10);
@@ -391,6 +548,22 @@ export class Player {
     this.legR = this.buildLeg();
     this.legL = this.buildLeg();
     this.root.add(this.legR.group, this.legL.group);
+
+    /* Todo o resto do corpo ganha cor de vértice NEUTRA.
+     *
+     * Isto não é enfeite, é obrigatório: os materiais do arqueiro têm
+     * `vertexColors: true` por causa do gradiente e do AO de junta, e o Three
+     * define `USE_COLOR` a partir do MATERIAL, sem olhar se a geometria tem o
+     * atributo. Numa geometria sem ele o WebGL entrega (0,0,0) para o atributo
+     * desligado — e a peça sai PRETA. Só os segmentos e as juntas nascem com
+     * cor (ver `utils/geometry.js`); pescoço, nariz, cinto, aljava e o resto
+     * são primitivas cruas, e é aqui que elas recebem o branco.
+     *
+     * Roda ANTES do arco entrar no root: os materiais do arco são dele e não
+     * têm `vertexColors`, então gastar memória com um atributo que ninguém lê
+     * seria desperdício.
+     */
+    fillNeutralVertexColors(this.root);
 
     /* arco ---------------------------------------------------------------- */
     this.bow = new Bow();
@@ -506,6 +679,12 @@ export class Player {
     this.mat.shoeRed.color.copy(c);
     // Bermuda um tom mais funda que a camiseta.
     this.mat.shorts.color.copy(c).multiplyScalar(0.8);
+    /* Fita e empena também (Fase 5A.6). Elas ficam mais CLARAS que a camiseta,
+       não iguais: são peças de poucos pixels contra o cabelo escuro e contra a
+       aljava de couro, e no mesmo tom da roupa elas desapareceriam justamente
+       nos dois fundos onde estão. */
+    this.mat.tie.color.copy(c).lerp(WHITE, 0.25);
+    this.mat.fletch.color.copy(c).lerp(WHITE, 0.18);
   }
 
   /**
@@ -646,6 +825,13 @@ export class Player {
   /* --------------------------------------------------------------- pose ---- */
 
   update(dt, moving) {
+    // Morto, o corpo não anda: quem manda na pose é o ragdoll, e ele já traz
+    // posição, orientação e a ponta de cada membro prontas.
+    if (this.ragdoll?.active) {
+      this.poseRagdoll(dt);
+      return;
+    }
+
     // O quique vertical sai da MESMA fase do passo (dois toques de pé por
     // ciclo), com `gaitBlend` desligando na parada e a respiração assumindo.
     // Sem isso teríamos duas fontes de verdade para a cadência e o corpo
@@ -666,11 +852,13 @@ export class Player {
       this.position.y + this.rootLift,
       this.position.z,
     );
-    this.root.rotation.y = this.yaw;
-    // Morte: o corpo tomba de lado pivotando nos pés e afunda um pouco. Girar
-    // o `root` inteiro é o suficiente — a pose interna congela sozinha porque
-    // quem morre para de andar e de tensionar.
-    this.root.rotation.z = this.deathFall * Math.PI * 0.5;
+    /* A rotação é escrita INTEIRA, e não só em Y e Z.
+     *
+     * O ragdoll põe uma orientação arbitrária no `root` (por quaternion, ver
+     * `poseRagdoll`), e o Three sincroniza os ângulos de Euler a partir dela —
+     * inclusive o X. Ao renascer, escrever só Y e Z deixava aquele X para trás,
+     * e a arqueira voltava à vida permanentemente tombada para a frente. */
+    this.root.rotation.set(0, this.yaw, this.deathFall * Math.PI * 0.5);
     if (this.deathFall > 0) this.root.position.y -= this.deathFall * 0.22;
 
     // Direção da mira no espaço do root (o yaw já está no root).
@@ -721,6 +909,82 @@ export class Player {
 
   localToRoot(x, y, z, out) {
     return out.set(x, y, z).applyMatrix4(this.spine.matrix);
+  }
+
+  /* -------------------------------------------------------------- ragdoll --
+   *
+   * A pose de um corpo sem tônus. Ela substitui `update()` inteiro na morte, e
+   * não o corrige: marcha, mira e tensionamento não existem mais aqui.
+   *
+   * A divisão de trabalho é a mesma do resto do arquivo: quem calcula É OUTRO
+   * (`game/ragdoll.js`, que simula o tombo e as pontas dos membros), e este
+   * método só VESTE o resultado no esqueleto — a mesma IK de dois ossos que
+   * anima a caminhada, alimentada com alvos que agora vêm da física em vez do
+   * ciclo de passo. É por isso que o corpo mole não precisou de nenhum osso
+   * novo nem de um segundo boneco.
+   */
+  poseRagdoll(dt) {
+    const rd = this.ragdoll;
+    rd.update(dt);
+
+    rd.rootPosition(this.root.position);
+    this.root.quaternion.copy(rd.orient);
+    this.root.updateMatrix();
+
+    /* Tronco: encurvado pelas molas da coluna, e com a postura de arqueiro
+       (o tronco de lado) desaparecendo — ela é tensão muscular, e o que
+       define este estado é justamente não haver nenhuma. */
+    this._q.setFromAxisAngle(AXIS_X, rd.spine.pitch);
+    this._qb.setFromAxisAngle(AXIS_Z, rd.spine.roll);
+    this.spine.quaternion.copy(this._q).multiply(this._qb);
+    this._qb.setFromAxisAngle(AXIS_Y, BODY.stanceYaw * 0.25);
+    this.spine.quaternion.multiply(this._qb);
+    this.spine.updateMatrix();
+
+    this.head.rotation.set(rd.neck.pitch * 0.6, 0, rd.neck.roll);
+
+    this.localToRoot(BODY.shoulderX, BODY.shoulderY - BODY.hipY, 0, this._shoulderR);
+    this.localToRoot(-BODY.shoulderX, BODY.shoulderY - BODY.hipY, 0, this._shoulderL);
+    this.localToRoot(BODY.hipX, -0.02, 0, this._hipR);
+    this.localToRoot(-BODY.hipX, -0.02, 0, this._hipL);
+
+    // Mãos e pés não atravessam o chão. A simulação dos membros roda no espaço
+    // do root, que está girando; o chão é do mundo — então a checagem tem de
+    // ir e voltar. É uma vez por membro por frame, não por subpasso.
+    this.clampLimbToGround(rd.handR.p, 0.05);
+    this.clampLimbToGround(rd.handL.p, 0.05);
+    this.clampLimbToGround(rd.footR.p, 0.08);
+    this.clampLimbToGround(rd.footL.p, 0.08);
+
+    // Cotovelos para fora, joelhos para a frente: sem um pólo definido a IK
+    // escolhe um plano arbitrário e as juntas dobram para dentro do corpo.
+    this._pole.set(1, 0.25, -0.3).normalize();
+    this.poseArm(this.armR, this._shoulderR, rd.handR.p, this._pole, 0.02);
+    this._pole.set(-1, 0.25, -0.3).normalize();
+    this.poseArm(this.armL, this._shoulderL, rd.handL.p, this._pole, 0.02);
+
+    this._pole.set(0, 0.15, -1).normalize();
+    this.poseLegTo(this.legR, this._hipR, rd.footR.p, this._pole);
+    this.poseLegTo(this.legL, this._hipL, rd.footL.p, this._pole);
+
+    // O arco cai junto com a mão que o segurava — largá-lo no chão exigiria um
+    // objeto solto com vida própria, e ninguém repara nele durante o tombo.
+    this.bow.group.position.copy(rd.handR.p);
+    this.bow.group.quaternion.copy(this.armR.fore.quaternion);
+
+    this.updatePonytail(dt);
+    this.prevYaw = this.yaw;
+    this.root.updateMatrixWorld(true);
+  }
+
+  /** Impede que uma ponta de membro entre no terreno. `p` é do espaço do root. */
+  clampLimbToGround(p, folga) {
+    this._tmp.copy(p).applyQuaternion(this.root.quaternion).add(this.root.position);
+    const chao = this.terrain.heightAt(this._tmp.x, this._tmp.z) + folga;
+    if (this._tmp.y >= chao) return;
+    this._tmp.y = chao;
+    this._tmp.sub(this.root.position);
+    p.copy(this._tmp).applyQuaternion(this._q.copy(this.root.quaternion).invert());
   }
 
   updateBow() {
@@ -912,7 +1176,18 @@ export class Player {
         CONFIG.gait.kneeTurn * this.gaitBlend,
       )
       .normalize();
-    solveTwoBoneIK(hip, foot, BODY.thigh, BODY.shin, this._pole, this._knee);
+    this.poseLegTo(leg, hip, foot, this._pole);
+  }
+
+  /**
+   * Resolve uma perna para um alvo de pé JÁ decidido.
+   *
+   * Separado de `poseLeg` porque o ragdoll também precisa dele: lá o pé não sai
+   * do ciclo de marcha, sai da simulação do corpo mole. A IK e a orientação dos
+   * segmentos são as mesmas nos dois casos — só a origem do alvo muda.
+   */
+  poseLegTo(leg, hip, foot, pole) {
+    solveTwoBoneIK(hip, foot, BODY.thigh, BODY.shin, pole, this._knee);
     orientSegment(leg.thigh, hip, this._knee);
     orientSegment(leg.shin, this._knee, foot);
     // Bermuda: metade de cima da coxa.
@@ -1000,4 +1275,23 @@ export class Player {
   setHeadVisible(visible) {
     this.head.visible = visible;
   }
+
+  /**
+   * LOD do rosto: acima de ~12 m somem íris, olho, sobrancelha, nariz, boca e
+   * orelha. São nove malhas por arqueiro que, a essa distância, ocupam menos de
+   * um pixel cada — e numa sala cheia é o item mais caro do corpo.
+   *
+   * O corte é feito por quem CONHECE a distância (o jogador remoto, em
+   * `net/remotePlayers.js`); aqui só se veste o resultado, e só na virada,
+   * porque escrever `visible` em nove objetos por quadro por jogador seria
+   * trocar chamadas de desenho por trabalho de CPU.
+   */
+  setFaceDetail(on) {
+    if (this._faceDetailOn === on) return;
+    this._faceDetailOn = on;
+    for (const o of this.faceDetail) o.visible = on;
+  }
 }
+
+/** Distância (m) acima da qual o rosto do arqueiro deixa de ser desenhado. */
+export const FACE_DETAIL_DISTANCE = 12;

@@ -4,8 +4,13 @@
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
-import { CONFIG } from "../config.js";
+import { CONFIG, applyQuality } from "../config.js";
 import { runSelfTest } from "../systems/selftest.js";
+
+/* Alvos do orçamento de desenho, da Fase 0 do plano. Verde dentro do alvo,
+   âmbar até o crítico, vermelho acima — o número sozinho não diz se está bom. */
+const CALLS_TARGET = 500;
+const CALLS_CRITICAL = 600;
 
 export class DebugPanel {
   constructor(root, ctx) {
@@ -18,6 +23,15 @@ export class DebugPanel {
     this.el.innerHTML = `
       <h3>Telemetria</h3>
       <div class="row"><span>fps</span><b id="d-fps">—</b></div>
+      <!-- O orçamento do frame. Os alvos vêm da Fase 0 do plano: horda 1
+           abaixo de 350 chamadas, horda 10 abaixo de 500 (crítico: 600).
+           O número fica VERDE dentro do alvo, âmbar no crítico e vermelho
+           acima — sem isso ele é só mais um número na tela. -->
+      <div class="row"><span>draw calls</span><b id="d-calls">—</b></div>
+      <div class="row"><span>triângulos</span><b id="d-tris">—</b></div>
+      <div class="row"><span>texturas / programas</span><b id="d-mem">—</b></div>
+      <div class="row"><span>partículas</span><b id="d-parts">—</b></div>
+      <div class="row"><span>qualidade</span><b id="d-quality">—</b></div>
       <div class="row"><span>passos de física / frame</span><b id="d-steps">—</b></div>
       <div class="row"><span>flechas em voo / cravadas</span><b id="d-arrows">—</b></div>
       <div class="row"><span>velocidade</span><b id="d-speed">—</b></div>
@@ -44,9 +58,13 @@ export class DebugPanel {
         <label>gravidade <b>9.81 m/s²</b></label>
         <input type="range" min="0" max="20" step="0.01" value="9.81">
       </div>
+      <!-- O valor inicial acompanha o CONFIG: o painel mostrava 3,5 m/s
+           enquanto o vento soprava a 12, e um controle que mente sobre o estado
+           atual é pior que nenhum controle. -->
       <div class="slider" data-key="wind">
-        <label>vento base <b>3.5 m/s</b></label>
-        <input type="range" min="0" max="12" step="0.1" value="3.5">
+        <label>vento base <b>${CONFIG.wind.baseSpeed.toFixed(1)} m/s</b></label>
+        <input type="range" min="0" max="20" step="0.1"
+               value="${CONFIG.wind.baseSpeed}">
       </div>
       <div class="slider" data-key="cop">
         <label>centro de pressão <b>13 cm</b></label>
@@ -60,6 +78,18 @@ export class DebugPanel {
         <button data-toggle="aero" class="on">estabilização</button>
         <button data-toggle="vectors">vetores</button>
         <button data-toggle="trace">traçado</button>
+        <button data-toggle="post" class="on">pós-processamento</button>
+      </div>
+
+      <!-- A qualidade recarrega a página: shadow map, densidade da grama e o
+           tamanho do alvo de render são decididos no build da cena, e trocá-los
+           a quente exigiria reconstruir o mundo inteiro. Recarregar é honesto e
+           leva o mesmo tempo. -->
+      <h3>Qualidade</h3>
+      <div class="toggles">
+        <button data-quality="low">baixa</button>
+        <button data-quality="medium">média</button>
+        <button data-quality="high">alta</button>
       </div>
 
       <h3>Critérios de aceite</h3>
@@ -70,6 +100,11 @@ export class DebugPanel {
 
     this.fields = {
       fps: this.el.querySelector("#d-fps"),
+      calls: this.el.querySelector("#d-calls"),
+      tris: this.el.querySelector("#d-tris"),
+      mem: this.el.querySelector("#d-mem"),
+      parts: this.el.querySelector("#d-parts"),
+      quality: this.el.querySelector("#d-quality"),
       steps: this.el.querySelector("#d-steps"),
       arrows: this.el.querySelector("#d-arrows"),
       speed: this.el.querySelector("#d-speed"),
@@ -151,7 +186,20 @@ export class DebugPanel {
           case "trace":
             this.ctx.arrows.setTraceVisible(on);
             break;
+          case "post":
+            this.ctx.renderer.setPostEnabled(on);
+            break;
         }
+      });
+    }
+
+    for (const btn of this.el.querySelectorAll("[data-quality]")) {
+      const nome = btn.dataset.quality;
+      btn.classList.toggle("on", nome === CONFIG.render.quality);
+      btn.addEventListener("click", () => {
+        if (nome === CONFIG.render.quality) return;
+        applyQuality(nome);
+        location.reload();
       });
     }
 
@@ -205,6 +253,26 @@ export class DebugPanel {
 
     const f = this.fields;
     f.fps.textContent = stats.fps.toFixed(0);
+
+    /* O contador de desenho.
+     *
+     * `renderer.info` é zerado a cada `render()`, então o que se lê aqui é o
+     * frame ANTERIOR — um quadro de atraso, invisível para quem está medindo
+     * uma horda que dura minutos. `programs` e `textures` entram junto porque
+     * são o outro lado da conta: dá para baixar as chamadas empilhando
+     * variantes de material e trocar um gargalo por outro. */
+    const info = this.ctx.renderer?.renderer?.info;
+    if (info) {
+      const calls = info.render.calls;
+      f.calls.textContent = String(calls);
+      f.calls.className =
+        calls <= CALLS_TARGET ? "ok" : calls <= CALLS_CRITICAL ? "warn" : "bad";
+      f.tris.textContent = `${(info.render.triangles / 1000).toFixed(0)} k`;
+      f.mem.textContent = `${info.memory.textures} / ${info.programs?.length ?? 0}`;
+    }
+    f.parts.textContent = String(this.ctx.particles?.count ?? 0);
+    f.quality.textContent = CONFIG.render.quality;
+
     f.steps.textContent = String(stats.steps);
     f.arrows.textContent = `${stats.live} / ${stats.stuck}`;
     f.wind.textContent = `${this.ctx.wind.speed.toFixed(1)} m/s @ ${((this.ctx.wind.direction * 180) / Math.PI).toFixed(0)}°`;

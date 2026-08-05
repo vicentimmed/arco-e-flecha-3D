@@ -34,8 +34,11 @@ import {
   playerEntity,
 } from "../src/shared/protocol.js";
 import { ColorPool } from "./colors.js";
-import { pickSpawnPoint, duelPositions } from "./spawnPoints.js";
+import { pickSpawnPoint, duelPositions, elkHuntPositions } from "./spawnPoints.js";
 import { BoarHunt, boarPoints } from "./boarSim.js";
+import { ElkHunt } from "./elkSim.js";
+import { BirdFlock } from "./birdSim.js";
+import { ZombieNight } from "./zombieSim.js";
 import { TargetSeries } from "./targetSeries.js";
 
 let nextPlayerId = 1;
@@ -62,7 +65,21 @@ export class Room {
     this.stuckArrows = [];
 
     this.hunt = new BoarHunt(this.terrain);
+    this.elks = new ElkHunt(this.terrain);
     this.series = new TargetSeries(this.terrain);
+    /* Os pássaros não pertencem a modo nenhum: eles existem enquanto a sala
+       existir. É o que os separa dos porcos e do alce — antes de serem alvo,
+       são o que faz o vale parecer habitado. */
+    this.birds = new BirdFlock(this.terrain);
+    this.zombies = new ZombieNight(this.terrain);
+    /**
+     * As quatro tochas do modo zumbi: acesa (true) ou apagada (false).
+     *
+     * Mora na SALA e não no cliente porque apagar uma tocha muda o campo para
+     * todo mundo — é a única peça de cenário do jogo que os jogadores podem
+     * destruir, e duas telas com tochas diferentes seriam dois campos de jogo.
+     */
+    this.torches = [true, true, true, true];
     /** Quem apertou "quero duelar" e ainda não desistiu. */
     this.duelInvites = new Set();
     this.inviteExpires = 0;
@@ -76,10 +93,10 @@ export class Room {
       () => this.dropSilentConnections(),
       net.heartbeat * 1000,
     );
-    // Os porcos andam num passo próprio, mais lento que o dos jogadores: um
+    // Os bichos andam num passo próprio, mais lento que o dos jogadores: um
     // javali não precisa de 20 Hz para parecer que anda.
     this.boarStep = 1 / net.boarHz;
-    this.boarTimer = setInterval(() => this.tickBoars(), 1000 / net.boarHz);
+    this.boarTimer = setInterval(() => this.tickCreatures(), 1000 / net.boarHz);
   }
 
   /* ---------------------------------------------------------------- modos -- */
@@ -95,7 +112,16 @@ export class Room {
    * quando dois ou mais aceitam. Quem não aceitou continua treinando em paz.
    */
   requestMode(player, modo) {
-    if (modo === "boarHunt" || modo === "series") {
+    /* A noite dos zumbis entra na mesma lista dos modos cooperativos: quem
+       aperta liga para a sala inteira. Não é convite como o duelo porque
+       ninguém é arrastado para brigar com ninguém — a horda é problema de
+       todos, e defender o quadrado sozinho não é o que o modo propõe. */
+    if (
+      modo === "boarHunt" ||
+      modo === "series" ||
+      modo === "elkHunt" ||
+      modo === "zombie"
+    ) {
       this.setMode(this.mode === modo ? "free" : modo);
       return;
     }
@@ -133,24 +159,51 @@ export class Room {
     }
   }
 
+  /**
+   * Troca de modo — e o mundo RECOMEÇA.
+   *
+   * Antes cada modo só desligava o que era dele: sair da caçada parava as ondas
+   * mas deixava os porcos soltos na mão andando pelo campo, e o placar seguia
+   * acumulando pontos de três modos diferentes na mesma coluna. O resultado era
+   * que ninguém sabia mais o que estava vendo — porcos de uma partida que
+   * acabou passeando no meio dos alvos em série, e um placar que misturava
+   * abates de meia hora atrás com o tiro de agora.
+   *
+   * Ligar um modo agora é começar do zero: campo limpo, placar zerado. É o que
+   * transforma "trocar de modo" em "começar uma partida".
+   */
   setMode(modo) {
     if (this.mode === modo) return;
     this.mode = modo;
 
-    if (modo === "boarHunt") {
-      this.hunt.start(this.playerPositions());
-    } else {
-      this.hunt.stop();
-      this.broadcastAll({ t: S2C.BOARS, b: [], clear: true });
-    }
+    this.resetWorld();
+
+    if (modo === "boarHunt") this.hunt.start(this.playerPositions());
 
     if (modo === "series") {
       this.series.start();
       this.lineUpForSeries();
       this.broadcastAll({ t: S2C.SERIES, target: this.series.view() });
-    } else if (this.series.active) {
-      this.series.stop();
-      this.broadcastAll({ t: S2C.SERIES, target: null });
+    }
+
+    if (modo === "elkHunt") {
+      // A ORDEM importa: os arqueiros primeiro, o alce depois. `pickElkSpawn`
+      // escolhe o ponto mais longe de todo mundo, então ele só sabe onde é "o
+      // lado oposto" depois que todos já foram postos na linha — e precisa
+      // receber os pontos NOVOS, não os que os clientes reportaram até agora.
+      this.elks.start(this.lineUpForElk());
+    }
+
+    /* A noite cai e a partida começa na hora — sem convite e sem espera.
+       Diferente do duelo, aqui não há por que pedir licença: o modo é
+       cooperativo e ninguém é arrastado para brigar com ninguém. */
+    if (modo === "zombie") {
+      for (const p of this.players.values()) this.resetZombieLives(p);
+      this.centerForZombie();
+      const horda = this.zombies.start();
+      this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
+      if (horda) this.broadcastAll({ t: S2C.HORDE, ...horda });
+      this.broadcastZombieStatus();
     }
 
     if (modo === "duel") this.startDuel();
@@ -161,6 +214,37 @@ export class Room {
 
     this.broadcastMode();
     this.log(`modo: ${modo}`);
+  }
+
+  /**
+   * Campo limpo e placar zerado.
+   *
+   * Varre TUDO, inclusive os bichos soltos na mão — que antes sobreviviam à
+   * troca de modo de propósito. A regra mudou porque o pedido mudou: "ao
+   * iniciar cada modo, tudo é resetado". Um alce avulso passeando no meio de
+   * uma série de alvos é exatamente o tipo de sobra que a regra nova elimina.
+   */
+  resetWorld() {
+    this.hunt.stop();
+    this.hunt.boars = [];
+    this.elks.stop();
+    this.elks.elks = [];
+    this.birds.reset();
+    this.zombies.stop();
+    // As tochas voltam acesas: a partida seguinte não herda o escuro que a
+    // anterior produziu.
+    this.torches = [true, true, true, true];
+    this.series.stop();
+    this.stuckArrows = [];
+    for (const p of this.players.values()) p.score = emptyScore();
+
+    this.broadcastAll({ t: S2C.BOARS, b: [], clear: true });
+    this.broadcastAll({ t: S2C.ELKS, e: [], clear: true });
+    this.broadcastAll({ t: S2C.ZOMBIES, z: [], clear: true });
+    this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
+    this.broadcastAll({ t: S2C.SERIES, target: null });
+    this.broadcastAll({ t: S2C.WORLD_RESET, mode: this.mode });
+    this.broadcastScores();
   }
 
   /**
@@ -192,6 +276,45 @@ export class Room {
         invulnUntil: p.invulnUntil,
       });
     });
+  }
+
+  /**
+   * Põe os arqueiros lado a lado num extremo do vale, para a caçada ao alce.
+   *
+   * Todos juntos e num lado só: é isso que dá sentido à investida. Espalhados
+   * pelo mapa, cada um encontraria o alce sozinho, em silêncio, e o modo viraria
+   * uma sequência de duelos privados com um bicho. Na linha, quem não está sendo
+   * perseguido vê o amigo correndo e atira em quem está atrás dele.
+   */
+  lineUpForElk() {
+    const jogadores = [...this.players.values()];
+    if (!jogadores.length) return [];
+    const pontos = elkHuntPositions(this.terrain, jogadores.length);
+    const postos = [];
+
+    jogadores.forEach((p, i) => {
+      const ponto = pontos[i] ?? pontos[0];
+      p.alive = true;
+      p.invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
+      postos.push({ id: p.id, alive: true, x: ponto.x, y: ponto.y, z: ponto.z });
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: p.id,
+        x: round(ponto.x),
+        z: round(ponto.z),
+        y: round(ponto.y),
+        drop: 2,
+        invulnUntil: p.invulnUntil,
+      });
+    });
+
+    /* Devolve os pontos ATRIBUÍDOS, e é por isso que este método devolve algo.
+       `playerPositions()` lê a última pose REPORTADA por cada cliente, e neste
+       instante ela ainda é a de antes do teleporte — o pacote de spawn acabou
+       de sair e a pose nova só volta no próximo envio, 50 ms depois. Escolher o
+       ponto do alce por ela punha o bicho ao lado dos arqueiros em vez de no
+       extremo oposto, que é exatamente o contrário do que o modo pede. */
+    return postos;
   }
 
   /** Alguém acertou o alvo da vez. */
@@ -254,18 +377,32 @@ export class Room {
 
   /* ---------------------------------------------------------------- porcos - */
 
+  /**
+   * Onde está cada jogador. O `id` e o `alive` vão junto porque o alce PRECISA
+   * escolher uma vítima — os porcos só precisam saber de quem fugir.
+   */
   playerPositions() {
     return [...this.players.values()]
       .filter((p) => p.state)
-      .map((p) => ({ x: p.state.p[0], z: p.state.p[2] }));
+      .map((p) => ({
+        id: p.id,
+        alive: p.alive,
+        x: p.state.p[0],
+        y: p.state.p[1],
+        z: p.state.p[2],
+      }));
   }
 
-  tickBoars() {
-    // Roda enquanto houver porco em campo, mesmo com a caçada desligada: os
-    // avulsos precisam andar.
+  /**
+   * Um passo do mundo dos bichos: porcos, alces e pássaros.
+   *
+   * Os três andam no mesmo relógio de 10 Hz, mas só os pássaros andam SEMPRE —
+   * porcos e alces só existem quando alguém os colocou em campo.
+   */
+  tickCreatures() {
     if (this.players.size === 0) return;
-    if (!this.hunt.active && this.hunt.boars.length === 0) return;
     const agora = this.now();
+    const jogadores = this.playerPositions();
 
     // Convite de duelo que ninguém aceitou expira sozinho: um aviso pendurado
     // para sempre na tela vira ruído.
@@ -276,8 +413,391 @@ export class Room {
       this.broadcastMode();
     }
 
-    this.hunt.update(this.boarStep, this.playerPositions(), agora);
-    this.broadcastAll({ t: S2C.BOARS, time: agora, b: this.hunt.view() });
+    // Roda enquanto houver porco em campo, mesmo com a caçada desligada: os
+    // avulsos precisam andar.
+    if (this.hunt.active || this.hunt.boars.length) {
+      this.hunt.update(this.boarStep, jogadores, agora);
+      // A onda nova é anunciada ANTES das poses: quem recebe já sabe por que
+      // apareceram seis javalis de uma vez.
+      const onda = this.hunt.takeWaveAnnouncement();
+      if (onda) {
+        this.broadcastAll({ t: S2C.WAVE, ...onda });
+        this.log(`onda ${onda.n}: ${onda.size} porcos`);
+      }
+      this.broadcastAll({ t: S2C.BOARS, time: agora, b: this.hunt.view() });
+    }
+
+    if (this.elks.active || this.elks.elks.length) {
+      const chifrados = this.elks.update(this.boarStep, jogadores, agora);
+      for (const id of chifrados) this.registerGore(id);
+      this.broadcastAll({ t: S2C.ELKS, time: agora, e: this.elks.view() });
+    }
+
+    if (this.mode === "zombie") this.tickZombies(agora, jogadores);
+
+    /* Os pássaros somem no modo zumbi. Não é economia — é o clima: um bando
+       cantando e circulando sobre um cerco de mortos-vivos desmancha a noite
+       que o modo inteiro constrói. */
+    if (this.mode !== "zombie") {
+      this.birds.update(this.boarStep, agora);
+      this.broadcastAll({ t: S2C.BIRDS, time: agora, k: this.birds.view() });
+    }
+  }
+
+  /**
+   * O alce chifrou alguém.
+   *
+   * A morte é do SERVIDOR, e é a única do jogo que é. As mortes por flecha são
+   * declaradas por quem atirou, porque quem atirou é quem viu o acerto e o tiro
+   * precisa parecer instantâneo. Aqui não existe "quem viu": o alce é do
+   * servidor, a investida é do servidor, e a cabeçada também.
+   */
+  registerGore(victimId) {
+    const vitima = this.playerById(victimId);
+    if (!vitima || !vitima.alive) return;
+    if (this.now() < vitima.invulnUntil) return;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+
+    // Direção do tranco: do alce para a vítima. É ela que joga o corpo mole
+    // para o lado certo — o mesmo caminho de uma morte por flecha.
+    const alce = this.elks.elks.find((e) => !e.dead && e.state !== "graze");
+    let contato = null;
+    let impulso = null;
+    if (alce && vitima.state) {
+      const dx = vitima.state.p[0] - alce.x;
+      const dz = vitima.state.p[2] - alce.z;
+      const len = Math.hypot(dx, dz) || 1;
+      contato = [vitima.state.p[0], vitima.state.p[1] + 1.1, vitima.state.p[2]];
+      // Uma cabeçada de alce vale bem mais que uma flechada: o corpo voa.
+      impulso = [(dx / len) * 130, 55, (dz / len) * 130];
+    }
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      victimColor: vitima.color,
+      // `killer: 0` não é jogador nenhum — é como o feed sabe que quem matou
+      // foi o bicho. Nenhum id de sala vale zero (o contador começa em 1).
+      killer: 0,
+      killerName: "Alce",
+      killerColor: "#c8b48a",
+      distance: null,
+      c: contato,
+      v: impulso,
+      // Como a pessoa morreu. O cliente usa isto para escolher o som: uma
+      // cabeçada tem uma pancada seca que uma flechada não tem.
+      cause: "gore",
+    });
+    this.broadcastScores();
+
+    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+    setTimeout(() => {
+      if (this.players.has(vitima.conn)) this.spawn(vitima);
+    }, espera).unref?.();
+  }
+
+  /* ---------------------------------------------------------------- zumbis - */
+
+  /** Devolve as três vidas e tira o jogador do estado de caído. */
+  resetZombieLives(player) {
+    player.zLives = CONFIG.modes.zombie.lives;
+    player.zDownUntil = 0;
+  }
+
+  /**
+   * Põe todo mundo no centro, dentro do quadrado das tochas.
+   *
+   * Num anel pequeno e não no ponto exato: dois arqueiros nascendo na mesma
+   * coordenada se empurram e um deles sai voando para fora da luz — que neste
+   * modo é morte.
+   */
+  centerForZombie() {
+    const Z = CONFIG.modes.zombie;
+    const jogadores = [...this.players.values()];
+    const n = jogadores.length;
+
+    jogadores.forEach((p, i) => {
+      const ang = (i / Math.max(1, n)) * Math.PI * 2;
+      const raio = n > 1 ? 3.0 : 0;
+      const x = Z.centerX + Math.sin(ang) * raio;
+      const z = Z.centerZ + Math.cos(ang) * raio;
+      p.alive = true;
+      p.invulnUntil = this.now() + Z.invulnerability * 1000;
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: p.id,
+        x: round(x),
+        z: round(z),
+        y: round(this.terrain.heightAt(x, z)),
+        drop: 2,
+        invulnUntil: p.invulnUntil,
+      });
+    });
+  }
+
+  /**
+   * Um passo da noite: move a horda, aplica os ataques, vira a horda e checa
+   * quem fugiu para o escuro.
+   */
+  tickZombies(agora, jogadores) {
+    const Z = CONFIG.modes.zombie;
+    if (this.zombies.over) return;
+
+    const r = this.zombies.update(this.boarStep, jogadores, agora);
+
+    for (const ataque of r.ataques) this.registerZombieAttack(ataque.playerId);
+    if (r.horda) {
+      this.broadcastAll({ t: S2C.HORDE, ...r.horda });
+      this.broadcastZombieStatus();
+      this.log(`horda ${r.horda.n}: ${r.horda.size} zumbis`);
+    }
+    if (r.venceu) {
+      this.broadcastAll({ t: S2C.ZOMBIE_OVER, reason: "win", horde: Z.hordes });
+      this.log("modo zumbi: venceram as dez hordas");
+    }
+
+    this.checkZombieBounds(agora);
+    this.checkZombieWipe(agora);
+    this.broadcastAll({ t: S2C.ZOMBIES, time: agora, z: this.zombies.view() });
+  }
+
+  /**
+   * Quem se afastou demais do centro morre.
+   *
+   * É a regra que sustenta o modo inteiro: sem ela, a resposta ótima a uma horda
+   * de bichos lentos é caminhar para longe e atirar de fora do alcance, e o
+   * cerco — que é a única ameaça que eles oferecem — deixa de existir.
+   */
+  checkZombieBounds(agora) {
+    const Z = CONFIG.modes.zombie;
+    for (const p of this.players.values()) {
+      if (!p.alive || !p.state) continue;
+      if (agora < p.invulnUntil) continue;
+      /* A pose é a última REPORTADA, e ela chega a 20 Hz — logo depois de um
+         `SPAWN` ela ainda é a de antes, lá do outro lado do vale. Sem esta
+         checagem o jogador era morto pelo escuro no instante em que o modo
+         começava, por estar num lugar onde já não estava. A invulnerabilidade
+         cobre o caso normal; isto cobre o cliente que engasgou. */
+      if (p.stateTime < p.invulnUntil - Z.invulnerability * 1000) continue;
+      const d = Math.hypot(p.state.p[0] - Z.centerX, p.state.p[2] - Z.centerZ);
+      if (d <= Z.safeRadius) continue;
+      this.registerZombieAttack(p.id, "dark");
+    }
+  }
+
+  /**
+   * Uma vida a menos.
+   *
+   * Zerou as três, o jogador fica CAÍDO por `downRespawnDelay` e volta com as
+   * vidas cheias. Enquanto isso ele não conta como vivo para os zumbis — que é o
+   * que permite a horda seguir atrás de quem sobrou em vez de rondar um corpo.
+   */
+  registerZombieAttack(victimId, causa = "zombie") {
+    const Z = CONFIG.modes.zombie;
+    const vitima = this.playerById(victimId);
+    if (!vitima || !vitima.alive) return;
+    if (this.now() < vitima.invulnUntil) return;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+    vitima.zLives = Math.max(0, (vitima.zLives ?? Z.lives) - 1);
+
+    const caiu = vitima.zLives === 0;
+    const espera = (caiu ? Z.downRespawnDelay : Z.hitRespawnDelay) * 1000;
+    vitima.zDownUntil = this.now() + espera;
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      victimColor: vitima.color,
+      killer: 0,
+      killerName: causa === "dark" ? "O escuro" : "Zumbi",
+      killerColor: causa === "dark" ? "#4a4a6a" : "#7fa05a",
+      distance: null,
+      c: null,
+      v: null,
+      cause: causa,
+    });
+    this.broadcastScores();
+    this.broadcastZombieStatus();
+
+    setTimeout(() => {
+      if (!this.players.has(vitima.conn)) return;
+      if (this.mode !== "zombie" || this.zombies.over) return;
+      if (caiu) this.resetZombieLives(vitima);
+      vitima.zDownUntil = 0;
+      this.centerOne(vitima);
+      this.broadcastZombieStatus();
+    }, espera).unref?.();
+  }
+
+  /** Devolve UM jogador ao centro do quadrado. */
+  centerOne(player) {
+    const Z = CONFIG.modes.zombie;
+    const ang = Math.random() * Math.PI * 2;
+    const raio = Math.random() * 3.0;
+    const x = Z.centerX + Math.sin(ang) * raio;
+    const z = Z.centerZ + Math.cos(ang) * raio;
+    player.alive = true;
+    player.invulnUntil = this.now() + Z.invulnerability * 1000;
+    this.broadcastAll({
+      t: S2C.SPAWN,
+      id: player.id,
+      x: round(x),
+      z: round(z),
+      y: round(this.terrain.heightAt(x, z)),
+      drop: 2,
+      invulnUntil: player.invulnUntil,
+    });
+  }
+
+  /**
+   * Todo mundo CAÍDO ao mesmo tempo: game over.
+   *
+   * "Caído" é `zLives === 0` e fora de campo — não é simplesmente "morto".
+   * A diferença decide se o modo é jogável: quem morre com vidas de sobra volta
+   * em 2 s, e checar só por "ninguém vivo" encerrava a partida na primeira morte
+   * de quem estivesse jogando sozinho, com duas vidas ainda no bolso.
+   *
+   * Com as três vidas gastas, o jogador espera 10 s. É a sobreposição dessas
+   * esperas que acaba com a noite: se todos estão nesses 10 s ao mesmo tempo,
+   * não sobrou ninguém para segurar o quadrado.
+   */
+  checkZombieWipe(agora) {
+    if (this.zombies.over || !this.players.size) return;
+    for (const p of this.players.values()) {
+      if (p.alive) return;
+      if ((p.zLives ?? CONFIG.modes.zombie.lives) > 0) return;
+    }
+
+    this.zombies.gameOver("wipe");
+    this.broadcastAll({
+      t: S2C.ZOMBIE_OVER,
+      reason: "wipe",
+      horde: this.zombies.horde,
+    });
+    this.broadcastAll({ t: S2C.ZOMBIES, z: [], clear: true });
+    this.log(`modo zumbi: game over na horda ${this.zombies.horde}`);
+  }
+
+  /** Uma flecha entrou num zumbi. Quem atirou declara se foi na cabeça. */
+  registerZombieHit(player, msg) {
+    if (this.mode !== "zombie" || this.zombies.over) return;
+    const Z = CONFIG.modes.zombie;
+    const r = this.zombies.hit(msg.id, msg.head === true);
+    if (!r || !r.morreu) return;
+
+    this.zombies.kill(msg.id, this.now());
+    const pontos = r.head ? Z.headPoints : Z.bodyPoints;
+    player.score.points += pontos;
+    player.score.kills++;
+
+    this.broadcastAll({
+      t: S2C.ZOMBIE_DEATH,
+      id: msg.id,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      points: pontos,
+      head: r.head,
+      distance: msg.d ?? 0,
+    });
+    this.broadcastScores();
+  }
+
+  /** Uma flecha apagou uma tocha. */
+  registerTorchHit(player, msg) {
+    if (this.mode !== "zombie") return;
+    const i = msg.i | 0;
+    if (i < 0 || i >= this.torches.length || !this.torches[i]) return;
+    this.torches[i] = false;
+    this.broadcastAll({ t: S2C.TORCHES, t4: this.torches, hit: i });
+    this.log(`${player.name} apagou a tocha ${i}`);
+  }
+
+  zombieStatus() {
+    return {
+      horde: this.zombies.horde,
+      size: this.zombies.horde ? this.zombies.hordeSize(this.zombies.horde) : 0,
+      remaining: this.zombies.vivos,
+      over: this.zombies.over,
+      reason: this.zombies.overReason,
+      lives: [...this.players.values()].map((p) => ({
+        id: p.id,
+        lives: p.zLives ?? CONFIG.modes.zombie.lives,
+        until: p.zDownUntil ?? 0,
+      })),
+    };
+  }
+
+  broadcastZombieStatus() {
+    this.broadcastAll({ t: S2C.ZOMBIE_STATUS, ...this.zombieStatus() });
+  }
+
+  /** Uma flecha entrou no alce. A vida e a morte são contadas aqui. */
+  registerElkHit(player, msg) {
+    const pos = player.state
+      ? { x: player.state.p[0], z: player.state.p[2] }
+      : null;
+    const r = this.elks.hit(msg.id, player.id, pos, this.playerPositions());
+    if (!r) return; // alce já morto, ou id desconhecido
+
+    const E = CONFIG.elk;
+    if (!r.morreu) {
+      if (!r.elk.fun) player.score.points += E.hitPoints;
+      this.broadcastAll({
+        t: S2C.ELK_HIT,
+        id: r.elk.id,
+        health: r.elk.health / E.maxHealth,
+        killer: player.id,
+      });
+      if (!r.elk.fun) this.broadcastScores();
+      return;
+    }
+
+    const morto = this.elks.kill(msg.id, this.now());
+    if (!morto) return;
+    const pontos = morto.fun ? 0 : E.killPoints;
+    if (!morto.fun) {
+      player.score.elks = (player.score.elks ?? 0) + 1;
+      player.score.points += pontos;
+    }
+
+    this.broadcastAll({
+      t: S2C.ELK_DEATH,
+      id: morto.id,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      points: pontos,
+      fun: morto.fun,
+    });
+    if (!morto.fun) this.broadcastScores();
+  }
+
+  /** Uma flecha acertou um pássaro. */
+  registerBirdHit(player, msg) {
+    const ave = this.birds.kill(msg.id, this.now());
+    if (!ave) return; // dois acertaram quase junto: o primeiro levou
+
+    const pontos = CONFIG.birds.points;
+    player.score.birds = (player.score.birds ?? 0) + 1;
+    player.score.points += pontos;
+
+    this.broadcastAll({
+      t: S2C.BIRD_DEATH,
+      id: ave.id,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      points: pontos,
+      distance: msg.d ?? 0,
+    });
+    this.broadcastScores();
   }
 
   registerBoarKill(player, msg) {
@@ -376,6 +896,10 @@ export class Room {
       alive: true,
       invulnUntil: 0,
       duelReady: false,
+      /* Vidas do modo zumbi. Nascem cheias mesmo fora do modo: quem entra no
+         meio de uma noite já em andamento entra com as três, e não caído. */
+      zLives: CONFIG.modes.zombie.lives,
+      zDownUntil: 0,
       lastManualRespawn: -Infinity,
       ping: 0,
       lastSeen: Date.now(),
@@ -411,6 +935,11 @@ export class Room {
         .map((p) => ({ ...publicView(p), state: p.state })),
       arrows: this.stuckArrows,
       boars: this.hunt.boars.length ? this.hunt.view() : [],
+      elks: this.elks.elks.length ? this.elks.view() : [],
+      birds: this.mode === "zombie" ? [] : this.birds.view(),
+      zombies: this.zombies.zombies.length ? this.zombies.view() : [],
+      torches: this.torches,
+      zombieStatus: this.mode === "zombie" ? this.zombieStatus() : null,
       series: this.series.view(),
       mode: this.modeView(),
       scores: this.scores(),
@@ -431,6 +960,25 @@ export class Room {
     this.broadcast({ t: S2C.LEAVE, id: player.id, name: player.name });
     this.broadcastScores();
     this.log(`saiu: ${player.name} (#${player.id}) — ${this.size} na sala`);
+
+    /* Sala vazia = mundo zerado, AGORA.
+     *
+     * A sala sobrevive 30 s ao último jogador (ver `RoomHost`), para que uma
+     * queda de rede curta não apague a sessão de quem estava jogando sozinho.
+     * O efeito colateral era que quem recarregava a página caía de volta num
+     * modo que já tinha acabado — com o alce da partida anterior pastando lá,
+     * sem ninguém ter apertado nada. Quem chega numa sala sem gente tem de
+     * encontrar o vale como ele começa: modo livre, sem bicho grande, com os
+     * pássaros (esses existem sempre). */
+    if (this.players.size === 0) {
+      // Sem condicionar ao modo: um alce solto com a tecla `L` sobrevive ao
+      // modo livre, e ele é justamente o que não pode estar lá quando o
+      // próximo jogador entrar.
+      this.mode = "free";
+      this.resetWorld();
+      this.log("sala vazia: mundo zerado");
+    }
+
     this.onEmpty?.(this);
   }
 
@@ -524,8 +1072,14 @@ export class Room {
         // Só o que fica cravado no mundo entra no snapshot: bicho e gente se
         // mexem, e uma flecha presa neles não faz sentido para quem chega
         // depois.
-        // Uma flecha caindo perto espanta os porcos ao redor.
-        if (this.hunt.active && msg.p) this.hunt.scareNear(msg.p[0], msg.p[2]);
+        /* Uma flecha caindo perto espanta os porcos ao redor — e levanta os
+           pássaros pousados, mesmo quando ela não acertou nada. É o que o
+           pedido descreve e o que impede o tiro fácil: errar custa o alvo, e o
+           segundo tiro é sempre mais difícil que o primeiro. */
+        if (msg.p) {
+          if (this.hunt.active) this.hunt.scareNear(msg.p[0], msg.p[2]);
+          this.birds.scareNear(msg.p[0], msg.p[2]);
+        }
 
         if (msg.k === "target" || msg.k === "scenery" || msg.k === "terrain") {
           this.stuckArrows.push({
@@ -554,6 +1108,35 @@ export class Room {
       case C2S.BOAR_HIT:
         this.registerBoarKill(player, msg);
         break;
+
+      case C2S.ELK_HIT:
+        this.registerElkHit(player, msg);
+        break;
+
+      case C2S.BIRD_HIT:
+        this.registerBirdHit(player, msg);
+        break;
+
+      case C2S.ZOMBIE_HIT:
+        this.registerZombieHit(player, msg);
+        break;
+
+      case C2S.TORCH_HIT:
+        this.registerTorchHit(player, msg);
+        break;
+
+      case C2S.SPAWN_ELK: {
+        const criado = this.elks.spawnOne(this.playerPositions(), true);
+        if (criado) {
+          this.broadcastAll({
+            t: S2C.ELKS,
+            time: this.now(),
+            e: this.elks.view(),
+          });
+          this.log(`${player.name} soltou um alce`);
+        }
+        break;
+      }
 
       case C2S.SERIES_HIT:
         this.registerSeriesHit(player, msg);
@@ -643,6 +1226,11 @@ export class Room {
       killerColor: killer.color,
       victimColor: vitima.color,
       distance: msg.d ?? null,
+      // Repassados sem julgamento: são a entrada do corpo mole na tela de todo
+      // mundo. Ver `game/ragdoll.js` para por que eles precisam trafegar.
+      c: msg.c ?? null,
+      v: msg.v ?? null,
+      cause: "arrow",
     });
     this.broadcastScores();
 
@@ -749,6 +1337,7 @@ export class Room {
     clearInterval(this.sweepTimer);
     clearInterval(this.boarTimer);
     this.hunt.stop();
+    this.elks.stop();
     this.players.clear();
   }
 }
@@ -823,7 +1412,7 @@ export class RoomHost {
  * tabela até a pessoa reentrar na sala.
  */
 function emptyScore() {
-  return { kills: 0, deaths: 0, boars: 0, targets: 0, points: 0 };
+  return { kills: 0, deaths: 0, boars: 0, elks: 0, birds: 0, targets: 0, points: 0 };
 }
 
 function publicView(p) {

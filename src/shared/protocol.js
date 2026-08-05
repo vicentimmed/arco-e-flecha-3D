@@ -20,8 +20,22 @@
    simplesmente nunca acontecia nada do outro lado.
    --------------------------------------------------------------------------- */
 
-/** Sobe quando o formato quebra. O servidor recusa quem não bate. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Sobe quando o formato quebra. O servidor recusa quem não bate.
+ *
+ * 2 — entraram alces, pássaros e o reinício de mundo, e a mensagem de morte
+ * passou a carregar o impacto (`c`, `v`) que alimenta o corpo mole. Uma aba
+ * antiga que continuasse conectada não veria bicho nenhum e cairia sempre para
+ * o mesmo lado: melhor recusar e pedir para recarregar do que deixar duas
+ * pessoas jogando partidas diferentes na mesma sala.
+ *
+ * 3 — entrou o modo zumbi, com hordas, vidas, tochas quebráveis e um sexto
+ * valor possível para `mode`. Uma aba antiga que continuasse conectada veria a
+ * sala anunciar um modo que ela não sabe desenhar: ficaria de dia, sem tochas e
+ * sem zumbi nenhum, atirando num campo vazio enquanto todos os outros defendem
+ * um quadrado de luz.
+ */
+export const PROTOCOL_VERSION = 3;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -44,10 +58,20 @@ export const C2S = {
   BOAR_HIT: "boarHit",
   /** Soltar um porco avulso, só por diversão — não vale ponto. */
   SPAWN_BOAR: "spawnBoar",
+  /** "Acertei este alce": `{ id }`. O dano e a morte quem decide é a sala. */
+  ELK_HIT: "elkHit",
+  /** Soltar um alce avulso (tecla L), em qualquer modo. */
+  SPAWN_ELK: "spawnElk",
+  /** "Acertei este pássaro": `{ id }`. */
+  BIRD_HIT: "birdHit",
   /** "Acertei o alvo da série": `{ seq }`. */
   SERIES_HIT: "seriesHit",
   /** Zerar o placar de todos. */
   RESET_SCORES: "resetScores",
+  /** "Acertei este zumbi": `{ id, head, d }`. `head` decide se morre na hora. */
+  ZOMBIE_HIT: "zombieHit",
+  /** "Acertei esta tocha": `{ i }`. Apaga a chama e a luz dela. */
+  TORCH_HIT: "torchHit",
   /** Sincronismo de relógio: `{ c: clientClock }`. */
   PING: "ping",
 };
@@ -79,6 +103,29 @@ export const S2C = {
   BOARS: "boars",
   /** Porco morto: `{ id, killer, points, distance }`. */
   BOAR_DEATH: "boarDeath",
+  /** Nova onda da caçada: `{ n, size }`. Vira faixa na tela e toque de trompa. */
+  WAVE: "wave",
+  /** Transformações dos alces, 10 Hz — com a fração de vida de cada um. */
+  ELKS: "elks",
+  /** Alce levou uma flecha: `{ id, health, killer }` — dor, não morte. */
+  ELK_HIT: "elkHit",
+  /** Alce derrubado: `{ id, killer, points }`. */
+  ELK_DEATH: "elkDeath",
+  /** Alce chifrou alguém: a morte vem pela mensagem `KILL`, esta é o aviso. */
+  ELK_GORE: "elkGore",
+  /** Transformações dos pássaros, 10 Hz. */
+  BIRDS: "birds",
+  /** Pássaro abatido: `{ id, killer, points }`. */
+  BIRD_DEATH: "birdDeath",
+  /**
+   * O mundo recomeçou (troca de modo).
+   *
+   * Existe porque "trocar de modo" passou a significar recomeçar de verdade:
+   * bichos, flechas cravadas e placar. Sem uma mensagem própria, cada cliente
+   * teria de deduzir isso da mudança de modo — e deduzir dá margem a cada um
+   * limpar uma coisa diferente.
+   */
+  WORLD_RESET: "worldReset",
   /** O alvo da vez na série (ou null quando o modo sai). */
   SERIES: "series",
   /** Alvo da série derrubado — explosão, pontos e o próximo. */
@@ -87,6 +134,19 @@ export const S2C = {
   SCORES: "scores",
   /** Alguém zerou o placar: `{ by }`. */
   SCORES_RESET: "scoresReset",
+  /** Transformações dos zumbis, 10 Hz: `{ z: [...] }`. */
+  ZOMBIES: "zombies",
+  /** Zumbi derrubado: `{ id, killer, points, head }`. `head` = pegou fogo. */
+  ZOMBIE_DEATH: "zombieDeath",
+  /** Horda nova: `{ n, size }`. Vira a faixa "HORDA n" na tela. */
+  HORDE: "horde",
+  /** Estado das quatro tochas: `{ t4: [true,true,false,true] }`.
+   *  A chave é `t4` e não `t` porque `t` é o tipo da mensagem — ver o cabeçalho. */
+  TORCHES: "torches",
+  /** Vidas, caídos e contadores do modo zumbi. Ver `Room.zombieStatus()`. */
+  ZOMBIE_STATUS: "zombieStatus",
+  /** Acabou: `{ reason, horde }`. Todos caíram, ou a horda 10 foi vencida. */
+  ZOMBIE_OVER: "zombieOver",
   /** Resposta do sincronismo: `{ c, s }`. */
   PONG: "pong",
 };
@@ -187,6 +247,10 @@ export function displayName(raw, max, fallback = "Arqueiro") {
  */
 export const playerEntity = (id) => `p${id}`;
 export const boarEntity = (id) => `b${id}`;
+export const elkEntity = (id) => `e${id}`;
+export const birdEntity = (id) => `v${id}`; // v de "voador": o `b` já é do porco
+export const zombieEntity = (id) => `z${id}`;
+export const torchEntity = (id) => `t${id}`;
 
 /** O caminho de volta: `"p3"` → `3`. Devolve null se não for de jogador. */
 export function playerIdFrom(entityId) {
@@ -196,6 +260,26 @@ export function playerIdFrom(entityId) {
 /** `"b7"` → `7`. */
 export function boarIdFrom(entityId) {
   return idFrom(entityId, "b");
+}
+
+/** `"e2"` → `2`. */
+export function elkIdFrom(entityId) {
+  return idFrom(entityId, "e");
+}
+
+/** `"v9"` → `9`. */
+export function birdIdFrom(entityId) {
+  return idFrom(entityId, "v");
+}
+
+/** `"z12"` → `12`. */
+export function zombieIdFrom(entityId) {
+  return idFrom(entityId, "z");
+}
+
+/** `"t2"` → `2`. */
+export function torchIdFrom(entityId) {
+  return idFrom(entityId, "t");
 }
 
 function idFrom(entityId, prefixo) {

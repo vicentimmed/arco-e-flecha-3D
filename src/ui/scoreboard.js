@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   O placar (Tab) e o kill feed.
+   O placar (0) e o kill feed.
 
    Uma tabela só para os dois modos. Sem isto o duelo e a caçada não têm como
    ser lidos: matar alguém ou abater um porco vira um número que ninguém vê.
@@ -18,9 +18,13 @@ const COLUNAS = [
   { chave: "kills", titulo: "Abates", modo: "duel" },
   { chave: "deaths", titulo: "Mortes", modo: "duel" },
   { chave: "boars", titulo: "Porcos", modo: "boarHunt" },
+  { chave: "elks", titulo: "Alces", modo: "elkHunt" },
+  // Os pássaros não têm modo: eles voam em todas as partidas, e a coluna nunca
+  // se destaca por isso mesmo — ela é um extra, não um objetivo.
+  { chave: "birds", titulo: "Aves", modo: null },
   { chave: "targets", titulo: "Alvos", modo: "series" },
-  // Pontos servem aos DOIS modos de pontaria: porco longe e alvo longe.
-  { chave: "points", titulo: "Pontos", modo: ["boarHunt", "series"] },
+  // Pontos servem a TODOS os modos de pontaria: porco longe, alvo longe, alce.
+  { chave: "points", titulo: "Pontos", modo: ["boarHunt", "series", "elkHunt"] },
   { chave: "ping", titulo: "Ping", modo: null },
 ];
 
@@ -91,15 +95,23 @@ export class Scoreboard {
 
   render() {
     const nomeDoModo =
-      { duel: "Duelo", boarHunt: "Caçada aos porcos", series: "Alvos em série" }[
-        this.mode
-      ] ?? "Livre";
+      {
+        duel: "Duelo",
+        boarHunt: "Caçada aos porcos",
+        series: "Alvos em série",
+        elkHunt: "Caçada ao alce",
+      }[this.mode] ?? "Livre";
     this.modoEl.textContent = nomeDoModo;
     this.contagemEl.textContent = `${this.scores.length} na sala`;
 
     // Ordena pela coluna que interessa AO MODO — no duelo, quem mais matou; na
     // caçada, quem fez mais pontos; no livre, quem chegou primeiro.
-    const chave = { duel: "kills", boarHunt: "points", series: "points" }[this.mode];
+    const chave = {
+      duel: "kills",
+      boarHunt: "points",
+      series: "points",
+      elkHunt: "points",
+    }[this.mode];
     const linhas = [...this.scores];
     if (chave) linhas.sort((a, b) => (b[chave] ?? 0) - (a[chave] ?? 0));
 

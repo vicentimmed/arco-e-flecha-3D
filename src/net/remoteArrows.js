@@ -81,6 +81,17 @@ export class RemoteArrows {
     }
 
     if (!flecha) return; // chegamos tarde: a flecha já expirou por tempo de vida
+
+    /* Alvo da série: o alvo explode e some, então a flecha some com ele.
+       Congelá-la deixaria a cópia pendurada no ar a duzentos metros — o mesmo
+       defeito que a flecha do dono tinha (ver `hitResolver.resolveSeriesHit`),
+       e ele precisa ser corrigido nos dois lados, senão quem atirou vê o campo
+       limpo e todo mundo continua vendo flechas flutuando. */
+    if (msg.k === "seriesTarget") {
+      this.arrows.remove(flecha);
+      return;
+    }
+
     const corpoAlvo = alvo?.body ?? null;
     const dinamico = corpoAlvo ? corpoAlvo.bodyType() === 0 : false;
     flecha.snapTo(

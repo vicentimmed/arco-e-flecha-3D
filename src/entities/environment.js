@@ -24,6 +24,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { TerrainField, pathCenterX } from "../shared/terrainField.js";
+import { SUN_DIR } from "../core/sun.js";
 import { clamp, smoothstep, makeRandom } from "../utils/math.js";
 
 // Reexportado porque metade do jogo importa `pathCenterX` daqui.
@@ -539,7 +540,29 @@ function scatterBoulders(scene, physics, terrain, random) {
 
     for (let i = 0; i < list.length; i++) {
       const b = list[i];
-      dummy.position.set(b.x, terrain.heightAt(b.x, b.z) - b.radius * 0.34, b.z);
+      /* ASSENTAMENTO (Fase 3.6 do plano).
+       *
+       * A altura saía de UM ponto — o centro da pedra. Numa encosta isso põe
+       * metade do matacão no ar: o chão desce do lado de baixo e a pedra fica
+       * pendurada, com uma fresta de céu por baixo. Não é sutil, é a primeira
+       * coisa que se vê subindo o sopé.
+       *
+       * A correção é amostrar a PEGADA inteira e usar o ponto mais baixo dela.
+       * Quatro amostras na borda mais o centro bastam: a célula do terreno tem
+       * 0,7 m dentro da arena e a pedra tem entre 0,5 e 2,6 m de raio, então
+       * cinco pontos já cobrem a variação que existe debaixo dela. */
+      let base = terrain.heightAt(b.x, b.z);
+      const r = b.radius * 0.85;
+      for (const [dx, dz] of [
+        [r, 0],
+        [-r, 0],
+        [0, r],
+        [0, -r],
+      ]) {
+        base = Math.min(base, terrain.heightAt(b.x + dx, b.z + dz));
+      }
+      // E ainda enterra um terço do raio: pedra assentada tem parte no chão.
+      dummy.position.set(b.x, base - b.radius * 0.34, b.z);
       dummy.rotation.set(b.rx, b.ry, b.rz);
       dummy.scale.setScalar(b.radius);
       dummy.updateMatrix();
@@ -576,7 +599,9 @@ function scatterBoulders(scene, physics, terrain, random) {
   }
 
   scene.add(group);
-  return group;
+  // A lista sai junto: é dela que o assado de AO tira as manchas de contato das
+  // pedras (ver `bakeVegetationAO`).
+  return { group, list: buckets.flat() };
 }
 
 /* ------------------------------------------------------------- árvores ----- */
@@ -584,17 +609,88 @@ function scatterBoulders(scene, physics, terrain, random) {
 const BROADLEAF_TRUNK = 2.7; // m
 const CONIFER_TRUNK = 1.5; // m
 
-/** Copa de folhosa: aglomerado de esferas facetadas, já na altura do tronco. */
-function broadleafCanopyGeometry(random) {
-  const parts = [];
-  const blobs = [
-    [0, 0.55, 0, 1.4],
-    [0.78, 0.12, 0.3, 0.98],
-    [-0.72, 0.3, -0.36, 1.02],
-    [0.16, 1.28, -0.5, 0.86],
-    [-0.32, 0.98, 0.66, 0.82],
+/**
+ * Gradiente vertical na copa, em cor de vértice (Fase 3.2 do plano).
+ *
+ * O topo pega sol e a base fica na sombra da própria copa. Sem isso a árvore é
+ * uma bolha de UMA cor só, e é isso que a entrega como primitiva quando o
+ * jogador chega perto — a três metros de distância uma copa chapada não tem
+ * volume nenhum.
+ *
+ * A cor é CINZA (multiplicador), não colorida: a tinta vem do `setColorAt` da
+ * instância, e as duas se multiplicam no shader. É o que permite ter quatro
+ * variedades de verde e o mesmo gradiente em todas.
+ */
+function shadeCanopy(geo, baixo, alto) {
+  const pos = geo.attributes.position;
+  const cores = new Float32Array(pos.count * 3);
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const inv = 1 / Math.max(1e-4, maxY - minY);
+  for (let i = 0; i < pos.count; i++) {
+    const t = (pos.getY(i) - minY) * inv;
+    // A curva não é linear: a base escurece rápido e o topo satura. É assim que
+    // a luz cai dentro de uma copa de verdade — quase toda a sombra está no
+    // terço de baixo.
+    const f = baixo + (alto - baixo) * Math.pow(t, 0.62);
+    cores[i * 3] = f;
+    cores[i * 3 + 1] = f;
+    cores[i * 3 + 2] = f;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(cores, 3));
+  return geo;
+}
+
+/**
+ * Copa de folhosa: aglomerado de esferas facetadas, já na altura do tronco.
+ *
+ * `variante` muda a receita de bolhas (Fase 3.3). DUAS silhuetas para 430
+ * árvores era pouco: o olho reconhece a repetição e o bosque vira papel de
+ * parede. Com quatro receitas — larga, alta, torta e rala — mais o sorteio de
+ * escala e de giro que já existia, a repetição some.
+ */
+function broadleafCanopyGeometry(random, variante = 0) {
+  const receitas = [
+    // larga e baixa: a copa "de campo", que cresceu sem competir por luz
+    [
+      [0, 0.5, 0, 1.5],
+      [0.86, 0.08, 0.32, 1.02],
+      [-0.8, 0.24, -0.4, 1.06],
+      [0.18, 1.1, -0.54, 0.86],
+      [-0.35, 0.86, 0.72, 0.84],
+    ],
+    // alta e estreita: cresceu no meio do bosque, esticada atrás de luz
+    [
+      [0, 0.9, 0, 1.16],
+      [0.4, 0.2, 0.24, 0.92],
+      [-0.42, 0.44, -0.22, 0.9],
+      [0.1, 1.72, -0.16, 0.82],
+      [-0.14, 2.3, 0.12, 0.58],
+    ],
+    // torta: o peso todo de um lado, como quem cresceu na borda da clareira
+    [
+      [0.28, 0.62, 0.1, 1.34],
+      [1.02, 0.5, 0.14, 0.9],
+      [-0.5, 0.22, -0.3, 0.86],
+      [0.7, 1.36, -0.3, 0.8],
+      [-0.1, 1.04, 0.6, 0.7],
+    ],
+    // rala: poucas bolhas e mais separadas — árvore velha, folhagem esparsa
+    [
+      [0, 0.66, 0, 1.2],
+      [0.94, 0.44, -0.2, 0.74],
+      [-0.86, 0.72, 0.3, 0.7],
+      [0.1, 1.5, 0.35, 0.66],
+    ],
   ];
-  for (const [bx, by, bz, br] of blobs) {
+
+  const parts = [];
+  for (const [bx, by, bz, br] of receitas[variante % receitas.length]) {
     const g = new THREE.IcosahedronGeometry(br, 1);
     g.scale(1, 0.85, 1);
     g.rotateY(random() * 3.1);
@@ -602,22 +698,92 @@ function broadleafCanopyGeometry(random) {
     g.translate(bx, BROADLEAF_TRUNK + by, bz);
     parts.push(g);
   }
-  return mergeGeometries(parts);
+  return shadeCanopy(mergeGeometries(parts), 0.52, 1.12);
 }
 
-/** Conífera: três saias cônicas empilhadas — silhueta de abeto. */
-function coniferCanopyGeometry() {
+/** Conífera: saias cônicas empilhadas — silhueta de abeto, em duas alturas. */
+function coniferCanopyGeometry(variante = 0) {
+  const receitas = [
+    [
+      [0.0, 3.6, 1.2],
+      [1.7, 3.0, 0.92],
+      [3.3, 2.3, 0.6],
+    ],
+    // a segunda é mais alta e mais afilada: abeto novo, ainda em ponta
+    [
+      [0.0, 3.0, 0.95],
+      [1.5, 2.9, 0.78],
+      [3.0, 2.6, 0.56],
+      [4.4, 1.9, 0.34],
+    ],
+  ];
   const parts = [];
-  for (const [y, hh, r] of [
-    [0.0, 3.6, 1.2],
-    [1.7, 3.0, 0.92],
-    [3.3, 2.3, 0.6],
-  ]) {
+  for (const [y, hh, r] of receitas[variante % receitas.length]) {
     const g = new THREE.ConeGeometry(r, hh, 7, 1);
     g.translate(0, CONIFER_TRUNK + y + hh / 2 - 0.5, 0);
     parts.push(g);
   }
-  return mergeGeometries(parts);
+  return shadeCanopy(mergeGeometries(parts), 0.46, 1.14);
+}
+
+/**
+ * Vento nas copas (Fase 3.1 do plano).
+ *
+ * É o mesmo enxerto de balanço da grama, com três diferenças:
+ *
+ * • A amplitude é ~10× maior (uns 15 cm no topo, contra 2 cm numa folha de
+ *   grama), porque uma copa de quatro metros que se mexe dois centímetros
+ *   parece congelada.
+ * • A fase vem da POSIÇÃO DA INSTÂNCIA, não da UV. É o que faz o bosque ondular
+ *   em vez de piscar em uníssono — a rajada atravessa o vale.
+ * • Só o que está ACIMA do tronco se mexe, e proporcionalmente à altura. O pé
+ *   da árvore está enterrado no chão; se ele oscilar junto, a árvore inteira
+ *   escorrega de lado e o efeito lê como bug de física, não como vento.
+ *
+ * Custo: zero de CPU. É vertex shader, e a árvore já era instanciada.
+ */
+function applyCanopySway(material, sway, baseY, topY, amplitude) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.swayTime = sway.time;
+    shader.uniforms.swayWind = sway.wind;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform float swayTime;
+         uniform vec2 swayWind;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+         {
+           float canopyT = clamp(
+             (position.y - ${baseY.toFixed(2)}) / ${(topY - baseY).toFixed(2)},
+             0.0, 1.0
+           );
+           vec3 iPos = instanceMatrix[3].xyz;
+           float ph = iPos.x * 0.13 + iPos.z * 0.11;
+           /* Duas senoides incomensuráveis: uma lenta, que é a rajada
+              atravessando, e uma rápida de menor amplitude, que é a folha
+              tremendo. Com uma só, o movimento tem período audível ao olho. */
+           float s = sin(swayTime * 0.85 + ph)
+                   + 0.42 * sin(swayTime * 2.3 + ph * 1.7);
+           /* O expoente 1.6 concentra o movimento no alto da copa: a ponta
+              chicoteia e a base quase não sai do lugar, que é como um galho se
+              comporta. Linear, a copa inteira desliza em bloco. */
+           vec2 d = swayWind * pow(canopyT, 1.6) * ${amplitude.toFixed(2)} * (0.6 + 0.4 * s);
+           /* Como na grama: o deslocamento é de MUNDO e precisa ser projetado
+              nos eixos da instância, senão o giro sorteado de cada árvore leva
+              o vento junto e cada uma balança para um lado. */
+           vec3 aX = instanceMatrix[0].xyz;
+           float invS = 1.0 / max(length(aX), 1e-4);
+           transformed.x += dot(vec3(d.x, 0.0, d.y), aX * invS) * invS;
+           transformed.z += dot(vec3(d.x, 0.0, d.y), instanceMatrix[2].xyz * invS) * invS;
+         }`,
+      );
+  };
+  material.customProgramCacheKey = () => `canopy-sway-${baseY}-${topY}-${amplitude}`;
+  return material;
 }
 
 function trunkGeometry(rTop, rBottom, height) {
@@ -639,7 +805,7 @@ function trunkGeometry(rTop, rBottom, height) {
  *
  * Tudo instanciado: 4 InstancedMesh cobrem ~400 árvores.
  */
-function scatterTrees(scene, physics, terrain, random) {
+function scatterTrees(scene, physics, terrain, random, sway) {
   const A = CONFIG.world.arena;
   const group = new THREE.Group();
   group.name = "trees";
@@ -647,16 +813,39 @@ function scatterTrees(scene, physics, terrain, random) {
   const barkMat = new THREE.MeshStandardMaterial({
     color: "#6b4a2c",
     roughness: 0.95,
+    metalness: 0,
     flatShading: true,
   });
-  const leafMat = new THREE.MeshStandardMaterial({
-    roughness: 0.9,
-    flatShading: true,
-  });
-  const needleMat = new THREE.MeshStandardMaterial({
-    roughness: 0.92,
-    flatShading: true,
-  });
+  /* `vertexColors` liga o gradiente de `shadeCanopy`; a tinta de cada árvore
+     continua vindo do `setColorAt` da instância e os dois se multiplicam no
+     shader. O balanço entra por cima, no vértice. */
+  const leafMat = applyCanopySway(
+    new THREE.MeshStandardMaterial({
+      roughness: 0.92,
+      metalness: 0,
+      flatShading: true,
+      vertexColors: true,
+    }),
+    sway,
+    BROADLEAF_TRUNK,
+    BROADLEAF_TRUNK + 2.5,
+    2.6, // multiplicador sobre a amplitude do vento (que já vale ~0,06 m)
+  );
+  const needleMat = applyCanopySway(
+    new THREE.MeshStandardMaterial({
+      roughness: 0.94,
+      metalness: 0,
+      flatShading: true,
+      vertexColors: true,
+    }),
+    sway,
+    CONIFER_TRUNK,
+    CONIFER_TRUNK + 6.0,
+    // A conífera é rígida: ela balança bem menos que a folhosa, e é justamente
+    // a diferença entre as duas que faz o vento parecer vento e não uma
+    // animação aplicada a tudo igual.
+    1.3,
+  );
 
   const leafTints = [
     new THREE.Color("#4f8236"),
@@ -710,15 +899,30 @@ function scatterTrees(scene, physics, terrain, random) {
     slope.push({ x, z, scale: 0.9 + random() * 1.1 });
   }
 
+  /* Uma passada de instâncias POR VARIANTE de silhueta.
+     São quatro chamadas de desenho a mais para as folhosas e uma para as
+     coníferas — cinco no total, num orçamento que a Fase 0 acabou de liberar em
+     centenas. Em troca, 430 árvores deixam de ser dois carimbos repetidos. */
+  const BROADLEAF_VARIANTS = 4;
+  const CONIFER_VARIANTS = 2;
+
   if (ring.length) {
     prepare(ring, terrain, 0.12);
     instance(group, ring, trunkGeometry(0.13, 0.24, BROADLEAF_TRUNK), barkMat, null, true);
-    instance(group, ring, broadleafCanopyGeometry(random), leafMat, leafTints, true);
+    for (let v = 0; v < BROADLEAF_VARIANTS; v++) {
+      const lote = ring.filter((t) => t.variant % BROADLEAF_VARIANTS === v);
+      if (!lote.length) continue;
+      instance(group, lote, broadleafCanopyGeometry(random, v), leafMat, leafTints, true);
+    }
   }
   if (slope.length) {
     prepare(slope, terrain, 0.1);
     instance(group, slope, trunkGeometry(0.1, 0.18, CONIFER_TRUNK), barkMat, null, false);
-    instance(group, slope, coniferCanopyGeometry(), needleMat, needleTints, false);
+    for (let v = 0; v < CONIFER_VARIANTS; v++) {
+      const lote = slope.filter((t) => t.variant % CONIFER_VARIANTS === v);
+      if (!lote.length) continue;
+      instance(group, lote, coniferCanopyGeometry(v), needleMat, needleTints, false);
+    }
   }
 
   /* Colisores só no anel — a encosta está atrás da barreira de caminhada. */
@@ -737,7 +941,31 @@ function scatterTrees(scene, physics, terrain, random) {
   }
 
   scene.add(group);
-  return group;
+
+  /* Os poleiros: o topo da copa de cada folhosa do anel.
+     Os pássaros são do servidor, mas o servidor não tem árvore nenhuma — ele
+     manda "pouse por aqui" com um (x, z) e cada cliente resolve para a copa
+     mais próxima que ELE conhece. Como o cenário é determinístico (mesma seed,
+     mesmo relevo), todos resolvem para a MESMA árvore, e o pássaro pousa no
+     mesmo galho em todas as telas sem que um único metro de altura trafegue. */
+  return {
+    group,
+    // As duas listas seguem para o assado de AO: as folhosas do anel dão a
+    // mancha larga do bosque e as coníferas da encosta, o pontilhado da serra.
+    ring,
+    slope,
+    /* A altura é o TOPO da copa, não o meio dela.
+       A copa é um aglomerado de esferas cujo ponto mais alto fica a 2,01 m
+       acima do tronco (a bolha `[0.16, 1.28, -0.5, 0.86]`, com 0,85 de achatamento
+       em Y). Com os 1,75 m de antes, o pássaro pousava 26 cm DENTRO da
+       folhagem: sumia da vista e não dava para acertar. Os 2,5 m o põem sobre a
+       copa, com meio metro de folga — silhueta contra o céu, e alvo de verdade. */
+    perches: ring.map((t) => ({
+      x: t.x,
+      z: t.z,
+      y: t.y + t.scale * (BROADLEAF_TRUNK + 2.5),
+    })),
+  };
 }
 
 /**
@@ -751,6 +979,10 @@ function prepare(list, terrain, sink) {
   for (const t of list) {
     t.yaw = (Math.sin(t.x * 12.9898 + t.z * 78.233) * 43758.5453) % (Math.PI * 2);
     t.tintIndex = Math.abs(Math.floor(t.x * 3.7 + t.z * 1.9));
+    /* Qual silhueta esta árvore usa. Sai da POSIÇÃO, como o giro e a tinta:
+       assim o bosque é o mesmo em todas as telas sem que nada trafegue, e a
+       árvore atrás da qual você se escondeu tem a mesma forma para o amigo. */
+    t.variant = Math.abs(Math.floor(t.x * 7.31 + t.z * 4.17)) % 12;
     t.y = terrain.heightAt(t.x, t.z) - sink;
   }
 }
@@ -778,12 +1010,29 @@ function instance(group, list, geo, material, tints, shadow) {
 
 /* -------------------------------------------------------------- cercas ----- */
 
+/**
+ * As cercas de madeira ao longo da trilha.
+ *
+ * Eram 46 malhas — 18 postes e 28 travessas —, cada uma uma chamada de desenho,
+ * para 46 caixas do mesmo material que NUNCA SE MEXEM. Agora a geometria de
+ * cada peça é gerada, transformada para o lugar dela e MESCLADA: uma malha só,
+ * uma chamada, mesma imagem.
+ *
+ * O truque que torna isso possível é a transformação ser aplicada na
+ * GEOMETRIA (`applyMatrix4`) em vez de no objeto. Uma malha mesclada não tem
+ * como girar cada poste depois — mas também não precisa, porque o ângulo
+ * torto de cada um é sorteado uma vez, no build, e vale para sempre.
+ *
+ * Os colisores continuam um por poste: eles são de física, não de render, e a
+ * flecha precisa de um alvo com forma para cravar.
+ */
 function buildFences(scene, physics, terrain, random) {
-  const group = new THREE.Group();
-  group.name = "fences";
   const wood = new THREE.MeshStandardMaterial({
     color: "#8a6039",
-    roughness: 0.9,
+    // Madeira exposta ao tempo quase não reflete: `0.95` tira o brilho plástico
+    // que a cerca tinha contra o sol da tarde (ver Fase 1.5, especular seletiva).
+    roughness: 0.95,
+    metalness: 0.0,
     flatShading: true,
   });
 
@@ -794,6 +1043,16 @@ function buildFences(scene, physics, terrain, random) {
     { z: -88, side: -1, count: 4 },
   ];
 
+  const partes = [];
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const meio = new THREE.Vector3();
+  const um = new THREE.Vector3(1, 1, 1);
+  const dummy = new THREE.Object3D();
+
   for (const s of sections) {
     const spacing = 2.0;
     const offset = 6.5 + random() * 2.5;
@@ -802,13 +1061,11 @@ function buildFences(scene, physics, terrain, random) {
       const x = pathCenterX(z) + s.side * offset;
       const y = terrain.heightAt(x, z);
 
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.15, 0.12), wood);
-      post.position.set(x, y + 0.5, z);
-      post.rotation.y = (random() - 0.5) * 0.3;
-      post.rotation.z = (random() - 0.5) * 0.08;
-      post.castShadow = true;
-      post.receiveShadow = true;
-      group.add(post);
+      const poste = new THREE.BoxGeometry(0.12, 1.15, 0.12);
+      e.set((random() - 0.5) * 0.08, (random() - 0.5) * 0.3, (random() - 0.5) * 0.08, "YXZ");
+      q.setFromEuler(e);
+      poste.applyMatrix4(m.compose(a.set(x, y + 0.5, z), q, um));
+      partes.push(poste);
 
       if (physics) {
         const body = physics.createBody(
@@ -826,20 +1083,31 @@ function buildFences(scene, physics, terrain, random) {
         const x2 = pathCenterX(z2) + s.side * offset;
         const y2 = terrain.heightAt(x2, z2);
         for (const railY of [0.85, 0.45]) {
-          const a = new THREE.Vector3(x, y + railY, z);
-          const b = new THREE.Vector3(x2, y2 + railY, z2);
+          a.set(x, y + railY, z);
+          b.set(x2, y2 + railY, z2);
           const len = a.distanceTo(b);
-          const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, len), wood);
-          rail.position.copy(a).lerp(b, 0.5);
-          rail.lookAt(b);
-          rail.castShadow = true;
-          group.add(rail);
+          // `lookAt` num Object3D descartável: é a mesma orientação de antes
+          // (a travessa aponta do poste A para o B), só que agora ela vira
+          // matriz e some dentro da geometria.
+          dummy.position.copy(meio.copy(a).lerp(b, 0.5));
+          dummy.quaternion.identity();
+          dummy.lookAt(b);
+          dummy.updateMatrix();
+          const trave = new THREE.BoxGeometry(0.07, 0.07, len);
+          trave.applyMatrix4(dummy.matrix);
+          partes.push(trave);
         }
       }
     }
   }
-  scene.add(group);
-  return group;
+
+  const cerca = new THREE.Mesh(mergeGeometries(partes), wood);
+  cerca.name = "fences";
+  cerca.castShadow = true;
+  cerca.receiveShadow = true;
+  for (const p of partes) p.dispose();
+  scene.add(cerca);
+  return cerca;
 }
 
 /* --------------------------------------------------------------- grama ----- */
@@ -875,20 +1143,63 @@ function grassTexture() {
 
 const GRASS_HEIGHT = 0.42; // m — altura da placa, usada pelo shader de balanço
 
-function scatterGrass(scene, terrain, random, sway) {
-  const A = CONFIG.world.arena;
-  const material = new THREE.MeshStandardMaterial({
-    map: grassTexture(),
-    transparent: false,
-    alphaTest: 0.42,
-    side: THREE.DoubleSide,
-    roughness: 1,
-    color: 0xffffff,
-  });
+/** Flor: um caule fino com uma corola de quatro pétalas no topo. */
+function flowerTexture() {
+  const w = 64;
+  const h = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
 
-  /* Balanço: só o topo da lâmina se move, e a fase vem da posição da instância
-     — assim o campo inteiro ondula em vez de piscar em uníssono. Tudo em
-     vértice, sem custo de CPU por tufo. */
+  // Caule.
+  ctx.strokeStyle = "#5f8c35";
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(32, h);
+  ctx.quadraticCurveTo(30, h * 0.5, 32, h * 0.26);
+  ctx.stroke();
+
+  // Corola: quatro pétalas em branco puro. A COR vem da instância, então uma
+  // textura branca serve para todas as espécies do campo.
+  ctx.fillStyle = "#ffffff";
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.ellipse(32 + Math.cos(a) * 7, 20 + Math.sin(a) * 7, 5.5, 4.2, a, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#f5d76a";
+  ctx.beginPath();
+  ctx.arc(32, 20, 3.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * Some com a distância, no VÉRTICE (Fase 3.4 do plano).
+ *
+ * O tufo encolhe até zero acima de `GRASS_FADE` metros em vez de ficar
+ * transparente. Encolher é melhor que apagar por três motivos:
+ *
+ * • `alphaTest` não tem meio-termo — ou o pixel existe ou não —, então um fade
+ *   de opacidade daria um recorte piscando em vez de um sumiço;
+ * • um triângulo de área zero é descartado pela GPU antes da rasterização, o
+ *   que economiza fragmento de verdade;
+ * • a transição é contínua e ninguém vê a borda do raio.
+ *
+ * O que se ganha é o essencial: os 4 200 tufos existem só nos 22 m em volta do
+ * jogador, que é onde a grama se vê. Além disso eles eram fragmento pago para
+ * pintar dois pixels de verde sobre um chão que já é verde.
+ */
+const GRASS_FADE = 22; // m — daqui para fora o tufo encolhe
+const GRASS_FADE_END = 30; // m — e some de vez
+
+function applyGroundCoverShader(material, sway, alturaRef, amplitude) {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.swayTime = sway.time;
     shader.uniforms.swayWind = sway.wind;
@@ -902,12 +1213,12 @@ function scatterGrass(scene, terrain, random, sway) {
       .replace(
         "#include <begin_vertex>",
         `#include <begin_vertex>
-         float bladeT = clamp(position.y / ${GRASS_HEIGHT.toFixed(2)}, 0.0, 1.0);
+         float bladeT = clamp(position.y / ${alturaRef.toFixed(2)}, 0.0, 1.0);
          vec3 iPos = instanceMatrix[3].xyz;
          float phase = iPos.x * 0.7 + iPos.z * 0.55;
          float s = sin(swayTime * 1.9 + phase) + 0.45 * sin(swayTime * 3.7 + phase * 1.7);
          vec3 dWorld = vec3(swayWind.x, 0.0, swayWind.y)
-                     * bladeT * bladeT * (0.55 + 0.45 * s);
+                     * bladeT * bladeT * (0.55 + 0.45 * s) * ${amplitude.toFixed(2)};
          /* Cada tufo tem um yaw aleatório. Deslocar o vértice direto faria a
             matriz da instância girar o deslocamento junto, e o campo balançaria
             em todas as direções. Projetando nos eixos da instância (e dividindo
@@ -915,10 +1226,39 @@ function scatterGrass(scene, terrain, random, sway) {
          vec3 aX = instanceMatrix[0].xyz;
          float invS = 1.0 / max(length(aX), 1e-4);
          transformed.x += dot(dWorld, aX * invS) * invS;
-         transformed.z += dot(dWorld, instanceMatrix[2].xyz * invS) * invS;`,
+         transformed.z += dot(dWorld, instanceMatrix[2].xyz * invS) * invS;
+
+         /* Encolhimento por distância. cameraPosition é uniforme embutido do
+            Three, então isto não custa nem um uniforme novo nem uma passada de
+            CPU por tufo. */
+         {
+           vec3 wp = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+           float d = distance(wp.xz, cameraPosition.xz);
+           float k = 1.0 - smoothstep(${GRASS_FADE.toFixed(1)}, ${GRASS_FADE_END.toFixed(1)}, d);
+           transformed.xyz *= k;
+         }`,
       );
   };
-  material.customProgramCacheKey = () => "grass-sway";
+  material.customProgramCacheKey = () => `ground-cover-${alturaRef}-${amplitude}`;
+  return material;
+}
+
+function scatterGrass(scene, terrain, random, sway) {
+  const A = CONFIG.world.arena;
+  const material = new THREE.MeshStandardMaterial({
+    map: grassTexture(),
+    transparent: false,
+    alphaTest: 0.42,
+    side: THREE.DoubleSide,
+    roughness: 1,
+    metalness: 0,
+    color: 0xffffff,
+    // Cada tufo herda a cor do terreno debaixo dele — ver o laço de sorteio.
+    vertexColors: false,
+  });
+
+  // Balanço + encolhimento por distância, os dois no vértice.
+  applyGroundCoverShader(material, sway, GRASS_HEIGHT, 1.0);
 
   // Tufo = duas placas cruzadas.
   const plane = new THREE.PlaneGeometry(0.5, GRASS_HEIGHT);
@@ -927,16 +1267,54 @@ function scatterGrass(scene, terrain, random, sway) {
   plane2.rotateY(Math.PI / 2);
   const merged = mergeGeometries([plane, plane2]);
 
-  const COUNT = 4200;
+  /* A FLOR é uma camada separada, com a própria textura, o próprio material e a
+     própria contagem — uma chamada de desenho a mais, e uma só. Tingir tufos de
+     grama de vermelho não daria flor nenhuma: a textura são lâminas, e uma
+     lâmina rosa lê como grama doente. */
+  const flowerMat = applyGroundCoverShader(
+    new THREE.MeshStandardMaterial({
+      map: flowerTexture(),
+      alphaTest: 0.45,
+      side: THREE.DoubleSide,
+      roughness: 0.85,
+      metalness: 0,
+      vertexColors: false,
+    }),
+    sway,
+    GRASS_HEIGHT,
+    // A flor balança mais que a grama: ela é mais alta e o caule é fino.
+    1.5,
+  );
+  const flowerTints = [
+    new THREE.Color("#f2f0e4"), // margarida
+    new THREE.Color("#e8d45c"), // botão-de-ouro
+    new THREE.Color("#c98fd8"), // cardo
+    new THREE.Color("#e2705f"), // papoula
+    new THREE.Color("#9fc4e8"), // cicória
+  ];
+
+  const COUNT = CONFIG.render.grassCount;
+  // Uma flor a cada vinte tufos, como o plano pede. Menos que isso o campo fica
+  // pontilhado como uma toalha estampada.
+  const FLOWERS = Math.round(COUNT / 20);
+
   const mesh = new THREE.InstancedMesh(merged, material, COUNT);
   mesh.name = "grass";
   mesh.castShadow = false;
   mesh.receiveShadow = false;
   mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
 
+  const flores = new THREE.InstancedMesh(merged, flowerMat, FLOWERS);
+  flores.name = "flowers";
+  flores.castShadow = false;
+  flores.receiveShadow = false;
+  flores.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+
   const dummy = new THREE.Object3D();
   const up = new THREE.Vector3();
+  const tintaChao = new THREE.Color();
   let placed = 0;
+  let comFlor = 0;
   let guard = 0;
   while (placed < COUNT && guard++ < COUNT * 14) {
     // Densidade decrescente a partir da trilha: perto do jogador é onde o
@@ -947,18 +1325,203 @@ function scatterGrass(scene, terrain, random, sway) {
     if (terrain.arenaDistance(x, z) > 8) continue;
     terrain.normalAt(x, z, 1.0, up);
     if (up.y < 0.8) continue;
-    dummy.position.set(x, terrain.heightAt(x, z) - 0.03, z);
+    const y = terrain.heightAt(x, z);
+    dummy.position.set(x, y - 0.03, z);
     dummy.rotation.set(0, random() * Math.PI, 0);
     const s = 0.7 + random() * 0.9;
     dummy.scale.set(s, s * (0.8 + random() * 0.6), s);
     dummy.updateMatrix();
     mesh.setMatrixAt(placed, dummy.matrix);
+
+    /* TINGIDO PELO CHÃO DEBAIXO DELE.
+       `surfaceColor` é a mesma função que pinta o vértice do terreno, então o
+       tufo nasce exatamente da cor sobre a qual está: verde no gramado,
+       amarelado na mancha seca, quase terra na beira da trilha. Antes todos os
+       tufos eram do mesmo verde da textura, e o campo tinha um tapete de uma cor
+       só por cima de um chão de muitas — dava para ver a emenda de longe. */
+    terrain.normalAt(x, z, 1.0, up);
+    terrain.surfaceColor(x, z, y, up, tintaChao);
+    // Clareia um pouco: a folha viva é mais clara que o chão que ela cobre.
+    mesh.setColorAt(placed, tintaChao.multiplyScalar(1.35));
     placed++;
+
+    // Uma em cada vinte vira flor, no mesmo ponto — a flor nasce NO tufo.
+    if (comFlor < FLOWERS && placed % 20 === 0) {
+      dummy.scale.multiplyScalar(1.15);
+      dummy.updateMatrix();
+      flores.setMatrixAt(comFlor, dummy.matrix);
+      flores.setColorAt(comFlor, flowerTints[Math.floor(random() * flowerTints.length)]);
+      comFlor++;
+    }
   }
   mesh.count = placed;
   mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   scene.add(mesh);
+
+  flores.count = comFlor;
+  flores.instanceMatrix.needsUpdate = true;
+  if (flores.instanceColor) flores.instanceColor.needsUpdate = true;
+  scene.add(flores);
   return mesh;
+}
+
+/* ------------------------------------------------- AO e sombra assadas ----
+
+   O melhor item do plano inteiro por custo/benefício, e ele não desenha nada:
+   escurece as CORES DE VÉRTICE do terreno onde há vegetação por cima.
+
+   Três problemas de uma vez:
+
+   1. "Tudo flutua." Uma árvore sem escurecimento no pé parece colada por cima
+      do chão. A mancha de contato é o que assenta o objeto no mundo — e é a
+      coisa que o olho procura primeiro para julgar se algo está apoiado.
+
+   2. A sombra dinâmica ACABA EM 46 m (`CONFIG.render.shadowRange`). Além disso o
+      bosque inteiro fica sem sombra nenhuma, e a encosta vira um tapete verde
+      chapado com adesivos de árvore. Esta não acaba nunca: ela é cor.
+
+   3. Custo de runtime ZERO. É um atributo que já existia e já era enviado à
+      GPU; o que muda são os números dentro dele.
+
+   POR QUE NÃO SÃO RAIOS. O plano pedia oito raios por vértice contra a
+   geometria. São 43 mil vértices — 344 mil raycasts contra `InstancedMesh`,
+   dezenas de segundos, e o resultado seria o mesmo: a copa é uma bolha e a
+   oclusão dela é analítica. Com as LISTAS de árvores e rochas em mãos, cada
+   vértice consulta só os vizinhos de uma grade e a conta fecha em milissegundos.
+
+   São DUAS camadas, somadas, e é a diferença entre elas que dá a leitura:
+
+   • OCLUSÃO — simétrica, centrada na copa. É "aqui chega menos céu".
+   • SOMBRA — o mesmo disco DESLOCADO na direção oposta ao sol, projetado no
+     chão. É "aqui o sol não bate". Sem ela a mancha fica igual dos quatro
+     lados e lê como sujeira; com ela, o bosque ganha hora do dia. */
+
+/** Grade uniforme para achar os oclusores perto de um ponto sem varrer todos. */
+class OccluderGrid {
+  constructor(cell) {
+    this.cell = cell;
+    this.map = new Map();
+  }
+
+  key(ix, iz) {
+    return ix * 73856093 ^ (iz * 19349663);
+  }
+
+  add(o) {
+    // O oclusor entra em TODAS as células que o raio dele alcança: assim a
+    // consulta olha uma célula só e mesmo assim não perde uma copa larga cujo
+    // centro caiu na célula vizinha.
+    const r = o.reach;
+    const i0 = Math.floor((o.x - r) / this.cell);
+    const i1 = Math.floor((o.x + r) / this.cell);
+    const j0 = Math.floor((o.z - r) / this.cell);
+    const j1 = Math.floor((o.z + r) / this.cell);
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const k = this.key(i, j);
+        let lista = this.map.get(k);
+        if (!lista) this.map.set(k, (lista = []));
+        lista.push(o);
+      }
+    }
+  }
+
+  at(x, z) {
+    return this.map.get(
+      this.key(Math.floor(x / this.cell), Math.floor(z / this.cell)),
+    );
+  }
+}
+
+/**
+ * Escurece as cores de vértice do terreno sob a vegetação.
+ *
+ * @param {Terrain} terrain o terreno já construído (com a malha e as cores)
+ * @param {Array<{x,z,y,radius,height}>} oclusores copas e matacões
+ */
+function bakeVegetationAO(terrain, oclusores) {
+  if (!oclusores.length) return;
+
+  const geo = terrain.mesh.geometry;
+  const pos = geo.attributes.position.array;
+  const cor = geo.attributes.color.array;
+
+  /* Deslocamento da sombra no plano: para onde a projeção da copa cai.
+     A luz viaja de `SUN_DIR` para o chão, então a sombra vai para −XZ do sol,
+     e o quanto ela se estica é `altura / tan(elevação)` — daí a divisão por
+     `SUN_DIR.y`. Fica limitada porque com o sol baixo a projeção esticaria
+     dezenas de metros e a mancha deixaria de parecer uma árvore. */
+  const espalha = Math.min(1.6, 1 / Math.max(0.25, SUN_DIR.y));
+  const sombraX = -SUN_DIR.x * espalha;
+  const sombraZ = -SUN_DIR.z * espalha;
+
+  const grade = new OccluderGrid(12);
+  for (const o of oclusores) {
+    // Alcance horizontal: a copa mais a projeção da sombra dela.
+    o.reach = o.radius * 1.7 + o.height * Math.abs(espalha) * 0.6;
+    grade.add(o);
+  }
+
+  const n = pos.length / 3;
+  for (let v = 0; v < n; v++) {
+    const i3 = v * 3;
+    const x = pos[i3];
+    const y = pos[i3 + 1];
+    const z = pos[i3 + 2];
+    const perto = grade.at(x, z);
+    if (!perto) continue;
+
+    let oclusao = 0;
+    let sombra = 0;
+    for (let k = 0; k < perto.length; k++) {
+      const o = perto[k];
+
+      /* Só ocluir o que está ABAIXO da copa. Sem isto, uma árvore no sopé
+         escureceria o terreno da encosta atrás dela, que está vinte metros
+         acima — e apareceria uma mancha escura pendurada na montanha. */
+      const alturaCopa = o.y + o.height;
+      if (y > alturaCopa) continue;
+
+      const dx = x - o.x;
+      const dz = z - o.z;
+      const d2 = dx * dx + dz * dz;
+
+      // Oclusão: disco macio centrado na copa.
+      const rO = o.radius * 1.45;
+      if (d2 < rO * rO) {
+        const t = 1 - Math.sqrt(d2) / rO;
+        oclusao += t * t * o.strength;
+      }
+
+      // Sombra: o MESMO disco, deslocado. Um pouco menor e mais dura, porque
+      // sombra tem borda e oclusão não.
+      const sx = dx - o.height * sombraX;
+      const sz = dz - o.height * sombraZ;
+      const rS = o.radius * 1.15;
+      const ds2 = sx * sx + sz * sz;
+      if (ds2 < rS * rS) {
+        const t = 1 - Math.sqrt(ds2) / rS;
+        sombra += t * 1.35 * o.strength;
+      }
+    }
+
+    if (oclusao === 0 && sombra === 0) continue;
+
+    /* As duas se somam mas SATURAM. Sem o teto, um bosque fechado (cinco copas
+       sobrepostas) levaria o chão a preto absoluto, e o pé do bosque viraria um
+       buraco — exatamente o defeito que a Fase 1.4 tirou da luz ambiente. */
+    const escuro = Math.min(0.72, oclusao * 0.42 + Math.min(0.55, sombra) * 0.5);
+    const f = 1 - escuro;
+    /* A sombra ESFRIA além de escurecer: o que sobra debaixo de uma copa é luz
+       do céu, que é azul. Escurecer só o brilho dá cinza morto; tirar mais do
+       vermelho que do azul dá sombra. */
+    cor[i3] *= f * 0.96;
+    cor[i3 + 1] *= f * 0.99;
+    cor[i3 + 2] *= Math.min(1, f * 1.06);
+  }
+
+  geo.attributes.color.needsUpdate = true;
 }
 
 /* ---------------------------------------------------------- bandeirolas ---- */
@@ -999,8 +1562,15 @@ class WindFlag {
   update(dt, wind) {
     this.time += dt;
     const speed = Math.hypot(wind.x, wind.z);
-    // A fita aponta para onde o vento sopra.
-    this.cloth.rotation.y = Math.atan2(wind.x, wind.z) + Math.PI / 2;
+
+    /* A fita aponta para onde o vento SOPRA — o mesmo rumo da seta do HUD.
+       O sinal aqui não é decorativo. A malha da fita nasce ao longo do +X local
+       (o `geo.translate(0.55, …)` lá em cima), e um grupo girado de θ em torno
+       do Y leva o +X local para (cos θ, 0, −sen θ) no mundo. Com `+ π/2` isso dá
+       exatamente −(vento): a bandeira apontava para a origem da rajada enquanto
+       a seta do HUD apontava para o destino, e quem confiasse na bandeira
+       corrigia a mira para o lado errado. Com `− π/2` os dois batem. */
+    this.cloth.rotation.y = Math.atan2(wind.x, wind.z) - Math.PI / 2;
     // ... e cai quando não há vento.
     this.cloth.rotation.z = -Math.PI / 2.2 + smoothstep(0, 9, speed) * (Math.PI / 2.2);
 
@@ -1029,10 +1599,56 @@ export function createEnvironment(scene, physics) {
     wind: { value: new THREE.Vector2() },
   };
 
-  scatterBoulders(scene, physics, terrain, random);
-  scatterTrees(scene, physics, terrain, random);
+  const rochas = scatterBoulders(scene, physics, terrain, random);
+  const arvores = scatterTrees(scene, physics, terrain, random, sway);
   buildFences(scene, physics, terrain, random);
   scatterGrass(scene, terrain, random, sway);
+
+  /* O assado tem de vir DEPOIS da vegetação: ele lê onde cada copa e cada
+     pedra ficaram. É a única coisa neste arquivo que depende da ordem, e é
+     por isso que está aqui embaixo e não dentro de `Terrain.build`.
+
+     `radius` e `height` descrevem a BOLHA que ocupa o lugar da copa, não a
+     malha: a folhosa é um aglomerado de esferas com ~1,6 m de raio a ~3,5 m do
+     chão; a conífera é um cone estreito e alto; o matacão é uma bola no chão.
+     A oclusão de uma bolha é analítica, e é por isso que isto custa
+     milissegundos em vez dos segundos que os raios custariam. */
+  if (CONFIG.render.terrainAO) {
+    const oclusores = [];
+    for (const t of arvores.ring) {
+      oclusores.push({
+        x: t.x,
+        z: t.z,
+        y: t.y,
+        radius: 1.75 * t.scale,
+        height: (BROADLEAF_TRUNK + 0.9) * t.scale,
+        strength: 1,
+      });
+    }
+    for (const t of arvores.slope) {
+      oclusores.push({
+        x: t.x,
+        z: t.z,
+        y: t.y,
+        radius: 1.1 * t.scale,
+        height: (CONIFER_TRUNK + 2.2) * t.scale,
+        // A conífera é rala e a encosta é longe: meia força evita que a serra
+        // inteira vire um borrão escuro visto do fundo do vale.
+        strength: 0.75,
+      });
+    }
+    for (const b of rochas.list) {
+      oclusores.push({
+        x: b.x,
+        z: b.z,
+        y: terrain.heightAt(b.x, b.z),
+        radius: b.radius * 0.95,
+        height: b.radius * 0.8,
+        strength: 0.85,
+      });
+    }
+    bakeVegetationAO(terrain, oclusores);
+  }
 
   const flags = [
     new WindFlag(terrain, pathCenterX(-24) + 5.2, -24),
@@ -1044,6 +1660,27 @@ export function createEnvironment(scene, physics) {
   return {
     terrain,
     flags,
+    /** Topos de copa onde um pássaro pode pousar (ver `scatterTrees`). */
+    perches: arvores.perches,
+
+    /**
+     * A copa mais próxima de um ponto do chão.
+     *
+     * Devolve null quando não há árvore por perto: o chamador então deixa o
+     * pássaro no ar em vez de fazê-lo pousar no vazio.
+     */
+    nearestPerch(x, z, maxDist = 26) {
+      let melhor = null;
+      let melhorD = maxDist * maxDist;
+      for (const p of arvores.perches) {
+        const d = (p.x - x) ** 2 + (p.z - z) ** 2;
+        if (d >= melhorD) continue;
+        melhorD = d;
+        melhor = p;
+      }
+      return melhor;
+    },
+
     update(dt, wind) {
       for (const f of flags) f.update(dt, wind);
       sway.time.value += dt;

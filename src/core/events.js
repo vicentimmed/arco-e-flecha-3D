@@ -9,7 +9,17 @@ export const EventType = {
   BOAR_SPAWN: "BOAR_SPAWN",
   BOAR_DEATH: "BOAR_DEATH",
   BOAR_SCARED: "BOAR_SCARED",
+  ELK_HIT: "ELK_HIT",
+  ELK_DEATH: "ELK_DEATH",
+  BIRD_HIT: "BIRD_HIT",
+  ZOMBIE_HIT: "ZOMBIE_HIT",
+  TORCH_HIT: "TORCH_HIT",
   AUDIO_PLAY: "AUDIO_PLAY",
+  /* Um lote de partículas. Segue o mesmo desenho de `AUDIO_PLAY`: quem emite
+     descreve o EFEITO (cor, quantidade, quanto dura) e não conhece o pool nem a
+     cena — um zumbi não precisa de uma referência ao sistema de partículas para
+     pegar fogo, do mesmo jeito que não precisa do mixer para gemer. */
+  PARTICLES: "PARTICLES",
 };
 
 class GameEventsBus {

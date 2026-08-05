@@ -18,15 +18,20 @@ import { pickBoarSpawn } from "./spawnPoints.js";
 
 let proximoId = 1;
 
+/** Desvios tentados ao fugir, do rumo direto para os lados (ver `flee`). */
+const DEFLECTIONS = [0, 0.6, -0.6, 1.3, -1.3, 2.1, -2.1, Math.PI];
+
 export class Boar {
   /**
    * @param {boolean} fun porco solto na mão por alguém, só por diversão.
    *   Ele anda e reage igual; só não vale ponto, porque ponto se ganha no modo
    *   caçada, onde as ondas vêm sozinhas e não dá para escolher a distância.
    */
-  constructor(terrain, x, z, fun = false) {
+  constructor(terrain, x, z, fun = false, wave = 0) {
     this.id = proximoId++;
     this.fun = fun;
+    /** Índice da onda que trouxe este porco. `0` = avulso, solto na mão. */
+    this.wave = wave;
     this.terrain = terrain;
     this.x = x;
     this.z = z;
@@ -100,8 +105,23 @@ export class Boar {
           const dx = this.x - this.fleeFrom.x;
           const dz = this.z - this.fleeFrom.z;
           const len = Math.hypot(dx, dz) || 1;
-          this.yaw = Math.atan2(dx / len, dz / len);
-          this.step(dx / len, dz / len, dt);
+          const base = Math.atan2(dx / len, dz / len);
+
+          /* Fugir em linha reta acaba na borda do mundo, e lá o passo é
+             recusado: o bicho ficava parado "correndo" contra a parede. Agora
+             ele DESVIA — tenta o rumo direto e, se não passar, vai abrindo o
+             ângulo para os dois lados até achar saída, que é o que um animal
+             encurralado faz. Ficou visível quando a fuga passou para 11 m/s:
+             antes, devagar, ele quase nunca chegava à borda. */
+          for (const desvio of DEFLECTIONS) {
+            const ang = base + desvio;
+            const fx = Math.sin(ang);
+            const fz = Math.cos(ang);
+            if (this.step(fx, fz, dt)) {
+              this.yaw = ang;
+              break;
+            }
+          }
         }
         this.fleeTimer -= dt;
         if (this.fleeTimer <= 0) {
@@ -131,6 +151,7 @@ export class Boar {
     this.step(dx / len, dz / len, dt);
   }
 
+  /** Dá um passo. Devolve false quando o destino não é chão pisável. */
   step(fx, fz, dt) {
     const passo = this.speed * dt;
     const nx = this.x + fx * passo;
@@ -138,11 +159,12 @@ export class Boar {
     // Fugir para fora do mundo não é fuga: escolhe outro rumo.
     if (!this.terrain.isWalkable(nx, nz) || this.terrain.arenaDistance(nx, nz) > 8) {
       this.pickWanderTarget();
-      return;
+      return false;
     }
     this.x = nx;
     this.z = nz;
     this.y = this.terrain.heightAt(nx, nz);
+    return true;
   }
 
   /** Só o essencial para a tela — a animação é local. */
@@ -162,10 +184,20 @@ export class Boar {
 /**
  * O modo de caçada: ondas que crescem.
  *
- * Cinco porcos ao ligar e, a cada `waveInterval`, mais uma leva — que aumenta
- * de tamanho a cada onda. Todos os números vivem em `CONFIG.modes.boarHunt`,
- * que é o arquivo de configuração pedido: dá para deixar a caçada mansa ou
- * insana sem tocar em código.
+ * 3 → 6 → 10 → 15 → 20 → 30, e daí em diante 30. A leva seguinte entra quando
+ * sobram 10 % da atual, e não quando um cronômetro toca.
+ *
+ * A DIFERENÇA IMPORTA. Com relógio, quem atira devagar acumula porcos até o
+ * campo virar um formigueiro, e quem atira rápido fica esperando de braços
+ * cruzados; a dificuldade não tinha relação nenhuma com o que a pessoa fazia.
+ * Pelo que sobra em campo, a caçada anda no ritmo de quem está caçando — limpar
+ * rápido traz a próxima leva rápido, e é aí que ela aperta.
+ *
+ * Os 10 % (e não "campo limpo") existem para o modo não travar atrás do último
+ * javali escondido numa dobra do terreno. E o `waveTimeout` é a rede embaixo
+ * disso: se nem os 10 % caírem, a onda entra assim mesmo.
+ *
+ * Todos os números vivem em `CONFIG.modes.boarHunt`.
  */
 export class BoarHunt {
   constructor(terrain) {
@@ -174,19 +206,56 @@ export class BoarHunt {
     this.boars = [];
     this.active = false;
     this.waveTimer = 0;
+    /** Quantas ondas já entraram. A primeira é a 1. */
     this.waveCount = 0;
+    /** Tamanho da onda em curso — é dele que sai o gatilho dos 10 %. */
+    this.waveSize = 0;
+    /**
+     * Onda recém-chegada, para a sala anunciar. `null` quando não há novidade;
+     * quem lê, limpa (ver `takeWaveAnnouncement`).
+     */
+    this.pendingWave = null;
   }
 
   get vivos() {
     return this.boars.reduce((n, b) => n + (b.dead ? 0 : 1), 0);
   }
 
+  /** Vivos da onda ATUAL. Os avulsos e os de ondas velhas não contam. */
+  get vivosDaOnda() {
+    return this.boars.reduce(
+      (n, b) => n + (!b.dead && b.wave === this.waveCount ? 1 : 0),
+      0,
+    );
+  }
+
+  /** Tamanho da onda `n` (1-based). Esgotada a tabela, repete a última. */
+  sizeOfWave(n) {
+    const tabela = CONFIG.modes.boarHunt.waveSizes;
+    return tabela[Math.min(n, tabela.length) - 1];
+  }
+
   start(jogadores) {
     if (this.active) return;
     this.active = true;
-    this.waveTimer = 0;
     this.waveCount = 0;
-    this.spawnMany(CONFIG.modes.boarHunt.initialBoars, jogadores);
+    this.nextWave(jogadores);
+  }
+
+  /** Traz a próxima leva e deixa o anúncio pronto para a sala despachar. */
+  nextWave(jogadores) {
+    this.waveCount++;
+    this.waveSize = this.sizeOfWave(this.waveCount);
+    this.waveTimer = 0;
+    const criados = this.spawnMany(this.waveSize, jogadores, false, this.waveCount);
+    this.pendingWave = { n: this.waveCount, size: criados.length || this.waveSize };
+  }
+
+  /** Devolve o anúncio pendente uma única vez. */
+  takeWaveAnnouncement() {
+    const aviso = this.pendingWave;
+    this.pendingWave = null;
+    return aviso;
   }
 
   /**
@@ -201,13 +270,13 @@ export class BoarHunt {
     this.boars = this.boars.filter((b) => b.fun);
   }
 
-  spawnMany(quantos, jogadores, fun = false) {
+  spawnMany(quantos, jogadores, fun = false, wave = 0) {
     const B = CONFIG.modes.boarHunt;
     const criados = [];
     for (let i = 0; i < quantos && this.vivos < B.maxAlive; i++) {
       const ponto = pickBoarSpawn(this.terrain, jogadores);
       if (!ponto) continue;
-      const b = new Boar(this.terrain, ponto.x, ponto.z, fun);
+      const b = new Boar(this.terrain, ponto.x, ponto.z, fun, wave);
       this.boars.push(b);
       criados.push(b);
     }
@@ -248,12 +317,16 @@ export class BoarHunt {
 
     if (!this.active) return;
     this.waveTimer += dt;
-    if (this.waveTimer < B.waveInterval) return;
-    this.waveTimer = 0;
-    this.waveCount++;
-    // A leva cresce: a caçada aperta sozinha conforme você aguenta.
-    const tamanho = B.waveSize + B.waveGrowth * (this.waveCount - 1);
-    this.spawnMany(tamanho, jogadores);
+
+    /* O gatilho: sobraram 10 % da onda, arredondando PARA CIMA.
+       Para cima, e não para baixo, porque com 3 porcos os 10 % dariam zero — e
+       exigir campo perfeitamente limpo faz a caçada travar atrás do último
+       javali que se enfiou numa moita. Com o arredondamento para cima, uma onda
+       de 3 chama a próxima quando resta 1, e uma de 30, quando restam 3. */
+    const limite = Math.ceil(this.waveSize * B.nextWaveRemaining);
+    const esvaziou = this.vivosDaOnda <= limite;
+    const demorou = this.waveTimer >= B.waveTimeout;
+    if (esvaziou || demorou) this.nextWave(jogadores);
   }
 
   view() {

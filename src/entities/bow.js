@@ -32,19 +32,29 @@ export class Bow {
     this.group.name = "bow";
     this.draw = 0;
 
+    /* ESPECULAR SELETIVA (Fase 1.5 do plano).
+     *
+     * Nem tudo brilha igual, e é justamente a DIFERENÇA de brilho entre as
+     * peças que conta de que material cada uma é feita. Com todas no mesmo
+     * `roughness` médio, o arco inteiro lê como um bloco de plástico fosco.
+     *
+     * O braço do arco é metal usinado: reflexo estreito e forte. O punho é
+     * couro trabalhado à mão: quase nada. A corda é fibra torcida: um brilho
+     * largo e fraco, que é o que faz a corda aparecer contra a paisagem sem
+     * virar um fio branco. */
     const black = new THREE.MeshStandardMaterial({
       color: "#17181c",
-      roughness: 0.38,
-      metalness: 0.22,
+      roughness: 0.3,
+      metalness: 0.7,
     });
     const grip = new THREE.MeshStandardMaterial({
       color: "#2a2117",
-      roughness: 0.85,
+      roughness: 0.92,
       metalness: 0.0,
     });
     const stringMat = new THREE.MeshStandardMaterial({
       color: "#d8d2c0",
-      roughness: 0.7,
+      roughness: 0.62,
       metalness: 0.0,
     });
     /* Exposto para o dono: cada arqueiro tem o SEU arco, e o piscar da

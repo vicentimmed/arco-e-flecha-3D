@@ -57,14 +57,18 @@ const ATALHOS = [
       [["2"], "duelo"],
       [["3"], "caçada aos porcos"],
       [["4"], "alvos em série"],
+      [["5"], "caçada ao alce"],
     ],
   },
   {
     titulo: "Sala",
     itens: [
-      [["Tab"], "placar"],
+      // O Tab saiu: no navegador ele é a tecla de navegação e o foco escapava
+      // para os controles do próprio navegador. Ver `systems/input.js`.
+      [["0"], "placar"],
       [["Y"], "zerar placar"],
       [["P"], "soltar porco"],
+      [["L"], "soltar alce"],
     ],
   },
   {
@@ -149,9 +153,21 @@ export class HUD {
       <div class="chip" id="target-chip">
         <span class="label">Alvo</span><span class="value" id="target-dist">—</span>
       </div>
+      <!-- Contagem de bichos em campo. Fixa, em TODOS os modos: é informação
+           de situação, não de modo. -->
       <div class="chip" id="boar-chip">
         <span class="label">Porcos</span>
         <span class="value" id="boar-count">0 vivos / 0 mortos</span>
+      </div>
+      <div class="chip" id="fauna-chip">
+        <span class="label">Fauna</span>
+        <span class="value" id="fauna-count">0 alces · 0 aves</span>
+      </div>
+
+      <!-- Vida do alce mais próximo. Só aparece quando existe um. -->
+      <div class="chip" id="elk-chip" hidden>
+        <span class="label" id="elk-label">Alce</span>
+        <div id="elk-bar"><div id="elk-bar-fill"></div></div>
       </div>
 
       <!-- Só aparece quando a conexão cai. Uma sala silenciosa e um servidor
@@ -174,6 +190,29 @@ export class HUD {
           <div id="power-mark"></div>
         </div>
         <div id="power-label">0 m/s</div>
+      </div>
+
+      <!-- Onda nova da caçada. Some sozinha; ver announceWave(). Sem crases
+           neste bloco: ele é um template literal, e uma crase o encerraria. -->
+      <div id="wave-banner" hidden>
+        <span id="wave-n"></span>
+        <span id="wave-size"></span>
+      </div>
+
+      <!-- Modo zumbi: horda, zumbis restantes e vidas. Fica junto dos outros
+           chips de situação, e não no meio da tela, porque é informação que se
+           consulta de relance entre um tiro e outro. -->
+      <div class="chip" id="zombie-chip" hidden>
+        <span class="label">Horda</span><span class="value" id="zombie-horde">1</span>
+        <span class="label">Zumbis</span><span class="value" id="zombie-left">0</span>
+        <span class="label">Vidas</span><span class="value" id="zombie-lives">♥♥♥</span>
+      </div>
+
+      <!-- Renascimento e game over. Este SIM no meio da tela: o jogador está
+           morto, não tem o que mirar, e a única coisa que importa é o número. -->
+      <div id="zombie-center" hidden>
+        <div id="zombie-center-title"></div>
+        <div id="zombie-center-sub"></div>
       </div>
 
       <div id="toasts"></div>
@@ -200,8 +239,22 @@ export class HUD {
       focus: root.querySelector("#focus"),
       targetDist: root.querySelector("#target-dist"),
       boarCount: root.querySelector("#boar-count"),
+      faunaCount: root.querySelector("#fauna-count"),
+      elkChip: root.querySelector("#elk-chip"),
+      elkLabel: root.querySelector("#elk-label"),
+      elkBarFill: root.querySelector("#elk-bar-fill"),
       netChip: root.querySelector("#net-chip"),
       modeBanner: root.querySelector("#mode-banner"),
+      waveBanner: root.querySelector("#wave-banner"),
+      waveN: root.querySelector("#wave-n"),
+      waveSize: root.querySelector("#wave-size"),
+      zombieChip: root.querySelector("#zombie-chip"),
+      zombieHorde: root.querySelector("#zombie-horde"),
+      zombieLeft: root.querySelector("#zombie-left"),
+      zombieLives: root.querySelector("#zombie-lives"),
+      zombieCenter: root.querySelector("#zombie-center"),
+      zombieCenterTitle: root.querySelector("#zombie-center-title"),
+      zombieCenterSub: root.querySelector("#zombie-center-sub"),
       power: root.querySelector("#power"),
       powerFill: root.querySelector("#power-fill"),
       powerMark: root.querySelector("#power-mark"),
@@ -261,8 +314,42 @@ export class HUD {
       index === null ? "—" : `#${index + 1} · ${distance.toFixed(0)} m`;
   }
 
-  setBoarCounts(alive, dead) {
+  /**
+   * Quantos bichos existem em campo agora. Sempre visível, em qualquer modo.
+   *
+   * @param {number} alive porcos vivos
+   * @param {number} dead corpos de porco ainda em cena
+   * @param {number} elks alces vivos
+   * @param {number} birds pássaros vivos
+   */
+  setCreatureCounts(alive, dead, elks, birds) {
     this.el.boarCount.textContent = `${alive} vivos / ${dead} mortos`;
+    this.el.faunaCount.textContent = `${elks} alces · ${birds} aves`;
+  }
+
+  /**
+   * Vida do alce mais próximo.
+   *
+   * A barra sobre a cabeça do bicho some quando ele está atrás de você — e é
+   * exatamente aí que saber se ele está quase caindo decide entre atirar mais
+   * uma vez ou correr. Por isso ela também vive aqui, fixa.
+   *
+   * @param {number|null} health 0..1, ou null quando não há alce em campo
+   */
+  setElk(health, state) {
+    if (health == null) {
+      this.el.elkChip.hidden = true;
+      return;
+    }
+    this.el.elkChip.hidden = false;
+    this.el.elkBarFill.style.width = `${Math.max(0, Math.min(1, health)) * 100}%`;
+    // Verde → âmbar → vermelho, igual à barra do bicho.
+    this.el.elkBarFill.style.background = `hsl(${health * 118}deg 65% 50%)`;
+    // Investindo: o aviso muda de texto e a peça pisca. É meio segundo de
+    // antecedência, e é o que separa sair da frente de levar a cabeçada.
+    const investindo = state === "charge";
+    this.el.elkLabel.textContent = investindo ? "ALCE INVESTINDO" : "Alce";
+    this.el.elkChip.classList.toggle("perigo", investindo);
   }
 
   /** Avisa quando a conexão cai — some sozinho quando ela volta. */
@@ -306,12 +393,74 @@ export class HUD {
     banner.className = mode;
     banner.append(
       texto(
-        { duel: "DUELO", boarHunt: "CAÇADA AOS PORCOS", series: "ALVOS EM SÉRIE" }[mode] ??
-          mode.toUpperCase(),
+        {
+          duel: "DUELO",
+          boarHunt: "CAÇADA AOS PORCOS",
+          series: "ALVOS EM SÉRIE",
+          elkHunt: "CAÇADA AO ALCE",
+          zombie: "NOITE DOS ZUMBIS",
+        }[mode] ?? mode.toUpperCase(),
         "forte",
       ),
       texto("   1 para sair"),
     );
+  }
+
+  /* --------------------------------------------------------------- zumbis -- */
+
+  /**
+   * O painel do modo: horda, quantos zumbis faltam e as vidas.
+   *
+   * Os corações são desenhados como texto e não como imagem por um motivo
+   * prático — eles precisam ser lidos de relance no meio de um cerco, e um
+   * glifo grande e cheio contrasta melhor com o fundo escuro do chip do que
+   * qualquer ícone pequeno.
+   */
+  setZombie(estado) {
+    const chip = this.el.zombieChip;
+    if (!estado) {
+      chip.hidden = true;
+      this.hideZombieCenter();
+      return;
+    }
+    chip.hidden = false;
+    this.el.zombieHorde.textContent = `${estado.horde} / ${estado.hordes}`;
+    this.el.zombieLeft.textContent = String(estado.remaining);
+
+    const vidas = Math.max(0, estado.lives ?? 0);
+    const total = estado.maxLives ?? 3;
+    this.el.zombieLives.textContent = "♥".repeat(vidas) + "♡".repeat(Math.max(0, total - vidas));
+    this.el.zombieLives.classList.toggle("perigo", vidas <= 1);
+  }
+
+  /** Faixa central: contagem de renascimento ou fim de jogo. */
+  showZombieCenter(titulo, sub = "", classe = "") {
+    const el = this.el.zombieCenter;
+    el.hidden = false;
+    el.className = classe;
+    this.el.zombieCenterTitle.textContent = titulo;
+    this.el.zombieCenterSub.textContent = sub;
+  }
+
+  hideZombieCenter() {
+    this.el.zombieCenter.hidden = true;
+  }
+
+  /** Faixa de horda nova — mesma mecânica da onda da caçada. */
+  announceHorde(n, size) {
+    const faixa = this.el.waveBanner;
+    this.el.waveN.textContent = `HORDA ${n}`;
+    this.el.waveSize.textContent = `${size} ${size === 1 ? "zumbi" : "zumbis"}`;
+    faixa.hidden = false;
+    faixa.classList.remove("entra");
+    void faixa.offsetWidth;
+    faixa.classList.add("entra");
+
+    clearTimeout(this._waveTimer);
+    this._waveTimer = setTimeout(() => {
+      faixa.hidden = true;
+      faixa.classList.remove("entra");
+    }, 2400);
   }
 
   addShot() {
@@ -330,6 +479,43 @@ export class HUD {
   }
 
   miss() {
+    this.refreshStats();
+  }
+
+  /**
+   * Anuncia uma onda nova da caçada.
+   *
+   * A faixa é grande e no meio da tela porque o aviso compete com o que está
+   * acontecendo: a pessoa está mirando, e um toast no canto passaria batido
+   * justamente quando seis javalis entraram em campo. Ela some sozinha em
+   * 2,4 s — tempo de ler, não de atrapalhar a mira.
+   *
+   * Reanunciar antes de a anterior sumir REINICIA a animação: sem tirar e
+   * repor a classe, o navegador ignora o `animation` de um elemento que já a
+   * tem, e a segunda onda entraria sem aviso nenhum.
+   */
+  announceWave(n, size) {
+    const faixa = this.el.waveBanner;
+    this.el.waveN.textContent = `ONDA ${n}`;
+    this.el.waveSize.textContent = `${size} ${size === 1 ? "porco" : "porcos"}`;
+    faixa.hidden = false;
+    faixa.classList.remove("entra");
+    void faixa.offsetWidth; // força o reinício da animação
+    faixa.classList.add("entra");
+
+    clearTimeout(this._waveTimer);
+    this._waveTimer = setTimeout(() => {
+      faixa.hidden = true;
+      faixa.classList.remove("entra");
+    }, 2400);
+  }
+
+  /** Zera a contabilidade local. Chamado quando a sala recomeça o mundo. */
+  resetStats() {
+    this.score = 0;
+    this.shots = 0;
+    this.hits = 0;
+    this.el.score.textContent = "0";
     this.refreshStats();
   }
 

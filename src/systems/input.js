@@ -20,6 +20,9 @@
 import { CONFIG } from "../config.js";
 import { clamp } from "../utils/math.js";
 
+/** As teclas de andar. Elas também encerram a câmera da flecha. */
+const MOVE_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD"]);
+
 export class Input {
   constructor(canvas, lockHint) {
     this.canvas = canvas;
@@ -49,7 +52,16 @@ export class Input {
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
     this.blockDraw = false;
 
-    /** Placar aberto (Tab segurado). */
+    /**
+     * Placar aberto (0 segurado).
+     *
+     * Era o Tab, a convenção dos jogos de tiro — e ela não sobrevive ao
+     * navegador: o Tab é a tecla de NAVEGAÇÃO da página, e mesmo com
+     * `preventDefault` o foco escapa para a barra de endereço e para os
+     * controles do próprio navegador quando o Pointer Lock não está ativo. O
+     * zero não tem dono, fica ao lado das teclas de modo (1–5) e não briga
+     * com ninguém.
+     */
     this.scoreboard = false;
 
     /**
@@ -73,6 +85,7 @@ export class Input {
       toggleWindInfluence: false,
       jump: false,
       spawnBoar: false,
+      spawnElk: false,
       toggleMusic: false,
       askRespawn: false, // K — renascer noutro lugar
       askResetScores: false, // Y — zerar o placar de todos
@@ -206,6 +219,16 @@ export class Input {
       }
 
       this.keys.add(e.code);
+
+      /* Andar durante a câmera da flecha traz a visão de volta, exatamente como
+         o clique já fazia. A pessoa que aperta W querendo se mexer está pedindo
+         para voltar ao corpo — obrigá-la a clicar antes é um passo a mais para
+         dizer a mesma coisa. Vai ANTES do switch porque W/A/S/D também precisam
+         continuar valendo como movimento no mesmo evento. */
+      if (this.blockDraw && MOVE_KEYS.has(e.code)) {
+        this.actions.dismissArrowCam = true;
+      }
+
       switch (e.code) {
         case "Escape":
           // Sempre processado por nós também: no modo livre não existe Esc
@@ -213,8 +236,13 @@ export class Input {
           if (this.active) this.disengage();
           break;
         case "Tab":
-          // Convenção de FPS. A troca de alvo, que morava aqui, foi para o Q.
+          /* Engolido, e só. O placar mudou para o zero (ver `scoreboard`), mas
+             o Tab continua sendo interceptado: solto, ele move o foco para os
+             controles do navegador no meio da partida. */
           e.preventDefault();
+          break;
+        case "Digit0":
+        case "Numpad0":
           this.scoreboard = true;
           break;
         case "KeyQ":
@@ -238,6 +266,12 @@ export class Input {
         case "Digit4":
           this.actions.setMode = "series";
           break;
+        case "Digit5":
+          this.actions.setMode = "elkHunt";
+          break;
+        case "Digit6":
+          this.actions.setMode = "zombie";
+          break;
         case "KeyC":
           this.firstPerson = true;
           break;
@@ -256,6 +290,9 @@ export class Input {
           break;
         case "KeyP":
           this.actions.spawnBoar = true;
+          break;
+        case "KeyL":
+          this.actions.spawnElk = true;
           break;
         case "KeyM":
           this.actions.toggleMusic = true;
@@ -279,13 +316,16 @@ export class Input {
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.code);
       if (e.code === "KeyC") this.firstPerson = false;
-      if (e.code === "Tab") this.scoreboard = false;
+      if (e.code === "Digit0" || e.code === "Numpad0") this.scoreboard = false;
       this.updateMovement(e);
     });
 
     window.addEventListener("blur", () => {
       this.keys.clear();
       this.drawing = false;
+      // O keyup do zero se perde junto com o foco; sem isto o placar ficaria
+      // aberto para sempre ao voltar para a aba.
+      this.scoreboard = false;
       this.updateMovement();
     });
   }
@@ -322,6 +362,7 @@ export class Input {
     a.toggleWindInfluence = false;
     a.jump = false;
     a.spawnBoar = false;
+    a.spawnElk = false;
     a.toggleMusic = false;
     a.askRespawn = false;
     a.askResetScores = false;

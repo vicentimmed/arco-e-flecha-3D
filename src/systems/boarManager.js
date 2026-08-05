@@ -11,8 +11,17 @@
    a cada impacto, para que o bando inteiro reaja igual em todas as telas.
    --------------------------------------------------------------------------- */
 
+import * as THREE from "three";
 import { Boar } from "../entities/boar.js";
 import { boarEntity } from "../shared/protocol.js";
+import { updateLodMap } from "../utils/lod.js";
+
+/* Alcance do LOD do javali, como múltiplo de `CONFIG.render.cullDistance`.
+   Não é 1 porque a caçada PONTUA por distância até 120 m: um javali que some
+   de vista a 60 m tornaria metade da tabela de pontos inalcançável. Com 2,2 o
+   bicho continua visível (em silhueta) muito além do abate mais caro, e ainda
+   assim são vinte e tantas malhas a menos por bicho no fundo do vale. */
+const BOAR_LOD_SCALE = 2.2;
 
 export class BoarManager {
   constructor(scene, physics, terrain) {
@@ -21,6 +30,7 @@ export class BoarManager {
     this.terrain = terrain;
     /** @type {Map<number, Boar>} id do servidor → casca local */
     this.byNetId = new Map();
+    this._cam = new THREE.Vector3();
   }
 
   get boars() {
@@ -85,7 +95,10 @@ export class BoarManager {
     this.byNetId.clear();
   }
 
-  update(dt) {
+  update(dt, camera) {
     for (const porco of this.byNetId.values()) porco.update(dt);
+    if (!camera) return;
+    camera.getWorldPosition(this._cam);
+    updateLodMap(this.byNetId, this._cam, BOAR_LOD_SCALE);
   }
 }

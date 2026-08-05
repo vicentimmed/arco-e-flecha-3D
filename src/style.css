@@ -121,7 +121,14 @@ body {
   animation: net-pulse 1.1s ease-in-out infinite;
 }
 
-#net-chip[hidden] {
+/* Vale para TODA peça, não só para a da rede.
+   `.chip` declara `display: flex`, e uma declaração de autor ganha do
+   `[hidden] { display: none }` que o navegador aplica por padrão — ou seja,
+   marcar `hidden` numa peça não a escondia. Estava escrito só para o
+   `#net-chip`, e a peça do alce nasceu com o mesmo defeito: ela aparecia com a
+   barra vazia mesmo sem alce nenhum em campo. Uma regra só fecha a porta para
+   a próxima peça também. */
+.chip[hidden] {
   display: none;
 }
 
@@ -211,6 +218,208 @@ body {
   top: 156px;
   right: 18px;
   font-size: 13px;
+}
+
+#fauna-chip {
+  top: 200px;
+  right: 18px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------- zumbis ----- */
+
+#zombie-chip {
+  top: 244px;
+  right: 18px;
+  font-size: 13px;
+  /* Verde-podre em vez do dourado dos outros chips: à noite o painel precisa
+     dizer sozinho a que modo pertence, sem ninguém ler o texto. */
+  border-color: rgba(124, 168, 92, 0.5);
+}
+
+#zombie-chip[hidden] {
+  display: none;
+}
+
+#zombie-lives {
+  color: #e2483c;
+  letter-spacing: 0.06em;
+}
+
+/* Uma vida restando: o coração pulsa. É o único aviso do jogo que se move, e
+   move-se justamente porque a pessoa está prestes a cair. */
+#zombie-lives.perigo {
+  animation: pulso-vida 0.9s ease-in-out infinite;
+}
+
+@keyframes pulso-vida {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.14); }
+}
+
+#zombie-center {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 34px;
+  background: rgba(10, 8, 12, 0.72);
+  border: 1px solid rgba(226, 72, 60, 0.35);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+#zombie-center[hidden] {
+  display: none;
+}
+
+#zombie-center-title {
+  font-size: 40px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  text-shadow: 0 3px 14px rgba(0, 0, 0, 0.8);
+}
+
+#zombie-center-sub {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+#zombie-center.gameover {
+  border-color: var(--red);
+}
+
+#zombie-center.gameover #zombie-center-title {
+  color: var(--red);
+}
+
+#zombie-center.vitoria {
+  border-color: var(--gold);
+}
+
+#zombie-center.vitoria #zombie-center-title {
+  color: var(--gold);
+}
+
+/* ------------------------------------------------------- onda da caçada --- */
+
+#wave-banner {
+  position: absolute;
+  top: 27%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  /* Não intercepta clique nenhum: é aviso, e o jogador está mirando por cima. */
+  pointer-events: none;
+  text-align: center;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.75);
+}
+
+#wave-banner[hidden] {
+  display: none;
+}
+
+#wave-n {
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: var(--gold);
+}
+
+#wave-size {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #f2ece0;
+  opacity: 0.85;
+}
+
+/* Entra crescendo e desaparece: chama o olho no primeiro instante e sai antes
+   de virar obstáculo entre a mira e o campo. */
+#wave-banner.entra {
+  animation: onda-entra 2.4s ease-out forwards;
+}
+
+@keyframes onda-entra {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.82);
+  }
+  12% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.04);
+  }
+  20% {
+    transform: translateX(-50%) scale(1);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1);
+  }
+}
+
+/* ------------------------------------------------------------------ alce -- */
+
+#elk-chip {
+  top: 244px;
+  right: 18px;
+  font-size: 13px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  min-width: 148px;
+  /* As outras peças são pílulas porque têm uma linha só; esta tem duas, e a
+     pílula deixaria a barra encostando na curva da borda. */
+  border-radius: 14px;
+}
+
+#elk-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+#elk-bar-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 4px;
+  transition: width 140ms linear;
+}
+
+/* Investindo: a peça pisca. É o único aviso que chega quando o bicho vem por
+   trás, e meio segundo de antecedência é a diferença entre desviar e morrer. */
+#elk-chip.perigo {
+  animation: elk-alerta 0.55s ease-in-out infinite;
+}
+
+#elk-chip.perigo .label {
+  color: #ff6a52;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+@keyframes elk-alerta {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(255, 90, 60, 0);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(255, 90, 60, 0.55);
+  }
 }
 
 /* ---------------------------------------------------------------- força ---- */
@@ -588,6 +797,20 @@ body {
 #debug .row b {
   color: var(--text);
   font-weight: 700;
+}
+
+/* Semáforo do orçamento de desenho (ver `ui/debug.js`): o número sozinho não
+   diz se 480 chamadas é bom ou ruim — a cor diz. */
+#debug .row b.ok {
+  color: #7ddc86;
+}
+
+#debug .row b.warn {
+  color: #f0c04a;
+}
+
+#debug .row b.bad {
+  color: #ff7d6e;
 }
 
 #debug .slider {

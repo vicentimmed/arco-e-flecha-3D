@@ -31,8 +31,20 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "boar") {
     return resolveBoarHit(ctx);
   }
+  if (other.kind === "elk") {
+    return resolveElkHit(ctx);
+  }
+  if (other.kind === "bird") {
+    return resolveBirdHit(ctx);
+  }
   if (other.kind === "seriesTarget") {
     return resolveSeriesHit(ctx);
+  }
+  if (other.kind === "zombie") {
+    return resolveZombieHit(ctx);
+  }
+  if (other.kind === "torch") {
+    return resolveTorchHit(ctx);
   }
   return resolveSceneryHit(ctx);
 }
@@ -118,12 +130,57 @@ function resolveBoarHit({ arrow, other, impact, deps }) {
 }
 
 /**
+ * Alce: a flecha CRAVA e o bicho continua vivo.
+ *
+ * É a diferença essencial para o porco, que morre no primeiro acerto. Aqui a
+ * flecha fica espetada no corpo cinemático e sai correndo junto — depois de
+ * cinco ou seis, o alce é uma almofada de agulhas vindo na sua direção, e essa
+ * imagem é o placar da briga. Quem conta a vida é o servidor; este lado só
+ * avisa que acertou.
+ */
+function resolveElkHit({ arrow, other, impact, deps }) {
+  const elk = other.elk;
+  if (!elk || elk.dead) return null;
+
+  elk.registerHit(impact, arrow);
+  emitImpact(arrow, "elk", elk.entityId, impact, null, { label: "alce" });
+  deps.spawnPuff?.(impact, null);
+
+  arrow.stick(elk.body, true);
+  deps.retireArrow?.(arrow);
+  return { kind: "elk", entityId: elk.entityId };
+}
+
+/**
+ * Pássaro: alvo pequeno, e a flecha SEGUE em frente.
+ *
+ * Não crava por uma razão física simples — uma flecha de caça atravessa um
+ * bicho de duzentos gramas —, e por uma razão de jogo: a flecha parada no ar a
+ * trinta metros de altura, onde o pássaro estava, ficaria pendurada ali para
+ * sempre. O corpo cai, a flecha some.
+ */
+function resolveBirdHit({ arrow, other, impact, deps }) {
+  const bird = other.bird;
+  if (!bird || bird.dead) return null;
+
+  bird.registerHit(impact, arrow);
+  emitImpact(arrow, "bird", bird.entityId, impact, null, { label: "pássaro" });
+  deps.spawnPuff?.(impact, null);
+  deps.removeArrow?.(arrow);
+  return { kind: "bird", entityId: bird.entityId };
+}
+
+/**
  * Alvo da série: ele não crava a flecha, ele EXPLODE.
  *
- * A flecha é retirada em vez de ficar espetada porque o alvo some no mesmo
- * instante — uma flecha pendurada no ar onde havia um alvo seria pior que
- * nenhuma. A explosão e o próximo alvo vêm do servidor, que é quem decide se
- * este acerto valeu (dois jogadores podem acertar quase juntos).
+ * E a flecha SOME junto. Ela era congelada no ponto do acerto, o que dava o
+ * resultado esquisito de uma flecha (às vezes três, quando o alvo aguenta dois
+ * tiros quase simultâneos) pendurada no ar, a duzentos metros, no lugar onde
+ * havia um alvo que já explodiu. Como o alvo desaparece, não sobrou nada em que
+ * ela pudesse estar cravada — o certo é ela ir embora na explosão.
+ *
+ * A explosão e o próximo alvo vêm do servidor, que é quem decide se este acerto
+ * valeu (dois jogadores podem acertar quase juntos).
  */
 function resolveSeriesHit({ arrow, other, impact, deps }) {
   emitImpact(arrow, "seriesTarget", other.seq, impact, null, {
@@ -131,9 +188,52 @@ function resolveSeriesHit({ arrow, other, impact, deps }) {
     seriesTarget: other.series,
   });
   deps.spawnPuff?.(impact, null);
+  deps.removeArrow?.(arrow);
+  return { kind: "seriesTarget", seq: other.seq };
+}
+
+/**
+ * Zumbi: duas no corpo, uma na cabeça.
+ *
+ * A CABEÇA É DECIDIDA AQUI, pela altura do ponto de contato em relação à base do
+ * corpo — e não por um colisor separado para o crânio. Um segundo colisor por
+ * zumbi custaria o dobro de corpos na física com vinte e um deles em campo, e
+ * não compraria precisão nenhuma que importe: a cabeça de um zumbi de 1,8 m é
+ * tudo acima de 1,45 m, e é exatamente isso que a comparação diz.
+ *
+ * A flecha CRAVA no corpo, como no alce. Um zumbi andando com duas flechas
+ * espetadas é o placar visível de quanto falta para ele cair.
+ */
+function resolveZombieHit({ arrow, other, impact, deps }) {
+  const zombie = other.zombie;
+  if (!zombie || zombie.dead) return null;
+
+  const head = impact.y - zombie.position.y >= CONFIG.modes.zombie.headMinY;
+  zombie.registerHit(impact, arrow, head);
+  emitImpact(arrow, "zombie", zombie.entityId, impact, null, {
+    label: head ? "zumbi (cabeça)" : "zumbi",
+    head,
+  });
+  deps.spawnPuff?.(impact, null);
+
+  arrow.stick(zombie.body, true);
+  deps.retireArrow?.(arrow);
+  return { kind: "zombie", entityId: zombie.entityId, head };
+}
+
+/**
+ * Tocha: a flecha apaga a chama.
+ *
+ * É o único cenário destrutível do jogo, e é destrutível de propósito — errar o
+ * zumbi e acertar a tocha escurece o próprio canto de quem errou. O risco é o
+ * que dá peso a cada tiro no meio da horda.
+ */
+function resolveTorchHit({ arrow, other, impact, normal, deps }) {
+  emitImpact(arrow, "torch", other.index, impact, normal, { label: "tocha" });
+  deps.spawnPuff?.(impact, normal);
   arrow.stick(null, false);
   deps.retireArrow?.(arrow);
-  return { kind: "seriesTarget", seq: other.seq };
+  return { kind: "torch", index: other.index };
 }
 
 function resolveSceneryHit({ arrow, other, impact, normal, deps }) {

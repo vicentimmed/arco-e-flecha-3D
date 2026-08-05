@@ -29,20 +29,26 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 let sharedArrowGeometry = null;
 
-function buildArrowMesh() {
+/** @param {number|null} color cor do dono; null = uniforme padrão da flecha */
+function buildArrowMesh(color = null) {
   if (!sharedArrowGeometry) {
     const L = CONFIG.arrow.length;
     const r = CONFIG.arrow.shaftRadius;
 
+    /* Especular seletiva (Fase 1.5). A PONTA é o brilho mais forte do jogo
+       inteiro: aço polido, quase espelho. É ela que faz a flecha em voo piscar
+       quando cruza o sol, e é esse lampejo que deixa a trajetória legível a
+       oitenta metros — antes, com metalness 0.75 e o mesmo `roughness` da
+       haste, ponta e madeira brilhavam igual e a flecha era um palito. */
     const shaftMat = new THREE.MeshStandardMaterial({
       color: "#c9b58c",
-      roughness: 0.55,
-      metalness: 0.05,
+      roughness: 0.62,
+      metalness: 0.0,
     });
     const tipMat = new THREE.MeshStandardMaterial({
       color: "#9aa0a6",
-      roughness: 0.3,
-      metalness: 0.75,
+      roughness: 0.22,
+      metalness: 0.85,
     });
     const fletchMat = new THREE.MeshStandardMaterial({
       color: "#d6483c",
@@ -84,8 +90,20 @@ function buildArrowMesh() {
   nock.position.y = -L / 2 + 0.01;
   group.add(nock);
 
+  /* A EMPENA LEVA A COR DE QUEM ATIROU (Fase 5A.6 do plano).
+   *
+   * O material é clonado por flecha só para as três empenas — o resto continua
+   * compartilhado. É a diferença entre um material por flecha e vinte, e a
+   * empena é a única peça que precisa variar: numa flecha cravada no alvo, a
+   * três centímetros de outra, é a cor dela que diz de quem foi o tiro.
+   *
+   * Sem dono (jogo local) fica a cor de fábrica e nada é clonado. */
+  const fletchMat = color != null ? g.fletchMat.clone() : g.fletchMat;
+  if (color != null) fletchMat.color.set(color).lerp(WHITE_REF, 0.18);
+  group.userData.fletchMat = color != null ? fletchMat : null;
+
   for (let i = 0; i < 3; i++) {
-    const fletch = new THREE.Mesh(g.fletch, g.fletchMat);
+    const fletch = new THREE.Mesh(g.fletch, fletchMat);
     fletch.position.set(0, -L / 2 + 0.075, 0.012);
     const holder = new THREE.Group();
     holder.rotation.y = (i * Math.PI * 2) / 3;
@@ -93,6 +111,54 @@ function buildArrowMesh() {
     group.add(holder);
   }
   return group;
+}
+
+/** Branco de referência: a empena é clareada para não sumir contra o alvo. */
+const WHITE_REF = new THREE.Color(1, 1, 1);
+
+/* ------------------------------------------------------------- incendiária -- */
+
+let sharedFire = null;
+
+/**
+ * A parte acesa de uma flecha incendiária: labareda + luz.
+ *
+ * A LUZ É O PONTO, não o enfeite. No modo zumbi o mundo acaba na borda das
+ * tochas, e uma flecha que ilumina o próprio caminho é a única forma de o
+ * jogador ver alguma coisa lá fora — atirar vira, também, acender uma lanterna
+ * por dois segundos. É por isso que ela tem alcance generoso e decaimento
+ * suave, em vez de ser um brilho colado na ponta.
+ *
+ * Uma `PointLight` por flecha VIVA, e só neste modo. Sem sombra, pelo mesmo
+ * motivo das tochas (seriam seis passes por flecha). Com o teto de flechas
+ * simultâneas do jogo isso fica em poucas luzes ao mesmo tempo.
+ */
+function buildFireParts() {
+  if (!sharedFire) {
+    sharedFire = {
+      // Cone invertido: a labareda se arrasta PARA TRÁS da ponta, ao longo do
+      // eixo local -Y, que é o rastro que o olho espera de algo em voo.
+      chama: new THREE.ConeGeometry(0.045, 0.34, 6, 1, true),
+      material: new THREE.MeshBasicMaterial({
+        color: 0xffa63a,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        fog: false,
+      }),
+    };
+    sharedFire.chama.rotateX(Math.PI); // ponta da chama para -Y
+  }
+  const material = sharedFire.material.clone();
+  const chama = new THREE.Mesh(sharedFire.chama, material);
+  chama.position.y = CONFIG.arrow.length / 2 - 0.1;
+  chama.renderOrder = 6;
+
+  const luz = new THREE.PointLight(0xff8c2a, 14, 26, 1.5);
+  luz.castShadow = false;
+  luz.position.y = CONFIG.arrow.length / 2;
+
+  return { chama, luz, material };
 }
 
 /* ---------------------------------------------------------------- flecha -- */
@@ -110,6 +176,7 @@ export class Arrow {
     trail = null,
     ownerEntityId = null,
     visualOnly = false,
+    color = null,
   ) {
     this.id = nextArrowId++;
     this.ownerEntityId = ownerEntityId;
@@ -141,7 +208,7 @@ export class Arrow {
     this.lastDragForce = 0;
     if (this.trail) this.trail.push(origin.x, origin.y, origin.z);
 
-    this.mesh = buildArrowMesh();
+    this.mesh = buildArrowMesh(color);
     this.mesh.position.copy(origin);
     const q = new THREE.Quaternion().setFromUnitVectors(UP, direction);
     this.mesh.quaternion.copy(q);
@@ -367,9 +434,61 @@ export class Arrow {
     this.sync.snap(this.body);
   }
 
+  /** Acende a flecha. Chamado pelo gerenciador quando o modo pede fogo. */
+  ignite() {
+    if (this.fire) return;
+    this.fire = buildFireParts();
+    this.mesh.add(this.fire.chama);
+    this.mesh.add(this.fire.luz);
+    this.fireAge = 0;
+  }
+
+  /**
+   * O fogo treme enquanto voa e se apaga depois de cravar.
+   *
+   * Cravada, a flecha vira uma tocha fraquinha por alguns segundos antes de
+   * morrer. É um detalhe barato com efeito de jogo real: um tiro perdido no
+   * escuro deixa uma brasa marcando onde ele foi parar.
+   */
+  updateFire(dt) {
+    if (!this.fire) return;
+    this.fireAge += dt;
+
+    const t = this.fireAge;
+    const tremor = 0.82 + 0.12 * Math.sin(t * 31) + 0.06 * Math.sin(t * 47);
+
+    if (this.stuck) {
+      // Cravada: some em 4 s.
+      const p = Math.min(1, (this.stuckAge = (this.stuckAge ?? 0) + dt) / 4);
+      const f = (1 - p) * tremor;
+      this.fire.luz.intensity = 14 * f * 0.5;
+      this.fire.material.opacity = 0.9 * f;
+      this.fire.chama.scale.setScalar(0.6 + f * 0.5);
+      if (p >= 1) this.extinguish();
+      return;
+    }
+
+    this.fire.luz.intensity = 14 * tremor;
+    this.fire.material.opacity = 0.9;
+    // Em voo a labareda estica: quanto mais rápido, mais longo o rastro.
+    const v = this.lastVelocity;
+    const rapidez = Math.min(1, Math.hypot(v.x, v.y, v.z) / 80);
+    this.fire.chama.scale.set(tremor, 0.7 + rapidez * 1.9, tremor);
+  }
+
+  extinguish() {
+    if (!this.fire) return;
+    this.mesh.remove(this.fire.chama);
+    this.mesh.remove(this.fire.luz);
+    this.fire.luz.dispose?.();
+    this.fire.material.dispose();
+    this.fire = null;
+  }
+
   dispose() {
     if (this.dead) return;
     this.dead = true;
+    this.extinguish();
     // Uma flecha que sumiu sem cravar (saiu do mapa, expirou) também encerra o
     // traçado — senão ele ficaria eternamente "em voo" e nunca desapareceria.
     if (this.trail) this.trail.finish();
@@ -380,8 +499,12 @@ export class Arrow {
     this.sync.remove(this.body);
     this.physics.removeBody(this.body);
     this.scene.remove(this.mesh);
-    // Geometrias e materiais da flecha são compartilhados entre todas as
-    // instâncias: nada a liberar aqui.
+    /* Geometrias e materiais da flecha são compartilhados entre todas as
+       instâncias — com UMA exceção: quando a flecha tem dono, o material da
+       empena é um clone tingido com a cor dele (ver `buildArrowMesh`). Esse é
+       desta flecha e morre com ela; sem isto, uma partida longa deixaria um
+       material vazando por disparo. */
+    this.mesh.userData.fletchMat?.dispose();
   }
 }
 
@@ -402,6 +525,9 @@ export class ArrowManager {
       aeroStabilization: true,
       windInfluence: true,
     };
+    /* Flechas incendiárias. Ligado só pelo modo zumbi — ver `systems/torches.js`
+       para a razão de o fogo ser fonte de luz e não enfeite. */
+    this.fireArrows = false;
     this._noWind = new THREE.Vector3();
 
     this.onScore = null;
@@ -453,8 +579,13 @@ export class ArrowManager {
       this.trails ? this.trails.create(ownerEntityId, trailColor) : null,
       ownerEntityId,
       visualOnly,
+      // A empena leva a cor do dono, como o traçado. Ver `buildArrowMesh`.
+      ownerEntityId != null ? trailColor : null,
     );
     this.live.push(arrow);
+    // Vale para as flechas dos OUTROS também: ver o amigo riscar o escuro com
+    // fogo do outro lado do quadrado é metade da graça do modo.
+    if (this.fireArrows) arrow.ignite();
     // A câmera de acompanhamento só segue as SUAS flechas.
     if (!visualOnly) this.lastArrow = arrow;
     return arrow;
@@ -492,6 +623,7 @@ export class ArrowManager {
         onCharacterHit: this.onCharacterHit,
         spawnPuff: (p, n) => this.spawnPuff(p, n),
         retireArrow: (a) => this.retire(a),
+        removeArrow: (a) => this.remove(a),
       },
     });
 
@@ -526,6 +658,22 @@ export class ArrowManager {
     while (this.stuck.length > maxStuckTotal) this.stuck.shift().dispose();
   }
 
+  /**
+   * Tira a flecha de cena imediatamente, sem passar por "cravada".
+   *
+   * É o caminho de quem acertou algo que DESAPARECE no impacto — hoje só o alvo
+   * da série, que explode. Não é o mesmo que `retire`: aquele guarda a flecha
+   * no mundo, este a apaga.
+   */
+  remove(arrow) {
+    const i = this.live.indexOf(arrow);
+    if (i >= 0) this.live.splice(i, 1);
+    const j = this.stuck.indexOf(arrow);
+    if (j >= 0) this.stuck.splice(j, 1);
+    if (this.lastArrow === arrow) this.lastArrow = null;
+    arrow.dispose();
+  }
+
   update(dt) {
     for (let i = this.live.length - 1; i >= 0; i--) {
       const arrow = this.live[i];
@@ -549,8 +697,12 @@ export class ArrowManager {
       if (tooOld || tooFar) {
         this.live.splice(i, 1);
         arrow.dispose();
+        continue;
       }
+      arrow.updateFire(dt);
     }
+    // As cravadas também: é o fogo delas que vira brasa marcando onde caíram.
+    for (const arrow of this.stuck) arrow.updateFire(dt);
     this.updatePuffs(dt);
   }
 

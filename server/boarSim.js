@@ -26,8 +26,12 @@ export class Boar {
    * @param {boolean} fun porco solto na mão por alguém, só por diversão.
    *   Ele anda e reage igual; só não vale ponto, porque ponto se ganha no modo
    *   caçada, onde as ondas vêm sozinhas e não dá para escolher a distância.
+   * @param {object|null} herd o PONTO do bando deste porco (ver `BoarHunt.herds`),
+   *   ou `null` para um porco desgarrado. Vários porcos compartilham o mesmo
+   *   objeto — é assim que eles pastam perto uns dos outros sem precisar saber
+   *   a posição um do outro: cada um só orbita o ponto em comum.
    */
-  constructor(terrain, x, z, fun = false, wave = 0) {
+  constructor(terrain, x, z, fun = false, wave = 0, herd = null) {
     this.id = proximoId++;
     this.fun = fun;
     /** Índice da onda que trouxe este porco. `0` = avulso, solto na mão. */
@@ -44,10 +48,22 @@ export class Boar {
     this.dead = false;
     this.deadSince = 0;
     this.fleeFrom = null;
+    this.herd = herd;
     this.pickWanderTarget();
   }
 
   pickWanderTarget() {
+    // No bando, o destino orbita o PONTO DO BANDO, não a própria posição —
+    // senão cada porco vagaria com seu próprio raio e o grupo se espalharia
+    // pelo mapa em poucos ciclos, exatamente como um desgarrado.
+    if (this.herd) {
+      const r = CONFIG.boar.herd.radius;
+      const ang = Math.random() * Math.PI * 2;
+      const d = Math.random() * r;
+      this.targetX = this.herd.x + Math.cos(ang) * d;
+      this.targetZ = this.herd.z + Math.sin(ang) * d;
+      return;
+    }
     const r = CONFIG.boar.wanderRadius;
     const ang = Math.random() * Math.PI * 2;
     const d = 3 + Math.random() * r;
@@ -182,10 +198,10 @@ export class Boar {
 /* ------------------------------------------------------------- a caçada ---- */
 
 /**
- * O modo de caçada: ondas que crescem.
+ * O modo de caçada: ondas que crescem, até um limite.
  *
- * 3 → 6 → 10 → 15 → 20 → 30, e daí em diante 30. A leva seguinte entra quando
- * sobram 10 % da atual, e não quando um cronômetro toca.
+ * 3 → 6 → 10 → 15 → 20. A leva seguinte entra quando sobram 10 % da atual, e
+ * não quando um cronômetro toca.
  *
  * A DIFERENÇA IMPORTA. Com relógio, quem atira devagar acumula porcos até o
  * campo virar um formigueiro, e quem atira rápido fica esperando de braços
@@ -196,6 +212,10 @@ export class Boar {
  * Os 10 % (e não "campo limpo") existem para o modo não travar atrás do último
  * javali escondido numa dobra do terreno. E o `waveTimeout` é a rede embaixo
  * disso: se nem os 10 % caírem, a onda entra assim mesmo.
+ *
+ * Esgotada a quinta onda (`maxWaves`), a caçada termina: a sala anuncia a
+ * vitória e nenhuma onda nova entra, mas os porcos que sobraram continuam
+ * vivos, andando e valendo ponto — só o cronômetro de ondas para.
  *
  * Todos os números vivem em `CONFIG.modes.boarHunt`.
  */
@@ -215,6 +235,18 @@ export class BoarHunt {
      * quem lê, limpa (ver `takeWaveAnnouncement`).
      */
     this.pendingWave = null;
+    /** A quinta onda já esgotou — não entra onda nova. */
+    this.finished = false;
+    /** Vitória recém-decidida, para a sala anunciar uma única vez. */
+    this.pendingVictory = false;
+    /**
+     * Os PONTOS dos bandos vivos — cada um é `{x, z, targetX, targetZ, timer}`,
+     * compartilhado pelos porcos daquele bando (ver `Boar.herd`). Um `Set` e
+     * não um `Map` por id porque nada aqui precisa procurar um bando pelo
+     * nome — só percorrer todos, a cada passo, e descartar os que ficaram sem
+     * porco vivo.
+     */
+    this.herds = new Set();
   }
 
   get vivos() {
@@ -239,6 +271,8 @@ export class BoarHunt {
     if (this.active) return;
     this.active = true;
     this.waveCount = 0;
+    this.finished = false;
+    this.pendingVictory = false;
     this.nextWave(jogadores);
   }
 
@@ -258,6 +292,13 @@ export class BoarHunt {
     return aviso;
   }
 
+  /** Devolve `true` uma única vez, no instante em que a quinta onda esgota. */
+  takeVictoryAnnouncement() {
+    if (!this.pendingVictory) return false;
+    this.pendingVictory = false;
+    return true;
+  }
+
   /**
    * Encerra as ondas — mas NÃO varre o campo.
    *
@@ -270,17 +311,58 @@ export class BoarHunt {
     this.boars = this.boars.filter((b) => b.fun);
   }
 
+  /**
+   * Traz `quantos` porcos ao campo, agrupados em bandos de até
+   * `CONFIG.boar.herd.maxSize` — com uma fração deles desgarrada (ver
+   * `pickHerdSize`). Cada bando nasce de um `pickBoarSpawn` só, e os membros se
+   * espalham a partir dali — é a partir desse mesmo ponto que o bando começa a
+   * pastar (ver `Boar.pickWanderTarget`).
+   */
   spawnMany(quantos, jogadores, fun = false, wave = 0) {
     const B = CONFIG.modes.boarHunt;
     const criados = [];
-    for (let i = 0; i < quantos && this.vivos < B.maxAlive; i++) {
+    let restam = quantos;
+
+    while (restam > 0 && this.vivos < B.maxAlive) {
+      const tamanho = fun ? 1 : Math.min(restam, this.pickHerdSize());
       const ponto = pickBoarSpawn(this.terrain, jogadores);
-      if (!ponto) continue;
-      const b = new Boar(this.terrain, ponto.x, ponto.z, fun, wave);
-      this.boars.push(b);
-      criados.push(b);
+      if (!ponto) break;
+
+      const herd =
+        tamanho > 1
+          ? { x: ponto.x, z: ponto.z, targetX: ponto.x, targetZ: ponto.z, timer: 0 }
+          : null;
+      if (herd) this.herds.add(herd);
+
+      for (let i = 0; i < tamanho && this.vivos < B.maxAlive; i++) {
+        // O primeiro porco nasce no próprio ponto; os demais se espalham perto
+        // dele, dentro do raio do bando — senão nasceriam todos empilhados.
+        let x = ponto.x;
+        let z = ponto.z;
+        if (i > 0) {
+          const ang = Math.random() * Math.PI * 2;
+          const d = Math.random() * CONFIG.boar.herd.radius;
+          const cx = ponto.x + Math.cos(ang) * d;
+          const cz = ponto.z + Math.sin(ang) * d;
+          if (this.terrain.isWalkable(cx, cz)) {
+            x = cx;
+            z = cz;
+          }
+        }
+        const b = new Boar(this.terrain, x, z, fun, wave, herd);
+        this.boars.push(b);
+        criados.push(b);
+        restam--;
+      }
     }
     return criados;
+  }
+
+  /** Sorteia o tamanho de um bando novo: a maioria em grupo, uma fração sozinha. */
+  pickHerdSize() {
+    const H = CONFIG.boar.herd;
+    if (Math.random() < H.soloChance) return 1;
+    return 2 + Math.floor(Math.random() * (H.maxSize - 1));
   }
 
   /** Marca como morto. Devolve o porco, ou null se já estava. */
@@ -302,8 +384,62 @@ export class BoarHunt {
     }
   }
 
+  /**
+   * Faz cada bando derivar devagar pelo mapa.
+   *
+   * O ponto do bando anda sozinho, bem mais devagar que um porco (ver
+   * `herd.driftSpeed`) — os membros é que orbitam ele ao pastar. Sem essa
+   * deriva o bando ficaria sempre plantado no ponto de nascimento; com ela,
+   * a caçada encontra bandos em lugares diferentes do mapa com o tempo, e não
+   * só onde a onda decidiu que eles nasceriam.
+   */
+  updateHerds(dt) {
+    const H = CONFIG.boar.herd;
+    for (const h of this.herds) {
+      h.timer -= dt;
+      const chegou = Math.hypot(h.targetX - h.x, h.targetZ - h.z) < 2;
+      if (h.timer <= 0 || chegou) {
+        const alvo = this.pickHerdDriftPoint(h);
+        if (alvo) {
+          h.targetX = alvo.x;
+          h.targetZ = alvo.z;
+        }
+        // Achou ou não achou chão bom desta vez, tenta de novo em breve — não
+        // trava a deriva esperando o intervalo inteiro se a primeira tentativa
+        // caiu numa encosta.
+        h.timer = alvo
+          ? H.driftInterval * (0.6 + Math.random() * 0.8)
+          : 2;
+      }
+
+      const dx = h.targetX - h.x;
+      const dz = h.targetZ - h.z;
+      const len = Math.hypot(dx, dz);
+      if (len < 1e-3) continue;
+      const passo = Math.min(len, H.driftSpeed * dt);
+      h.x += (dx / len) * passo;
+      h.z += (dz / len) * passo;
+    }
+  }
+
+  /** Um novo destino para o bando `h`: chão de arena a uma boa distância dali. */
+  pickHerdDriftPoint(h) {
+    for (let i = 0; i < 20; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const d = 8 + Math.random() * 18;
+      const x = h.x + Math.cos(ang) * d;
+      const z = h.z + Math.sin(ang) * d;
+      if (!this.terrain.isWalkable(x, z)) continue;
+      if (this.terrain.arenaDistance(x, z) > 0) continue;
+      return { x, z };
+    }
+    return null;
+  }
+
   update(dt, jogadores, agora) {
     const B = CONFIG.modes.boarHunt;
+
+    this.updateHerds(dt);
 
     // Os porcos andam sempre que existem — inclusive os avulsos, fora da
     // caçada. Só as ONDAS dependem do modo estar ligado.
@@ -315,18 +451,33 @@ export class BoarHunt {
       (b) => !b.dead || agora - b.deadSince < B.corpseLifetime * 1000,
     );
 
-    if (!this.active) return;
+    // Bando sem porco vivo não tem mais o que segurar junto — descarta, senão
+    // o `Set` só cresce ao longo de uma caçada inteira.
+    for (const h of this.herds) {
+      if (!this.boars.some((b) => !b.dead && b.herd === h)) this.herds.delete(h);
+    }
+
+    if (!this.active || this.finished) return;
     this.waveTimer += dt;
 
     /* O gatilho: sobraram 10 % da onda, arredondando PARA CIMA.
        Para cima, e não para baixo, porque com 3 porcos os 10 % dariam zero — e
        exigir campo perfeitamente limpo faz a caçada travar atrás do último
        javali que se enfiou numa moita. Com o arredondamento para cima, uma onda
-       de 3 chama a próxima quando resta 1, e uma de 30, quando restam 3. */
+       de 3 chama a próxima quando resta 1, e uma de 20, quando restam 2. */
     const limite = Math.ceil(this.waveSize * B.nextWaveRemaining);
     const esvaziou = this.vivosDaOnda <= limite;
     const demorou = this.waveTimer >= B.waveTimeout;
-    if (esvaziou || demorou) this.nextWave(jogadores);
+    if (!esvaziou && !demorou) return;
+
+    if (this.waveCount >= B.maxWaves) {
+      // A quinta onda esgotou: a caçada termina aqui. Os porcos que sobraram
+      // continuam em campo (ver o `filter` acima) — só o relógio de ondas para.
+      this.finished = true;
+      this.pendingVictory = true;
+      return;
+    }
+    this.nextWave(jogadores);
   }
 
   view() {

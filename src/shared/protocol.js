@@ -105,6 +105,12 @@ export const S2C = {
   BOAR_DEATH: "boarDeath",
   /** Nova onda da caçada: `{ n, size }`. Vira faixa na tela e toque de trompa. */
   WAVE: "wave",
+  /**
+   * A caçada acabou: a quinta onda esgotou.
+   * `{ ranking: [{ id, name, color, boars }, ...] }`, do maior abatedor ao
+   * menor. Vira a tela de vitória — os porcos que sobraram continuam vivos.
+   */
+  HUNT_OVER: "huntOver",
   /** Transformações dos alces, 10 Hz — com a fração de vida de cada um. */
   ELKS: "elks",
   /** Alce levou uma flecha: `{ id, health, killer }` — dor, não morte. */
@@ -145,7 +151,9 @@ export const S2C = {
   TORCHES: "torches",
   /** Vidas, caídos e contadores do modo zumbi. Ver `Room.zombieStatus()`. */
   ZOMBIE_STATUS: "zombieStatus",
-  /** Acabou: `{ reason, horde }`. Todos caíram, ou a horda 10 foi vencida. */
+  /** Acabou: `{ reason, horde, ranking? }`. Todos caíram, ou a horda 10 foi
+   *  vencida — só a vitória carrega `ranking` (abates e mortes de cada um),
+   *  para a tela final. */
   ZOMBIE_OVER: "zombieOver",
   /** Resposta do sincronismo: `{ c, s }`. */
   PONG: "pong",

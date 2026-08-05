@@ -39,6 +39,7 @@ const ATALHOS = [
       [["Clique"], "segurar e soltar"],
       [["Dir.", "C"], "1ª pessoa"],
       [["Q"], "trocar de alvo"],
+      [["F"], "câmera da flecha liga/desliga"],
     ],
   },
   {
@@ -58,6 +59,7 @@ const ATALHOS = [
       [["3"], "caçada aos porcos"],
       [["4"], "alvos em série"],
       [["5"], "caçada ao alce"],
+      [["6"], "noite dos zumbis"],
     ],
   },
   {
@@ -215,6 +217,22 @@ export class HUD {
         <div id="zombie-center-sub"></div>
       </div>
 
+      <!-- Vitória da caçada: entra ao fechar a quinta onda (ver S2C.HUNT_OVER).
+           Fica na tela até o Enter, por isso a dica mora dentro do próprio
+           card — é a única tecla que a fecha, e ninguém adivinha sozinho. -->
+      <div id="hunt-victory" hidden>
+        <div class="hv-card">
+          <div class="hv-title" id="hunt-victory-title">CAÇADA CONCLUÍDA</div>
+          <div class="hv-winner">
+            <span class="hv-winner-label">Vencedor</span>
+            <span class="hv-winner-name"></span>
+            <span class="hv-winner-count"></span>
+          </div>
+          <div class="hv-others"></div>
+          <div class="hv-hint"><kbd>Enter</kbd><span>fecha esta tela</span></div>
+        </div>
+      </div>
+
       <div id="toasts"></div>
 
       <!-- Preenchido por montarAtalhos(), a partir da tabela ATALHOS. -->
@@ -255,6 +273,11 @@ export class HUD {
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
+      huntVictory: root.querySelector("#hunt-victory"),
+      huntVictoryTitle: root.querySelector("#hunt-victory-title"),
+      huntVictoryWinnerName: root.querySelector(".hv-winner-name"),
+      huntVictoryWinnerCount: root.querySelector(".hv-winner-count"),
+      huntVictoryOthers: root.querySelector(".hv-others"),
       power: root.querySelector("#power"),
       powerFill: root.querySelector("#power-fill"),
       powerMark: root.querySelector("#power-mark"),
@@ -510,6 +533,67 @@ export class HUD {
     }, 2400);
   }
 
+  /**
+   * A tela de vitória da caçada: o vencedor em destaque, os demais por baixo
+   * e sem realce — visíveis, mas claramente secundários.
+   *
+   * `ranking` já chega ORDENADO (a sala ordena antes de mandar, ver
+   * S2C.HUNT_OVER e S2C.ZOMBIE_OVER) — aqui só se desenha o primeiro como
+   * vencedor e o resto como lista.
+   *
+   * `opts.title` e `opts.statLabel` deixam a mesma tela servir a horda de
+   * zumbis (ver `showZombieVictory`), que pontua e mostra outra coisa.
+   */
+  showHuntVictory(ranking, selfId = null, opts = {}) {
+    if (!ranking.length) return;
+    const {
+      title = "CAÇADA CONCLUÍDA",
+      statLabel = (p) => `${p.boars ?? 0} ${p.boars === 1 ? "porco abatido" : "porcos abatidos"}`,
+    } = opts;
+    const [vencedor, ...resto] = ranking;
+    const cor = (c) => `#${(c ?? 0xffffff).toString(16).padStart(6, "0")}`;
+
+    this.el.huntVictoryTitle.textContent = title;
+    this.el.huntVictoryWinnerName.textContent = vencedor.name;
+    this.el.huntVictoryWinnerName.style.color = cor(vencedor.color);
+    this.el.huntVictoryWinnerCount.textContent = statLabel(vencedor);
+
+    this.el.huntVictoryOthers.replaceChildren(
+      ...resto.map((p) => {
+        const linha = document.createElement("div");
+        linha.className = "hv-other";
+        if (p.id === selfId) linha.classList.add("eu");
+        const nome = texto(p.name);
+        nome.style.color = cor(p.color);
+        linha.append(nome, texto(statLabel(p), "hv-other-count"));
+        return linha;
+      }),
+    );
+
+    this.el.huntVictory.hidden = false;
+  }
+
+  /**
+   * A mesma tela de vitória, para quando a horda 10 cai inteira.
+   *
+   * O que muda é só o que se conta: não porco abatido, mas zumbi — e, junto,
+   * quantas vezes cada um caiu, porque numa horda essa dupla conta a história
+   * inteira da noite (quem carregou o grupo e quem passou renascendo).
+   */
+  showZombieVictory(ranking, selfId = null) {
+    const rotulo = (p) => {
+      const k = p.kills ?? 0;
+      const d = p.deaths ?? 0;
+      return `${k} ${k === 1 ? "zumbi abatido" : "zumbis abatidos"} · ${d} ${d === 1 ? "morte" : "mortes"}`;
+    };
+    this.showHuntVictory(ranking, selfId, { title: "HORDAS SOBREVIVIDAS", statLabel: rotulo });
+  }
+
+  /** Fecha a tela de vitória — pelo Enter (ver `confirmOverlay`) ou por um mundo novo. */
+  hideHuntVictory() {
+    this.el.huntVictory.hidden = true;
+  }
+
   /** Zera a contabilidade local. Chamado quando a sala recomeça o mundo. */
   resetStats() {
     this.score = 0;
@@ -537,6 +621,12 @@ export class HUD {
     const parts = [];
     if (e.score > 0) {
       parts.push({ text: `+${e.score}`, className: "score" });
+    } else if (e.hit) {
+      // Acertou de verdade (porco, alce, pássaro, zumbi, personagem, alvo da
+      // série), só sem pontuação decidida aqui — o placar chega depois, pelo
+      // servidor. Sem este ramo, "errou" aparecia em cima de um acerto certeiro
+      // só porque o `score` ainda não tinha número.
+      parts.push({ text: `acertou · ${e.label}`, className: "score" });
     } else if (e.label) {
       parts.push({ text: `errou · ${e.label}`, className: "dim" });
     }
@@ -544,7 +634,7 @@ export class HUD {
       text: `${parts.length ? " · " : ""}${e.distance.toFixed(1)} m`,
       className: "distance",
     });
-    this.toast(parts, e.score > 0 ? "" : "miss");
+    this.toast(parts, e.score > 0 || e.hit ? "" : "miss");
   }
 
   /**

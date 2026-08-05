@@ -142,6 +142,48 @@ function makeHornBuffer(ctx) {
   return buffer;
 }
 
+/**
+ * Fanfarra de vitória: quatro notas de trompa em fila, como cornetas reais
+ * anunciando o fim da caçada — mais longa e mais cheia do que o toque curto
+ * de `makeHornBuffer`, que é só um aviso de "chegou gente".
+ */
+function makeFanfareBuffer(ctx) {
+  const duration = 2.3;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  // Tônica, quinta, oitava e o remate na décima — a fórmula clássica de
+  // fanfarra de trompete, com a última nota segurada mais tempo.
+  const notas = [
+    { inicio: 0.0, dur: 0.26, freq: 261.63 },
+    { inicio: 0.24, dur: 0.26, freq: 329.63 },
+    { inicio: 0.48, dur: 0.26, freq: 392.0 },
+    { inicio: 0.72, dur: 1.15, freq: 523.25 },
+  ];
+  for (const n of notas) {
+    const de = Math.floor(n.inicio * sampleRate);
+    const ate = Math.min(length, Math.ceil((n.inicio + n.dur) * sampleRate));
+    for (let i = de; i < ate; i++) {
+      const t = (i - de) / sampleRate;
+      const p = t / n.dur;
+      const ataque = Math.min(1, t / 0.02);
+      const solta = Math.pow(Math.max(0, 1 - p), 1.3);
+      const fase = TAU * n.freq * t;
+      // Quatro harmônicas somadas dão o timbre metálico de trompa/corneta —
+      // uma senoide pura soa a apito, não a metal.
+      const voz =
+        Math.sin(fase) * 0.5 +
+        Math.sin(fase * 2) * 0.26 +
+        Math.sin(fase * 3) * 0.16 +
+        Math.sin(fase * 4) * 0.08;
+      data[i] += voz * ataque * solta * 0.55;
+    }
+  }
+  return buffer;
+}
+
 /** Guincho curto, descendente e áspero — reserva caso o mp3 não decodifique. */
 function makeBoarDeathBuffer(ctx) {
   const duration = 0.9;
@@ -399,6 +441,9 @@ export class AudioSystem {
 
     // Toque curto de trompa: anuncia a onda nova da caçada.
     this.buffers.waveHorn = makeHornBuffer(this.ctx);
+
+    // Fanfarra: a caçada acabou, com direito a tela de vitória.
+    this.buffers.victoryFanfare = makeFanfareBuffer(this.ctx);
 
     // Os gravados chegam depois; até lá tocam as versões sintetizadas (ou nada,
     // no caso do ronco, que não tem substituto — melhor mudo que errado).

@@ -499,12 +499,14 @@ export const CONFIG = {
       /* As ondas crescem por TABELA, não por fórmula.
          Uma progressão calculada dá números certinhos e sem graça; escrita à
          mão, dá para apertar o salto onde ele precisa doer — o pulo de 6 para
-         10 é onde a caçada deixa de ser tiro ao alvo. Esgotada a lista, a
-         última se repete: 30 porcos vivos já é o limite do que dá para ler em
-         campo. */
-      waveSizes: [3, 6, 10, 15, 20, 30],
+         10 é onde a caçada deixa de ser tiro ao alvo. */
+      waveSizes: [3, 6, 10, 15, 20],
+      /* A quinta onda é a última: esgotada ela, a tela de vitória entra e os
+         porcos que sobraram continuam vivos e valendo ponto — só não nasce
+         onda nova. */
+      maxWaves: 5,
       /* A onda seguinte entra quando sobram 10 % da atual, ARREDONDANDO PARA
-         CIMA: onda de 3 chama a próxima com 1 vivo, de 30 com 3. Para baixo,
+         CIMA: onda de 3 chama a próxima com 1 vivo, de 20 com 2. Para baixo,
          as primeiras ondas exigiriam campo limpo, e uma caçada que para porque
          um javali se escondeu atrás de uma pedra não é uma caçada. */
       nextWaveRemaining: 0.1,
@@ -636,6 +638,20 @@ export const CONFIG = {
     wanderRadius: 12, // m
     spawnMinDist: 30, // m — spawn longe do jogador
     spawnMaxDist: 50, // m
+
+    /* Bando: a maioria dos porcos de uma onda nasce em grupo e pasta perto um
+       do outro; uma fração nasce desgarrada e vaga sozinha, como sempre fez.
+       O bando em si é um ponto que deriva devagar pelo mapa (`driftSpeed`),
+       bem mais lento que um porco andando — os membros orbitam esse ponto,
+       não uns aos outros, o que evita que precisem saber a posição uns dos
+       outros a cada passo. */
+    herd: {
+      maxSize: 6, // porcos por bando, no máximo
+      soloChance: 0.2, // fração da onda que nasce desgarrada
+      radius: 5, // m — até onde um membro se afasta do ponto do bando ao pastar
+      driftSpeed: 0.35, // m/s — velocidade do próprio ponto do bando
+      driftInterval: 14, // s — intervalo médio entre um novo destino do bando
+    },
     colliderHalfHeight: 0.28, // m
     colliderRadius: 0.32, // m
     bodyHeight: 0.75, // m

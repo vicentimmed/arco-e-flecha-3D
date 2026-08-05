@@ -435,7 +435,11 @@ export class Zombie {
    */
   animate(dt) {
     this.group.position.copy(this.position);
-    this.group.rotation.y = this.yaw;
+    // A malha (olhos, mandíbula, braços) foi construída de frente para -Z, e
+    // não para +Z como o porco e o alce — sem o giro de 180°, o zumbi mostrava
+    // a nuca para o rumo em que estava andando, e os olhos só apareciam para
+    // quem desse a volta nele.
+    this.group.rotation.y = this.yaw + Math.PI;
 
     const passada = 1.15; // m por ciclo completo
     this.animPhase += (Math.PI * 2 * this.speed * dt) / passada + dt * 0.55;

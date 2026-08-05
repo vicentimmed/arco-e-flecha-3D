@@ -51,6 +51,10 @@ export class CameraRig {
     this.mode = CameraMode.ARCHER;
     /** Modo que o jogador está pedindo (botão direito/C), mesmo durante o voo. */
     this.wantFirstPerson = false;
+    /** Ligado por padrão: cada disparo joga a câmera para trás da flecha.
+     *  Desligado (tecla F), o disparo não muda a câmera — a arqueira continua
+     *  na visão de sempre enquanto a flecha voa. */
+    this.followArrowEnabled = true;
     this.followArrow = null;
     /** Câmera da flecha congelada no impacto (não segue alvo balançando). */
     this.arrowCamFrozen = false;
@@ -101,12 +105,19 @@ export class CameraRig {
     this.applyLens();
   }
 
-  /** Todo disparo joga a câmera para a flecha. */
+  /** Todo disparo joga a câmera para a flecha — a menos que o jogador tenha
+   *  desligado o acompanhamento (tecla F). */
   onShoot(arrow) {
+    if (!this.followArrowEnabled) return;
     this.followArrow = arrow;
     this.arrowCamFrozen = false;
     this.mode = CameraMode.ARROW;
     this.applyLens();
+  }
+
+  /** Liga/desliga a câmera acompanhando a flecha em voo. Ligado por padrão. */
+  setFollowArrow(on) {
+    this.followArrowEnabled = on;
   }
 
   /**

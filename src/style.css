@@ -308,6 +308,115 @@ body {
   color: var(--gold);
 }
 
+/* ------------------------------------------------------ fim da caçada ---- */
+
+#hunt-victory {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+}
+
+#hunt-victory[hidden] {
+  display: none;
+}
+
+.hv-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: 320px;
+  padding: 28px 40px;
+  background: rgba(10, 8, 12, 0.82);
+  border: 1px solid rgba(245, 196, 81, 0.4);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.hv-title {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+}
+
+.hv-winner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.hv-winner-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--gold);
+  text-transform: uppercase;
+}
+
+.hv-winner-name {
+  font-size: 38px;
+  font-weight: 900;
+  color: var(--text);
+  text-shadow: 0 3px 14px rgba(0, 0, 0, 0.8);
+}
+
+.hv-winner-count {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+/* Os demais entram por baixo, bem menores — visíveis, mas claramente
+   secundários diante de quem venceu. */
+.hv-others {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding-top: 6px;
+  border-top: 1px solid var(--ui-stroke);
+}
+
+.hv-other {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+  opacity: 0.75;
+}
+
+.hv-other.eu {
+  opacity: 1;
+  font-weight: 700;
+}
+
+.hv-other-count {
+  color: var(--text-dim);
+}
+
+.hv-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.hv-hint kbd {
+  padding: 2px 7px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 5px;
+  font-weight: 700;
+}
+
 /* ------------------------------------------------------- onda da caçada --- */
 
 #wave-banner {

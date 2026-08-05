@@ -110,6 +110,8 @@ class Game {
     this.nightTarget = 0;
     /** Último estado do modo zumbi vindo da sala (vidas, horda, caídos). */
     this.zombieState = null;
+    /** A tela de vitória da caçada está na tela, esperando o Enter que a fecha. */
+    this.huntVictoryOpen = false;
 
     this.aim = new AimSolver(physics);
     this.aim.setExcludedCollider(this.playerPhysics.collider);
@@ -435,6 +437,21 @@ class Game {
       });
     });
 
+    /* Fim da caçada: a quinta onda esgotou. A tela de vitória entra para todo
+       mundo, com o mesmo ranking — e o toque lembra as cornetas reais de uma
+       vitória de verdade, não a trompa curta de aviso de onda. Ela fica na
+       tela até o jogador apertar Enter (ver `confirmOverlay` em input.js);
+       os porcos que sobraram continuam valendo ponto normalmente. */
+    net.on(S2C.HUNT_OVER, (msg) => {
+      this.huntVictoryOpen = true;
+      this.hud.showHuntVictory(msg.ranking ?? [], this.net.me?.id);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "victoryFanfare",
+        position: vec3Payload(this.player.position),
+        volume: 1.0,
+      });
+    });
+
     net.on(S2C.BOAR_DEATH, (msg) => {
       this.boars.kill(msg.id);
       // Porco avulso não entra no feed de pontuação: ele é brincadeira.
@@ -498,6 +515,8 @@ class Game {
       this.zombies.clear();
       this.hud.resetStats();
       this.hud.hideZombieCenter();
+      this.huntVictoryOpen = false;
+      this.hud.hideHuntVictory();
       this.rig.returnToArcher();
     });
 
@@ -550,14 +569,20 @@ class Game {
       this.zombieState = msg;
     });
 
+    /* A vitória do modo zumbi usa a MESMA tela da caçada (ver S2C.HUNT_OVER):
+       quem joga já sabe ler aquele card, e ele já mostra quem se destacou.
+       Só a derrota (todo mundo caído) fica com o aviso simples no centro —
+       ali não há o que ranquear, a noite só acabou mal. */
     net.on(S2C.ZOMBIE_OVER, (msg) => {
       this.zombieState = { ...(this.zombieState ?? {}), over: true, reason: msg.reason };
       if (msg.reason === "win") {
-        this.hud.showZombieCenter(
-          "SOBREVIVERAM",
-          `as ${msg.horde} hordas caíram`,
-          "vitoria",
-        );
+        this.huntVictoryOpen = true;
+        this.hud.showZombieVictory(msg.ranking ?? [], this.net.me?.id);
+        gameEvents.emit(EventType.AUDIO_PLAY, {
+          sound: "victoryFanfare",
+          position: vec3Payload(this.player.position),
+          volume: 1.0,
+        });
       } else {
         this.hud.showZombieCenter("GAME OVER", `caíram na horda ${msg.horde}`, "gameover");
       }
@@ -710,6 +735,18 @@ class Game {
         "miss",
       );
     }
+    if (a.toggleArrowCam) {
+      const on = !this.rig.followArrowEnabled;
+      this.rig.setFollowArrow(on);
+      this.hud.toast(
+        on ? "câmera da flecha ligada" : "câmera da flecha desligada",
+        "miss",
+      );
+    }
+    if (a.confirmOverlay && this.huntVictoryOpen) {
+      this.huntVictoryOpen = false;
+      this.hud.hideHuntVictory();
+    }
     // Qualquer um pode soltar um porco e todos veem. Não vale ponto: quem
     // solta escolheria a distância, e a caçada pontua justamente por distância.
     if (a.spawnBoar) this.net.send(C2S.SPAWN_BOAR);
@@ -777,6 +814,13 @@ class Game {
 
     this.nightTarget = ligado ? 1 : 0;
     this.arrows.fireArrows = ligado;
+
+    /* A câmera da flecha atrapalha o cerco: ela tira o olho do resto da horda
+       bem no momento em que ela se aproxima por todos os lados. Por isso o
+       modo entra com o acompanhamento desligado — e sai restaurando o padrão
+       dos outros modos. Quem quiser de volta liga com a tecla de sempre
+       (`toggleArrowCam`, ver bindActions). */
+    this.rig.setFollowArrow(!ligado);
 
     if (ligado) {
       this.torches.build();

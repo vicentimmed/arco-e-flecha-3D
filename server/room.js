@@ -107,9 +107,17 @@ export class Room {
    * A caçada é cooperativa: quem apertar liga para a sala inteira, porque não
    * existe motivo para alguém não querer porcos aparecendo.
    *
+   * Toda tecla de modo é também uma tecla de REINÍCIO: apertá-la reinicia
+   * aquele modo do zero, MESMO que ele já seja o modo em curso. Antes, apertar
+   * de novo a tecla do modo ativo o desligava (voltava para "livre") — mas
+   * quem está no meio de uma caçada e aperta `3` de novo quer é começar outra
+   * caçada, não sair dela. Sair continua existindo: é a tecla `1`.
+   *
    * O duelo é diferente — arrasta gente para uma briga. Então é CONVITE:
    * apertar marca você como pronto, a sala é avisada, e a partida só começa
    * quando dois ou mais aceitam. Quem não aceitou continua treinando em paz.
+   * Já em duelo, apertar `2` de novo reinicia a partida do zero com quem já
+   * está dentro — não é um convite novo.
    */
   requestMode(player, modo) {
     /* A noite dos zumbis entra na mesma lista dos modos cooperativos: quem
@@ -122,7 +130,7 @@ export class Room {
       modo === "elkHunt" ||
       modo === "zombie"
     ) {
-      this.setMode(this.mode === modo ? "free" : modo);
+      this.setMode(modo);
       return;
     }
 
@@ -130,18 +138,20 @@ export class Room {
       // Sair do duelo: some da lista, e se sobrar menos de dois a partida acaba.
       this.duelInvites.delete(player.id);
       player.duelReady = false;
-      if (this.mode === "duel" && this.duelInvites.size < CONFIG.modes.duel.minPlayers) {
-        this.setMode("free");
-      } else {
-        this.broadcastMode();
-      }
+      this.setMode("free");
       return;
     }
 
     if (modo !== "duel") return;
 
+    if (this.mode === "duel") {
+      // Já duelando: reinicia a partida com quem já está dentro.
+      this.setMode("duel");
+      return;
+    }
+
     if (this.duelInvites.has(player.id)) {
-      // Apertar de novo cancela o próprio convite.
+      // Convite pendente, ainda sem duelo: apertar de novo cancela o próprio.
       this.duelInvites.delete(player.id);
       player.duelReady = false;
       this.broadcastMode();
@@ -170,10 +180,10 @@ export class Room {
    * abates de meia hora atrás com o tiro de agora.
    *
    * Ligar um modo agora é começar do zero: campo limpo, placar zerado. É o que
-   * transforma "trocar de modo" em "começar uma partida".
+   * transforma "trocar de modo" em "começar uma partida" — e roda mesmo que o
+   * modo pedido já seja o atual: é assim que a tecla do modo também reinicia.
    */
   setMode(modo) {
-    if (this.mode === modo) return;
     this.mode = modo;
 
     this.resetWorld();
@@ -424,6 +434,15 @@ export class Room {
         this.broadcastAll({ t: S2C.WAVE, ...onda });
         this.log(`onda ${onda.n}: ${onda.size} porcos`);
       }
+      // A quinta onda esgotou: a caçada acabou. O ranking vai por abates de
+      // porco — é a coluna que o modo pontua, e o que a tela de vitória lê.
+      if (this.hunt.takeVictoryAnnouncement()) {
+        const ranking = [...this.players.values()]
+          .map((p) => ({ id: p.id, name: p.name, color: p.color, boars: p.score.boars }))
+          .sort((a, b) => b.boars - a.boars);
+        this.broadcastAll({ t: S2C.HUNT_OVER, ranking });
+        this.log("caçada: ondas esgotadas, vitória anunciada");
+      }
       this.broadcastAll({ t: S2C.BOARS, time: agora, b: this.hunt.view() });
     }
 
@@ -555,7 +574,19 @@ export class Room {
       this.log(`horda ${r.horda.n}: ${r.horda.size} zumbis`);
     }
     if (r.venceu) {
-      this.broadcastAll({ t: S2C.ZOMBIE_OVER, reason: "win", horde: Z.hordes });
+      // Sobreviveram as dez hordas: mesma tela de vitória da caçada, só que o
+      // ranking aqui é por zumbi abatido — e leva as mortes junto, porque numa
+      // horda quem mais mata também costuma ser quem mais cai.
+      const ranking = [...this.players.values()]
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          kills: p.score.kills,
+          deaths: p.score.deaths,
+        }))
+        .sort((a, b) => b.kills - a.kills);
+      this.broadcastAll({ t: S2C.ZOMBIE_OVER, reason: "win", horde: Z.hordes, ranking });
       this.log("modo zumbi: venceram as dez hordas");
     }
 

@@ -83,6 +83,8 @@ export class Input {
       toggleHelp: false,
       toggleTrace: false,
       toggleWindInfluence: false,
+      toggleArrowCam: false,
+      confirmOverlay: false, // Enter fora de um diálogo — fecha telas como a de vitória
       jump: false,
       spawnBoar: false,
       spawnElk: false,
@@ -275,6 +277,15 @@ export class Input {
         case "KeyC":
           this.firstPerson = true;
           break;
+        case "KeyF":
+          this.actions.toggleArrowCam = true;
+          break;
+        case "Enter":
+        case "NumpadEnter":
+          // Sem diálogo aberto (esse caso já retornou lá em cima): Enter é de
+          // quem quiser fechar uma tela sozinha, como a de vitória da caçada.
+          this.actions.confirmOverlay = true;
+          break;
         case "KeyR":
           this.actions.clearArrows = true;
           break;
@@ -360,6 +371,8 @@ export class Input {
     a.toggleHelp = false;
     a.toggleTrace = false;
     a.toggleWindInfluence = false;
+    a.toggleArrowCam = false;
+    a.confirmOverlay = false;
     a.jump = false;
     a.spawnBoar = false;
     a.spawnElk = false;

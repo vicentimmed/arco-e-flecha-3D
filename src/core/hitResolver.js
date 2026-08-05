@@ -82,6 +82,7 @@ function resolveCharacterHit({ arrow, other, impact, normal, deps }) {
   });
   emitImpact(arrow, "character", character.entityId, impact, normal, {
     label: character.displayName ?? "personagem",
+    hit: true,
   });
 
   deps.spawnPuff?.(impact, null);
@@ -120,7 +121,7 @@ function resolveBoarHit({ arrow, other, impact, deps }) {
   if (!boar || boar.dead) return null;
 
   boar.registerHit(impact, arrow);
-  emitImpact(arrow, "boar", boar.entityId, impact, null, { label: "porco" });
+  emitImpact(arrow, "boar", boar.entityId, impact, null, { label: "porco", hit: true });
   deps.spawnPuff?.(impact, null);
 
   const body = boar.body;
@@ -143,7 +144,7 @@ function resolveElkHit({ arrow, other, impact, deps }) {
   if (!elk || elk.dead) return null;
 
   elk.registerHit(impact, arrow);
-  emitImpact(arrow, "elk", elk.entityId, impact, null, { label: "alce" });
+  emitImpact(arrow, "elk", elk.entityId, impact, null, { label: "alce", hit: true });
   deps.spawnPuff?.(impact, null);
 
   arrow.stick(elk.body, true);
@@ -164,7 +165,7 @@ function resolveBirdHit({ arrow, other, impact, deps }) {
   if (!bird || bird.dead) return null;
 
   bird.registerHit(impact, arrow);
-  emitImpact(arrow, "bird", bird.entityId, impact, null, { label: "pássaro" });
+  emitImpact(arrow, "bird", bird.entityId, impact, null, { label: "pássaro", hit: true });
   deps.spawnPuff?.(impact, null);
   deps.removeArrow?.(arrow);
   return { kind: "bird", entityId: bird.entityId };
@@ -186,6 +187,7 @@ function resolveSeriesHit({ arrow, other, impact, deps }) {
   emitImpact(arrow, "seriesTarget", other.seq, impact, null, {
     label: "alvo",
     seriesTarget: other.series,
+    hit: true,
   });
   deps.spawnPuff?.(impact, null);
   deps.removeArrow?.(arrow);
@@ -213,6 +215,7 @@ function resolveZombieHit({ arrow, other, impact, deps }) {
   emitImpact(arrow, "zombie", zombie.entityId, impact, null, {
     label: head ? "zumbi (cabeça)" : "zumbi",
     head,
+    hit: true,
   });
   deps.spawnPuff?.(impact, null);
 

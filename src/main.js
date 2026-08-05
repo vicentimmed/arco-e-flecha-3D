@@ -858,6 +858,7 @@ class Game {
    */
   applyMode(msg) {
     if (!msg) return;
+    const mudouModo = this.mode !== msg.mode;
     this.mode = msg.mode;
     this.scoreboard.setMode(msg.mode);
 
@@ -885,10 +886,22 @@ class Game {
     }
 
     this.applyZombieMode(msg.mode === "zombie");
+    if (mudouModo) this.applyArrowCameraMode(msg.mode);
     if (msg.mode !== "elkHunt") {
       this.elkState = null;
       this._elkHudCountdown = false;
     }
+  }
+
+  /**
+   * A câmera que acompanha a flecha começa desligada nos modos de cerco:
+   * durante a caçada ao alce e a horda zumbi, o jogador precisa continuar
+   * vendo o campo. O atalho continua podendo ligá-la manualmente.
+   */
+  applyArrowCameraMode(mode) {
+    const bloqueadaAoEntrar = mode === "zombie" || mode === "elkHunt";
+    this.rig.setFollowArrow(!bloqueadaAoEntrar);
+    if (bloqueadaAoEntrar) this.rig.returnToArcher();
   }
 
   /** Aplica o vento na flecha localmente (já decidido pela sala). */

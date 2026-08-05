@@ -18,15 +18,16 @@ import grilosUrl from "../assets/audio/grilos_noite.mp3";
 import lobosUrl from "../assets/audio/lobos_uivo.mp3";
 import loboAlcateiaUrl from "../assets/audio/lobo_alcateia_uivo.mp3";
 import loboMorteUrl from "../assets/audio/lobo_morte_uivo.mp3";
+import playerMorteUrl from "../assets/audio/player_morte_grunt.mp3";
 
 const TAU = Math.PI * 2;
 
 /** Volume da trilha de fundo. Um pouco abaixo para os ambientes respirarem. */
 const MUSIC_VOLUME_DAY = 0.09;
 /** Noite dos zumbis: a trilha sobe um pouco — é ela que carrega o clima. */
-const MUSIC_VOLUME_ZOMBIE = 0.11;
+const MUSIC_VOLUME_ZOMBIE = 0.14;
 const BIRDS_VOLUME = 0.5;
-const CRICKETS_VOLUME = 0.22;
+const CRICKETS_VOLUME = 0.18;
 /** Uivos distantes de matilha — espaçados, só para o clima aterrorizante. */
 const AMBIENT_HOWL_MIN_INTERVAL = 22;
 const AMBIENT_HOWL_MAX_INTERVAL = 55;
@@ -505,6 +506,7 @@ export class AudioSystem {
     this._loadFile("boarIdle", roncoUrl);
     this._loadFile("wolfHowl", loboAlcateiaUrl);
     this._loadFile("wolfDeath", loboMorteUrl);
+    this._loadFile("playerDeath", playerMorteUrl);
     this._loadElkVoice();
   }
 

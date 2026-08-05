@@ -20,8 +20,8 @@ const WOLF_LEAP_LEGACY = 12.0;
 const WOLF_SLOW_SCALE = 0.7;
 const WOLF_SPEED_SLOW = WOLF_SPEED_LEGACY * WOLF_SLOW_SCALE; // ≈ 3,36 m/s
 const WOLF_LEAP_SLOW = WOLF_LEAP_LEGACY * WOLF_SLOW_SCALE; // ≈ 8,4 m/s
-const WOLF_SPEED_FAST = WALK_SPEED * 4.5; // ≈ 14,4 m/s
-const WOLF_LEAP_FAST = 36.0;
+const WOLF_SPEED_FAST = WALK_SPEED * 4.5 * 0.9; // ≈ 12,96 m/s
+const WOLF_LEAP_FAST = 36.0 * 0.9; // 32,4 m/s
 
 // Centro da bacia jogável. Mora aqui em cima porque DOIS blocos precisam dele —
 // o sorteio de nascimento e a arena de tochas do modo zumbi — e um deles não
@@ -78,7 +78,7 @@ export const CONFIG = {
        encaixa no arco. Enquanto isso, mira e tiro ficam bloqueados — sem isso
        o arco vira metralhadora. Desligável no painel ~. */
     reloadAnimation: true,
-    reloadTime: 2.0, // s
+    reloadTime: 1.0, // s
   },
 
   wind: {
@@ -846,22 +846,20 @@ export const CONFIG = {
     chargeDuration: 7.0, // s
     chargeCooldown: 0.7, // s
     /* A TRAVA DA INVESTIDA — é o que torna a esquiva possível.
-       Dentro deste raio o alce para de corrigir o rumo: fixa a mira (já com o
-       lead à frente do jogador) e vem em linha reta, como um touro. A 5,5 m e
-       12,5 m/s são ~0,45 s de janela, e cada metro aqui muda o jogo inteiro:
-       a 4,5 m só a quebra perfeita salva, a 7 m até correr em linha reta para
-       longe basta. Antes da trava nada mudou — ele persegue e corrige, e é por
-       isso que sair de lado CEDO não adianta: o lead acompanha. */
-    commitDistance: 5.5, // m — a partir daqui o rumo está travado
+       Dentro deste raio o alce para de corrigir o rumo: fixa a mira (com
+       antecipação moderada) e vem em linha reta, como um touro. A 11 m e
+       12,5 m/s são ~0,9 s de janela para sair de lado. Antes da trava ele
+       ainda aproxima e corrige, sem grudar indefinidamente no strafe. */
+    commitDistance: 11, // m — a partir daqui o rumo está travado
     // Passou do jogador e não acertou: ainda leva a tonelada por mais alguns
     // metros antes de conseguir parar. É o preço do embalo, e é a recompensa
     // visível de quem desviou.
     overshootDistance: 14, // m de rolagem depois do ponto travado
-    turnRate: 1.15, // rad/s
+    turnRate: 0.9, // rad/s
     giveUpTicks: 8,
     goreRadius: 1.85, // m
     nearestBias: 0.65,
-    leadTime: 0.45, // s — mira à frente do jogador
+    leadTime: 0.22, // s — antecipação moderada antes da trava
     leadTimePerHit: 0.008, // s a mais por flecha (ferido = mais preciso)
     rechargeOnMissChance: 0.7, // após miss com hits≥3
     rechargeOnMissMinHits: 3,

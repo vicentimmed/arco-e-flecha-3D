@@ -166,6 +166,7 @@ export class Wolf {
     this.leapTimer = 0;
     this.leapFx = 0;
     this.leapFz = 0;
+    this.leapRemain = 0;
 
     const base = tuning.wolfSpeed ?? Z.wolfSpeed;
     this.baseSpeed = base * (1 + (Math.random() * 2 - 1) * (Z.wolfSpeedVariation ?? 0.08));
@@ -369,6 +370,10 @@ export class Wolf {
     const len = Math.hypot(dx, dz) || 1;
     this.leapFx = dx / len;
     this.leapFz = dz / len;
+    // O salto termina pouco depois do ponto onde foi disparado. Sem esse
+    // limite, o perfil rápido do alce atravessa o jogador e só verifica o hit
+    // muitos metros depois, já fora do raio de ataque.
+    this.leapRemain = len + 1.0;
     this.heading = Math.atan2(this.leapFx, this.leapFz);
     this.yaw = this.heading;
     this.state = "leap";
@@ -384,18 +389,33 @@ export class Wolf {
     const leapSpeed = this.leapSpeed;
     this.leapTimer += dt;
     const t = Math.min(1, this.leapTimer / dur);
-    const passo = leapSpeed * dt;
+    const passo = Math.min(leapSpeed * dt, this.leapRemain);
     const nx = this.x + this.leapFx * passo;
     const nz = this.z + this.leapFz * passo;
     if (this.terrain.isWalkable(nx, nz) && this.terrain.arenaDistance(nx, nz) <= 10) {
       this.x = nx;
       this.z = nz;
     }
+    this.leapRemain = Math.max(0, this.leapRemain - passo);
     this.baseY = this.terrain.heightAt(this.x, this.z);
     this.y = this.baseY + Math.sin(t * Math.PI) * (Z.wolfLeapHeight ?? 1.2);
     this.heading = Math.atan2(this.leapFx, this.leapFz);
     this.yaw = this.heading;
     this.vel = leapSpeed;
+
+    // O lobo pode atravessar o player durante o voo. O teste precisa ocorrer
+    // antes do pouso, e em cada tick, para que o salto seja uma colisão real.
+    const alvoNoAr = this.pickTarget(jogadores);
+    if (
+      alvoNoAr &&
+      Math.hypot(alvoNoAr.x - this.x, alvoNoAr.z - this.z) <=
+        (Z.wolfAttackRadius ?? 1.4) * 2.2
+    ) {
+      this.lastAttack = agora;
+      this.y = this.baseY;
+      this.state = "attack";
+      return alvoNoAr.id;
+    }
 
     if (this.leapTimer < dur) return null;
 

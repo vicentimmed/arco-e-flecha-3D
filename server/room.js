@@ -80,6 +80,13 @@ export class Room {
      * destruir, e duas telas com tochas diferentes seriam dois campos de jogo.
      */
     this.torches = [true, true, true, true];
+    /**
+     * Vento na flecha — um booleano da SALA, não de cada cliente.
+     *
+     * Se cada um ligasse o seu, a flecha do amigo cairia num lugar e a sua
+     * noutro, e o placar mentiria. Aqui quem aperta V muda para todo mundo.
+     */
+    this.windInfluence = true;
     /** Quem apertou "quero duelar" e ainda não desistiu. */
     this.duelInvites = new Set();
     this.inviteExpires = 0;
@@ -184,42 +191,53 @@ export class Room {
    * modo pedido já seja o atual: é assim que a tecla do modo também reinicia.
    */
   setMode(modo) {
+    const anterior = this.mode;
     this.mode = modo;
 
     this.resetWorld();
 
-    if (modo === "boarHunt") this.hunt.start(this.playerPositions());
-
+    /* Em todo modo, ao entrar: todo mundo renasce piscando, em pé, e cai no
+       chão. Sem isso, quem estava morto ou deitado no ragdoll entraria no modo
+       novo ainda caindo — e quem estava longe do ponto certo do modo (linha de
+       tiro, quadrado de luz) começaria desnorteado. */
     if (modo === "series") {
       this.series.start();
       this.lineUpForSeries();
       this.broadcastAll({ t: S2C.SERIES, target: this.series.view() });
-    }
-
-    if (modo === "elkHunt") {
+    } else if (modo === "elkHunt") {
       // A ORDEM importa: os arqueiros primeiro, o alce depois. `pickElkSpawn`
       // escolhe o ponto mais longe de todo mundo, então ele só sabe onde é "o
       // lado oposto" depois que todos já foram postos na linha — e precisa
       // receber os pontos NOVOS, não os que os clientes reportaram até agora.
       this.elks.start(this.lineUpForElk());
-    }
-
-    /* A noite cai e a partida começa na hora — sem convite e sem espera.
-       Diferente do duelo, aqui não há por que pedir licença: o modo é
-       cooperativo e ninguém é arrastado para brigar com ninguém. */
-    if (modo === "zombie") {
+    } else if (modo === "zombie") {
+      /* A noite cai e a partida começa na hora — sem convite e sem espera.
+         Diferente do duelo, aqui não há por que pedir licença: o modo é
+         cooperativo e ninguém é arrastado para brigar com ninguém. */
       for (const p of this.players.values()) this.resetZombieLives(p);
       this.centerForZombie();
       const horda = this.zombies.start();
       this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
       if (horda) this.broadcastAll({ t: S2C.HORDE, ...horda });
       this.broadcastZombieStatus();
+    } else if (modo === "duel") {
+      this.startDuel();
+    } else {
+      // livre e caçada aos porcos: renascimento padrão no campo
+      this.respawnEveryone();
+      if (modo === "boarHunt") this.hunt.start(this.playerPositions());
+      if (modo === "free") {
+        this.duelInvites.clear();
+        for (const p of this.players.values()) p.duelReady = false;
+      }
     }
 
-    if (modo === "duel") this.startDuel();
-    if (modo === "free") {
-      this.duelInvites.clear();
-      for (const p of this.players.values()) p.duelReady = false;
+    /* Vento na flecha: no zumbi começa desligado; ao sair, volta ao padrão
+       ligado. Entre outros modos, o que o jogador escolheu com V permanece. */
+    if (modo === "zombie") {
+      this.setWindInfluence(false, { silent: true });
+    } else if (anterior === "zombie") {
+      this.setWindInfluence(true, { silent: true });
     }
 
     this.broadcastMode();
@@ -258,31 +276,30 @@ export class Room {
   }
 
   /**
-   * Põe todo mundo na linha de tiro, no começo da estrada.
+   * Põe todo mundo atrás da linha de tiro, no começo da estrada.
    *
    * Lado a lado e voltados para o vale: a série inteira é uma sequência de
-   * distâncias medidas a partir DAQUI, então começar espalhados pelo mapa
-   * tornaria "o alvo dos 80 m" um número diferente para cada um.
+   * distâncias medidas a partir DA LINHA no chão, então começar espalhados pelo
+   * mapa tornaria "o alvo dos 80 m" um número diferente para cada um.
    */
   lineUpForSeries() {
     const S = CONFIG.modes.series;
     const jogadores = [...this.players.values()];
     const meio = (jogadores.length - 1) / 2;
+    const z = S.startZ + (S.spawnBehind ?? 3);
 
     jogadores.forEach((p, i) => {
-      const x = pathCenterX(S.startZ) + (i - meio) * S.lineSpread;
-      const z = S.startZ;
+      const x = pathCenterX(z) + (i - meio) * S.lineSpread;
       p.alive = true;
       p.invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
+      this.stampSpawnState(p, x, z);
       this.broadcastAll({
         t: S2C.SPAWN,
         id: p.id,
         x: round(x),
         z: round(z),
         y: round(this.terrain.heightAt(x, z)),
-        // Queda curta: aqui o ponto é começar a atirar, não anunciar
-        // renascimento — dez metros de queda só atrasariam o primeiro tiro.
-        drop: 2,
+        drop: CONFIG.spawn.dropHeight,
         invulnUntil: p.invulnUntil,
       });
     });
@@ -307,13 +324,14 @@ export class Room {
       p.alive = true;
       p.invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
       postos.push({ id: p.id, alive: true, x: ponto.x, y: ponto.y, z: ponto.z });
+      this.stampSpawnState(p, ponto.x, ponto.z);
       this.broadcastAll({
         t: S2C.SPAWN,
         id: p.id,
         x: round(ponto.x),
         z: round(ponto.z),
         y: round(ponto.y),
-        drop: 2,
+        drop: CONFIG.spawn.dropHeight,
         invulnUntil: p.invulnUntil,
       });
     });
@@ -349,6 +367,21 @@ export class Room {
     });
     this.broadcastAll({ t: S2C.SERIES, target: this.series.view() });
     this.broadcastScores();
+
+    // Último alvo: placar de vitória com alvos acertados e pontos de cada um.
+    if (vencido.last) {
+      const ranking = [...this.players.values()]
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          targets: p.score.targets ?? 0,
+          points: p.score.points ?? 0,
+        }))
+        .sort((a, b) => b.points - a.points || b.targets - a.targets);
+      this.broadcastAll({ t: S2C.SERIES_OVER, ranking });
+      this.log("série: último alvo derrubado, vitória anunciada");
+    }
   }
 
   /**
@@ -369,6 +402,7 @@ export class Room {
       const ponto = pontos[i] ?? pontos[0];
       p.alive = true;
       p.invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
+      this.stampSpawnState(p, ponto.x, ponto.z);
       this.broadcastAll({
         t: S2C.SPAWN,
         id: p.id,
@@ -545,13 +579,14 @@ export class Room {
       const z = Z.centerZ + Math.cos(ang) * raio;
       p.alive = true;
       p.invulnUntil = this.now() + Z.invulnerability * 1000;
+      this.stampSpawnState(p, x, z);
       this.broadcastAll({
         t: S2C.SPAWN,
         id: p.id,
         x: round(x),
         z: round(z),
         y: round(this.terrain.heightAt(x, z)),
-        drop: 2,
+        drop: CONFIG.spawn.dropHeight,
         invulnUntil: p.invulnUntil,
       });
     });
@@ -574,7 +609,7 @@ export class Room {
       this.log(`horda ${r.horda.n}: ${r.horda.size} zumbis`);
     }
     if (r.venceu) {
-      // Sobreviveram as dez hordas: mesma tela de vitória da caçada, só que o
+      // Sobreviveram as hordas: mesma tela de vitória da caçada, só que o
       // ranking aqui é por zumbi abatido — e leva as mortes junto, porque numa
       // horda quem mais mata também costuma ser quem mais cai.
       const ranking = [...this.players.values()]
@@ -1173,6 +1208,11 @@ export class Room {
         this.registerSeriesHit(player, msg);
         break;
 
+      case C2S.WIND:
+        // Qualquer um liga/desliga — e vale para a sala inteira.
+        this.setWindInfluence(typeof msg.on === "boolean" ? msg.on : !this.windInfluence);
+        break;
+
       case C2S.SPAWN_BOAR: {
         const criados = this.hunt.spawnMany(1, this.playerPositions(), true);
         if (criados.length) {
@@ -1296,6 +1336,7 @@ export class Room {
     const invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
     player.alive = true;
     player.invulnUntil = invulnUntil;
+    this.stampSpawnState(player, ponto.x, ponto.z);
 
     this.broadcastAll({
       t: S2C.SPAWN,
@@ -1324,6 +1365,54 @@ export class Room {
     this.broadcastAll({ t: S2C.SCORES, scores: this.scores() });
   }
 
+  /**
+   * Renasce todo mundo nos pontos padrão do vale.
+   *
+   * Usado ao entrar no modo livre e na caçada aos porcos — modos que não têm
+   * uma linha de tiro própria, mas ainda precisam do piscar + queda para quem
+   * estava morto ou longe.
+   */
+  respawnEveryone() {
+    for (const p of this.players.values()) this.spawn(p);
+  }
+
+  /**
+   * Grava a pose de spawn no estado do jogador.
+   *
+   * Sem isso, `playerPositions()` ainda devolveria a pose ANTIGA nos 50 ms
+   * seguintes ao teleporte — e a caçada / o alce nasceriam em cima de onde a
+   * pessoa ESTAVA, não de onde ela está agora.
+   */
+  stampSpawnState(player, x, z) {
+    const y = this.terrain.heightAt(x, z);
+    player.state = {
+      p: [round(x), round(y), round(z)],
+      y: 0,
+      i: 0,
+      g: 0,
+      b: 0,
+      r: 0,
+      d: 0,
+      f: 0,
+      s: 0,
+      a: 1,
+    };
+    player.stateTime = this.now();
+  }
+
+  /**
+   * Liga/desliga a influência do vento na flecha para a SALA INTEIRA.
+   *
+   * `silent` evita o toast quando a sala muda o padrão sozinha (entrar/sair
+   * do modo zumbi). Quem aperta V sempre vê o aviso.
+   */
+  setWindInfluence(on, { silent = false } = {}) {
+    const ligado = !!on;
+    if (this.windInfluence === ligado && silent) return;
+    this.windInfluence = ligado;
+    this.broadcastAll({ t: S2C.WIND, on: ligado, silent: !!silent });
+  }
+
   modeView() {
     return {
       mode: this.mode,
@@ -1332,6 +1421,7 @@ export class Room {
         .filter((p) => p.duelReady)
         .map((p) => ({ id: p.id, name: p.name })),
       needed: CONFIG.modes.duel.minPlayers,
+      windInfluence: this.windInfluence,
     };
   }
 

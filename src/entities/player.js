@@ -14,7 +14,7 @@
 import * as THREE from "three";
 import { Bow } from "./bow.js";
 import { makeSegment, orientSegment, makeJoint } from "../utils/geometry.js";
-import { solveTwoBoneIK, clamp, damp } from "../utils/math.js";
+import { solveTwoBoneIK, clamp, damp, smoothstep } from "../utils/math.js";
 import { CONFIG } from "../config.js";
 
 /* Antropometria (m) — mulher de ~1,72 m. Não são constantes de simulação,
@@ -256,6 +256,11 @@ export class Player {
      * relógio da sala.
      */
     this.invulnerable = false;
+    /**
+     * Limite de Z mínimo (modo série). Atrás da linha no chão os arqueiros
+     * podem andar; além dela, não. null = sem limite.
+     */
+    this.minZ = null;
     /** 0 = de pé, 1 = caído. Sobrevive como medida de progresso do tombo. */
     this.deathFall = 0;
     /**
@@ -274,6 +279,9 @@ export class Player {
     this.yaw = 0; // 0 = olhando para -Z, na direção dos alvos
     this.pitch = 0;
     this.drawFraction = 0;
+    /* 0 = pronta para tensionar; (0,1] = mão da corda buscando flecha na
+       aljava. Ver `setReload` / `updateReloadArm`. */
+    this.reloadFraction = 0;
     this.bobPhase = 0;
     this.ponytailLag = new THREE.Vector2();
     this.prevYaw = 0;
@@ -303,6 +311,8 @@ export class Player {
     this._tmpB = new THREE.Vector3();
     this._idleHand = new THREE.Vector3();
     this._nock = new THREE.Vector3();
+    this._quiverGrab = new THREE.Vector3();
+    this._reloadHand = new THREE.Vector3();
     this._anchor = new THREE.Vector3();
     this._lateral = new THREE.Vector3();
     this._eye = new THREE.Vector3();
@@ -544,6 +554,12 @@ export class Player {
     this.armL = this.buildArm(); // braço da corda
     this.root.add(this.armR.group, this.armL.group);
 
+    /* Flecha que a mão carrega da aljava até o nock durante o reload.
+       Fica escondida fora dessa janela — a flecha encaixada no arco é outra. */
+    this.heldArrow = this.buildHeldArrow();
+    this.armL.hand.add(this.heldArrow);
+    this.heldArrow.visible = false;
+
     /* pernas -------------------------------------------------------------- */
     this.legR = this.buildLeg();
     this.legL = this.buildLeg();
@@ -657,6 +673,55 @@ export class Player {
 
   setDraw(fraction) {
     this.drawFraction = clamp(fraction, 0, 1);
+  }
+
+  /**
+   * Progresso da animação de recarregar (0 = ociosa, 1 = acabou de encaixar).
+   * Quem dispara o timer é o `main`; aqui só vestimos a pose.
+   */
+  setReload(fraction) {
+    this.reloadFraction = clamp(fraction, 0, 1);
+    if (this.reloadFraction <= 0 && this.heldArrow) {
+      this.heldArrow.visible = false;
+    }
+  }
+
+  get isReloading() {
+    return this.reloadFraction > 0;
+  }
+
+  /** Haste simples na mão da corda — só aparece no meio do reload. */
+  buildHeldArrow() {
+    const group = new THREE.Group();
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.004, 0.004, 0.55, 5),
+      this.mat.arrowShaft,
+    );
+    shaft.rotation.x = Math.PI / 2;
+    shaft.position.z = -0.22;
+    shaft.castShadow = true;
+    group.add(shaft);
+
+    const tip = new THREE.Mesh(
+      new THREE.ConeGeometry(0.007, 0.04, 5),
+      this.mat.metal,
+    );
+    tip.rotation.x = -Math.PI / 2;
+    tip.position.z = -0.52;
+    group.add(tip);
+
+    const fletch = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.06, 0.018),
+      this.mat.fletch,
+    );
+    fletch.rotation.y = Math.PI / 2;
+    fletch.position.set(0, 0.01, 0.02);
+    group.add(fletch);
+
+    // Orientação na palma: haste saindo para trás da mão.
+    group.position.set(0.01, 0.02, -0.02);
+    group.rotation.set(0.15, 0.4, 0.35);
+    return group;
   }
 
   /** Todos os materiais deste arqueiro, o arco incluído. */
@@ -811,6 +876,8 @@ export class Player {
   }
 
   tryStep(x, z) {
+    // Modo série: a linha no chão. Quem passa dela anula o tiro à distância.
+    if (this.minZ != null && z < this.minZ) z = this.minZ;
     if (!this.terrain.isWalkable(x, z)) return false;
     this.position.x = x;
     this.position.z = z;
@@ -1014,7 +1081,11 @@ export class Player {
     this._euler.set(this.pitch, 0, -0.21);
     this.bow.group.quaternion.setFromEuler(this._euler);
     this.bow.setDraw(this.drawFraction);
-    this.bow.setArrowVisible(true);
+    /* Sem flecha no arco enquanto a mão busca outra na aljava. Volta a
+       aparecer quando a mão chega perto do nock (ver `updateReloadArm`). */
+    const t = this.reloadFraction;
+    const flechaNoArco = t <= 0 || t >= 0.7;
+    this.bow.setArrowVisible(flechaNoArco);
   }
 
   updateArms(dt) {
@@ -1022,6 +1093,11 @@ export class Player {
     const gripLocal = this.bow.group.position;
     this._pole.set(0.55, -1, 0.15).normalize();
     this.poseArm(this.armR, this._shoulderR, gripLocal, this._pole, 0.06);
+
+    if (this.reloadFraction > 0) {
+      this.updateReloadArm();
+      return;
+    }
 
     /* braço da corda: puxa o nock, cotovelo alto e para trás ---------------- */
     // Nock em coordenadas do root, direto da transformação local do arco (sem
@@ -1055,6 +1131,66 @@ export class Player {
       .addScaledVector(this._lateral, -0.55)
       .normalize();
     this.poseArm(this.armL, this._shoulderL, this._handTarget, this._pole, 0.0);
+  }
+
+  /**
+   * Mão da corda: nock → aljava → nock → repouso.
+   *
+   * É a mão LIVRE depois do tiro (a outra segura o arco). Sai da face, sobe
+   * pelas costas até a aljava, traz a flecha de volta ao arco e só então
+   * descansa no quadril. Funciona andando, correndo ou parado.
+   */
+  updateReloadArm() {
+    const t = this.reloadFraction;
+
+    this._nock
+      .copy(this.bow.nockPoint)
+      .applyQuaternion(this.bow.group.quaternion)
+      .add(this.bow.group.position);
+
+    // Boca da aljava, um pouco acima do cilindro — onde a mão "pega" a haste.
+    this.localToRoot(
+      -0.1,
+      (BODY.shoulderY - BODY.hipY) * 0.88,
+      0.2,
+      this._quiverGrab,
+    );
+
+    this._idleHand.copy(this._hipL).add(this._tmp.set(-0.06, -0.16, 0.06));
+
+    let hand;
+    if (t < 0.32) {
+      // Da face (onde soltou a corda) para as costas / aljava.
+      const k = smoothstep(0, 0.32, t);
+      hand = this._reloadHand.copy(this._nock).lerp(this._quiverGrab, k);
+    } else if (t < 0.42) {
+      // Segura um instante — o "pegou".
+      hand = this._reloadHand.copy(this._quiverGrab);
+    } else if (t < 0.78) {
+      // Traz a flecha até o nock e encaixa.
+      const k = smoothstep(0.42, 0.78, t);
+      hand = this._reloadHand.copy(this._quiverGrab).lerp(this._nock, k);
+    } else {
+      // Solta o nock e volta ao quadril.
+      const k = smoothstep(0.78, 1, t);
+      hand = this._reloadHand.copy(this._nock).lerp(this._idleHand, k);
+    }
+
+    // Cotovelo alto e para trás enquanto alcança a aljava; depois abre de
+    // lado no caminho de volta ao arco.
+    const reachBack = t < 0.5 ? 1 : 1 - smoothstep(0.5, 0.85, t);
+    this._pole
+      .copy(this._aim)
+      .multiplyScalar(-0.35 - 0.65 * reachBack)
+      .addScaledVector(AXIS_Y, 0.55 + 0.35 * reachBack)
+      .addScaledVector(this._lateral, -0.35 - 0.4 * reachBack)
+      .normalize();
+    this.poseArm(this.armL, this._shoulderL, hand, this._pole, 0.0);
+
+    // Flecha na mão só no trecho aljava → nock.
+    if (this.heldArrow) {
+      this.heldArrow.visible = t >= 0.32 && t < 0.7;
+    }
   }
 
   poseArm(arm, shoulder, hand, pole, straighten) {

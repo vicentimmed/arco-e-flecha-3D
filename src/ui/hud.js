@@ -38,7 +38,6 @@ const ATALHOS = [
       [["Mouse"], "mirar"],
       [["Clique"], "segurar e soltar"],
       [["Dir.", "C"], "1ª pessoa"],
-      [["Q"], "trocar de alvo"],
       [["F"], "câmera da flecha liga/desliga"],
     ],
   },
@@ -152,9 +151,6 @@ export class HUD {
         <span class="label">Mira</span>
         <span class="value" id="focus">—</span>
       </div>
-      <div class="chip" id="target-chip">
-        <span class="label">Alvo</span><span class="value" id="target-dist">—</span>
-      </div>
       <!-- Contagem de bichos em campo. Fixa, em TODOS os modos: é informação
            de situação, não de modo. -->
       <div class="chip" id="boar-chip">
@@ -255,7 +251,6 @@ export class HUD {
       windArrow: root.querySelector("#wind-arrow"),
       windSpeed: root.querySelector("#wind-speed"),
       focus: root.querySelector("#focus"),
-      targetDist: root.querySelector("#target-dist"),
       boarCount: root.querySelector("#boar-count"),
       faunaCount: root.querySelector("#fauna-count"),
       elkChip: root.querySelector("#elk-chip"),
@@ -330,11 +325,6 @@ export class HUD {
   setWind(speed, relativeAngle) {
     this.el.windSpeed.textContent = `${speed.toFixed(1)} m/s`;
     this.el.windArrow.style.transform = `rotate(${180 - radToDeg(relativeAngle)}deg)`;
-  }
-
-  setTarget(index, distance) {
-    this.el.targetDist.textContent =
-      index === null ? "—" : `#${index + 1} · ${distance.toFixed(0)} m`;
   }
 
   /**
@@ -589,6 +579,21 @@ export class HUD {
     this.showHuntVictory(ranking, selfId, { title: "HORDAS SOBREVIVIDAS", statLabel: rotulo });
   }
 
+  /**
+   * Placar de vitória da série: alvos acertados e pontos (alvos longe valem mais).
+   */
+  showSeriesVictory(ranking, selfId = null) {
+    const rotulo = (p) => {
+      const a = p.targets ?? 0;
+      const pts = p.points ?? 0;
+      return `${a} ${a === 1 ? "alvo" : "alvos"} · ${pts} pts`;
+    };
+    this.showHuntVictory(ranking, selfId, {
+      title: "SÉRIE CONCLUÍDA",
+      statLabel: rotulo,
+    });
+  }
+
   /** Fecha a tela de vitória — pelo Enter (ver `confirmOverlay`) ou por um mundo novo. */
   hideHuntVictory() {
     this.el.huntVictory.hidden = true;
@@ -656,10 +661,14 @@ export class HUD {
       const span = document.createElement("span");
       span.textContent = String(part.text ?? "");
       if (part.className) span.className = part.className;
+      if (part.color != null) {
+        span.style.color = `#${Number(part.color).toString(16).padStart(6, "0")}`;
+      }
       node.appendChild(span);
     }
     this.el.toasts.appendChild(node);
-    setTimeout(() => node.remove(), 1650);
+    const life = extraClass.includes("series-hit") ? 2800 : 1650;
+    setTimeout(() => node.remove(), life);
   }
 
   /** Abre e fecha o painel de atalhos; a pista de reabertura troca junto. */

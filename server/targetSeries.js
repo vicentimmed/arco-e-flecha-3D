@@ -3,6 +3,7 @@
 
    Um alvo por vez, cada um mais longe que o anterior. Acertou: ele explode,
    some, e o próximo nasce adiante — até o último, lá na encosta da serra.
+   Acertar o último encerra a partida e abre o placar de vitória.
 
    Por que no servidor: o alvo tem de ser O MESMO para todo mundo. Se cada
    cliente sorteasse a próxima posição, dois amigos estariam mirando em alvos
@@ -25,17 +26,21 @@ export class TargetSeries {
     this.active = false;
     this.index = 0;
     this.target = null;
+    /** true depois que o último alvo caiu — a sala anuncia a vitória. */
+    this.finished = false;
   }
 
   start() {
     if (this.active) return;
     this.active = true;
+    this.finished = false;
     this.index = 0;
     this.place();
   }
 
   stop() {
     this.active = false;
+    this.finished = false;
     this.target = null;
   }
 
@@ -54,6 +59,9 @@ export class TargetSeries {
 
   /**
    * Põe o alvo da vez sobre a estrada, na distância da sequência.
+   *
+   * Distâncias são medidas a partir da linha no chão (`startZ`): é dali que os
+   * arqueiros atiram, e é o número que a seta amarela mostra.
    *
    * Ele segue a curva da trilha (`pathCenterX`) em vez de uma reta: a estrada
    * serpenteia, e um alvo fora dela ficaria no meio do mato. A altura sai do
@@ -80,19 +88,27 @@ export class TargetSeries {
   /**
    * Alguém acertou. Devolve o alvo vencido, ou null se a mensagem chegou
    * atrasada e o alvo já era outro — dois tiros quase juntos são normais.
+   *
+   * No último alvo, a série termina (`finished`) em vez de recomeçar: a sala
+   * abre o placar de vitória com alvos e pontos de cada um.
    */
   hit(seq) {
-    if (!this.active || !this.target || this.target.seq !== seq) return null;
+    if (!this.active || this.finished || !this.target || this.target.seq !== seq) {
+      return null;
+    }
     const vencido = this.target;
-    // Chegou ao fim: recomeça a série em vez de encerrar o modo, para a
-    // brincadeira não parar sozinha no meio de uma rodada boa.
-    this.index = vencido.last ? 0 : this.index + 1;
-    this.place();
+    if (vencido.last) {
+      this.finished = true;
+      this.target = null;
+    } else {
+      this.index = this.index + 1;
+      this.place();
+    }
     return vencido;
   }
 
   view() {
-    return this.active ? this.target : null;
+    return this.active && !this.finished ? this.target : null;
   }
 }
 

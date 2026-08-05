@@ -220,7 +220,7 @@ export class Arrow {
       .setLinvel(direction.x * speed, direction.y * speed, direction.z * speed)
       .setAngularDamping(CONFIG.arrow.angularDamping)
       .setLinearDamping(0) // arrasto é calculado à mão; damping aqui falsearia
-      .setCcdEnabled(true); // a 85 m/s a flecha anda 0,7 m por passo
+      .setCcdEnabled(true); // a 120 m/s a flecha anda 1 m por passo
     this.body = physics.createBody(bodyDesc);
 
     const half = CONFIG.arrow.length / 2 - CONFIG.arrow.shaftRadius * 1.5;

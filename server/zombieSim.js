@@ -30,7 +30,7 @@ let proximoId = 1;
 const DEFLECTIONS = [0, 0.45, -0.45, 0.95, -0.95, 1.6, -1.6];
 
 export class Zombie {
-  constructor(terrain, x, z) {
+  constructor(terrain, x, z, speed = null) {
     const Z = CONFIG.modes.zombie;
     this.id = proximoId++;
     this.terrain = terrain;
@@ -49,7 +49,8 @@ export class Zombie {
 
     /* Cada um anda num passo ligeiramente diferente. Sem isso a horda inteira
        chega junta, na mesma linha, e lê como um bloco em vez de um bando. */
-    this.speed = Z.speed * (1 + (Math.random() * 2 - 1) * Z.speedVariation);
+    const base = speed ?? Z.speed;
+    this.speed = base * (1 + (Math.random() * 2 - 1) * Z.speedVariation);
   }
 
   /**
@@ -161,9 +162,10 @@ export class Zombie {
 /**
  * A noite dos zumbis.
  *
- * Dez hordas, de 3 a 21 zumbis, e a seguinte só entra quando o último da atual
- * cai. É essa regra — e não um cronômetro — que faz o modo ter ritmo: a pausa
- * entre hordas é o tempo que os jogadores levaram para limpar a anterior.
+ * Sete hordas (ver `CONFIG.modes.zombie.hordeSizes`), e a seguinte só entra
+ * quando o último da atual cai. É essa regra — e não um cronômetro — que faz o
+ * modo ter ritmo: a pausa entre hordas é o tempo que os jogadores levaram para
+ * limpar a anterior.
  */
 export class ZombieNight {
   constructor(terrain) {
@@ -183,10 +185,17 @@ export class ZombieNight {
     return this.zombies.reduce((n, z) => n + (z.dead ? 0 : 1), 0);
   }
 
-  /** Quantos zumbis a horda `n` traz: 3, 5, 7, … */
+  /** Quantos zumbis a horda `n` traz — tabela em `CONFIG.modes.zombie.hordeSizes`. */
   hordeSize(n) {
+    const lista = CONFIG.modes.zombie.hordeSizes;
+    return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? lista[lista.length - 1];
+  }
+
+  /** Velocidade base (m/s) da horda `n` — tabela em `hordeSpeeds`. */
+  hordeSpeed(n) {
     const Z = CONFIG.modes.zombie;
-    return Z.firstHorde + (n - 1) * Z.hordeStep;
+    const lista = Z.hordeSpeeds;
+    return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? Z.speed;
   }
 
   start() {
@@ -208,7 +217,7 @@ export class ZombieNight {
     this.overReason = null;
   }
 
-  /** Entra a horda seguinte. Devolve `{ n, size }`, ou null se acabaram as dez. */
+  /** Entra a horda seguinte. Devolve `{ n, size }`, ou null se acabaram. */
   nextHorde() {
     const Z = CONFIG.modes.zombie;
     if (this.horde >= Z.hordes) return null;
@@ -250,7 +259,7 @@ export class ZombieNight {
     }
     if (!achou) return null;
 
-    const zumbi = new Zombie(this.terrain, x, z);
+    const zumbi = new Zombie(this.terrain, x, z, this.hordeSpeed(this.horde));
     zumbi.faceToward(Z.centerX, Z.centerZ);
     this.zombies.push(zumbi);
     return zumbi;
@@ -283,7 +292,7 @@ export class ZombieNight {
    * Devolve `{ ataques, horda, venceu }`:
    *   • `ataques` — [{ zombieId, playerId }] de quem alcançou alguém agora;
    *   • `horda`   — `{ n, size }` se uma horda nova acabou de entrar;
-   *   • `venceu`  — true quando a décima horda caiu inteira.
+   *   • `venceu`  — true quando a última horda caiu inteira.
    */
   update(dt, jogadores, agora) {
     const Z = CONFIG.modes.zombie;

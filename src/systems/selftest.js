@@ -91,7 +91,7 @@ function launch({ speed, angleDeg, drag }) {
   return { range, time, speeds };
 }
 
-/** Critério 3: uma flecha a 85 m/s não pode atravessar uma placa de 5 cm. */
+/** Critério 3: uma flecha a 120 m/s não pode atravessar uma placa de 5 cm. */
 function ccdTest(shots = 50) {
   let pierced = 0;
   for (let i = 0; i < shots; i++) {
@@ -155,7 +155,7 @@ export function runSelfTest() {
   /* 3 — CCD impede tunelamento ------------------------------------------ */
   const ccd = ccdTest(50);
   results.push({
-    name: "CCD a 85 m/s contra placa de 5 cm",
+    name: `CCD a ${CONFIG.bow.maxSpeed} m/s contra placa de 5 cm`,
     detail: `${ccd.shots - ccd.pierced}/${ccd.shots} detectadas · ${ccd.pierced} atravessaram`,
     pass: ccd.pierced === 0,
   });

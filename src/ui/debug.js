@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { CONFIG, applyQuality } from "../config.js";
 import { runSelfTest } from "../systems/selftest.js";
+import { C2S } from "../shared/protocol.js";
 
 /* Alvos do orçamento de desenho, da Fase 0 do plano. Verde dentro do alvo,
    âmbar até o crítico, vermelho acima — o número sozinho não diz se está bom. */
@@ -51,8 +52,8 @@ export class DebugPanel {
         <input type="range" min="0" max="4" step="0.05" value="2">
       </div>
       <div class="slider" data-key="speed">
-        <label>velocidade máxima <b>85 m/s</b></label>
-        <input type="range" min="30" max="130" step="1" value="85">
+        <label>velocidade máxima <b>120 m/s</b></label>
+        <input type="range" min="30" max="130" step="1" value="120">
       </div>
       <div class="slider" data-key="gravity">
         <label>gravidade <b>9.81 m/s²</b></label>
@@ -76,6 +77,7 @@ export class DebugPanel {
         <button data-toggle="drag" class="on">arrasto</button>
         <button data-toggle="wind" class="on">vento na flecha</button>
         <button data-toggle="aero" class="on">estabilização</button>
+        <button data-toggle="reload" class="on">anim. reload</button>
         <button data-toggle="vectors">vetores</button>
         <button data-toggle="trace">traçado</button>
         <button data-toggle="post" class="on">pós-processamento</button>
@@ -174,10 +176,17 @@ export class DebugPanel {
             this.ctx.arrows.options.dragEnabled = on;
             break;
           case "wind":
-            this.ctx.arrows.options.windInfluence = on;
+            // Mesmo caminho da tecla V: a sala decide e avisa todo mundo.
+            this.ctx.net?.send?.(C2S.WIND, { on });
+            // Reverte o botão até a confirmação da sala — senão o painel mente
+            // por um frame se a rede estiver lenta.
+            btn.classList.toggle("on", !on);
             break;
           case "aero":
             this.ctx.arrows.options.aeroStabilization = on;
+            break;
+          case "reload":
+            CONFIG.bow.reloadAnimation = on;
             break;
           case "vectors":
             this.showVectors = on;

@@ -12,16 +12,21 @@
       a dificuldade tem de estar no TIRO, não em achar onde atirar.
 
    2. A seta cresce com a distância, como as etiquetas de nome, para continuar
-      legível no fim da série.
+      legível no fim da série. Acima dela, o número de metros até a linha de
+      tiro — o mesmo número que a mensagem de acerto usa.
 
    3. A explosão é de partículas simples e some sozinha. Ela não é enfeite: com
       um alvo a 250 m, sem um estouro visível você não sabe se acertou ou se a
       flecha passou de raspão.
+
+   4. A LINHA NO CHÃO. Uma faixa bem visível à frente dos arqueiros: é o limite
+      do campo de tiro. Andar além dela anularia o modo (chegar perto e atirar).
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
+import { pathCenterX } from "../shared/terrainField.js";
 
 const _cam = new THREE.Vector3();
 
@@ -33,6 +38,7 @@ export class TargetSeriesView {
     this.target = null; // { seq, group, body, collider, ... }
     this.explosions = [];
     this.marker = null;
+    this.fence = null;
   }
 
   get active() {
@@ -41,10 +47,21 @@ export class TargetSeriesView {
 
   /** O alvo da vez, como o servidor o descreve. */
   setTarget(info) {
-    if (!info) return this.clear();
+    if (!info) {
+      this.removeTarget();
+      // Sem alvo mas ainda no modo: a cerca permanece até clear().
+      return;
+    }
     if (this.target?.seq === info.seq) return;
     this.removeTarget();
     this.target = this.build(info);
+    this.ensureFence();
+    this.updateDistanceLabel(info.distance);
+  }
+
+  /** Mostra a linha no chão (entrada no modo série). */
+  showFence() {
+    this.ensureFence();
   }
 
   build(info) {
@@ -117,6 +134,81 @@ export class TargetSeriesView {
   clear() {
     this.removeTarget();
     this.hideMarker();
+    this.hideFence();
+  }
+
+  /* ---------------------------------------------------------------- cerca --- */
+
+  ensureFence() {
+    if (this.fence) {
+      this.fence.group.visible = true;
+      return this.fence;
+    }
+    const S = CONFIG.modes.series;
+    const z = S.startZ;
+    const largura = S.fenceWidth ?? 48;
+    const cx = pathCenterX(z);
+    const y = this.terrain.heightAt(cx, z);
+
+    const grupo = new THREE.Group();
+    grupo.name = "series-fence";
+
+    // Faixa no chão: larga, amarela, bem visível de qualquer ângulo.
+    const faixa = new THREE.Mesh(
+      new THREE.PlaneGeometry(largura, 0.55),
+      new THREE.MeshBasicMaterial({
+        color: 0xf5c451,
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    faixa.rotation.x = -Math.PI / 2;
+    faixa.position.set(cx, y + 0.06, z);
+    faixa.renderOrder = 4;
+    grupo.add(faixa);
+
+    // Contorno escuro para contrastar com grama clara e pedra.
+    const borda = new THREE.Mesh(
+      new THREE.PlaneGeometry(largura + 0.3, 0.85),
+      new THREE.MeshBasicMaterial({
+        color: 0x1a1208,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    borda.rotation.x = -Math.PI / 2;
+    borda.position.set(cx, y + 0.04, z);
+    borda.renderOrder = 3;
+    grupo.add(borda);
+
+    // Postes baixos nas pontas — reforçam a leitura de "linha de tiro".
+    for (const lado of [-1, 1]) {
+      const poste = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.08, 0.9, 6),
+        new THREE.MeshStandardMaterial({ color: "#c9a227", roughness: 0.7 }),
+      );
+      poste.position.set(cx + lado * (largura * 0.48), y + 0.45, z);
+      poste.castShadow = true;
+      grupo.add(poste);
+    }
+
+    this.scene.add(grupo);
+    this.fence = { group: grupo, z };
+    return this.fence;
+  }
+
+  hideFence() {
+    if (!this.fence) return;
+    this.scene.remove(this.fence.group);
+    this.fence.group.traverse((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+    });
+    this.fence = null;
   }
 
   /* ---------------------------------------------------------------- seta --- */
@@ -145,10 +237,62 @@ export class TargetSeriesView {
     haste.position.y = 1.1;
     grupo.add(haste);
 
+    // Distância em metros, acima da seta — mesmo número medido da linha no chão.
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 96;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.center.set(0.5, 0);
+    sprite.position.y = 2.4;
+    sprite.renderOrder = 10;
+    grupo.add(sprite);
+
     grupo.renderOrder = 9;
     this.scene.add(grupo);
-    this.marker = { group: grupo, material };
+    this.marker = {
+      group: grupo,
+      material,
+      labelCanvas: canvas,
+      labelTexture: texture,
+      labelSprite: sprite,
+      labelMat: spriteMat,
+      lastDistance: null,
+    };
     return this.marker;
+  }
+
+  updateDistanceLabel(distance) {
+    const marca = this.ensureMarker();
+    const metros = Math.round(distance);
+    if (marca.lastDistance === metros) return;
+    marca.lastDistance = metros;
+
+    const ctx = marca.labelCanvas.getContext("2d");
+    const W = marca.labelCanvas.width;
+    const H = marca.labelCanvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const texto = `${metros} m`;
+    ctx.font = "700 52px Nunito, 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = "rgba(8, 10, 14, 0.92)";
+    ctx.strokeText(texto, W / 2, H / 2);
+    ctx.fillStyle = "#f5c451";
+    ctx.fillText(texto, W / 2, H / 2);
+    marca.labelTexture.needsUpdate = true;
   }
 
   hideMarker() {
@@ -202,6 +346,11 @@ export class TargetSeriesView {
       marca.group.position.set(info.x, info.y + altura, info.z);
       // Balanço lento: movimento é o que o olho encontra num horizonte parado.
       marca.group.position.y += Math.sin(performance.now() * 0.0022) * escala * 0.18;
+
+      // O sprite da distância já escala com o grupo; ajusta a proporção do
+      // retângulo do canvas para a letra não ficar esmagada.
+      const spr = marca.labelSprite;
+      spr.scale.set(2.4 * (256 / 96), 2.4, 1);
     } else {
       this.hideMarker();
     }

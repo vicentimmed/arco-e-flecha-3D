@@ -158,6 +158,7 @@ export class TorchRing {
     this.terrain = terrain;
     /** @type {Torch[]} */
     this.torches = [];
+    this.centerLight = null;
     this.time = 0;
   }
 
@@ -190,11 +191,30 @@ export class TorchRing {
         ),
       );
     });
+
+    // Luz extra no meio do quadrado: sem ela o centro fica na sombra entre as
+    // quatro tochas, e o cerco some justamente onde os arqueiros se reúnem.
+    const yCentro =
+      this.terrain.heightAt(Z.centerX, Z.centerZ) + (Z.centerLightHeight ?? 3.2);
+    this.centerLight = new THREE.PointLight(
+      Z.torchColor,
+      Z.centerLightIntensity ?? 22,
+      Z.centerLightRange ?? 12,
+      1.8,
+    );
+    this.centerLight.castShadow = false;
+    this.centerLight.position.set(Z.centerX, yCentro, Z.centerZ);
+    this.scene.add(this.centerLight);
   }
 
   clear() {
     for (const t of this.torches) t.dispose();
     this.torches.length = 0;
+    if (this.centerLight) {
+      this.scene.remove(this.centerLight);
+      this.centerLight.dispose();
+      this.centerLight = null;
+    }
   }
 
   /** Aplica o estado que veio da sala. */

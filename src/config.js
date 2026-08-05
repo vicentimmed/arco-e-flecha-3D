@@ -59,10 +59,17 @@ export const CONFIG = {
 
   bow: {
     minSpeed: 30, // m/s — toque rápido
-    maxSpeed: 85, // m/s — tensão máxima
-    fullDrawTime: 1.2, // s até a tensão máxima
+    maxSpeed: 120, // m/s — tensão máxima
+    // A tensão acompanha a nova velocidade máxima: chegar a 120 m/s exige
+    // mais curso/tempo do que chegar a 85 m/s.
+    fullDrawTime: 1.7, // s até a tensão máxima
     holdBeforeShake: 3.0, // s segurando antes de começar a tremer
     shakeAmplitude: 0.0055, // rad/s de tremor acumulado
+    /* Depois de cada tiro a mão da corda vai à aljava, pega outra flecha e
+       encaixa no arco. Enquanto isso, mira e tiro ficam bloqueados — sem isso
+       o arco vira metralhadora. Desligável no painel ~. */
+    reloadAnimation: true,
+    reloadTime: 2.0, // s
   },
 
   wind: {
@@ -437,8 +444,8 @@ export const CONFIG = {
     /* Ganho do empurrão: quanto de velocidade o corpo recebe por m/s de flecha.
        Não é físico e não tenta ser (ver o comentário em `Ragdoll.begin`). Com
        0.05, a flecha mais fraca (30 m/s) dá um tranco de 1,5 m/s e a mais forte
-       (85 m/s) joga o corpo a 4,2 m/s — a diferença entre os dois é visível, que
-       é o ponto. */
+       (120 m/s) joga o corpo a 6,0 m/s — a diferença entre os dois é visível,
+       que é o ponto. */
     pushGain: 0.05,
     liftGain: 0.022, // fração da velocidade convertida em impulso para cima
     spinGain: 0.9, // rad/s por (m de braço × m/s de flecha)
@@ -484,14 +491,18 @@ export const CONFIG = {
        muda pouco; de 220 m para 300 m muda tudo. Um passo fixo faria os
        primeiros alvos parecerem repetidos e os últimos, um salto no escuro. */
     series: {
-      firstDistance: 25, // m — o primeiro alvo, logo à frente
+      firstDistance: 25, // m — o primeiro alvo, medido a partir da linha no chão
       lastDistance: 300, // m — o último, na encosta da serra
       steps: 12, // quantos alvos até chegar ao mais distante
       pointsBase: 50, // pontos do primeiro alvo
       pointsPerStep: 1.32, // multiplicador de pontos a cada alvo vencido
       markerHeight: 5.0, // m — altura da seta indicadora sobre o alvo
       explosionTime: 1.0, // s de explosão ao acertar
-      startZ: 26, // m — a linha de tiro, no começo da estrada
+      /* A linha no chão. Jogadores nascem ATRÁS dela e só podem andar do lado
+         de cá — ir até o alvo a pé anularia o modo. */
+      startZ: 26, // m — Z da linha de tiro (cerca no chão)
+      spawnBehind: 3, // m — quanto atrás da linha os jogadores nascem (+Z)
+      fenceWidth: 48, // m — largura visual da linha no chão
       lineSpread: 6, // m — afastamento lateral entre jogadores na linha
     },
 
@@ -556,22 +567,27 @@ export const CONFIG = {
       centerZ: SPAWN_CENTER_Z,
 
       // ------------------------------------------------------------ tochas --
-      // Meia-aresta do quadrado. 10 m dá 20 m de lado: espaço para correr,
-      // desviar e recuar sem nunca sair da luz.
-      torchHalf: 10, // m
+      // Meia-aresta do quadrado. 7 m dá 14 m de lado: tochas mais juntas, com
+      // o centro bem iluminado (ver centerLight* abaixo).
+      torchHalf: 7, // m
       torchHeight: 2.5, // m — altura da chama acima do chão
-      torchRange: 17, // m — alcance da luz de cada tocha
+      torchRange: 14, // m — alcance da luz de cada tocha
       torchIntensity: 30, // intensidade da PointLight
       torchColor: 0xffa542,
+      // Luz extra no centro do quadrado — sem ela o meio fica mais escuro que
+      // os cantos, e o cerco some na sombra entre as tochas.
+      centerLightIntensity: 22,
+      centerLightRange: 12, // m
+      centerLightHeight: 3.2, // m acima do chão
       // Uma flecha apaga a tocha. É risco de verdade: errar o zumbi e acertar a
       // tocha escurece o próprio canto de quem errou.
       torchRadius: 0.16, // m — raio do colisor do poste
 
       /* Distância do centro além da qual o jogador morre.
-         Fica FORA do quadrado das tochas (cujos cantos estão a 10√2 ≈ 14,1 m),
+         Fica FORA do quadrado das tochas (cujos cantos estão a 7√2 ≈ 9,9 m),
          com folga para perseguir um zumbi até a borda da luz sem ser punido por
          isso — mas não o bastante para acampar no escuro. */
-      safeRadius: 22, // m
+      safeRadius: 16, // m
 
       // ------------------------------------------------------------- vidas --
       lives: 3, // vidas por jogador
@@ -580,18 +596,23 @@ export const CONFIG = {
       invulnerability: 2.5, // s de graça ao voltar ao centro
 
       // ------------------------------------------------------------ hordas --
-      hordes: 10, // quantas até o fim
-      firstHorde: 3, // zumbis na horda 1
-      hordeStep: 2, // +N a cada horda ⇒ 3,5,7,…,21 (120 no total)
+      /* Tamanho de cada horda — tabela, não fórmula, para dar o salto certo
+         onde a dificuldade precisa apertar. Fácil de retocar. */
+      hordeSizes: [2, 4, 8, 12, 16, 20, 30],
+      hordes: 7, // deve bater com o comprimento de hordeSizes
+      /* Velocidade de caminhada (m/s) por horda. O arqueiro anda a 3,2 m/s —
+         mesmo a horda 7 continua mais lenta que uma caminhada. Edite aqui. */
+      hordeSpeeds: [1.0, 1.1, 1.2, 1.35, 1.5, 1.65, 1.85],
       hordeDelay: 3.0, // s entre a última morte e a horda seguinte
       // Raio em que os zumbis entram em cena: fora do alcance das tochas, para
       // eles nascerem no breu e aparecerem primeiro como um par de olhos.
-      spawnRadius: 44, // m
-      spawnJitter: 6, // m de sorteio dentro do setor
+      spawnRadius: 36, // m
+      spawnJitter: 5, // m de sorteio dentro do setor
 
       // ------------------------------------------------------------- bicho --
-      speed: 1.15, // m/s — bem mais lento que a caminhada do arqueiro (3,2)
-      speedVariation: 0.28, // fração de variação individual, para não andarem juntos
+      // Fallback se hordeSpeeds não cobrir a horda (não deve acontecer).
+      speed: 1.15, // m/s
+      speedVariation: 0.18, // fração de variação individual, para não andarem juntos
       bodyHits: 2, // flechas no corpo para derrubar
       // Altura do impacto, medida da base do zumbi, a partir da qual conta como
       // cabeça. O corpo tem 1,8 m; o pescoço começa em ~1,45 m.

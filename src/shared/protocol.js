@@ -34,8 +34,12 @@
  * sala anunciar um modo que ela não sabe desenhar: ficaria de dia, sem tochas e
  * sem zumbi nenhum, atirando num campo vazio enquanto todos os outros defendem
  * um quadrado de luz.
+ *
+ * 4 — vento na flecha sincronizado pela sala, fim da série com placar de
+ * vitória, e hordas de zumbi por tabela. Uma aba antiga divergiria na física
+ * da flecha e reiniciaria a série no último alvo.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -66,6 +70,8 @@ export const C2S = {
   BIRD_HIT: "birdHit",
   /** "Acertei o alvo da série": `{ seq }`. */
   SERIES_HIT: "seriesHit",
+  /** Liga/desliga o vento na flecha para a sala: `{ on?: boolean }`. */
+  WIND: "wind",
   /** Zerar o placar de todos. */
   RESET_SCORES: "resetScores",
   /** "Acertei este zumbi": `{ id, head, d }`. `head` decide se morre na hora. */
@@ -136,6 +142,13 @@ export const S2C = {
   SERIES: "series",
   /** Alvo da série derrubado — explosão, pontos e o próximo. */
   SERIES_HIT: "seriesHit",
+  /**
+   * A série acabou: o último alvo caiu.
+   * `{ ranking: [{ id, name, color, targets, points }, ...] }`.
+   */
+  SERIES_OVER: "seriesOver",
+  /** Vento na flecha (sala): `{ on, silent? }`. */
+  WIND: "wind",
   /** Placar completo (sempre que muda). */
   SCORES: "scores",
   /** Alguém zerou o placar: `{ by }`. */
@@ -183,6 +196,7 @@ export function packState(player) {
     b: r3(player.gaitBlend),
     r: r3(player.runBlend),
     d: r3(player.drawFraction),
+    l: r3(player.reloadFraction ?? 0),
     f: r3(player.moveF),
     s: r3(player.moveS),
     a: player.airborne ? 1 : 0,
@@ -200,6 +214,7 @@ export function unpackState(state, out) {
   out.gaitBlend = state.b;
   out.runBlend = state.r;
   out.drawFraction = state.d;
+  out.reloadFraction = state.l ?? 0;
   out.moveF = state.f;
   out.moveS = state.s;
   out.airborne = state.a === 1;

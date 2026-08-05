@@ -67,6 +67,7 @@ export class Respawn {
     p.gaitBlend = 0;
     p.runBlend = 0;
     p.setDraw(0);
+    p.setReload(0);
   }
 
   /** @param {number} serverTime ms no relógio da sala */

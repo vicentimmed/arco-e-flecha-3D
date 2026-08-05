@@ -141,6 +141,7 @@ class Game {
       // Para o contador de draw calls e a chave do pós-processamento.
       renderer: this.renderer,
       particles: this.particles,
+      net: null, // preenchido abaixo, depois do NetClient
     });
 
     this.selectedTarget = 0;
@@ -149,6 +150,7 @@ class Game {
 
     /* --------------------------------------------------------------- rede -- */
     this.net = new NetClient();
+    this.debug.ctx.net = this.net;
     this.remotes = new RemotePlayers(this.scene, physics, this.terrain);
     this.remoteArrows = new RemoteArrows(this.arrows, () => this.targets);
     this.series = new TargetSeriesView(this.scene, physics, this.terrain);
@@ -163,6 +165,8 @@ class Game {
     this.bindNetwork();
 
     this.drawTime = 0;
+    /** Segundos restantes da animação de buscar flecha na aljava (0 = pronta). */
+    this.reloadTimer = 0;
     this.accumulator = 0;
     this.lastTime = performance.now();
     this.fps = 60;
@@ -380,6 +384,9 @@ class Game {
       if (msg.id === net.me?.id) {
         this.death.revive();
         this.respawn.begin(msg);
+        this.reloadTimer = 0;
+        this.drawTime = 0;
+        this.input.drawing = false;
       } else {
         this.remotes.get(msg.id)?.applySpawn(msg);
       }
@@ -513,6 +520,7 @@ class Game {
       this.arrows.clearAll();
       this.remoteArrows.clear();
       this.zombies.clear();
+      this.series.clear();
       this.hud.resetStats();
       this.hud.hideZombieCenter();
       this.huntVictoryOpen = false;
@@ -532,6 +540,29 @@ class Game {
         { text: `+${msg.points}`, forte: true },
         { text: `   ${msg.distance.toFixed(0)} m` },
       ]);
+      // Mensagem central para TODOS: quem acertou e a quantos metros da linha.
+      this.hud.toast(
+        [
+          { text: msg.killerName, color: msg.killerColor, className: "score" },
+          { text: " acertou o alvo a " },
+          { text: `${Math.round(msg.distance)} m`, className: "score" },
+        ],
+        "series-hit",
+      );
+    });
+
+    net.on(S2C.SERIES_OVER, (msg) => {
+      this.huntVictoryOpen = true;
+      this.hud.showSeriesVictory(msg.ranking ?? [], this.net.me?.id);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "victoryFanfare",
+        position: vec3Payload(this.player.position),
+        volume: 1.0,
+      });
+    });
+
+    net.on(S2C.WIND, (msg) => {
+      this.applyWindInfluence(!!msg.on, { toast: !msg.silent });
     });
 
     /* ------------------------------------------------------------ zumbis -- */
@@ -658,7 +689,9 @@ class Game {
     this.updateFootDust();
     this.updateCamera(dt);
     this.solveAim();
-    if (actions.release && !this.death.dying) this.shoot();
+    if (actions.release && !this.death.dying && !this.player.isReloading) {
+      this.shoot();
+    }
 
     /* O vento é função do relógio da SALA, não do local. É essa amarração que
        permite mandar um evento de disparo em vez da trajetória inteira: com o
@@ -711,9 +744,6 @@ class Game {
   }
 
   handleActions(a) {
-    if (a.cycleTarget) {
-      this.selectTarget((this.selectedTarget + 1) % this.targets.length);
-    }
     if (a.dismissArrowCam) this.rig.returnToArcher();
     // Limpa só as SUAS flechas: em rede, varrer as dos outros da tela seria
     // apagar o tiro que o amigo acabou de dar.
@@ -726,14 +756,9 @@ class Game {
       );
     }
     if (a.toggleWindInfluence) {
-      this.arrows.options.windInfluence = !this.arrows.options.windInfluence;
-      this.debug.syncWindInfluenceToggle(this.arrows.options.windInfluence);
-      this.hud.toast(
-        this.arrows.options.windInfluence
-          ? "vento na flecha ligado"
-          : "vento na flecha desligado",
-        "miss",
-      );
+      // O vento é da SALA: quem aperta V pede a troca, o servidor manda para
+      // todo mundo (ver S2C.WIND). Sem isso, cada um teria uma física diferente.
+      this.net.send(C2S.WIND, { on: !this.arrows.options.windInfluence });
     }
     if (a.toggleArrowCam) {
       const on = !this.rig.followArrowEnabled;
@@ -796,7 +821,35 @@ class Game {
     this.marker.visible = !escondeFixos;
     this.hud.setMode(msg.mode, msg.invites ?? [], msg.needed ?? 2, this.net.me?.id);
 
+    if (msg.mode === "series") {
+      this.series.showFence();
+      this.player.minZ = CONFIG.modes.series.startZ;
+    } else {
+      this.series.hideFence();
+      this.player.minZ = null;
+    }
+
+    if (typeof msg.windInfluence === "boolean") {
+      this.applyWindInfluence(msg.windInfluence, { toast: false });
+    }
+
     this.applyZombieMode(msg.mode === "zombie");
+  }
+
+  /** Aplica o vento na flecha localmente (já decidido pela sala). */
+  applyWindInfluence(ligado, { toast = true } = {}) {
+    if (this.arrows.options.windInfluence === ligado) {
+      this.debug.syncWindInfluenceToggle(ligado);
+      return;
+    }
+    this.arrows.options.windInfluence = ligado;
+    this.debug.syncWindInfluenceToggle(ligado);
+    if (toast) {
+      this.hud.toast(
+        ligado ? "vento na flecha ligado" : "vento na flecha desligado",
+        "miss",
+      );
+    }
   }
 
   /**
@@ -875,9 +928,29 @@ class Game {
     // Morto, o corpo cai e nada mais responde: não anda, não pula, não tensiona.
     // Sem isso o cadáver continuaria correndo pelo campo enquanto tomba.
     const morto = this.death.dying;
-    this.input.blockDraw = this.rig.isArrowCam || morto;
 
-    if (this.input.drawing && !morto) this.drawTime += dt;
+    /* Timer do reload: avança mesmo andando/correndo. Se a chave do painel ~
+       for desligada no meio, cancela na hora — senão a pessoa ficaria presa
+       sem poder atirar com a animação "desligada". */
+    if (!CONFIG.bow.reloadAnimation && this.reloadTimer > 0) {
+      this.reloadTimer = 0;
+    }
+    if (morto) {
+      this.reloadTimer = 0;
+    } else if (this.reloadTimer > 0) {
+      this.reloadTimer = Math.max(0, this.reloadTimer - dt);
+    }
+    const recarregando = this.reloadTimer > 0;
+    const dur = CONFIG.bow.reloadTime;
+    this.player.setReload(recarregando && dur > 0 ? 1 - this.reloadTimer / dur : 0);
+
+    this.input.blockDraw = this.rig.isArrowCam || morto || recarregando;
+    if (recarregando) {
+      this.input.drawing = false;
+      this.drawTime = 0;
+    }
+
+    if (this.input.drawing && !morto && !recarregando) this.drawTime += dt;
     else if (morto) this.drawTime = 0;
 
     if (actions.jump && !morto) this.player.jump();
@@ -1038,6 +1111,7 @@ class Game {
   }
 
   shoot() {
+    if (this.player.isReloading) return;
     if (this.drawTime < 0.04) {
       this.drawTime = 0;
       return;
@@ -1055,6 +1129,12 @@ class Game {
     this.hud.addShot();
     this.drawTime = 0;
     this.player.setDraw(0);
+    this.input.drawing = false;
+
+    if (CONFIG.bow.reloadAnimation) {
+      this.reloadTimer = CONFIG.bow.reloadTime;
+      this.player.setReload(0.001);
+    }
 
     gameEvents.emit(EventType.ARROW_SHOT, {
       arrowId: arrow.id,
@@ -1200,13 +1280,6 @@ class Game {
       this.wind.speed,
       this.wind.relativeAngle(this.aimYaw ?? 0),
     );
-    const target = this.targets[this.selectedTarget];
-    if (target) {
-      this.hud.setTarget(
-        this.selectedTarget,
-        target.distanceTo(this.player.position),
-      );
-    }
     /* Quantos bichos existem em campo AGORA, em qualquer modo. É informação de
        situação, não de modo: saber que há doze porcos vivos muda o que se faz
        em seguida, e não saber é ficar girando a câmera procurando. */

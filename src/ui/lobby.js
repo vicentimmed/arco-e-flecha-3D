@@ -11,7 +11,7 @@
    várias vezes na mesma tarde, e redigitar toda vez é atrito à toa.
    --------------------------------------------------------------------------- */
 
-import { CONFIG } from "../config.js";
+import { CONFIG, applyQuality } from "../config.js";
 import { sanitizeName } from "../shared/protocol.js";
 
 const STORAGE_KEY = "arco-flecha:nome";
@@ -30,6 +30,20 @@ export class Lobby {
         <h1>Arco &amp; Flecha</h1>
         <p class="lobby-sub">Campo de tiro online</p>
 
+        <section class="lobby-quality" aria-labelledby="lobby-quality-title">
+          <h2 id="lobby-quality-title">Qualidade gráfica do jogo</h2>
+          <p>Esta escolha vale somente para você e fica salva neste navegador.</p>
+          <div class="lobby-quality-options" role="radiogroup"
+               aria-label="Qualidade gráfica do jogo">
+            <button type="button" data-quality="low" role="radio"
+                    aria-checked="false">Low</button>
+            <button type="button" data-quality="medium" role="radio"
+                    aria-checked="false">Medium</button>
+            <button type="button" data-quality="high" role="radio"
+                    aria-checked="false">High</button>
+          </div>
+        </section>
+
         <label class="lobby-field">
           <span>Seu nome</span>
           <input id="lobby-name" type="text" autocomplete="off" spellcheck="false"
@@ -44,16 +58,37 @@ export class Lobby {
     this.input = root.querySelector("#lobby-name");
     this.button = root.querySelector("#lobby-enter");
     this.status = root.querySelector("#lobby-status");
+    this.qualityButtons = [...root.querySelectorAll("[data-quality]")];
 
     this.input.value = readStoredName();
+    this.syncQuality();
     this.input.addEventListener("input", () => this.refresh());
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.submit();
     });
     this.button.addEventListener("click", () => this.submit());
+    for (const qualityButton of this.qualityButtons) {
+      qualityButton.addEventListener("click", () => {
+        const quality = qualityButton.dataset.quality;
+        if (quality === CONFIG.render.quality) return;
+
+        applyQuality(quality);
+        this.syncQuality();
+        this.status.textContent = "qualidade gráfica salva — recarregando…";
+        location.reload();
+      });
+    }
 
     // Foco imediato: quem abre o link já pode digitar.
     requestAnimationFrame(() => this.input.focus());
+  }
+
+  syncQuality() {
+    for (const button of this.qualityButtons) {
+      const selected = button.dataset.quality === CONFIG.render.quality;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-checked", String(selected));
+    }
   }
 
   /** Passo do preparo do mundo — ocupa a mesma linha do status. */

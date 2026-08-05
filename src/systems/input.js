@@ -185,13 +185,16 @@ export class Input {
     document.addEventListener("mousedown", (e) => {
       if (!this.active) return;
       if (e.button === 2) {
+        // Mira em primeira pessoa também fica bloqueada durante reload /
+        // câmera da flecha / morte — o `blockDraw` cobre os três.
+        if (this.blockDraw) return;
         this.firstPerson = true;
         return;
       }
       if (e.button !== 0) return;
       if (this.blockDraw) {
-        // Estamos vendo a flecha voar: este clique só traz a câmera de volta,
-        // sem começar a tensionar o arco (senão soltaria um tiro fraco).
+        // Estamos vendo a flecha voar (ou recarregando): este clique só traz a
+        // câmera de volta, sem começar a tensionar o arco.
         this.actions.dismissArrowCam = true;
         return;
       }
@@ -246,9 +249,6 @@ export class Input {
         case "Digit0":
         case "Numpad0":
           this.scoreboard = true;
-          break;
-        case "KeyQ":
-          this.actions.cycleTarget = true;
           break;
         case "KeyK":
           this.actions.askRespawn = true;

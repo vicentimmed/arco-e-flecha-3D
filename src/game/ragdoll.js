@@ -173,8 +173,8 @@ export class Ragdoll {
     if (velocity) {
       /* O empurrão.
 
-         Fisicamente uma flecha de 25 g a 85 m/s carrega 2,1 kg·m/s, e num corpo
-         de 70 kg isso são 3 cm/s — invisível. Se a intenção fosse realismo, a
+         Fisicamente uma flecha de 25 g a 120 m/s carrega 3,0 kg·m/s, e num corpo
+         de 70 kg isso são 4 cm/s — invisível. Se a intenção fosse realismo, a
          resposta certa seria não mexer o corpo. Mas o acerto precisa TER
          consequência visível, então o impulso é amplificado por `pushGain` e o
          que se preserva é o que informa: a DIREÇÃO de onde veio o tiro e o

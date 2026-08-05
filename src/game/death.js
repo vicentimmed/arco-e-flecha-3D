@@ -71,6 +71,7 @@ export class Death {
     this.player.gaitBlend = 0;
     this.player.runBlend = 0;
     this.player.setDraw(0);
+    this.player.setReload(0);
     this.lastTime = serverTime;
   }
 }

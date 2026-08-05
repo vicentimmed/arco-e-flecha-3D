@@ -124,6 +124,7 @@ class RemotePlayer {
     this.player.gaitBlend = 0;
     this.player.runBlend = 0;
     this.player.setDraw(0);
+    this.player.setReload(0);
   }
 
   /**
@@ -159,6 +160,7 @@ class RemotePlayer {
       p.gaitBlend = 0;
       p.runBlend = 0;
       p.setDraw(0);
+      p.setReload(0);
     }
 
     p.bobPhase += dt * 1.3; // respiração: é local, não trafega
@@ -247,6 +249,7 @@ class RemotePlayer {
       p.moveS = a.moveS;
       p.airborne = a.airborne;
       p.setDraw(a.drawFraction);
+      p.setReload(a.reloadFraction ?? 0);
       this.body.verticalVelocity = 0;
       return;
     }
@@ -263,6 +266,7 @@ class RemotePlayer {
     p.moveS = lerp(a.moveS, b.moveS, t);
     p.airborne = t < 0.5 ? a.airborne : b.airborne;
     p.setDraw(lerp(a.drawFraction, b.drawFraction, t));
+    p.setReload(lerp(a.reloadFraction ?? 0, b.reloadFraction ?? 0, t));
 
     // Velocidade vertical estimada das amostras: é o que a pose de pulo usa
     // para encolher as pernas na subida.
@@ -303,6 +307,7 @@ class RemotePlayer {
     p.moveS = b.moveS;
     p.airborne = b.airborne;
     p.setDraw(b.drawFraction);
+    p.setReload(b.reloadFraction ?? 0);
   }
 
   dispose(scene) {

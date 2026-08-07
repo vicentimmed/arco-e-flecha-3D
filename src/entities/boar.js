@@ -360,10 +360,11 @@ export class Boar {
     this.snortTimer -= dt;
     if (this.snortTimer > 0) return;
     this.snortTimer = this._nextSnortDelay();
+    const charging = this.state === "charge";
     gameEvents.emit(EventType.AUDIO_PLAY, {
       sound: "boarIdle",
       position: vec3Payload(this.position),
-      volume: CONFIG.boar.snortVolume,
+      volume: charging ? CONFIG.boar.snortVolume * 1.35 : CONFIG.boar.snortVolume,
     });
   }
 
@@ -373,7 +374,10 @@ export class Boar {
 
     const eatBob =
       this.state === "eat" ? Math.sin(this.animPhase * 3) * 0.08 : 0;
-    this.head.rotation.x = eatBob - (this.state === "eat" ? 0.48 : 0.08);
+    const charging = this.state === "charge";
+    this.head.rotation.x = charging
+      ? -0.32
+      : eatBob - (this.state === "eat" ? 0.48 : 0.08);
     this.head.rotation.z =
       this.state === "eat" ? Math.sin(this.animPhase * 1.7) * 0.045 : 0;
     this.bodyMesh.position.y =

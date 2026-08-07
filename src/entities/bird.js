@@ -13,6 +13,9 @@
    2. O COLISOR É PEQUENO E EXISTE SEMPRE. Um alvo de meio metro a trinta de
       altura é o tiro mais difícil do jogo, e é isso que o torna interessante —
       aumentar o colisor "para ajudar" tiraria justamente a graça.
+
+   No modo caça existe ainda o pássaro raro: maior, cor distinta, colisor um
+   pouco maior — a dificuldade vem da altura, não de um hitbox minúsculo.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -32,16 +35,38 @@ const MAT = {
   beak: new THREE.MeshStandardMaterial({ color: "#d8a13c", roughness: 0.6 }),
 };
 
+function materiaisEspeciais() {
+  const Sp = CONFIG.modes.birdHunt.special;
+  return {
+    body: new THREE.MeshStandardMaterial({
+      color: Sp.bodyColor,
+      roughness: 0.7,
+    }),
+    wing: new THREE.MeshStandardMaterial({
+      color: Sp.wingColor,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+    }),
+    beak: new THREE.MeshStandardMaterial({
+      color: Sp.beakColor,
+      roughness: 0.55,
+    }),
+  };
+}
+
 export class Bird {
-  constructor(scene, physics, terrain, entityId, x, y, z) {
+  constructor(scene, physics, terrain, entityId, x, y, z, opts = {}) {
     this.scene = scene;
     this.physics = physics;
     this.terrain = terrain;
     this.entityId = entityId;
+    this.special = !!opts.special;
     this.netTarget = null;
     this.dead = false;
     this.state = "fly";
     this.flapPhase = Math.random() * Math.PI * 2;
+    /** Materiais próprios do raro — não compartilham o pool escuro do bando. */
+    this._mats = this.special ? materiaisEspeciais() : null;
 
     this.position = new THREE.Vector3(x, y, z);
     this.yaw = 0;
@@ -54,11 +79,14 @@ export class Bird {
     this.group.position.copy(this.position);
     scene.add(this.group);
 
+    const hitR = this.special
+      ? CONFIG.modes.birdHunt.special.hitRadius
+      : CONFIG.birds.hitRadius;
     this.body = physics.createBody(
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(x, y, z),
     );
     this.collider = physics.createCollider(
-      RAPIER.ColliderDesc.ball(CONFIG.birds.hitRadius).setActiveEvents(
+      RAPIER.ColliderDesc.ball(hitR).setActiveEvents(
         RAPIER.ActiveEvents.COLLISION_EVENTS,
       ),
       this.body,
@@ -68,6 +96,7 @@ export class Bird {
   }
 
   buildMesh() {
+    const mat = this._mats ?? MAT;
     const root = new THREE.Group();
     /* LOD (ver `utils/lod.js`). O pássaro é pequeno e voa alto: o bico de 3 cm
        a 40 m já não existe na tela, e a 60 m o que sobra é a silhueta batendo
@@ -76,23 +105,23 @@ export class Bird {
     this.lodDetail = [];
     this.lodBulk = [];
 
-    const corpo = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 7), MAT.body);
+    const corpo = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 7), mat.body);
     corpo.scale.set(1, 0.85, 1.7);
     corpo.castShadow = true;
     root.add(corpo);
 
-    const cabeca = new THREE.Mesh(new THREE.SphereGeometry(0.095, 8, 6), MAT.body);
+    const cabeca = new THREE.Mesh(new THREE.SphereGeometry(0.095, 8, 6), mat.body);
     cabeca.position.set(0, 0.06, 0.22);
     root.add(cabeca);
     this.lodBulk.push(cabeca);
 
-    const bico = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.12, 5), MAT.beak);
+    const bico = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.12, 5), mat.beak);
     bico.rotation.x = Math.PI / 2;
     bico.position.set(0, 0.04, 0.34);
     root.add(bico);
     this.lodDetail.push(bico);
 
-    const cauda = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, 0.22), MAT.wing);
+    const cauda = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, 0.22), mat.wing);
     cauda.position.set(0, 0.01, -0.34);
     root.add(cauda);
     this.lodDetail.push(cauda);
@@ -103,12 +132,16 @@ export class Bird {
     for (const lado of [-1, 1]) {
       const asa = new THREE.Group();
       asa.position.set(lado * 0.11, 0.04, 0);
-      const pena = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.24), MAT.wing);
+      const pena = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.24), mat.wing);
       pena.position.set(lado * 0.25, 0, -0.02);
       pena.rotation.x = -Math.PI / 2;
       asa.add(pena);
       root.add(asa);
       this.wings.push({ group: asa, lado });
+    }
+
+    if (this.special) {
+      root.scale.setScalar(CONFIG.modes.birdHunt.special.scale);
     }
 
     this.group.add(root);
@@ -137,7 +170,7 @@ export class Bird {
     gameEvents.emit(EventType.AUDIO_PLAY, {
       sound: "birdDeath",
       position: vec3Payload(this.position),
-      volume: 1,
+      volume: this.special ? 1.35 : 1,
     });
   }
 
@@ -147,6 +180,11 @@ export class Bird {
     entityRegistry.unregister(this.entityId);
     this.scene.remove(this.group);
     this.group.traverse((o) => o.geometry?.dispose());
+    if (this._mats) {
+      this._mats.body.dispose();
+      this._mats.wing.dispose();
+      this._mats.beak.dispose();
+    }
   }
 
   /**

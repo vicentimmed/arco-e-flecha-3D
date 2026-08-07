@@ -8,7 +8,7 @@
    saído dali. Com um simulador só, existe uma verdade.
 
    É a mesma máquina de estados de `entities/boar.js` — vagar, comer, fugir,
-   acalmar —, só que sem malha e sem física: posição, ângulo e estado. O cliente
+   investir, acalmar —, só que sem malha e sem física: posição, ângulo e estado. O cliente
    recebe isso a 10 Hz, interpola e roda pernas e cabeça localmente, porque
    animação não precisa trafegar.
    --------------------------------------------------------------------------- */
@@ -49,6 +49,10 @@ export class Boar {
     this.deadSince = 0;
     this.fleeFrom = null;
     this.herd = herd;
+    /** Id do jogador perseguido na investida, ou null. */
+    this.chargeTargetId = null;
+    /** Tempo restante até este porco poder sortear investida de novo. */
+    this.chargeCooldown = 0;
     this.pickWanderTarget();
   }
 
@@ -73,23 +77,53 @@ export class Boar {
 
   scare(x, z) {
     if (this.dead) return;
+    this.chargeTargetId = null;
     this.state = "flee";
     this.fleeTimer = CONFIG.boar.scareDuration;
     this.fleeFrom = { x, z };
   }
 
+  /** Desiste da investida e volta a fugir — ou acalma se perdeu o alvo. */
+  endCharge(alvo) {
+    this.chargeTargetId = null;
+    this.chargeCooldown = CONFIG.boar.chargeCooldown ?? 8;
+    if (alvo) {
+      this.state = "flee";
+      this.stateTimer = 0;
+      this.fleeTimer = CONFIG.boar.fleeDuration;
+      this.fleeFrom = { x: alvo.x, z: alvo.z };
+    } else {
+      this.state = "calm";
+      this.stateTimer = 0;
+    }
+  }
+
+  /**
+   * @returns {{ id: number, bx: number, bz: number } | null} jogador atingido
+   */
   update(dt, jogadores) {
-    if (this.dead) return;
+    if (this.dead) return null;
     const cfg = CONFIG.boar;
 
-    // Ver um jogador de perto assusta. É o que faz a caçada exigir aproximação
-    // cuidadosa em vez de virar tiro ao alvo parado.
-    for (const p of jogadores) {
-      if (Math.hypot(p.x - this.x, p.z - this.z) >= cfg.visionRange) continue;
-      this.state = "flee";
-      this.fleeTimer = cfg.fleeDuration;
-      this.fleeFrom = { x: p.x, z: p.z };
-      break;
+    if (this.chargeCooldown > 0) this.chargeCooldown -= dt;
+
+    // Só sorteia reação ao AVISTAR — não a cada quadro de fuga nem durante
+    // investida, senão os 5 % virariam certeza em poucos segundos.
+    if (this.state !== "charge" && this.state !== "flee") {
+      for (const p of jogadores) {
+        if (!p.alive) continue;
+        if (Math.hypot(p.x - this.x, p.z - this.z) >= cfg.visionRange) continue;
+        if (this.chargeCooldown <= 0 && Math.random() < (cfg.chargeChance ?? 0.05)) {
+          this.state = "charge";
+          this.stateTimer = 0;
+          this.chargeTargetId = p.id;
+        } else {
+          this.state = "flee";
+          this.fleeTimer = cfg.fleeDuration;
+          this.fleeFrom = { x: p.x, z: p.z };
+        }
+        break;
+      }
     }
 
     this.stateTimer += dt;
@@ -156,7 +190,30 @@ export class Boar {
           this.pickWanderTarget();
         }
         break;
+
+      case "charge": {
+        const alvo = jogadores.find((p) => p.id === this.chargeTargetId && p.alive);
+        if (!alvo) {
+          this.endCharge(null);
+          break;
+        }
+        const d = Math.hypot(alvo.x - this.x, alvo.z - this.z);
+        const raio = cfg.attackRadius ?? 1.2;
+        if (d < raio) {
+          this.endCharge(alvo);
+          return { id: alvo.id, bx: this.x, bz: this.z };
+        }
+        if (this.stateTimer >= (cfg.chargeDuration ?? 10)) {
+          this.endCharge(alvo);
+          break;
+        }
+        // Mesma velocidade da fuga — ver `fleeSpeed` em config.
+        this.speed = cfg.fleeSpeed;
+        this.moveToward(alvo.x, alvo.z, dt);
+        break;
+      }
     }
+    return null;
   }
 
   moveToward(tx, tz, dt) {
@@ -443,7 +500,11 @@ export class BoarHunt {
 
     // Os porcos andam sempre que existem — inclusive os avulsos, fora da
     // caçada. Só as ONDAS dependem do modo estar ligado.
-    for (const b of this.boars) b.update(dt, jogadores);
+    const atacados = [];
+    for (const b of this.boars) {
+      const hit = b.update(dt, jogadores);
+      if (hit) atacados.push(hit);
+    }
 
     // Corpos somem depois de um tempo, senão o campo vira um matadouro que só
     // acumula geometria.
@@ -457,7 +518,7 @@ export class BoarHunt {
       if (!this.boars.some((b) => !b.dead && b.herd === h)) this.herds.delete(h);
     }
 
-    if (!this.active || this.finished) return;
+    if (!this.active || this.finished) return atacados;
     this.waveTimer += dt;
 
     /* O gatilho: sobraram 10 % da onda, arredondando PARA CIMA.
@@ -468,16 +529,17 @@ export class BoarHunt {
     const limite = Math.ceil(this.waveSize * B.nextWaveRemaining);
     const esvaziou = this.vivosDaOnda <= limite;
     const demorou = this.waveTimer >= B.waveTimeout;
-    if (!esvaziou && !demorou) return;
+    if (!esvaziou && !demorou) return atacados;
 
     if (this.waveCount >= B.maxWaves) {
       // A quinta onda esgotou: a caçada termina aqui. Os porcos que sobraram
       // continuam em campo (ver o `filter` acima) — só o relógio de ondas para.
       this.finished = true;
       this.pendingVictory = true;
-      return;
+      return atacados;
     }
     this.nextWave(jogadores);
+    return atacados;
   }
 
   view() {

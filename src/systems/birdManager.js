@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { Bird } from "../entities/bird.js";
 import { birdEntity } from "../shared/protocol.js";
-import { updateLodMap } from "../utils/lod.js";
+import { applyLod, lodLevel } from "../utils/lod.js";
 
 /* O bando circula num raio de 70 m a 26 m de altura, e o tiro no pássaro é o
    mais difícil do jogo justamente por isso. Um alcance de LOD generoso é o que
@@ -57,6 +57,7 @@ export class BirdManager {
           item.p[0],
           item.p[1],
           item.p[2],
+          { special: !!item.m },
         );
         this.byNetId.set(item.id, ave);
       }
@@ -84,6 +85,14 @@ export class BirdManager {
     for (const ave of this.byNetId.values()) ave.update(dt, this.acharPoleiro);
     if (!camera) return;
     camera.getWorldPosition(this._cam);
-    updateLodMap(this.byNetId, this._cam, BIRD_LOD_SCALE);
+    for (const ave of this.byNetId.values()) {
+      // O raro voa ~60 m acima: LOD mais generoso para a silhueta continuar
+      // existindo no céu.
+      const escala = ave.special ? BIRD_LOD_SCALE * 1.6 : BIRD_LOD_SCALE;
+      applyLod(
+        ave,
+        lodLevel(ave.position.distanceTo(this._cam), ave._lod ?? 0, escala),
+      );
+    }
   }
 }

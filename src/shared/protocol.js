@@ -50,8 +50,11 @@
  * 7 — entrou a pose curta do golpe de faca e o comando de melee.
  *
  * 8 — o golpe de faca também passou a ter um canal próprio para acertar players.
+ *
+ * 9 — entrou o modo caça aos pássaros (`birdHunt`), com pássaro raro e placar
+ * de vitória. Uma aba antiga não saberia desenhar o modo nem a tela final.
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -154,8 +157,13 @@ export const S2C = {
   ELK_OVER: "elkOver",
   /** Transformações dos pássaros, 10 Hz. */
   BIRDS: "birds",
-  /** Pássaro abatido: `{ id, killer, points }`. */
+  /** Pássaro abatido: `{ id, killer, points, special? }`. */
   BIRD_DEATH: "birdDeath",
+  /**
+   * A caça aos pássaros acabou.
+   * `{ reason: "count"|"special", winner, ranking: [{ id, name, color, birds }] }`.
+   */
+  BIRD_HUNT_OVER: "birdHuntOver",
   /**
    * O mundo recomeçou (troca de modo).
    *

@@ -236,7 +236,10 @@ export class Input {
       if (e.repeat) return;
 
       // Diálogo aberto: Enter e Esc são dele, e mais nada é processado.
-      if (this.dialogOpen && (e.code === "Enter" || e.code === "Escape")) {
+      if (
+        this.dialogOpen &&
+        (e.code === "Enter" || e.code === "NumpadEnter" || e.code === "Escape")
+      ) {
         e.preventDefault();
         this.onDialogKey?.(e.code === "Enter");
         return;
@@ -298,6 +301,9 @@ export class Input {
           break;
         case "Digit7":
           this.actions.setMode = "zombieBoss";
+          break;
+        case "Digit8":
+          this.actions.setMode = "birdHunt";
           break;
         case "KeyC":
           this.firstPerson = true;

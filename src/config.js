@@ -524,6 +524,27 @@ export const CONFIG = {
       lineSpread: 6, // m — afastamento lateral entre jogadores na linha
     },
 
+    /* ---------------------------------------------------- caça aos pássaros --
+       Corrida: quem abater 5 aves primeiro ganha. Alternativa instantânea: o
+       pássaro raro, maior e mais alto — quem o derruba fecha a partida na hora.
+       No modo o bando fica mais denso; fora dele o céu volta ao cenário normal. */
+    birdHunt: {
+      birdsToWin: 5, // abates para vencer pela contagem
+      birdCount: 14, // mais abundantes que o cenário livre (CONFIG.birds.count)
+      special: {
+        cruiseHeight: 62, // m — bem acima do bando comum (~26 m)
+        heightSpread: 3,
+        circleRadius: 90, // m — circunda a arena num arco largo
+        flySpeed: 10.5,
+        scale: 5.5, // bem maior: tem de ser óbvio no céu que é a rara
+        hitRadius: 1.6, // colisor acompanha o tamanho; a dificuldade é a altura
+        bodyColor: "#c45a28",
+        wingColor: "#8a3218",
+        beakColor: "#e8c45a",
+        points: 500,
+      },
+    },
+
     boarHunt: {
       /* As ondas crescem por TABELA, não por fórmula.
          Uma progressão calculada dá números certinhos e sem graça; escrita à
@@ -761,6 +782,12 @@ export const CONFIG = {
     scareRadius: 6, // m — flecha cai perto e assusta
     scareDuration: 4, // s — fuga após flecha perto
     fleeDuration: 5, // s — fuga ao ver jogador
+    /* Investida rara: ao avistar um jogador, ~5 % viram agressivos em vez de
+       fugir. A corrida usa `fleeSpeed` — mesma velocidade da fuga. */
+    chargeChance: 0.05,
+    chargeDuration: 10, // s — desiste se não alcançar
+    attackRadius: 1.2, // m — distância do impacto no jogador
+    chargeCooldown: 8, // s — o mesmo porco não investe de novo logo em seguida
     eatDuration: 3, // s — animação de comer
     wanderMaxTime: 8, // s — tempo andando antes de comer
     calmDuration: 3, // s — acalmar após fugir

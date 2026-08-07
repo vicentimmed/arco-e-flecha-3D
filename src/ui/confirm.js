@@ -1,9 +1,10 @@
 /* ---------------------------------------------------------------------------
    Diálogo de confirmação.
 
-   Existe porque duas teclas do jogo fazem coisas que não dá para desfazer:
-   renascer em outro lugar (K) e zerar o placar de todos (Y). Uma tecla dessas
-   apertada sem querer, no meio de um duelo, estraga a partida de todo mundo.
+   Existe porque algumas teclas do jogo fazem coisas que não dá para desfazer:
+   renascer em outro lugar (K), zerar o placar de todos (Y) e trocar de modo
+   (1, 3–7). Uma tecla dessas apertada sem querer, no meio de uma partida,
+   estraga o jogo de todo mundo.
 
    Enquanto ele está aberto, o `Esc` fecha o DIÁLOGO em vez de soltar o mouse —
    senão o reflexo natural de cancelar tiraria o jogador da mira junto.

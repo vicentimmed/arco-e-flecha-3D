@@ -61,6 +61,7 @@ const ATALHOS = [
       [["5"], "caçada ao alce"],
       [["6"], "noite dos zumbis"],
       [["7"], "zumbi (só chefão)"],
+      [["8"], "caça aos pássaros"],
     ],
   },
   {
@@ -412,6 +413,7 @@ export class HUD {
         {
           duel: "DUELO",
           boarHunt: "CAÇADA AOS PORCOS",
+          birdHunt: "CAÇA AOS PÁSSAROS",
           series: "ALVOS EM SÉRIE",
           elkHunt: "CAÇADA AO ALCE",
           zombie: "NOITE DOS ZUMBIS",
@@ -419,7 +421,11 @@ export class HUD {
         }[mode] ?? mode.toUpperCase(),
         "forte",
       ),
-      texto("   1 para sair"),
+      texto(
+        mode === "birdHunt"
+          ? "   5 aves ou a rara · 1 para sair"
+          : "   1 para sair",
+      ),
     );
   }
 
@@ -604,6 +610,22 @@ export class HUD {
     };
     this.showHuntVictory(ranking, selfId, {
       title: "SÉRIE CONCLUÍDA",
+      statLabel: rotulo,
+    });
+  }
+
+  /**
+   * Placar da caça aos pássaros: quantas aves cada um abateu.
+   * `reason === "special"` quando o vencedor derrubou a ave rara.
+   */
+  showBirdVictory(ranking, selfId = null, reason = "count") {
+    const rotulo = (p) => {
+      const n = p.birds ?? 0;
+      return `${n} ${n === 1 ? "ave" : "aves"}`;
+    };
+    this.showHuntVictory(ranking, selfId, {
+      title: reason === "special" ? "AVE RARA ABATIDA" : "CAÇA CONCLUÍDA",
+      winnerLabel: reason === "special" ? "Golpe decisivo" : "Vencedor",
       statLabel: rotulo,
     });
   }

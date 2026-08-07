@@ -63,6 +63,17 @@ function isZombieMode(mode) {
   return mode === "zombie" || mode === "zombieBoss";
 }
 
+/** Nomes legíveis para o diálogo de confirmação ao trocar de modo. */
+const MODE_LABELS = {
+  free: "modo livre",
+  boarHunt: "caçada aos porcos",
+  birdHunt: "caça aos pássaros",
+  series: "alvos em série",
+  elkHunt: "caçada ao alce",
+  zombie: "noite dos zumbis",
+  zombieBoss: "chefão zumbi",
+};
+
 /** Milímetro de precisão: de sobra para a rede e metade dos bytes. */
 const mm = (v) => Math.round(v * 1000) / 1000;
 
@@ -442,6 +453,12 @@ class Game {
             position: onde,
             volume: 1.3,
           });
+        } else if (msg.cause === "boar") {
+          gameEvents.emit(EventType.AUDIO_PLAY, {
+            sound: "boarIdle",
+            position: onde,
+            volume: 1.4,
+          });
         }
         gameEvents.emit(EventType.AUDIO_PLAY, {
           sound: "playerDeath",
@@ -452,7 +469,10 @@ class Game {
 
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
-        { text: msg.cause === "knife" ? "  🔪  " : "  🏹  " },
+        {
+          text:
+            msg.cause === "knife" ? "  🔪  " : msg.cause === "boar" ? "  🐗  " : "  🏹  ",
+        },
         { text: msg.victimName, color: msg.victimColor, forte: true },
         ...(msg.distance ? [{ text: `   ${msg.distance.toFixed(0)} m` }] : []),
       ]);
@@ -563,10 +583,20 @@ class Game {
       this.birds.kill(msg.id);
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
-        { text: "  \u{1F426}  " },
+        { text: msg.special ? "  \u{1F426}\u2726  " : "  \u{1F426}  " },
         { text: `+${msg.points}`, forte: true },
         { text: `   ${(msg.distance ?? 0).toFixed(0)} m` },
       ]);
+    });
+
+    net.on(S2C.BIRD_HUNT_OVER, (msg) => {
+      this.huntVictoryOpen = true;
+      this.hud.showBirdVictory(msg.ranking ?? [], this.net.me?.id, msg.reason);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "victoryFanfare",
+        position: vec3Payload(this.player.position),
+        volume: 1.0,
+      });
     });
 
     /* O mundo recomeçou (alguém trocou de modo). A limpeza do CENÁRIO vem em
@@ -860,7 +890,7 @@ class Game {
       this.net.send(C2S.SPAWN_ELK_WOLVES);
     }
 
-    if (a.setMode) this.net.send(C2S.MODE, { mode: a.setMode });
+    if (a.setMode) this.askModeChange(a.setMode);
     if (a.toggleMusic) {
       const on = this.audio.toggleMusic();
       this.hud.toast(on ? "música ligada" : "música desligada", "miss");
@@ -1024,6 +1054,22 @@ class Game {
     this.ask("Zerar o placar de TODOS os jogadores?", () =>
       this.net.send(C2S.RESET_SCORES),
     );
+  }
+
+  /**
+   * Troca de modo (1–8). O duelo (2) é instantâneo — já funciona como convite
+   * e pode ser cancelado com a mesma tecla. Os demais pedem confirmação para
+   * evitar acionamento acidental no meio de uma partida.
+   */
+  askModeChange(mode) {
+    if (!this.net.connected) return;
+    if (mode === "duel") {
+      this.net.send(C2S.MODE, { mode });
+      return;
+    }
+    if (this.mode === mode) return;
+    const nome = MODE_LABELS[mode] ?? mode;
+    this.ask(`Entrar no ${nome}?`, () => this.net.send(C2S.MODE, { mode }));
   }
 
   /** Começa a estocada, preservando o ponto atual da recarga. */

@@ -19,12 +19,11 @@ const COLUNAS = [
   { chave: "deaths", titulo: "Mortes", modo: "duel" },
   { chave: "boars", titulo: "Porcos", modo: "boarHunt" },
   { chave: "elkHits", titulo: "Flechas", modo: "elkHunt" },
-  // Os pássaros não têm modo: eles voam em todas as partidas, e a coluna nunca
-  // se destaca por isso mesmo — ela é um extra, não um objetivo.
-  { chave: "birds", titulo: "Aves", modo: null },
+  // Em birdHunt a coluna de aves é o objetivo; nos demais modos continua extra.
+  { chave: "birds", titulo: "Aves", modo: "birdHunt" },
   { chave: "targets", titulo: "Alvos", modo: "series" },
   // Pontos servem a TODOS os modos de pontaria: porco longe, alvo longe, alce.
-  { chave: "points", titulo: "Pontos", modo: ["boarHunt", "series", "elkHunt"] },
+  { chave: "points", titulo: "Pontos", modo: ["boarHunt", "series", "elkHunt", "birdHunt"] },
   { chave: "ping", titulo: "Ping", modo: null },
 ];
 
@@ -98,6 +97,7 @@ export class Scoreboard {
       {
         duel: "Duelo",
         boarHunt: "Caçada aos porcos",
+        birdHunt: "Caça aos pássaros",
         series: "Alvos em série",
         elkHunt: "Caçada ao alce",
       }[this.mode] ?? "Livre";
@@ -109,6 +109,7 @@ export class Scoreboard {
     const chave = {
       duel: "kills",
       boarHunt: "points",
+      birdHunt: "birds",
       series: "points",
       elkHunt: "elkHits",
     }[this.mode];

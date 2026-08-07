@@ -73,10 +73,11 @@ export class Room {
     this.elks = new ElkHunt(this.terrain);
     this.elkWolves = new ElkWolfPack(this.terrain);
     this.series = new TargetSeries(this.terrain);
-    /* Os pássaros não pertencem a modo nenhum: eles existem enquanto a sala
-       existir. É o que os separa dos porcos e do alce — antes de serem alvo,
-       são o que faz o vale parecer habitado. */
+    /* Os pássaros existem em quase todo modo como cenário vivo. No birdHunt o
+       bando fica mais denso e nasce o pássaro raro — ver BirdFlock.reset. */
     this.birds = new BirdFlock(this.terrain);
+    /** Partida de caça aos pássaros já tem vencedor (não reabre o placar). */
+    this.birdHuntOver = false;
     this.zombies = new ZombieNight(this.terrain);
     /**
      * As quatro tochas do modo zumbi: acesa (true) ou apagada (false).
@@ -139,6 +140,7 @@ export class Room {
        todos, e defender o quadrado sozinho não é o que o modo propõe. */
     if (
       modo === "boarHunt" ||
+      modo === "birdHunt" ||
       modo === "series" ||
       modo === "elkHunt" ||
       modo === "zombie" ||
@@ -235,9 +237,13 @@ export class Room {
     } else if (modo === "duel") {
       this.startDuel();
     } else {
-      // livre e caçada aos porcos: renascimento padrão no campo
+      // livre, caçada aos porcos e caça aos pássaros: renascimento no campo
       this.respawnEveryone();
       if (modo === "boarHunt") this.hunt.start(this.playerPositions());
+      if (modo === "birdHunt") {
+        this.birdHuntOver = false;
+        this.birds.reset({ hunt: true });
+      }
       if (modo === "free") {
         this.duelInvites.clear();
         for (const p of this.players.values()) p.duelReady = false;
@@ -270,6 +276,7 @@ export class Room {
     this.elks.stop();
     this.elks.elks = [];
     this.elkWolves.clear();
+    this.birdHuntOver = false;
     this.birds.reset();
     this.zombies.stop();
     // As tochas voltam acesas: a partida seguinte não herda o escuro que a
@@ -496,7 +503,8 @@ export class Room {
     // Roda enquanto houver porco em campo, mesmo com a caçada desligada: os
     // avulsos precisam andar.
     if (this.hunt.active || this.hunt.boars.length) {
-      this.hunt.update(this.boarStep, jogadores, agora);
+      const atacados = this.hunt.update(this.boarStep, jogadores, agora);
+      for (const hit of atacados) this.registerBoarAttack(hit);
       // A onda nova é anunciada ANTES das poses: quem recebe já sabe por que
       // apareceram seis javalis de uma vez.
       const onda = this.hunt.takeWaveAnnouncement();
@@ -597,6 +605,51 @@ export class Room {
       this.downOnElkHunt(vitima);
       return;
     }
+
+    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+    setTimeout(() => {
+      if (this.players.has(vitima.conn)) this.spawn(vitima);
+    }, espera).unref?.();
+  }
+
+  /**
+   * Porco investiu e acertou um jogador — tranco leve e renascimento padrão.
+   *
+   * Na caçada aos porcos a morte não entra no placar de abates: azar de levar
+   * uma investida não deveria custar o ranking de quem caçou mais.
+   */
+  registerBoarAttack({ id: victimId, bx, bz }) {
+    const vitima = this.playerById(victimId);
+    if (!vitima || !vitima.alive) return;
+    if (this.now() < vitima.invulnUntil) return;
+
+    vitima.alive = false;
+    if (this.mode !== "boarHunt") vitima.score.deaths++;
+
+    let contato = null;
+    let impulso = null;
+    if (vitima.state) {
+      const dx = vitima.state.p[0] - bx;
+      const dz = vitima.state.p[2] - bz;
+      const len = Math.hypot(dx, dz) || 1;
+      contato = [vitima.state.p[0], vitima.state.p[1] + 1.1, vitima.state.p[2]];
+      impulso = [(dx / len) * 75, 40, (dz / len) * 75];
+    }
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      victimColor: vitima.color,
+      killer: 0,
+      killerName: "Porco",
+      killerColor: "#8b6914",
+      distance: null,
+      c: contato,
+      v: impulso,
+      cause: "boar",
+    });
+    if (this.mode !== "boarHunt") this.broadcastScores();
 
     const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
     setTimeout(() => {
@@ -1254,7 +1307,10 @@ export class Room {
     const ave = this.birds.kill(msg.id, this.now());
     if (!ave) return; // dois acertaram quase junto: o primeiro levou
 
-    const pontos = CONFIG.birds.points;
+    const especial = !!ave.special;
+    const pontos = especial
+      ? CONFIG.modes.birdHunt.special.points
+      : CONFIG.birds.points;
     player.score.birds = (player.score.birds ?? 0) + 1;
     player.score.points += pontos;
 
@@ -1266,8 +1322,47 @@ export class Room {
       killerColor: player.color,
       points: pontos,
       distance: msg.d ?? 0,
+      special: especial ? 1 : 0,
     });
     this.broadcastScores();
+
+    if (this.mode === "birdHunt" && !this.birdHuntOver) {
+      const meta = CONFIG.modes.birdHunt.birdsToWin;
+      if (especial || player.score.birds >= meta) {
+        this.endBirdHunt(player, especial ? "special" : "count");
+      }
+    }
+  }
+
+  /**
+   * Fecha a caça aos pássaros: placar para todos, vencedor em destaque.
+   * @param {"count"|"special"} reason
+   */
+  endBirdHunt(winner, reason) {
+    this.birdHuntOver = true;
+    const ranking = [...this.players.values()]
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        birds: p.score.birds ?? 0,
+      }))
+      .sort((a, b) => {
+        if (a.id === winner.id) return -1;
+        if (b.id === winner.id) return 1;
+        return b.birds - a.birds;
+      });
+    this.broadcastAll({
+      t: S2C.BIRD_HUNT_OVER,
+      reason,
+      winner: winner.id,
+      ranking,
+    });
+    this.log(
+      reason === "special"
+        ? `modo pássaros: vitória de ${winner.name} (ave rara)`
+        : `modo pássaros: vitória de ${winner.name} (${winner.score.birds} aves)`,
+    );
   }
 
   registerBoarKill(player, msg) {

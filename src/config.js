@@ -739,17 +739,19 @@ export const CONFIG = {
         laughMinInterval: 18,
         laughMaxInterval: 35,
         laughVolume: 2.4,
-        /* Matilhas de escolta: nascem no corredor do chefão, não na arena. */
+        /* Matilhas de escolta: nascem no corredor do chefão, não na arena.
+           pack = min(packMax, packBase + packPerPlayer × (N − 1)). */
         wolves: {
-          packBase: 2,
-          packPerPlayer: 1,
-          packMax: 4,
+          packBase: 4,
+          packPerPlayer: 2,
+          packMax: 8,
           waves: 4,
           healthThresholds: [0.75, 0.5, 0.25],
-          stagger: 0.9,
-          spawnOffsetMin: 4,
-          spawnOffsetMax: 10,
-          spawnLateral: 6,
+          /* Entrada escalonada: matilha grande não desaba toda no centro. */
+          stagger: 1.4,
+          spawnOffsetMin: 8,
+          spawnOffsetMax: 36,
+          spawnLateral: 8,
         },
         /* Flash no impacto: clarão que revela o corpo inteiro à distância. */
         hitFlash: {
@@ -759,6 +761,33 @@ export const CONFIG = {
           range: 95,
           decay: 1.05,
           life: 0.38,
+        },
+        /* Tempestade só no chefão: nuvens escuras + raios volumétricos + trovão.
+           Chuva opcional = Points leves (~48 gotas, 1 draw). */
+        storm: {
+          fadeIn: 2.2,
+          fadeOut: 1.6,
+          strikeMin: 3.2, // s — mais frequente que o clima genérico
+          strikeMax: 7.5,
+          nearBossChance: 0.72, // maioria dos raios perto do chefão
+          nearBossRadiusMin: 5, // m
+          nearBossRadiusMax: 26,
+          doubleChance: 0.45,
+          doubleDelay: 0.1,
+          cloudHeight: 128, // m — nasce nas nuvens baixas
+          lightColor: 0xc8e0ff,
+          lightIntensity: 420, // clarão local (silhueta do chefão)
+          lightRange: 72,
+          lightDecay: 1.25,
+          lightLife: 0.22,
+          boltLife: 0.18,
+          boltCoreWidth: 0.55, // m — núcleo branco
+          boltGlowWidth: 2.4, // m — halo azul additive
+          shockLife: 0.28, // anel no solo
+          thunderVolume: 0.7, // mais baixo que o estouro inicial
+          thunderMaxDistance: 260,
+          rain: true,
+          rainCount: 48,
         },
       },
     },
@@ -854,7 +883,7 @@ export const CONFIG = {
 
     /* ------------------------------------------------------------- ritmo --- */
     walkSpeed: 2.6, // m/s — pastando
-    fleeSpeed: 15.0, // m/s — fugindo
+    fleeSpeed: 12.0, // m/s — fugindo (era 15; demais na subida da trilha)
     chargeSpeed: 12.5, // m/s — investida
     chargeSpeedPerHit: 0.3, // m/s a mais por flecha levada
     chargeSpeedMax: 14.5, // m/s
@@ -952,9 +981,14 @@ export const CONFIG = {
     dodgeSpeed: 11.0, // m/s no pulo lateral
     dodgeJumpHeight: 1.1, // m
 
-    /* Navegação */
-    maxArenaDist: 3.5,
+    /* Navegação
+       maxArenaDist: borda "mole" do sopé. O porco usa 8; 3,5 era curto demais
+       na subida da trilha (+z) e a fuga misturava vetores opostos ali.
+       minSlope 0.82 ≈ 35° — evita pastar na serra. stuckMinSlope relaxa só
+       na fuga do stuck. */
+    maxArenaDist: 8,
     minSlope: 0.82,
+    stuckMinSlope: 0.68,
     lookAhead: 3.5,
     stuckEscapeTime: 0.35,
 

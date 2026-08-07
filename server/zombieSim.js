@@ -691,7 +691,8 @@ export class ZombieNight {
     if (this.bossWolfWavesFired.has(waveIndex)) return;
     const W = CONFIG.modes.zombie.boss?.wolves ?? {};
     const total = this.bossWolfPackSize();
-    const stagger = W.stagger ?? 0.9;
+    /* Matilha maior → gap um pouco maior entre nascimentos. */
+    const stagger = (W.stagger ?? 1.4) * Math.max(1, Math.sqrt(total / 4));
     for (let i = 0; i < total; i++) {
       this.pendingSpawns.push({
         timer: i * stagger + Math.random() * stagger * 0.35,
@@ -715,16 +716,19 @@ export class ZombieNight {
     const fz = dz / len;
     const px = -fz;
     const pz = fx;
-    const offMin = W.spawnOffsetMin ?? 4;
-    const offMax = W.spawnOffsetMax ?? 10;
-    const lateralBase = W.spawnLateral ?? 6;
+    const offMin = W.spawnOffsetMin ?? 8;
+    const offMax = W.spawnOffsetMax ?? 36;
+    const lateralBase = W.spawnLateral ?? 8;
     const lado = i % 2 === 0 ? 1 : -1;
-    const faixa = 1 + Math.floor(i / 2) * 0.35;
+    const faixa = 1 + Math.floor(i / 2) * 0.4;
+    /* Índice alto = mais longe do centro → chegam em fileira, não em bloco. */
+    const t = total > 1 ? i / (total - 1) : 0.5;
+    const depthBias = offMin + (offMax - offMin) * (0.12 + 0.88 * t);
 
     for (let tentativa = 0; tentativa < 6; tentativa++) {
       const shrink = 1 - tentativa * 0.14;
-      const offsetBack =
-        (offMin + Math.random() * (offMax - offMin)) * shrink;
+      const jitter = (Math.random() - 0.5) * (offMax - offMin) * 0.18;
+      const offsetBack = Math.max(offMin, depthBias + jitter) * shrink;
       const lateral = lateralBase * faixa * shrink * lado;
       const x = boss.x - fx * offsetBack + px * lateral;
       const z = boss.z - fz * offsetBack + pz * lateral;

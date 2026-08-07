@@ -265,18 +265,14 @@ export class Elk {
           const len = Math.hypot(dx, dz) || 1;
           let fx = dx / len;
           let fz = dz / len;
-          const ad = this.terrain.arenaDistance(this.x, this.z);
-          if (ad > -2) {
-            const paraDentroX = -this.x;
-            const paraDentroZ = -this.z;
-            const pl = Math.hypot(paraDentroX, paraDentroZ) || 1;
-            fx = fx * 0.45 + (paraDentroX / pl) * 0.55;
-            fz = fz * 0.45 + (paraDentroZ / pl) * 0.55;
-            const fl = Math.hypot(fx, fz) || 1;
-            fx /= fl;
-            fz /= fl;
-          }
-          this.yaw = Math.atan2(fx, fz);
+          // Perto da borda: NÃO mistura com "para o centro" (vetores opostos
+          // cancelam e o yaw inverte ~180° a cada tick — alce gira no lugar
+          // na subida da trilha). Em vez disso, corta a componente que sobe
+          // o SDF da arena.
+          const corr = this.deflectFromArenaEdge(fx, fz);
+          fx = corr.fx;
+          fz = corr.fz;
+          this.steerToward(Math.atan2(fx, fz), 4.5 * dt);
         }
         this.stepForward(dt);
 
@@ -555,18 +551,91 @@ export class Elk {
     if (Math.hypot(tx - this.x, tz - this.z) < 2.5) this.pickWanderTarget();
   }
 
-  isClear(x, z) {
+  isClear(x, z, minSlope = null) {
     const E = CONFIG.elk;
     if (!this.terrain.isWalkable(x, z)) return false;
     if (this.terrain.arenaDistance(x, z) > E.maxArenaDist) return false;
-    if (this.terrain.slopeAt(x, z, 1.0) < E.minSlope) return false;
+    const limiar = minSlope ?? E.minSlope;
+    if (this.terrain.slopeAt(x, z, 1.0) < limiar) return false;
     return true;
+  }
+
+  /**
+   * Gradiente de `arenaDistance` (aponta para FORA da bacia).
+   * Usado para desviar a fuga da parede invisível sem inverter o yaw.
+   */
+  arenaOutward(x = this.x, z = this.z, eps = 1.0) {
+    const gx =
+      this.terrain.arenaDistance(x + eps, z) -
+      this.terrain.arenaDistance(x - eps, z);
+    const gz =
+      this.terrain.arenaDistance(x, z + eps) -
+      this.terrain.arenaDistance(x, z - eps);
+    const len = Math.hypot(gx, gz) || 1;
+    return { x: gx / len, z: gz / len };
+  }
+
+  /**
+   * Remove a componente do rumo que sobe a borda da arena.
+   * Se sobrar quase nada, corre tangente à borda (ou para dentro se já passou).
+   */
+  deflectFromArenaEdge(fx, fz) {
+    const E = CONFIG.elk;
+    const ad = this.terrain.arenaDistance(this.x, this.z);
+    // Longe da borda: fuga pura.
+    if (ad < -6) return { fx, fz };
+
+    const g = this.arenaOutward();
+    const outDot = fx * g.x + fz * g.z;
+    if (outDot > 0) {
+      fx -= g.x * outDot;
+      fz -= g.z * outDot;
+    }
+
+    let fl = Math.hypot(fx, fz);
+    if (fl < 0.25) {
+      // Quase cancelado: corre ao longo da borda (tangente).
+      fx = -g.z;
+      fz = g.x;
+      // Escolhe o lado da tangente que ainda afasta do perseguidor, se houver.
+      if (this.fleeFrom) {
+        const ax = this.x - this.fleeFrom.x;
+        const az = this.z - this.fleeFrom.z;
+        if (fx * ax + fz * az < 0) {
+          fx = -fx;
+          fz = -fz;
+        }
+      }
+      fl = 1;
+    }
+
+    fx /= fl;
+    fz /= fl;
+
+    // Já encostou / passou do limite: puxa para dentro com peso crescente.
+    if (ad > -1) {
+      const w = Math.min(1, (ad + 1) / (E.maxArenaDist + 1));
+      fx = fx * (1 - w) - g.x * w;
+      fz = fz * (1 - w) - g.z * w;
+      fl = Math.hypot(fx, fz) || 1;
+      fx /= fl;
+      fz /= fl;
+    }
+    return { fx, fz };
+  }
+
+  /** Slope mínimo vigente: relaxa quando o alce já está preso. */
+  currentMinSlope() {
+    const E = CONFIG.elk;
+    return this.stuckTime >= E.stuckEscapeTime ? E.stuckMinSlope : E.minSlope;
   }
 
   stepForward(dt, lead = null) {
     const E = CONFIG.elk;
     const passo = Math.max(0.4, this.speed * dt);
     const look = E.lookAhead;
+    const minSlope = this.currentMinSlope();
+    const ad0 = this.terrain.arenaDistance(this.x, this.z);
 
     let melhor = null;
     let melhorNota = -Infinity;
@@ -577,15 +646,20 @@ export class Elk {
       const fz = Math.cos(ang);
       const nx = this.x + fx * passo;
       const nz = this.z + fz * passo;
-      if (!this.isClear(nx, nz)) continue;
+      if (!this.isClear(nx, nz, minSlope)) continue;
       const lx = this.x + fx * look;
       const lz = this.z + fz * look;
-      const lookOk = this.isClear(lx, lz);
+      const lookOk = this.isClear(lx, lz, minSlope);
 
       const ad = this.terrain.arenaDistance(nx, nz);
+      const slope = this.terrain.slopeAt(nx, nz, 1.0);
       let nota = -Math.abs(desvio) * 1.4;
       if (lookOk) nota += 2.5;
       nota -= Math.max(0, ad + 4) * 0.35;
+      // Prefere chão mais plano — sai de bolsões no sopé em vez de oscilar.
+      nota += (slope - E.minSlope) * 4.0;
+      // Perto da borda: premia passos que DESCENDEM o SDF (para dentro).
+      if (ad0 > -6) nota += (ad0 - ad) * 3.5;
 
       // Em charge: premia headings que aproximam do ponto de lead.
       if (lead) {
@@ -602,17 +676,68 @@ export class Elk {
 
     if (melhor == null) {
       this.stuckTime += dt;
-      if (this.stuckTime >= E.stuckEscapeTime) this.escapeStuck();
+      if (this.stuckTime >= E.stuckEscapeTime) this.escapeStuck(dt);
       return false;
     }
 
     this.yaw = melhor;
-    return this.step(Math.sin(melhor), Math.cos(melhor), dt);
+    return this.step(Math.sin(melhor), Math.cos(melhor), dt, minSlope);
   }
 
-  escapeStuck() {
-    this.stuckTime = 0;
-    this.yaw = Math.atan2(-this.x, -this.z) + (Math.random() - 0.5) * 0.8;
+  /**
+   * Procura um passo caminhável e força o deslocamento.
+   * Se já estiver fora do maxArenaDist, aceita qualquer passo que reduza `ad`.
+   */
+  escapeStuck(dt = 1 / 30) {
+    const E = CONFIG.elk;
+    const passo = Math.max(0.8, this.speed * Math.max(dt, 1 / 30));
+    const relax = E.stuckMinSlope;
+    const ad0 = this.terrain.arenaDistance(this.x, this.z);
+    let melhor = null;
+    let melhorNota = -Infinity;
+
+    for (let i = 0; i < 16; i++) {
+      const ang = (i / 16) * Math.PI * 2;
+      const fx = Math.sin(ang);
+      const fz = Math.cos(ang);
+      const nx = this.x + fx * passo;
+      const nz = this.z + fz * passo;
+      if (!this.terrain.isWalkable(nx, nz)) continue;
+      const ad = this.terrain.arenaDistance(nx, nz);
+      const slope = this.terrain.slopeAt(nx, nz, 1.0);
+      const dentro = ad <= E.maxArenaDist && slope >= relax;
+      // Fora da zona: ainda aceita passo que MELHORE ad (volta para a bacia).
+      const resgate = ad0 > E.maxArenaDist && ad < ad0 - 0.05;
+      if (!dentro && !resgate) continue;
+
+      let nota = slope * 8 - Math.max(0, ad + 2) * 1.2 + (ad0 - ad) * 6;
+      nota -= Math.hypot(nx, nz) * 0.02;
+      if (nota > melhorNota) {
+        melhorNota = nota;
+        melhor = { ang, nx, nz };
+      }
+    }
+
+    if (melhor) {
+      this.yaw = melhor.ang;
+      this.x = melhor.nx;
+      this.z = melhor.nz;
+      if (this.state !== "dodge") this.y = this.terrain.heightAt(melhor.nx, melhor.nz);
+      this.stuckTime = 0;
+    } else {
+      // Último recurso: um passo na direção do gradiente para dentro.
+      const g = this.arenaOutward();
+      const nx = this.x - g.x * passo;
+      const nz = this.z - g.z * passo;
+      this.yaw = Math.atan2(-g.x, -g.z);
+      if (this.terrain.isWalkable(nx, nz)) {
+        this.x = nx;
+        this.z = nz;
+        if (this.state !== "dodge") this.y = this.terrain.heightAt(nx, nz);
+        this.stuckTime = 0;
+      }
+    }
+
     if (this.state === "graze") this.pickWanderTarget();
   }
 
@@ -620,7 +745,7 @@ export class Elk {
     const moved = Math.hypot(this.x - this.lastX, this.z - this.lastZ);
     if (this.speed > 0.5 && moved < this.speed * dt * 0.25) {
       this.stuckTime += dt;
-      if (this.stuckTime >= CONFIG.elk.stuckEscapeTime) this.escapeStuck();
+      if (this.stuckTime >= CONFIG.elk.stuckEscapeTime) this.escapeStuck(dt);
     } else if (moved > 0.05) {
       this.stuckTime = Math.max(0, this.stuckTime - dt * 2);
     }
@@ -628,11 +753,11 @@ export class Elk {
     this.lastZ = this.z;
   }
 
-  step(fx, fz, dt) {
+  step(fx, fz, dt, minSlope = null) {
     const passo = this.speed * dt;
     const nx = this.x + fx * passo;
     const nz = this.z + fz * passo;
-    if (!this.isClear(nx, nz)) return false;
+    if (!this.isClear(nx, nz, minSlope ?? this.currentMinSlope())) return false;
     this.x = nx;
     this.z = nz;
     if (this.state !== "dodge") this.y = this.terrain.heightAt(nx, nz);

@@ -64,6 +64,9 @@ export class Bird {
     this.stateTime = faixa(B.flyMinTime, B.flyMaxTime);
     this.dead = false;
     this.deadSince = 0;
+    this.fallSpeed = 0;
+    this.landed = false;
+    this.justLanded = false;
     /** Poleiro pedido: só (x, z). O cliente acha a copa (ver o cabeçalho). */
     this.perch = null;
   }
@@ -104,16 +107,30 @@ export class Bird {
     this.dead = true;
     this.deadSince = agora;
     this.state = "dead";
+    this.fallSpeed = 0;
+    this.landed = false;
+    /** True no frame em que o corpo toca o chão (consumido pelo bando). */
+    this.justLanded = false;
     return true;
   }
 
   update(dt) {
     if (this.dead) {
-      // O corpo cai. Ele continua sendo transmitido durante a queda porque a
-      // queda é a confirmação do acerto: sem ela o pássaro simplesmente sumiria
-      // do céu e ninguém saberia se acertou.
+      // Queda com a mesma aceleração do cliente: a vitória da rara só anuncia
+      // quando o corpo chega ao chão, e os dois lados precisam bater no tempo.
+      this.justLanded = false;
+      if (this.landed) return;
       const chao = this.terrain.heightAt(this.x, this.z);
-      this.y = Math.max(chao, this.y - CONFIG.birds.fallSpeed * dt);
+      this.fallSpeed = Math.min(
+        CONFIG.birds.fallSpeed,
+        this.fallSpeed - CONFIG.physics.gravity * dt,
+      );
+      this.y -= this.fallSpeed * dt;
+      if (this.y <= chao) {
+        this.y = chao;
+        this.landed = true;
+        this.justLanded = true;
+      }
       return;
     }
 
@@ -208,6 +225,7 @@ export class BirdFlock {
     this.birds = [];
     /** Densidade e pássaro raro do modo caça. */
     this.hunt = false;
+    this._specialLanded = false;
     for (let i = 0; i < CONFIG.birds.count; i++) this.birds.push(new Bird(terrain));
   }
 
@@ -233,6 +251,12 @@ export class BirdFlock {
   update(dt, agora) {
     for (const b of this.birds) b.update(dt);
 
+    // A rara tocou o chão neste tick — a sala usa isto para abrir a vitória.
+    this._specialLanded = false;
+    for (const b of this.birds) {
+      if (b.special && b.justLanded) this._specialLanded = true;
+    }
+
     /* O bando comum tem tamanho fixo: quem morre é substituído. Sem isso o céu
        esvaziaria em dez minutos de partida e o cenário morreria junto.
        O pássaro raro NÃO respawna — um só por partida de caça. */
@@ -248,12 +272,20 @@ export class BirdFlock {
     }
   }
 
+  /** Consome o aviso de que a ave rara acabou de pousar. */
+  takeSpecialLanded() {
+    if (!this._specialLanded) return false;
+    this._specialLanded = false;
+    return true;
+  }
+
   /**
    * Reinício de mundo.
    * @param {{ hunt?: boolean }} [opts]
    */
   reset(opts = {}) {
     this.hunt = !!opts.hunt;
+    this._specialLanded = false;
     this.birds = [];
     const n = this.hunt ? CONFIG.modes.birdHunt.birdCount : CONFIG.birds.count;
     for (let i = 0; i < n; i++) {

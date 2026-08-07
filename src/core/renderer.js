@@ -173,6 +173,8 @@ export class Renderer {
     this.moonDirection = new THREE.Vector3(0.5, 0.72, -0.48).normalize();
     /** 0 = dia, 1 = noite fechada. Ver `setNight`. */
     this._night = 0;
+    /** 0 = céu limpo, 1 = tempestade do chefão. Ver `setStorm`. */
+    this._storm = 0;
 
     this.buildSky();
     this.buildLights();
@@ -337,9 +339,31 @@ export class Renderer {
     this.scene.fog.density =
       CONFIG.world.fogDensity * (1 - n) + CONFIG.world.fogDensityNight * n;
 
-    this.clouds.visible = n < 0.5;
+    /* Tempestade do chefão: nuvens ficam LIGADAS à noite (no dia normal
+       somem quando n ≥ 0,5). Sem isto o céu da luta seria só breu + estrelas. */
+    this.clouds.visible = n < 0.5 || this._storm > 0.05;
     this.stars.visible = n > 0.15;
-    this.stars.material.opacity = Math.max(0, (n - 0.15) / 0.85);
+    const starBase = Math.max(0, (n - 0.15) / 0.85);
+    this.stars.material.opacity = starBase * (1 - this._storm * 0.9);
+  }
+
+  /**
+   * Fecha o céu na tempestade do chefão (0 → 1).
+   *
+   * Independente da noite: a virada noturna continua em `setNight`, e isto só
+   * puxa as nuvens de volta, as escurece e engrossa a cobertura. Duas draw
+   * calls das camadas — o custo não muda.
+   */
+  setStorm(t) {
+    const a = Math.max(0, Math.min(1, t));
+    if (a === this._storm) return;
+    this._storm = a;
+    this.clouds.setStorm(a);
+    this.clouds.visible = this._night < 0.5 || a > 0.05;
+    if (this.stars?.material) {
+      const starBase = Math.max(0, (this._night - 0.15) / 0.85);
+      this.stars.material.opacity = starBase * (1 - a * 0.9);
+    }
   }
 
   buildLights() {
@@ -594,6 +618,7 @@ class CloudLayers {
     this.group.name = "clouds";
     this.drift = new THREE.Vector2();
     this.layers = [];
+    this._storm = 0;
 
     /* Alta: fina, muito branca, quase parada — cirros. Baixa: mais fechada,
        mais escura por baixo e três vezes mais rápida. A razão de velocidade
@@ -609,6 +634,10 @@ class CloudLayers {
         opacity: 0.55,
         top: new THREE.Color(0xfdfeff),
         base: new THREE.Color(0xdfeaf6),
+        stormCover: 0.78,
+        stormOpacity: 0.72,
+        stormTop: new THREE.Color(0x6a7388),
+        stormBase: new THREE.Color(0x2a303c),
       },
       {
         y: 138,
@@ -620,6 +649,10 @@ class CloudLayers {
         opacity: 0.82,
         top: new THREE.Color(0xfbfcfe),
         base: new THREE.Color(0xb9c8dc),
+        stormCover: 0.88,
+        stormOpacity: 0.92,
+        stormTop: new THREE.Color(0x4a5264),
+        stormBase: new THREE.Color(0x151820),
       },
     ];
 
@@ -639,8 +672,8 @@ class CloudLayers {
           scale: { value: s.scale },
           cover: { value: s.cover },
           softness: { value: s.softness },
-          topColor: { value: s.top },
-          baseColor: { value: s.base },
+          topColor: { value: s.top.clone() },
+          baseColor: { value: s.base.clone() },
           opacity: { value: s.opacity },
           fade: { value: s.radius * 0.95 },
           sunDir: { value: SUN_DIR.clone() },
@@ -651,7 +684,19 @@ class CloudLayers {
       mesh.frustumCulled = false;
       mesh.renderOrder = -900;
       this.group.add(mesh);
-      this.layers.push({ mesh, mat, speed: s.speed });
+      this.layers.push({
+        mesh,
+        mat,
+        speed: s.speed,
+        dayCover: s.cover,
+        dayOpacity: s.opacity,
+        dayTop: s.top,
+        dayBase: s.base,
+        stormCover: s.stormCover,
+        stormOpacity: s.stormOpacity,
+        stormTop: s.stormTop,
+        stormBase: s.stormBase,
+      });
     }
   }
 
@@ -664,17 +709,36 @@ class CloudLayers {
   }
 
   /**
+   * Interpola cobertura e cor entre o céu diurno e o nublado de tempestade.
+   * Roda só quando o valor muda — não aloca por quadro.
+   */
+  setStorm(amount) {
+    const a = Math.max(0, Math.min(1, amount));
+    if (a === this._storm) return;
+    this._storm = a;
+    for (const l of this.layers) {
+      l.mat.uniforms.cover.value = l.dayCover + (l.stormCover - l.dayCover) * a;
+      l.mat.uniforms.opacity.value =
+        l.dayOpacity + (l.stormOpacity - l.dayOpacity) * a;
+      l.mat.uniforms.topColor.value.lerpColors(l.dayTop, l.stormTop, a);
+      l.mat.uniforms.baseColor.value.lerpColors(l.dayBase, l.stormBase, a);
+    }
+  }
+
+  /**
    * As camadas acompanham a câmera em X e Z (são "infinitamente longe", como o
    * céu) e escorregam pelo vento. O deslocamento é acumulado no UNIFORME, não
    * na posição da malha: mover a malha faria a nuvem andar junto com o jogador.
    */
   update(dt, camera, wind) {
     if (!this.group.visible) return;
+    /* Na tempestade o vento empurra mais: nuvem pesada que corre. */
+    const boost = 1 + this._storm * 1.4;
     if (wind) {
-      this.drift.x -= wind.x * dt;
-      this.drift.y -= wind.z * dt;
+      this.drift.x -= wind.x * dt * boost;
+      this.drift.y -= wind.z * dt * boost;
     } else {
-      this.drift.x -= dt * 2.4;
+      this.drift.x -= dt * 2.4 * boost;
     }
     for (const l of this.layers) {
       l.mesh.position.x = camera.position.x;

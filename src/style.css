@@ -476,6 +476,8 @@ body {
 
 /* ------------------------------------------------------------------ alce -- */
 
+/* Vida do alce / chefão: por padrão à direita; com `.boss-hp` sobe para o
+   topo central (abaixo da faixa de modo, longe de placar/vento/fauna). */
 #elk-chip {
   top: 200px;
   right: 18px;
@@ -489,14 +491,13 @@ body {
   border-radius: 14px;
 }
 
-/* Chefão: barra no topo central, abaixo da faixa de modo (62px) e longe dos
-   chips laterais (placar, vento, horda). */
+/* Topo central: abaixo da faixa de modo (62px) e acima do killfeed/chips. */
 #elk-chip.boss-hp {
   top: 108px;
   left: 50%;
   right: auto;
   transform: translateX(-50%);
-  min-width: 240px;
+  min-width: 260px;
   align-items: center;
   text-align: center;
   z-index: 2;

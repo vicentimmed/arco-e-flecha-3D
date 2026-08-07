@@ -127,6 +127,8 @@ export function pickElkSpawn(terrain, jogadores = [], random = Math.random) {
       const x = S.centerX + Math.cos(ang) * r;
       const z = S.centerZ + Math.sin(ang) * r;
       if (!terrain.isWalkable(x, z) || terrain.arenaDistance(x, z) > 0) continue;
+      // Evita nascer no sopé: o filtro de slope da IA trava o alce aí.
+      if (terrain.slopeAt(x, z, 1.0) < CONFIG.elk.minSlope) continue;
       const folga = distanciaAoMaisProximo(x, z, jogadores);
       if (folga > melhorFolga) {
         melhorFolga = folga;

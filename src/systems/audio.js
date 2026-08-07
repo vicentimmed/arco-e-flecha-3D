@@ -93,6 +93,40 @@ function makeToneBuffer(ctx, freq, duration) {
  * guincho agudo do pássaro até o berro grave do alce — e é uma função pura do
  * tempo, então não depende de arquivo nenhum e nunca chega atrasada.
  */
+/**
+ * Trovão: estalo seco + ronco grave que se arrasta.
+ *
+ * Ruído filtrado por envoltória, não um tom — trovão real não tem nota. O
+ * primeiro pico é o "crack" próximo; o resto é o eco longo no vale.
+ */
+function makeThunderBuffer(ctx) {
+  const duration = 2.8;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  let low = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const white = Math.random() * 2 - 1;
+    // Passa-baixa barato: o corpo do trovão vive abaixo de ~200 Hz.
+    low += (white - low) * 0.045;
+    const crack = white * Math.exp(-t * 28) * 0.85;
+    const boom =
+      low *
+      (Math.exp(-t * 1.8) * 0.7 +
+        Math.exp(-Math.max(0, t - 0.35) * 2.4) * 0.55 +
+        Math.exp(-Math.max(0, t - 0.9) * 1.6) * 0.35);
+    const rumble =
+      Math.sin(TAU * (38 - 12 * Math.min(1, t / duration)) * t) *
+      Math.exp(-t * 1.1) *
+      0.22;
+    data[i] = Math.tanh((crack + boom + rumble) * 1.35);
+  }
+  return buffer;
+}
+
 /** Risada instável do chefão — aguda, quebrada, curta. */
 function makeBossLaughBuffer(ctx) {
   const duration = 1.75;
@@ -549,6 +583,7 @@ export class AudioSystem {
       rasp: 0.42,
       growl: 1.0,
     });
+    this.buffers.thunder = makeThunderBuffer(this.ctx);
 
     /* Lobo: fallback sintetizado até os MP3 chegarem. */
     this.buffers.wolfHowl = makeCryBuffer(this.ctx, {
@@ -903,6 +938,11 @@ export class AudioSystem {
       audio.setRefDistance(18);
       audio.setRolloffFactor(0.85);
       audio.setMaxDistance(220);
+    } else if (id === "thunder") {
+      /* Trovão atravessa o vale: o raio cai longe e ainda precisa soar. */
+      audio.setRefDistance(28);
+      audio.setRolloffFactor(0.7);
+      audio.setMaxDistance(260);
     } else {
       audio.setRefDistance(3);
       audio.setRolloffFactor(1.2);

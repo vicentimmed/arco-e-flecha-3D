@@ -78,6 +78,8 @@ export class Room {
     this.birds = new BirdFlock(this.terrain);
     /** Partida de caça aos pássaros já tem vencedor (não reabre o placar). */
     this.birdHuntOver = false;
+    /** Vitória pela rara adiada até o corpo tocar o chão. */
+    this.pendingSpecialBirdWin = null;
     this.zombies = new ZombieNight(this.terrain);
     /**
      * As quatro tochas do modo zumbi: acesa (true) ou apagada (false).
@@ -242,6 +244,7 @@ export class Room {
       if (modo === "boarHunt") this.hunt.start(this.playerPositions());
       if (modo === "birdHunt") {
         this.birdHuntOver = false;
+        this.pendingSpecialBirdWin = null;
         this.birds.reset({ hunt: true });
       }
       if (modo === "free") {
@@ -277,6 +280,7 @@ export class Room {
     this.elks.elks = [];
     this.elkWolves.clear();
     this.birdHuntOver = false;
+    this.pendingSpecialBirdWin = null;
     this.birds.reset();
     this.zombies.stop();
     // As tochas voltam acesas: a partida seguinte não herda o escuro que a
@@ -546,6 +550,16 @@ export class Room {
        que o modo inteiro constrói. */
     if (!isZombieMode(this.mode)) {
       this.birds.update(this.boarStep, agora);
+      // A rara caiu no chão: agora sim a tela de vitória.
+      if (
+        this.mode === "birdHunt" &&
+        this.pendingSpecialBirdWin &&
+        this.birds.takeSpecialLanded()
+      ) {
+        const vencedor = this.pendingSpecialBirdWin;
+        this.pendingSpecialBirdWin = null;
+        this.endBirdHunt(vencedor, "special");
+      }
       this.broadcastAll({ t: S2C.BIRDS, time: agora, k: this.birds.view() });
     }
   }
@@ -1326,10 +1340,13 @@ export class Room {
     });
     this.broadcastScores();
 
-    if (this.mode === "birdHunt" && !this.birdHuntOver) {
+    if (this.mode === "birdHunt" && !this.birdHuntOver && !this.pendingSpecialBirdWin) {
       const meta = CONFIG.modes.birdHunt.birdsToWin;
-      if (especial || player.score.birds >= meta) {
-        this.endBirdHunt(player, especial ? "special" : "count");
+      if (especial) {
+        // Vitória decidida, mas o placar só abre quando o corpo tocar o chão.
+        this.pendingSpecialBirdWin = player;
+      } else if (player.score.birds >= meta) {
+        this.endBirdHunt(player, "count");
       }
     }
   }

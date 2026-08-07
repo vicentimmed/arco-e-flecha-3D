@@ -35,6 +35,7 @@ import { ElkManager } from "./systems/elkManager.js";
 import { BirdManager } from "./systems/birdManager.js";
 import { ZombieManager } from "./systems/zombieManager.js";
 import { TorchRing } from "./systems/torches.js";
+import { StormSystem } from "./systems/storm.js";
 import { HUD } from "./ui/hud.js";
 import { DebugPanel } from "./ui/debug.js";
 import { Lobby } from "./ui/lobby.js";
@@ -120,6 +121,17 @@ class Game {
     );
     this.zombies = new ZombieManager(this.scene, physics, this.terrain, this.arrows);
     this.torches = new TorchRing(this.scene, physics, this.terrain);
+    /** Tempestade cosmética do chefão — ver `systems/storm.js`. */
+    this.storm = new StormSystem(this.scene, this.renderer, {
+      getListenerPos: () => this.renderer.camera.position,
+      getBoss: () => {
+        for (const bicho of this.zombies.byNetId.values()) {
+          if (bicho.kind === "boss" && !bicho.dead) return bicho;
+        }
+        return null;
+      },
+      heightAt: (x, z) => this.terrain.heightAt(x, z),
+    });
     /** 0 = dia, 1 = noite. Persegue `nightTarget` — ver `updateNight`. */
     this.night = 0;
     this.nightTarget = 0;
@@ -817,6 +829,7 @@ class Game {
     this.zombies.update(dt, this.renderer.camera);
     this.torches.update(dt);
     this.updateNight(dt);
+    this.updateBossStorm(dt);
     if (this._zombieOn) this.audio.tickAmbient(dt, this.renderer.camera.position);
     this.trails.update(dt);
     this.particles.update(dt);
@@ -1012,6 +1025,7 @@ class Game {
       this.torches.clear();
       this.zombies.clear();
       this.zombieState = null;
+      this.storm.setActive(false);
       this.hud.setZombie(null);
       this.hud.setBossHp(null);
       this.hud.hideZombieCenter();
@@ -1501,6 +1515,31 @@ class Game {
       this.night = Math.max(this.nightTarget, this.night - passo);
     }
     this.renderer.setNight(this.night);
+  }
+
+  /**
+   * Tempestade só na luta do chefão (horda 9 / modo zombieBoss).
+   * Cosmético: nuvens escuras, raios com luz local e trovão.
+   */
+  updateBossStorm(dt) {
+    this.storm.setActive(this.isBossStormActive());
+    this.storm.update(dt);
+  }
+
+  isBossStormActive() {
+    if (!isZombieMode(this.mode) || !this._zombieOn) return false;
+    const st = this.zombieState;
+    if (st?.over) return false;
+
+    if (this.mode === "zombieBoss") return true;
+
+    const hordes = CONFIG.modes.zombie.hordes ?? 9;
+    if (st?.horde >= hordes) return true;
+
+    for (const bicho of this.zombies.byNetId.values()) {
+      if (bicho.kind === "boss" && !bicho.dead) return true;
+    }
+    return false;
   }
 
   /** Flash de luz no impacto de flecha no chefão (sem sombra). */

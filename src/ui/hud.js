@@ -358,14 +358,15 @@ export class HUD {
       return;
     }
     this.el.elkChip.hidden = false;
-    this.el.elkChip.classList.remove("boss-hp");
+    // Mesmo layout do chefão: topo central, fora dos chips laterais.
+    this.el.elkChip.classList.add("boss-hp");
     this.el.elkBarFill.style.width = `${Math.max(0, Math.min(1, health)) * 100}%`;
     // Verde → âmbar → vermelho, igual à barra do bicho.
     this.el.elkBarFill.style.background = `hsl(${health * 118}deg 65% 50%)`;
     // Investindo: o aviso muda de texto e a peça pisca. É meio segundo de
     // antecedência, e é o que separa sair da frente de levar a cabeçada.
     const investindo = state === "charge";
-    this.el.elkLabel.textContent = investindo ? "ALCE INVESTINDO" : "Alce";
+    this.el.elkLabel.textContent = investindo ? "ALCE INVESTINDO" : "ALCE";
     this.el.elkChip.classList.toggle("perigo", investindo);
   }
 
@@ -616,16 +617,32 @@ export class HUD {
 
   /**
    * Placar da caça aos pássaros: quantas aves cada um abateu.
-   * `reason === "special"` quando o vencedor derrubou a ave rara.
+   * `reason === "special"` quando o vencedor derrubou a ave rara — a tela
+   * deixa isso explícito no rótulo e na linha do vencedor.
    */
   showBirdVictory(ranking, selfId = null, reason = "count") {
+    if (reason === "special") {
+      const vencedorId = ranking[0]?.id;
+      const rotulo = (p) => {
+        const n = p.birds ?? 0;
+        const aves = `${n} ${n === 1 ? "ave" : "aves"}`;
+        if (p.id === vencedorId) return `matou a ave rara · ${aves}`;
+        return aves;
+      };
+      this.showHuntVictory(ranking, selfId, {
+        title: "AVE RARA ABATIDA",
+        winnerLabel: "Matou a ave rara",
+        statLabel: rotulo,
+      });
+      return;
+    }
     const rotulo = (p) => {
       const n = p.birds ?? 0;
       return `${n} ${n === 1 ? "ave" : "aves"}`;
     };
     this.showHuntVictory(ranking, selfId, {
-      title: reason === "special" ? "AVE RARA ABATIDA" : "CAÇA CONCLUÍDA",
-      winnerLabel: reason === "special" ? "Golpe decisivo" : "Vencedor",
+      title: "CAÇA CONCLUÍDA",
+      winnerLabel: "Vencedor",
       statLabel: rotulo,
     });
   }

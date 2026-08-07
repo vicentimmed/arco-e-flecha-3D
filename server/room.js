@@ -25,6 +25,10 @@
 
 import { CONFIG } from "../src/config.js";
 import { TerrainField, pathCenterX } from "../src/shared/terrainField.js";
+
+function isZombieMode(mode) {
+  return mode === "zombie" || mode === "zombieBoss";
+}
 import {
   C2S,
   S2C,
@@ -137,7 +141,8 @@ export class Room {
       modo === "boarHunt" ||
       modo === "series" ||
       modo === "elkHunt" ||
-      modo === "zombie"
+      modo === "zombie" ||
+      modo === "zombieBoss"
     ) {
       this.setMode(modo);
       return;
@@ -216,13 +221,14 @@ export class Room {
       this.elks.start(postos);
       this.broadcastElkLineUp(postos);
       this.broadcastElkStatus();
-    } else if (modo === "zombie") {
-      /* A noite cai e a partida começa na hora — sem convite e sem espera.
-         Diferente do duelo, aqui não há por que pedir licença: o modo é
-         cooperativo e ninguém é arrastado para brigar com ninguém. */
-      for (const p of this.players.values()) this.resetZombieLives(p);
+    } else if (isZombieMode(modo)) {
+      for (const p of this.players.values()) {
+        p.zDownUntil = 0;
+      }
       this.centerForZombie();
-      const horda = this.zombies.start();
+      const n = this.players.size;
+      const horda =
+        modo === "zombieBoss" ? this.zombies.startBossOnly(n) : this.zombies.start(n);
       this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
       if (horda) this.broadcastAll({ t: S2C.HORDE, ...horda });
       this.broadcastZombieStatus();
@@ -240,9 +246,9 @@ export class Room {
 
     /* Vento na flecha: no zumbi começa desligado; ao sair, volta ao padrão
        ligado. Entre outros modos, o que o jogador escolheu com V permanece. */
-    if (modo === "zombie") {
+    if (isZombieMode(modo)) {
       this.setWindInfluence(false, { silent: true });
-    } else if (anterior === "zombie") {
+    } else if (isZombieMode(anterior)) {
       this.setWindInfluence(true, { silent: true });
     }
 
@@ -525,12 +531,12 @@ export class Room {
       this.broadcastAll({ t: S2C.ELKS, time: agora, e: this.elks.view() });
     }
 
-    if (this.mode === "zombie") this.tickZombies(agora, jogadores);
+    if (isZombieMode(this.mode)) this.tickZombies(agora, jogadores);
 
     /* Os pássaros somem no modo zumbi. Não é economia — é o clima: um bando
        cantando e circulando sobre um cerco de mortos-vivos desmancha a noite
        que o modo inteiro constrói. */
-    if (this.mode !== "zombie") {
+    if (!isZombieMode(this.mode)) {
       this.birds.update(this.boarStep, agora);
       this.broadcastAll({ t: S2C.BIRDS, time: agora, k: this.birds.view() });
     }
@@ -670,10 +676,16 @@ export class Room {
 
   /* ---------------------------------------------------------------- zumbis - */
 
-  /** Devolve as três vidas e tira o jogador do estado de caído. */
-  resetZombieLives(player) {
-    player.zLives = CONFIG.modes.zombie.lives;
+  /** Limpa timer de respawn do modo zumbi. */
+  resetZombieDown(player) {
     player.zDownUntil = 0;
+  }
+
+  hasLivingPlayer() {
+    for (const p of this.players.values()) {
+      if (p.alive) return true;
+    }
+    return false;
   }
 
   /**
@@ -738,7 +750,7 @@ export class Room {
         }))
         .sort((a, b) => b.kills - a.kills);
       this.broadcastAll({ t: S2C.ZOMBIE_OVER, reason: "win", horde: Z.hordes, ranking });
-      this.log("modo zumbi: venceram as dez hordas");
+      this.log("modo zumbi: venceram as nove hordas");
     }
 
     this.checkZombieBounds(agora);
@@ -771,11 +783,10 @@ export class Room {
   }
 
   /**
-   * Uma vida a menos.
+   * Morte no modo zumbi: 10 s de espectador e volta ao centro.
    *
-   * Zerou as três, o jogador fica CAÍDO por `downRespawnDelay` e volta com as
-   * vidas cheias. Enquanto isso ele não conta como vivo para os zumbis — que é o
-   * que permite a horda seguir atrás de quem sobrou em vez de rondar um corpo.
+   * Sozinho (testes): sempre renasce — sem game over. Com mais de um jogador,
+   * só volta se alguém ainda estiver vivo quando o timer acabar.
    */
   registerZombieAttack(victimId, causa = "zombie") {
     const Z = CONFIG.modes.zombie;
@@ -783,12 +794,10 @@ export class Room {
     if (!vitima || !vitima.alive) return;
     if (this.now() < vitima.invulnUntil) return;
 
+    const sozinho = this.players.size <= 1;
     vitima.alive = false;
     vitima.score.deaths++;
-    vitima.zLives = Math.max(0, (vitima.zLives ?? Z.lives) - 1);
-
-    const caiu = vitima.zLives === 0;
-    const espera = (caiu ? Z.downRespawnDelay : Z.hitRespawnDelay) * 1000;
+    const espera = Z.respawnDelay * 1000;
     vitima.zDownUntil = this.now() + espera;
 
     this.broadcastAll({
@@ -806,11 +815,12 @@ export class Room {
     });
     this.broadcastScores();
     this.broadcastZombieStatus();
+    if (!sozinho) this.checkZombieWipe(this.now());
 
     setTimeout(() => {
       if (!this.players.has(vitima.conn)) return;
-      if (this.mode !== "zombie" || this.zombies.over) return;
-      if (caiu) this.resetZombieLives(vitima);
+      if (!isZombieMode(this.mode) || this.zombies.over) return;
+      if (!sozinho && !this.hasLivingPlayer()) return;
       vitima.zDownUntil = 0;
       this.centerOne(vitima);
       this.broadcastZombieStatus();
@@ -838,22 +848,14 @@ export class Room {
   }
 
   /**
-   * Todo mundo CAÍDO ao mesmo tempo: game over.
+   * Todo mundo morto ao mesmo tempo: game over.
    *
-   * "Caído" é `zLives === 0` e fora de campo — não é simplesmente "morto".
-   * A diferença decide se o modo é jogável: quem morre com vidas de sobra volta
-   * em 2 s, e checar só por "ninguém vivo" encerrava a partida na primeira morte
-   * de quem estivesse jogando sozinho, com duas vidas ainda no bolso.
-   *
-   * Com as três vidas gastas, o jogador espera 10 s. É a sobreposição dessas
-   * esperas que acaba com a noite: se todos estão nesses 10 s ao mesmo tempo,
-   * não sobrou ninguém para segurar o quadrado.
+   * Não vale para quem joga sozinho — ver `registerZombieAttack`.
    */
-  checkZombieWipe(agora) {
-    if (this.zombies.over || !this.players.size) return;
+  checkZombieWipe(_agora) {
+    if (this.zombies.over || !this.players.size || this.players.size <= 1) return;
     for (const p of this.players.values()) {
       if (p.alive) return;
-      if ((p.zLives ?? CONFIG.modes.zombie.lives) > 0) return;
     }
 
     this.zombies.gameOver("wipe");
@@ -866,37 +868,52 @@ export class Room {
     this.log(`modo zumbi: game over na horda ${this.zombies.horde}`);
   }
 
-  /** Uma flecha entrou num zumbi ou lobo. Quem atirou declara se foi na cabeça. */
+  /** Uma flecha entrou num zumbi, lobo ou chefão. */
   registerZombieHit(player, msg) {
-    // Lobos da caçada ao alce usam o mesmo canal de hit.
     if (this.mode === "elkHunt" && !this.elks.over) {
       this.registerElkWolfHit(player, msg);
       return;
     }
-    if (this.mode !== "zombie" || this.zombies.over) return;
+    if (!isZombieMode(this.mode) || this.zombies.over) return;
+    const id = Number(msg.id);
+    if (!Number.isFinite(id)) return;
     const Z = CONFIG.modes.zombie;
-    const r = this.zombies.hit(msg.id, msg.head === true, msg.v ?? 0);
-    if (!r || !r.morreu) return;
+    const r = this.zombies.hit(id, msg.head === true, msg.v ?? 0);
+    if (!r) return;
 
     const isWolf = r.zombie.kind === "wolf";
-    this.zombies.kill(msg.id, this.now());
-    const pontos = isWolf
-      ? (Z.wolfPoints ?? 60)
-      : r.head
-        ? Z.headPoints
-        : Z.bodyPoints;
+    const isBoss = r.zombie.kind === "boss";
+
+    if (!r.morreu) {
+      if (isBoss) {
+        this.broadcastAll({ t: S2C.ZOMBIES, time: this.now(), z: this.zombies.view() });
+      }
+      return;
+    }
+
+    this.zombies.kill(id, this.now());
+    let pontos;
+    if (isBoss) {
+      pontos = Z.boss?.points ?? 500;
+      if (r.head) pontos += Z.boss?.headBonusPoints ?? 200;
+    } else if (isWolf) {
+      pontos = Z.wolfPoints ?? 60;
+    } else {
+      pontos = r.head ? Z.headPoints : Z.bodyPoints;
+    }
     player.score.points += pontos;
     player.score.kills++;
 
     this.broadcastAll({
       t: S2C.ZOMBIE_DEATH,
-      id: msg.id,
+      id,
       killer: player.id,
       killerName: player.name,
       killerColor: player.color,
       points: pontos,
       head: isWolf ? false : r.head,
       wolf: isWolf,
+      boss: isBoss,
       distance: msg.d ?? 0,
     });
     this.broadcastScores();
@@ -911,7 +928,7 @@ export class Room {
     if (!Number.isFinite(id)) return;
 
     let alvo = null;
-    if (this.mode === "zombie" && !this.zombies.over) {
+    if (isZombieMode(this.mode) && !this.zombies.over) {
       alvo = this.zombies.byId(id);
     } else if (this.mode === "elkHunt" && !this.elks.over) {
       alvo = this.elkWolves.byId(id);
@@ -926,11 +943,32 @@ export class Room {
     player.lastKnifeTarget = id;
     player.lastKnifeAt = agora;
 
-    if (this.mode === "zombie") {
-      this.zombies.kill(id, agora);
+    if (isZombieMode(this.mode)) {
       const Z = CONFIG.modes.zombie;
       const isWolf = alvo.kind === "wolf";
-      const pontos = isWolf ? (Z.wolfPoints ?? 60) : (Z.bodyPoints ?? 40);
+      const isBoss = alvo.kind === "boss";
+      let morreu = true;
+      let head = false;
+
+      if (isBoss) {
+        const r = alvo.hit(false);
+        morreu = r.morreu;
+        head = r.head;
+        if (!morreu) {
+          this.broadcastAll({ t: S2C.ZOMBIES, time: agora, z: this.zombies.view() });
+          return;
+        }
+      }
+
+      this.zombies.kill(id, agora);
+      let pontos;
+      if (isBoss) {
+        pontos = Z.boss?.points ?? 500;
+      } else if (isWolf) {
+        pontos = Z.wolfPoints ?? 60;
+      } else {
+        pontos = Z.bodyPoints ?? 40;
+      }
       player.score.points += pontos;
       player.score.kills++;
       this.broadcastAll({
@@ -942,6 +980,7 @@ export class Room {
         points: pontos,
         head: false,
         wolf: isWolf,
+        boss: isBoss,
         distance: Number(msg.d) || 0,
         knife: true,
       });
@@ -1045,15 +1084,17 @@ export class Room {
   }
 
   registerElkWolfHit(player, msg) {
-    const r = this.elkWolves.hit(msg.id);
+    const id = Number(msg.id);
+    if (!Number.isFinite(id)) return;
+    const r = this.elkWolves.hit(id);
     if (!r || !r.morreu) return;
-    this.elkWolves.kill(msg.id, this.now());
+    this.elkWolves.kill(id, this.now());
     const pontos = CONFIG.elk.wolfPoints ?? 60;
     player.score.points += pontos;
     player.score.kills++;
     this.broadcastAll({
       t: S2C.ZOMBIE_DEATH,
-      id: msg.id,
+      id,
       killer: player.id,
       killerName: player.name,
       killerColor: player.color,
@@ -1094,7 +1135,7 @@ export class Room {
 
   /** Uma flecha apagou uma tocha. */
   registerTorchHit(player, msg) {
-    if (this.mode !== "zombie") return;
+    if (!isZombieMode(this.mode)) return;
     const i = msg.i | 0;
     if (i < 0 || i >= this.torches.length || !this.torches[i]) return;
     this.torches[i] = false;
@@ -1109,9 +1150,8 @@ export class Room {
       remaining: this.zombies.vivos,
       over: this.zombies.over,
       reason: this.zombies.overReason,
-      lives: [...this.players.values()].map((p) => ({
+      downs: [...this.players.values()].map((p) => ({
         id: p.id,
-        lives: p.zLives ?? CONFIG.modes.zombie.lives,
         until: p.zDownUntil ?? 0,
       })),
     };
@@ -1326,9 +1366,7 @@ export class Room {
       alive: true,
       invulnUntil: 0,
       duelReady: false,
-      /* Vidas do modo zumbi. Nascem cheias mesmo fora do modo: quem entra no
-         meio de uma noite já em andamento entra com as três, e não caído. */
-      zLives: CONFIG.modes.zombie.lives,
+      /* Timer de respawn no modo zumbi. */
       zDownUntil: 0,
       lastKnifeAt: -Infinity,
       lastKnifeTarget: null,
@@ -1370,10 +1408,10 @@ export class Room {
       arrows: this.stuckArrows,
       boars: this.hunt.boars.length ? this.hunt.view() : [],
       elks: this.elks.elks.length ? this.elks.view() : [],
-      birds: this.mode === "zombie" ? [] : this.birds.view(),
+      birds: isZombieMode(this.mode) ? [] : this.birds.view(),
       zombies: this.zombies.zombies.length ? this.zombies.view() : [],
       torches: this.torches,
-      zombieStatus: this.mode === "zombie" ? this.zombieStatus() : null,
+      zombieStatus: isZombieMode(this.mode) ? this.zombieStatus() : null,
       elkStatus: this.mode === "elkHunt" ? this.elkStatus() : null,
       series: this.series.view(),
       mode: this.modeView(),

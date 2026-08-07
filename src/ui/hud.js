@@ -60,6 +60,7 @@ const ATALHOS = [
       [["4"], "alvos em série"],
       [["5"], "caçada ao alce"],
       [["6"], "noite dos zumbis"],
+      [["7"], "zumbi (só chefão)"],
     ],
   },
   {
@@ -205,7 +206,6 @@ export class HUD {
       <div class="chip" id="zombie-chip" hidden>
         <span class="label">Horda</span><span class="value" id="zombie-horde">1</span>
         <span class="label">Zumbis</span><span class="value" id="zombie-left">0</span>
-        <span class="label">Vidas</span><span class="value" id="zombie-lives">♥♥♥</span>
       </div>
 
       <!-- Renascimento e game over. Este SIM no meio da tela: o jogador está
@@ -266,7 +266,6 @@ export class HUD {
       zombieChip: root.querySelector("#zombie-chip"),
       zombieHorde: root.querySelector("#zombie-horde"),
       zombieLeft: root.querySelector("#zombie-left"),
-      zombieLives: root.querySelector("#zombie-lives"),
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
@@ -354,9 +353,11 @@ export class HUD {
   setElk(health, state) {
     if (health == null) {
       this.el.elkChip.hidden = true;
+      this.el.elkChip.classList.remove("boss-hp");
       return;
     }
     this.el.elkChip.hidden = false;
+    this.el.elkChip.classList.remove("boss-hp");
     this.el.elkBarFill.style.width = `${Math.max(0, Math.min(1, health)) * 100}%`;
     // Verde → âmbar → vermelho, igual à barra do bicho.
     this.el.elkBarFill.style.background = `hsl(${health * 118}deg 65% 50%)`;
@@ -414,6 +415,7 @@ export class HUD {
           series: "ALVOS EM SÉRIE",
           elkHunt: "CAÇADA AO ALCE",
           zombie: "NOITE DOS ZUMBIS",
+          zombieBoss: "CHEFÃO ZUMBI",
         }[mode] ?? mode.toUpperCase(),
         "forte",
       ),
@@ -424,12 +426,7 @@ export class HUD {
   /* --------------------------------------------------------------- zumbis -- */
 
   /**
-   * O painel do modo: horda, quantos zumbis faltam e as vidas.
-   *
-   * Os corações são desenhados como texto e não como imagem por um motivo
-   * prático — eles precisam ser lidos de relance no meio de um cerco, e um
-   * glifo grande e cheio contrasta melhor com o fundo escuro do chip do que
-   * qualquer ícone pequeno.
+   * Painel do modo zumbi: horda e quantos zumbis faltam.
    */
   setZombie(estado) {
     const chip = this.el.zombieChip;
@@ -441,11 +438,21 @@ export class HUD {
     chip.hidden = false;
     this.el.zombieHorde.textContent = `${estado.horde} / ${estado.hordes}`;
     this.el.zombieLeft.textContent = String(estado.remaining);
+  }
 
-    const vidas = Math.max(0, estado.lives ?? 0);
-    const total = estado.maxLives ?? 3;
-    this.el.zombieLives.textContent = "♥".repeat(vidas) + "♡".repeat(Math.max(0, total - vidas));
-    this.el.zombieLives.classList.toggle("perigo", vidas <= 1);
+  /** Barra de vida do chefão (reusa o chip do alce, centralizado no topo). */
+  setBossHp(health) {
+    if (health == null) {
+      this.el.elkChip.hidden = true;
+      this.el.elkChip.classList.remove("boss-hp");
+      return;
+    }
+    this.el.elkChip.hidden = false;
+    this.el.elkChip.classList.add("boss-hp");
+    this.el.elkBarFill.style.width = `${Math.max(0, Math.min(1, health)) * 100}%`;
+    this.el.elkBarFill.style.background = `hsl(${health * 118}deg 70% 48%)`;
+    this.el.elkLabel.textContent = "CHEFÃO";
+    this.el.elkChip.classList.toggle("perigo", health < 0.25);
   }
 
   /** Faixa central: contagem de renascimento ou fim de jogo. */
@@ -462,10 +469,12 @@ export class HUD {
   }
 
   /** Faixa de horda nova — mesma mecânica da onda da caçada. */
-  announceHorde(n, size) {
+  announceHorde(n, size, boss = false) {
     const faixa = this.el.waveBanner;
-    this.el.waveN.textContent = `HORDA ${n}`;
-    this.el.waveSize.textContent = `${size} ${size === 1 ? "zumbi" : "zumbis"}`;
+    this.el.waveN.textContent = boss ? "CHEFÃO" : `HORDA ${n}`;
+    this.el.waveSize.textContent = boss
+      ? "horda final"
+      : `${size} ${size === 1 ? "zumbi" : "zumbis"}`;
     faixa.hidden = false;
     faixa.classList.remove("entra");
     void faixa.offsetWidth;

@@ -570,7 +570,7 @@ export const CONFIG = {
       /* Uma partida = um alce. Morto, vitória; sem respawn automático do bicho.
          O jogador caído espera `playerRespawnDelay` (igual à lógica do zumbi
          caído: countdown + espectador). Se todos caírem ao mesmo tempo, derrota. */
-      playerRespawnDelay: 15, // s até o arqueiro voltar após a cabeçada
+      playerRespawnDelay: 10, // s até o arqueiro voltar após a cabeçada
       invulnerability: 2.5, // s de graça ao renascer
       /* SOZINHO NA SALA a regra é outra: não existe "todo mundo caiu" quando
          só existe uma pessoa, e declarar derrota ali seria terminar a partida
@@ -617,68 +617,52 @@ export const CONFIG = {
          isso — mas não o bastante para acampar no escuro. */
       safeRadius: 16, // m
 
-      // ------------------------------------------------------------- vidas --
-      lives: 3, // vidas por jogador
-      hitRespawnDelay: 2.0, // s até voltar, ainda com vidas
-      downRespawnDelay: 10.0, // s caído, com as três vidas perdidas
+      // ----------------------------------------------------------- respawn --
+      respawnDelay: 10.0, // s — morto espera; volta se alguém ainda estiver vivo
       invulnerability: 2.5, // s de graça ao voltar ao centro
 
       // ------------------------------------------------------------ hordas --
-      /* Tamanho de cada horda — tabela, não fórmula, para dar o salto certo
-         onde a dificuldade precisa apertar. Fácil de retocar. */
-      hordeSizes: [2, 4, 8, 12, 16, 20, 30],
-      hordes: 7, // deve bater com o comprimento de hordeSizes
-      /* Velocidade de caminhada (m/s) por horda. O arqueiro anda a 3,2 m/s —
-         mesmo a horda 7 continua mais lenta que uma caminhada. Edite aqui. */
-      hordeSpeeds: [1.0, 1.1, 1.2, 1.35, 1.5, 1.65, 1.85],
+      /* Bases para N=1; tamanho real = ceil(base × jogadores). Horda 9 = boss. */
+      hordeSizes: [2, 4, 8, 12, 16, 20, 26, 34],
+      hordes: 9,
+      hordeSpeeds: [1.0, 1.1, 1.2, 1.35, 1.5, 1.65, 1.8, 1.95],
       hordeDelay: 3.0, // s entre a última morte e a horda seguinte
-      // Raio em que os zumbis entram em cena: fora do alcance das tochas, para
-      // eles nascerem no breu e aparecerem primeiro como um par de olhos.
-      spawnRadius: 36, // m — centro da faixa (legado; min/max abaixo)
-      spawnRadiusMin: 28, // m — alguns nascem mais perto (chegam antes)
-      spawnRadiusMax: 50, // m — outros mais longe (demoram mais)
-      spawnJitter: 4, // m de sorteio extra por indivíduo
-      // Intervalo entre cada zumbi da horda — evita que todos nasçam juntos
-      // e cheguem ao centro ao mesmo tempo.
-      spawnStagger: 0.85, // s entre cada entrada na horda
+      lateHordeFrom: 6, // hordas ≥6: ETA ao centro espaçado
+      lateHordeSizeFrom: 16,
+      spawnRadius: 36, // m — legado
+      spawnRadiusMin: 28,
+      spawnRadiusMax: 50,
+      spawnRadiusMaxLate: 58, // hordas grandes: nascem mais longe
+      spawnJitter: 4,
+      spawnStagger: 0.85,
+      speedVariationLate: 0.28, // hordas ≥6: quebra pelotão
 
       // ------------------------------------------------------------- bicho --
-      // Fallback se hordeSpeeds não cobrir a horda (não deve acontecer).
-      speed: 1.15, // m/s
-      speedVariation: 0.18, // fração de variação individual, para não andarem juntos
-      bodyHits: 2, // flechas no corpo para derrubar
-      // Tensão máxima do arco: uma flecha solta a esta velocidade mata no corpo.
-      fullDrawKillSpeed: 118, // m/s — folga sobre bow.maxSpeed 120
-      // Altura do impacto, medida da base do zumbi, a partir da qual conta como
-      // cabeça. O corpo tem 1,8 m; o pescoço começa em ~1,45 m.
-      headMinY: 1.45, // m
-      attackRadius: 1.1, // m — alcance dos braços (~ raio zumbi + player + agarrão)
-      attackInterval: 1.4, // s entre ataques do mesmo zumbi
-      burnTime: 1.5, // s pegando fogo depois de um tiro na cabeça
-      corpseLifetime: 7, // s até o corpo sumir
+      speed: 1.15,
+      speedVariation: 0.18,
+      bodyHits: 2,
+      fullDrawKillSpeed: 118,
+      headMinY: 1.45,
+      attackRadius: 1.1,
+      attackInterval: 1.4,
+      burnTime: 1.5,
+      corpseLifetime: 7,
       eyeColor: 0xff2a18,
-      // O gemido sai com intervalo sorteado, como o ronco do porco, e é LOCAL
-      // pelo mesmo motivo: é som ambiente, e meio segundo de diferença entre
-      // duas telas não muda nada do jogo.
-      moanMinInterval: 3.0, // s
-      moanMaxInterval: 8.5, // s
+      moanMinInterval: 3.0,
+      moanMaxInterval: 8.5,
       moanVolume: 0.85,
 
-      // ------------------------------------------------------------ pontos --
-      bodyPoints: 40, // por derrubar no corpo
-      headPoints: 100, // na cabeça: paga mais porque é alvo pequeno
+      bodyPoints: 40,
+      headPoints: 100,
 
-      // ------------------------------------------------------------- lobos --
-      /* Misturados na horda: mais rápidos, 1 flecha, uivam ao aproximar.
-         Sempre em menor número que os zumbis (a massa do cerco continua). */
-      wolfCounts: [1, 2, 3, 4, 5, 7, 10],
+      wolfCounts: [1, 2, 3, 4, 5, 6, 8, 10],
       // Lobos não nascem todos no start: 1 a cada N zumbis mortos nesta horda.
       wolfEveryZombieKills: 3,
       wolfSpawnDelay: 1.0, // s de espera antes do lobo entrar (após gatilho)
       wolfSpawnRadiusBonus: 6, // m a mais que zumbis — chegam depois, de longe
       wolfSpawnStagger: 1.4, // s entre lobos da mesma horda
-      // Modo zumbi: mais lento (legacy −30%).
-      wolfSpeed: WOLF_SPEED_SLOW,
+      // Modo zumbi: 2× a velocidade base lenta (legacy −30%, depois dobrado).
+      wolfSpeed: WOLF_SPEED_SLOW * 2,
       wolfSpeedVariation: 0.08,
       wolfAttackRadius: 1.0, // m — mordida corpo a corpo (~ raio lobo + player + focinho)
       wolfLeapHitRadius: 1.2, // m — contato no salto (não 3 m de tolerância)
@@ -686,13 +670,13 @@ export const CONFIG = {
       wolfLeapRange: 5.0, // m — inicia o salto-ataque
       wolfLeapDuration: 0.45, // s
       wolfLeapHeight: 1.2, // m
-      wolfLeapSpeed: WOLF_LEAP_SLOW,
+      wolfLeapSpeed: WOLF_LEAP_SLOW * 2,
       /* Motor de locomoção: giro limitado, aceleração, curva sustentada. */
       wolfAI: {
         turnRateMax: 3.2, // rad/s — giro no trote
         turnRateMin: 1.1, // rad/s — giro na disparada
-        accel: 7.0 * WOLF_SLOW_SCALE,
-        brake: 11.0 * WOLF_SLOW_SCALE,
+        accel: 7.0 * WOLF_SLOW_SCALE * 2,
+        brake: 11.0 * WOLF_SLOW_SCALE * 2,
         speedApproach: 0.65, // fração de wolfSpeed longe do alvo
         speedChase: 1.0, // fração perto / antes do salto
         separationRadius: 1.8, // m — repulsão entre lobos
@@ -711,6 +695,51 @@ export const CONFIG = {
       wolfHowlVolume: 1.05,
       wolfBodyHeight: 1.45, // m — cernelha de lobo, não de cachorro
       wolfEyeColor: 0xff8c28, // laranja assustador (diferente dos zumbis)
+
+      // ------------------------------------------------------ chefão (h.9) --
+      boss: {
+        /* ~3× o chefão anterior (2.8): silhueta de colosso no breu. */
+        scale: 8.5,
+        speed: 0.9,
+        /* Pista longa: ~40 flechas × ~3,5 s entre tiros × 0,9 m/s ≈ 126 m;
+           160 m dá folga para a luta respirar no fundo do vale (−Z). */
+        spawnRadius: 160,
+        bodyDamage: 1,
+        headDamage: 2,
+        arrowsToKillPerPlayer: 40,
+        attackRadius: 6.6,
+        headMinY: 1.45 * 8.5,
+        points: 500,
+        headBonusPoints: 200,
+        eyeColor: 0xffaa22,
+        moanMinInterval: 1.8,
+        moanMaxInterval: 3.5,
+        moanVolume: 2.8,
+        laughMinInterval: 18,
+        laughMaxInterval: 35,
+        laughVolume: 2.4,
+        /* Matilhas de escolta: nascem no corredor do chefão, não na arena. */
+        wolves: {
+          packBase: 2,
+          packPerPlayer: 1,
+          packMax: 4,
+          waves: 4,
+          healthThresholds: [0.75, 0.5, 0.25],
+          stagger: 0.9,
+          spawnOffsetMin: 4,
+          spawnOffsetMax: 10,
+          spawnLateral: 6,
+        },
+        /* Flash no impacto: clarão que revela o corpo inteiro à distância. */
+        hitFlash: {
+          color: 0xffdd88,
+          intensity: 360,
+          fillIntensity: 0.55,
+          range: 95,
+          decay: 1.05,
+          life: 0.38,
+        },
+      },
     },
   },
 

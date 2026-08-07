@@ -59,6 +59,10 @@ import {
   round3,
 } from "./shared/protocol.js";
 
+function isZombieMode(mode) {
+  return mode === "zombie" || mode === "zombieBoss";
+}
+
 /** Milímetro de precisão: de sobra para a rede e metade dos bytes. */
 const mm = (v) => Math.round(v * 1000) / 1000;
 
@@ -108,9 +112,10 @@ class Game {
     /** 0 = dia, 1 = noite. Persegue `nightTarget` — ver `updateNight`. */
     this.night = 0;
     this.nightTarget = 0;
-    /** Último estado do modo zumbi vindo da sala (vidas, horda, caídos). */
+    /** Luzes curtas a cada flecha no chefão (sem sombra). */
+    this._bossFlashes = [];
+    /** Último estado do modo zumbi vindo da sala (horda, caídos). */
     this.zombieState = null;
-    /** Estado da caçada ao alce (caídos / fim de partida). */
     this.elkState = null;
     this._elkHudCountdown = false;
     /** A tela de vitória da caçada está na tela, esperando o Enter que a fecha. */
@@ -262,10 +267,11 @@ class Game {
       if (e.ownerId !== this.player.entityId) return;
       const id = zombieIdFrom(e.zombieId);
       if (id == null) return;
+      if (e.boss && e.impact) this.spawnBossFlash(e.impact, id);
       const limiar = CONFIG.modes.zombie.fullDrawKillSpeed ?? CONFIG.bow.maxSpeed * 0.98;
       const fullDraw = (e.speed ?? 0) >= limiar;
-      // Lobo, headshot ou tensão máxima: caem na hora.
-      if (e.wolf || e.head || fullDraw) this.zombies.kill(id, e.head === true);
+      // Lobo, headshot ou tensão máxima: caem na hora — chefão só cai no servidor.
+      if (e.wolf || (!e.boss && (e.head || fullDraw))) this.zombies.kill(id, e.head === true);
       this.net.send(C2S.ZOMBIE_HIT, {
         id,
         head: e.head === true,
@@ -361,7 +367,7 @@ class Game {
          quem chegou depois estaria todo aceso e ele acharia que enxerga um
          canto que, para os outros, está no escuro. */
       this.zombies.clear();
-      this.applyZombieMode(msg.snapshot.mode?.mode === "zombie");
+      this.applyZombieMode(isZombieMode(msg.snapshot.mode?.mode));
       if (msg.snapshot.zombies?.length) this.zombies.applyNetwork(msg.snapshot.zombies);
       this.torches.setStates(msg.snapshot.torches);
       this.zombieState = msg.snapshot.zombieStatus ?? null;
@@ -393,6 +399,7 @@ class Game {
 
     net.on(S2C.SPAWN, (msg) => {
       if (msg.id === net.me?.id) {
+        this.arrows.removeAttachedTo(this.player);
         this.death.revive();
         this.respawn.begin(msg);
         /* O rumo da câmera pode vir do servidor. Na caçada ao alce ele vem
@@ -407,7 +414,11 @@ class Game {
         this.drawTime = 0;
         this.input.drawing = false;
       } else {
-        this.remotes.get(msg.id)?.applySpawn(msg);
+        const remoto = this.remotes.get(msg.id);
+        if (remoto) {
+          this.arrows.removeAttachedTo(remoto.player);
+          remoto.applySpawn(msg);
+        }
       }
     });
 
@@ -623,12 +634,15 @@ class Game {
 
     net.on(S2C.ZOMBIE_DEATH, (msg) => {
       this.zombies.kill(msg.id, msg.head);
+      if (msg.boss) this.hud.setBossHp(null);
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
         {
           text: msg.knife
             ? "  \u{1F52A}  "
-            : msg.wolf
+            : msg.boss
+              ? "  \u{1F480}  "
+              : msg.wolf
               ? "  \u{1F43A}  "
               : msg.head
                 ? "  \u{1F525}  "
@@ -640,7 +654,7 @@ class Game {
     });
 
     net.on(S2C.HORDE, (msg) => {
-      this.hud.announceHorde(msg.n, msg.size);
+      this.hud.announceHorde(msg.n, msg.size, msg.boss === true);
       gameEvents.emit(EventType.AUDIO_PLAY, {
         sound: "waveHorn",
         position: vec3Payload(this.player.position),
@@ -776,6 +790,7 @@ class Game {
     if (this._zombieOn) this.audio.tickAmbient(dt, this.renderer.camera.position);
     this.trails.update(dt);
     this.particles.update(dt);
+    this.updateBossFlashes(dt);
     this.environment.update(dt, this.wind.vector);
     this.death.update(this.net.serverTime);
     this.respawn.update(this.net.serverTime);
@@ -885,7 +900,7 @@ class Game {
        e ainda por cima uma flecha perdida cravaria num alvo velho. */
     /* Os alvos fixos somem na série (um alvo por vez é o modo) e na noite dos
        zumbis — lá o pedido é campo limpo: nem mira, nem madeira, nem bicho. */
-    const escondeFixos = msg.mode === "series" || msg.mode === "zombie";
+    const escondeFixos = msg.mode === "series" || isZombieMode(msg.mode);
     for (const alvo of this.targets) alvo.setActive(!escondeFixos);
     this.marker.visible = !escondeFixos;
     this.hud.setMode(msg.mode, msg.invites ?? [], msg.needed ?? 2, this.net.me?.id);
@@ -902,7 +917,7 @@ class Game {
       this.applyWindInfluence(msg.windInfluence, { toast: false });
     }
 
-    this.applyZombieMode(msg.mode === "zombie");
+    this.applyZombieMode(isZombieMode(msg.mode));
     if (mudouModo) this.applyArrowCameraMode(msg.mode);
     if (msg.mode !== "elkHunt") {
       this.elkState = null;
@@ -916,7 +931,7 @@ class Game {
    * vendo o campo. O atalho continua podendo ligá-la manualmente.
    */
   applyArrowCameraMode(mode) {
-    const bloqueadaAoEntrar = mode === "zombie" || mode === "elkHunt";
+    const bloqueadaAoEntrar = isZombieMode(mode) || mode === "elkHunt";
     this.rig.setFollowArrow(!bloqueadaAoEntrar);
     if (bloqueadaAoEntrar) this.rig.returnToArcher();
   }
@@ -968,6 +983,7 @@ class Game {
       this.zombies.clear();
       this.zombieState = null;
       this.hud.setZombie(null);
+      this.hud.setBossHp(null);
       this.hud.hideZombieCenter();
     }
 
@@ -1441,46 +1457,98 @@ class Game {
     this.renderer.setNight(this.night);
   }
 
-  /** Painel do modo zumbi: horda, restantes, vidas e o contador de renascimento. */
+  /** Flash de luz no impacto de flecha no chefão (sem sombra). */
+  spawnBossFlash(impact, zombieId = null) {
+    const F = CONFIG.modes.zombie.boss?.hitFlash ?? {};
+    const peak = F.intensity ?? 360;
+    const range = F.range ?? 95;
+    const decay = F.decay ?? 1.05;
+    const life = F.life ?? 0.38;
+    const color = F.color ?? 0xffdd88;
+
+    this._pushBossFlashLight(impact.x, impact.y + 0.4, impact.z, peak, range, decay, life, color);
+
+    /* Segunda luz no tronco: o impacto acende um ponto; esta revela o corpo
+       inteiro quando o tiro vem de longe. */
+    const boss = zombieId != null ? this.zombies.byNetId.get(zombieId) : null;
+    if (boss && !boss.dead) {
+      const fill = peak * (F.fillIntensity ?? 0.55);
+      const torsoY = boss.position.y + (boss.bodyHeight ?? 15) * 0.52;
+      this._pushBossFlashLight(
+        boss.position.x,
+        torsoY,
+        boss.position.z,
+        fill,
+        range * 1.12,
+        decay,
+        life,
+        color,
+      );
+    }
+  }
+
+  _pushBossFlashLight(x, y, z, peak, range, decay, life, color) {
+    const light = new THREE.PointLight(color, peak, range, decay);
+    light.position.set(x, y, z);
+    light.castShadow = false;
+    this.scene.add(light);
+    this._bossFlashes.push({ light, t: 0, life, peak });
+  }
+
+  updateBossFlashes(dt) {
+    for (let i = this._bossFlashes.length - 1; i >= 0; i--) {
+      const f = this._bossFlashes[i];
+      f.t += dt;
+      const p = f.t / f.life;
+      f.light.intensity = f.peak * (1 - p) * (1 - p);
+      if (f.t >= f.life) {
+        this.scene.remove(f.light);
+        f.light.dispose();
+        this._bossFlashes.splice(i, 1);
+      }
+    }
+  }
+
+  /** Painel do modo zumbi: horda, restantes e contador de renascimento. */
   updateZombieHud() {
     const st = this.zombieState;
-    if (!st || this.mode !== "zombie") {
+    if (!st || !isZombieMode(this.mode)) {
       if (this._zombieHudOn) {
         this.hud.setZombie(null);
+        this.hud.setBossHp(null);
         this._zombieHudOn = false;
       }
       return;
     }
     this._zombieHudOn = true;
 
-    const eu = st.lives?.find((l) => l.id === this.net.me?.id);
     this.hud.setZombie({
       horde: st.horde,
       hordes: CONFIG.modes.zombie.hordes,
-      // O número de zumbis é contado DAQUI, da lista que chega a 10 Hz, e não do
-      // status: assim ele cai no instante em que o corpo cai na tela, em vez de
-      // esperar a próxima mensagem de estado.
       remaining: this.zombies.counts.alive,
-      lives: eu?.lives ?? CONFIG.modes.zombie.lives,
-      maxLives: CONFIG.modes.zombie.lives,
     });
 
-    if (st.over) return; // a faixa de fim já está na tela
+    let bossHp = null;
+    for (const bicho of this.zombies.byNetId.values()) {
+      if (bicho.kind === "boss" && !bicho.dead) {
+        bossHp = bicho.health;
+        break;
+      }
+    }
+    this.hud.setBossHp(bossHp);
 
-    // Contador de renascimento, só para quem está esperando.
+    if (st.over) return;
+
+    const eu = st.downs?.find((d) => d.id === this.net.me?.id);
     const falta = (eu?.until ?? 0) - this.net.serverTime;
     if (falta <= 0) {
       this.hud.hideZombieCenter();
       return;
     }
-    {
-      const seg = Math.ceil(falta / 1000);
-      const semVidas = (eu?.lives ?? 0) === 0;
-      this.hud.showZombieCenter(
-        String(seg),
-        semVidas ? "sem vidas — voltando com três" : "voltando ao centro",
-      );
-    }
+    this.hud.showZombieCenter(
+      String(Math.ceil(falta / 1000)),
+      "voltando ao centro…",
+    );
   }
 
   /**

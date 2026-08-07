@@ -1,8 +1,8 @@
 /* ---------------------------------------------------------------------------
-   Os zumbis e lobos, no servidor.
+   Os zumbis, lobos e o chefão, no servidor.
 
    Lobos entram mesclados nas hordas: mais rápidos, 1 flecha, uivam no cliente.
-   Contam para limpar a horda junto com os zumbis.
+   Horda 9 = um boss gigante com vida escalada por jogador.
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
@@ -25,8 +25,12 @@ function clampTurn(current, target, maxDelta) {
   return current + Math.sign(d) * maxDelta;
 }
 
+function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 export class Zombie {
-  constructor(terrain, x, z, speed = null) {
+  constructor(terrain, x, z, speed = null, speedVar = null) {
     const Z = CONFIG.modes.zombie;
     this.id = proximoId++;
     this.kind = "zombie";
@@ -41,9 +45,11 @@ export class Zombie {
     this.burning = false;
     this.hits = 0;
     this.lastAttack = -Infinity;
+    this.attackRadius = Z.attackRadius ?? 1.1;
 
     const base = speed ?? Z.speed;
-    this.speed = base * (1 + (Math.random() * 2 - 1) * Z.speedVariation);
+    const varFrac = speedVar ?? Z.speedVariation;
+    this.speed = base * (1 + (Math.random() * 2 - 1) * varFrac);
   }
 
   update(dt, jogadores, agora) {
@@ -59,7 +65,7 @@ export class Zombie {
 
     const d = Math.hypot(alvo.x - this.x, alvo.z - this.z);
 
-    if (d <= (Z.attackRadius ?? 1.1)) {
+    if (d <= this.attackRadius) {
       this.state = "attack";
       this.faceToward(alvo.x, alvo.z);
       if (agora - this.lastAttack < Z.attackInterval * 1000) return null;
@@ -125,7 +131,6 @@ export class Zombie {
     return { morreu: this.hits >= CONFIG.modes.zombie.bodyHits, head: false };
   }
 
-  /** Cabeça, ou corpo com tensão máxima do arco. */
   hitWithSpeed(head, speed = 0) {
     if (this.dead) return { morreu: false, head: false };
     const limiar = CONFIG.modes.zombie.fullDrawKillSpeed ?? CONFIG.bow.maxSpeed * 0.98;
@@ -133,6 +138,34 @@ export class Zombie {
       this.hits = CONFIG.modes.zombie.bodyHits;
       return { morreu: true, head: false };
     }
+    return this.hit(head);
+  }
+}
+
+/** Chefão da horda 9: tanque com vida escalada; cabeça = 2× dano. */
+export class BossZombie extends Zombie {
+  constructor(terrain, x, z, playerCount) {
+    const B = CONFIG.modes.zombie.boss;
+    super(terrain, x, z, B.speed, 0.06);
+    this.kind = "boss";
+    this.maxHealth = B.arrowsToKillPerPlayer * Math.max(1, playerCount | 0);
+    this.health = this.maxHealth;
+    this.attackRadius = B.attackRadius ?? 6.6;
+  }
+
+  hit(head) {
+    if (this.dead) return { morreu: false, head: false };
+    const B = CONFIG.modes.zombie.boss;
+    const dmg = head ? B.headDamage : B.bodyDamage;
+    this.health -= dmg;
+    if (this.health <= 0) {
+      if (head) this.burning = true;
+      return { morreu: true, head: !!head };
+    }
+    return { morreu: false, head: !!head };
+  }
+
+  hitWithSpeed(head, _speed = 0) {
     return this.hit(head);
   }
 }
@@ -172,10 +205,8 @@ export class Wolf {
     this.speed = this.baseSpeed;
     this.leapSpeed = tuning.wolfLeapSpeed ?? Z.wolfLeapSpeed ?? 11;
     this._aiConfig = AI;
-    /** Com 2 jogadores: trava em um alvo (id) para a matilha se dividir. */
     this.lockedTargetId = null;
 
-    /** Curva de aproximação: lado sustentado por alguns segundos. */
     this.bearingSide = Math.random() < 0.5 ? 1 : -1;
     this.bearingHold = this._nextBearingHold(AI);
     this.bearingOffset = this._pickBearingOffset(AI);
@@ -269,7 +300,6 @@ export class Wolf {
     return Math.abs(angleDelta(this.heading, toTarget)) <= cone;
   }
 
-  /** Perseguição em curva sustentada — substitui zigue-zague por waypoint. */
   chaseWithBearing(alvo, dt, speedFrac, vizinhos) {
     const AI = this._ai();
     this.bearingHold -= dt;
@@ -296,9 +326,6 @@ export class Wolf {
     this.steer(dt, tx, tz, speedFrac, vizinhos);
   }
 
-  /**
-   * Motor de locomoção: seek + separação + whiskers → giro limitado + aceleração.
-   */
   steer(dt, tx, tz, speedFrac, vizinhos = []) {
     const AI = this._ai();
     const accel = AI.accel ?? 7.0;
@@ -317,7 +344,6 @@ export class Wolf {
       sz = Math.cos(this.heading);
     }
 
-    // Separação entre lobos.
     for (const outro of vizinhos) {
       if (outro === this || outro.dead) continue;
       const ox = this.x - outro.x;
@@ -329,7 +355,6 @@ export class Wolf {
       sz += (oz / od) * peso * 1.4;
     }
 
-    // Whiskers de terreno — empurra rumo, registra lado bloqueado.
     const probeLen = this.vel * 0.5 + 0.8;
     const probes = [
       { ang: 0, side: 0 },
@@ -404,7 +429,6 @@ export class Wolf {
     this.yaw = this.heading;
     this.vel = leapSpeed;
 
-    // Colisão no ar: o lobo pode cruzar o jogador entre ticks.
     const alvoNoAr = this.pickTarget(jogadores);
     if (
       alvoNoAr &&
@@ -435,11 +459,6 @@ export class Wolf {
     return null;
   }
 
-  /**
-   * Com exatamente 2 vivos: a matilha se divide — cada lobo trava num dos dois
-   * (pelo id do lobo), para não empilharem no mesmo arqueiro.
-   * Com 1 ou 3+: prefere o mais isolado (ou o único).
-   */
   pickTarget(jogadores) {
     const vivos = jogadores.filter((p) => p.alive !== false);
     if (!vivos.length) {
@@ -452,11 +471,9 @@ export class Wolf {
     }
 
     if (vivos.length === 2) {
-      // Ordena por id para a divisão ser estável entre ticks.
       const ordenados = [...vivos].sort((a, b) => String(a.id).localeCompare(String(b.id)));
       const slot = this.id % 2;
       const preferido = ordenados[slot];
-      // Mantém o lock se o alvo ainda está vivo; senão troca para o outro.
       if (this.lockedTargetId != null) {
         const locked = ordenados.find((p) => p.id === this.lockedTargetId);
         if (locked) return locked;
@@ -514,7 +531,7 @@ export class Wolf {
 export class ZombieNight {
   constructor(terrain) {
     this.terrain = terrain;
-    /** @type {(Zombie|Wolf)[]} */
+    /** @type {(Zombie|Wolf|BossZombie)[]} */
     this.zombies = [];
     this.active = false;
     this.horde = 0;
@@ -525,22 +542,33 @@ export class ZombieNight {
     this.pendingWolves = 0;
     this.zombiesKilledInHorde = 0;
     this.plannedWolves = 0;
-    /** @type {{ timer: number, i: number, total: number, isWolf: boolean }[]} */
+    this.playerCount = 1;
+    /** @type {{ timer: number, i: number; total: number; isWolf: boolean; isBoss?: boolean; bossWolf?: boolean; bossId?: number }[]} */
     this.pendingSpawns = [];
+    /** Ondas de lobos do chefão já disparadas (0 = spawn, 1–3 = limiares de HP). */
+    this.bossWolfWavesFired = new Set();
   }
 
   get vivos() {
     return this.zombies.reduce((n, z) => n + (z.dead ? 0 : 1), 0);
   }
 
-  hordeSize(n) {
+  hordeBaseSize(n) {
     const lista = CONFIG.modes.zombie.hordeSizes;
     return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? lista[lista.length - 1];
   }
 
+  hordeSize(n) {
+    const Z = CONFIG.modes.zombie;
+    if (n >= Z.hordes) return 0;
+    return Math.ceil(this.hordeBaseSize(n) * Math.max(1, this.playerCount));
+  }
+
   wolfCount(n) {
     const lista = CONFIG.modes.zombie.wolfCounts ?? [];
-    return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? 0;
+    const base = lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? 0;
+    if (n >= CONFIG.modes.zombie.hordes) return 0;
+    return Math.ceil(base * Math.max(1, this.playerCount));
   }
 
   hordeSpeed(n) {
@@ -549,7 +577,22 @@ export class ZombieNight {
     return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? Z.speed;
   }
 
-  start() {
+  isLateHorde(horde, size) {
+    const Z = CONFIG.modes.zombie;
+    return horde >= (Z.lateHordeFrom ?? 6) || size >= (Z.lateHordeSizeFrom ?? 16);
+  }
+
+  effectiveStagger(size, horde) {
+    const Z = CONFIG.modes.zombie;
+    let stagger = Z.spawnStagger ?? 0.85;
+    if (this.isLateHorde(horde, size)) {
+      stagger = Math.min(1.6, stagger * Math.sqrt(size / 12));
+    }
+    return stagger;
+  }
+
+  start(nPlayers = 1) {
+    this.playerCount = Math.max(1, nPlayers | 0);
     this.active = true;
     this.over = false;
     this.overReason = null;
@@ -561,6 +604,24 @@ export class ZombieNight {
     this.zombiesKilledInHorde = 0;
     this.pendingSpawns = [];
     this.spawnPhase = Math.random() * Math.PI * 2;
+    this.bossWolfWavesFired = new Set();
+    return this.nextHorde();
+  }
+
+  startBossOnly(nPlayers = 1) {
+    this.playerCount = Math.max(1, nPlayers | 0);
+    this.active = true;
+    this.over = false;
+    this.overReason = null;
+    this.zombies = [];
+    this.horde = CONFIG.modes.zombie.hordes - 1;
+    this.hordeTimer = 0;
+    this.pendingWolves = 0;
+    this.plannedWolves = 0;
+    this.zombiesKilledInHorde = 0;
+    this.pendingSpawns = [];
+    this.spawnPhase = Math.random() * Math.PI * 2;
+    this.bossWolfWavesFired = new Set();
     return this.nextHorde();
   }
 
@@ -572,6 +633,7 @@ export class ZombieNight {
     this.plannedWolves = 0;
     this.zombiesKilledInHorde = 0;
     this.pendingSpawns = [];
+    this.bossWolfWavesFired = new Set();
     this.over = false;
     this.overReason = null;
   }
@@ -580,6 +642,11 @@ export class ZombieNight {
     const Z = CONFIG.modes.zombie;
     if (this.horde >= Z.hordes) return null;
     this.horde++;
+
+    if (this.horde >= Z.hordes) {
+      return this.queueBossHorde();
+    }
+
     const size = this.hordeSize(this.horde);
     const wolves = this.wolfCount(this.horde);
     this.spawnPhase += 0.7 + Math.random() * 1.4;
@@ -588,7 +655,7 @@ export class ZombieNight {
     this.zombiesKilledInHorde = 0;
     this.pendingSpawns = [];
 
-    const stagger = Z.spawnStagger ?? 0.85;
+    const stagger = this.effectiveStagger(size, this.horde);
     for (let i = 0; i < size; i++) {
       this.pendingSpawns.push({
         timer: i * stagger + Math.random() * stagger * 0.35,
@@ -597,18 +664,116 @@ export class ZombieNight {
         isWolf: false,
       });
     }
-    // Lobos entram intercalados conforme zumbis morrem — não no start.
 
     return { n: this.horde, size: size + wolves };
   }
 
-  /** Raio de spawn variado: alterna perto/longe para espalhar chegadas ao centro. */
-  spawnRadiusFor(i, total, isWolf) {
+  queueBossHorde() {
+    this.pendingWolves = 0;
+    this.plannedWolves = 0;
+    this.zombiesKilledInHorde = 0;
+    this.bossWolfWavesFired = new Set();
+    this.pendingSpawns = [{ timer: 0.5, i: 0, total: 1, isWolf: false, isBoss: true }];
+    return { n: this.horde, size: 1, boss: true };
+  }
+
+  /** Tamanho da matilha de escolta do chefão (escala com jogadores, com teto). */
+  bossWolfPackSize() {
+    const W = CONFIG.modes.zombie.boss?.wolves ?? {};
+    const base = W.packBase ?? 2;
+    const extra = (W.packPerPlayer ?? 1) * Math.max(0, this.playerCount - 1);
+    return Math.min(W.packMax ?? 4, base + extra);
+  }
+
+  /** Enfileira uma onda de lobos no corredor do chefão. */
+  queueBossWolfWave(boss, waveIndex) {
+    if (!boss || boss.dead || boss.kind !== "boss") return;
+    if (this.bossWolfWavesFired.has(waveIndex)) return;
+    const W = CONFIG.modes.zombie.boss?.wolves ?? {};
+    const total = this.bossWolfPackSize();
+    const stagger = W.stagger ?? 0.9;
+    for (let i = 0; i < total; i++) {
+      this.pendingSpawns.push({
+        timer: i * stagger + Math.random() * stagger * 0.35,
+        i,
+        total,
+        bossWolf: true,
+        bossId: boss.id,
+      });
+    }
+    this.bossWolfWavesFired.add(waveIndex);
+  }
+
+  /** Lobos do chefão: nascem atrás/lateral no eixo boss → centro (não na arena). */
+  spawnBossWolfNear(boss, i, total) {
+    const Z = CONFIG.modes.zombie;
+    const W = Z.boss?.wolves ?? {};
+    const dx = Z.centerX - boss.x;
+    const dz = Z.centerZ - boss.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const fx = dx / len;
+    const fz = dz / len;
+    const px = -fz;
+    const pz = fx;
+    const offMin = W.spawnOffsetMin ?? 4;
+    const offMax = W.spawnOffsetMax ?? 10;
+    const lateralBase = W.spawnLateral ?? 6;
+    const lado = i % 2 === 0 ? 1 : -1;
+    const faixa = 1 + Math.floor(i / 2) * 0.35;
+
+    for (let tentativa = 0; tentativa < 6; tentativa++) {
+      const shrink = 1 - tentativa * 0.14;
+      const offsetBack =
+        (offMin + Math.random() * (offMax - offMin)) * shrink;
+      const lateral = lateralBase * faixa * shrink * lado;
+      const x = boss.x - fx * offsetBack + px * lateral;
+      const z = boss.z - fz * offsetBack + pz * lateral;
+      if (!this.terrain.isWalkable(x, z) || this.terrain.arenaDistance(x, z) > 5) {
+        continue;
+      }
+      const lobo = new Wolf(this.terrain, x, z);
+      lobo.faceToward(Z.centerX, Z.centerZ);
+      this.zombies.push(lobo);
+      return lobo;
+    }
+    return null;
+  }
+
+  /** Ondas 1–3: disparam por fração de vida do chefão (independente de lobos vivos). */
+  tickBossWolfWaves() {
+    const boss = this.zombies.find((z) => z.kind === "boss" && !z.dead);
+    if (!boss || boss.maxHealth <= 0) return;
+    const W = CONFIG.modes.zombie.boss?.wolves;
+    if (!W) return;
+    const thresholds = W.healthThresholds ?? [0.75, 0.5, 0.25];
+    const frac = boss.health / boss.maxHealth;
+    for (let wi = 0; wi < thresholds.length; wi++) {
+      const waveIndex = wi + 1;
+      if (this.bossWolfWavesFired.has(waveIndex)) continue;
+      if (frac <= thresholds[wi]) {
+        this.queueBossWolfWave(boss, waveIndex);
+      }
+    }
+  }
+
+  /** Raio de spawn variado: alterna perto/longe; hordas grandes usam ETA ao centro. */
+  spawnRadiusFor(i, total, isWolf, walkSpeed) {
     const Z = CONFIG.modes.zombie;
     const rMin = Z.spawnRadiusMin ?? Z.spawnRadius - (Z.spawnJitter ?? 5);
-    const rMax = Z.spawnRadiusMax ?? Z.spawnRadius + (Z.spawnJitter ?? 5);
+    const rMaxDefault = Z.spawnRadiusMax ?? Z.spawnRadius + (Z.spawnJitter ?? 5);
+    const rMax = this.isLateHorde(this.horde, total)
+      ? (Z.spawnRadiusMaxLate ?? rMaxDefault)
+      : rMaxDefault;
+
+    if (!isWolf && walkSpeed > 0 && this.isLateHorde(this.horde, total)) {
+      const gap = clamp(0.55 + 0.012 * total, 0.55, 0.85);
+      const eta = i * gap + (Math.random() - 0.5) * gap * 0.25;
+      const r = clamp(walkSpeed * eta, rMin, rMax);
+      const bonus = isWolf ? (Z.wolfSpawnRadiusBonus ?? 6) : 0;
+      return r + bonus;
+    }
+
     const t = total > 1 ? i / (total - 1) : 0.5;
-    // Onda senoidal + offset por índice: vizinhos não ficam na mesma distância.
     const wave = 0.5 + 0.5 * Math.sin(i * 2.17 + this.spawnPhase);
     const base = rMin + (rMax - rMin) * (t * 0.35 + wave * 0.65);
     const jitter = (Math.random() - 0.5) * (Z.spawnJitter ?? 4);
@@ -621,28 +786,44 @@ export class ZombieNight {
       const ps = this.pendingSpawns[j];
       ps.timer -= dt;
       if (ps.timer <= 0) {
-        this.spawnAt(ps.i, ps.total, ps.isWolf);
+        if (ps.bossWolf) {
+          const boss = ps.bossId != null ? this.byId(ps.bossId) : null;
+          if (boss && !boss.dead) {
+            this.spawnBossWolfNear(boss, ps.i, ps.total);
+          }
+        } else {
+          this.spawnAt(ps.i, ps.total, ps.isWolf, ps.isBoss === true);
+        }
         this.pendingSpawns.splice(j, 1);
       }
     }
   }
 
-  /**
-   * @param {boolean} isWolf
-   */
-  spawnAt(i, total, isWolf = false) {
+  spawnAt(i, total, isWolf = false, isBoss = false) {
     const Z = CONFIG.modes.zombie;
-    const setor = (Math.PI * 2) / total;
-    // Lobos nascem nos “meios” dos setores dos zumbis: fase deslocada.
+    const B = Z.boss ?? {};
+    const setor = (Math.PI * 2) / Math.max(1, total);
     const faseExtra = isWolf ? setor * 0.5 + 0.35 : 0;
-    const ang =
+    let ang =
       this.spawnPhase + faseExtra + i * setor + (Math.random() - 0.5) * setor * 0.7;
-    const raio = this.spawnRadiusFor(i, total, isWolf);
+
+    const hordeSpd = isBoss ? (B.speed ?? 0.9) : this.hordeSpeed(this.horde);
+    /* Chefão: fundo do vale (−Z a partir do círculo de tochas). O ângulo
+       aleatório da horda o empurrava pra lateral da bacia (~30 m) e ele
+       nascia perto demais — a vida de 20 flechas pedia bem mais pista. */
+    let raio = isBoss
+      ? (B.spawnRadius ??
+        Math.max(100, (B.speed ?? 0.9) * (B.arrowsToKillPerPlayer ?? 40) * 7))
+      : this.spawnRadiusFor(i, total, isWolf, hordeSpd);
+    if (isBoss) {
+      ang = Math.PI + (Math.random() - 0.5) * 0.55;
+    }
 
     let x = 0;
     let z = 0;
     let achou = false;
-    for (let r = raio; r > 14; r -= 2) {
+    const raioMin = isBoss ? Math.max(70, raio * 0.55) : 14;
+    for (let r = raio; r > raioMin; r -= 2) {
       x = Z.centerX + Math.sin(ang) * r;
       z = Z.centerZ + Math.cos(ang) * r;
       if (this.terrain.isWalkable(x, z) && this.terrain.arenaDistance(x, z) <= 5) {
@@ -652,11 +833,21 @@ export class ZombieNight {
     }
     if (!achou) return null;
 
-    const bicho = isWolf
-      ? new Wolf(this.terrain, x, z)
-      : new Zombie(this.terrain, x, z, this.hordeSpeed(this.horde));
+    let bicho;
+    if (isBoss) {
+      bicho = new BossZombie(this.terrain, x, z, this.playerCount);
+    } else if (isWolf) {
+      bicho = new Wolf(this.terrain, x, z);
+    } else {
+      const late = this.isLateHorde(this.horde, total);
+      const varFrac = late ? (Z.speedVariationLate ?? 0.28) : Z.speedVariation;
+      bicho = new Zombie(this.terrain, x, z, hordeSpd, varFrac);
+    }
     bicho.faceToward(Z.centerX, Z.centerZ);
     this.zombies.push(bicho);
+    if (isBoss) {
+      this.queueBossWolfWave(bicho, 0);
+    }
     return bicho;
   }
 
@@ -683,19 +874,18 @@ export class ZombieNight {
     zumbi.deadSince = agora;
     zumbi.state = "dead";
 
-    if (zumbi.kind !== "wolf") {
+    if (zumbi.kind !== "wolf" && zumbi.kind !== "boss") {
       this.zombiesKilledInHorde++;
       this.trySpawnPendingWolf();
     }
     return zumbi;
   }
 
-  /** 1 lobo a cada N zumbis mortos; se só sobram pending e zero zumbis, libera 1. */
   trySpawnPendingWolf() {
     if (this.pendingWolves <= 0) return;
     const aCada = CONFIG.modes.zombie.wolfEveryZombieKills ?? 3;
     const zumbisVivos = this.zombies.reduce(
-      (n, z) => n + (!z.dead && z.kind !== "wolf" ? 1 : 0),
+      (n, z) => n + (!z.dead && z.kind === "zombie" ? 1 : 0),
       0,
     );
     const noRitmo =
@@ -722,6 +912,7 @@ export class ZombieNight {
     const ataques = [];
 
     this.tickPendingSpawns(dt);
+    this.tickBossWolfWaves();
 
     const lobosVivos = this.zombies.filter((z) => !z.dead && z.kind === "wolf");
 
@@ -732,7 +923,6 @@ export class ZombieNight {
       if (alvo != null) ataques.push({ zombieId: zumbi.id, playerId: alvo });
     }
 
-    // Se a horda limpou os zumbis mas ainda há lobos pendentes, solta um por tick de horda.
     if (
       this.active &&
       !this.over &&
@@ -749,7 +939,13 @@ export class ZombieNight {
     let horda = null;
     let venceu = false;
 
-    if (this.active && !this.over && this.vivos === 0 && this.pendingWolves === 0 && this.pendingSpawns.length === 0) {
+    if (
+      this.active &&
+      !this.over &&
+      this.vivos === 0 &&
+      this.pendingWolves === 0 &&
+      this.pendingSpawns.length === 0
+    ) {
       this.hordeTimer += dt;
       if (this.hordeTimer >= Z.hordeDelay) {
         this.hordeTimer = 0;
@@ -774,15 +970,22 @@ export class ZombieNight {
   }
 
   view() {
-    return this.zombies.map((z) => ({
-      id: z.id,
-      p: [round(z.x), round(z.y), round(z.z)],
-      y: round(z.yaw),
-      s: z.state,
-      b: z.burning ? 1 : 0,
-      d: z.dead ? 1 : 0,
-      k: z.kind === "wolf" ? "w" : "z",
-    }));
+    return this.zombies.map((z) => {
+      const row = {
+        id: z.id,
+        p: [round(z.x), round(z.y), round(z.z)],
+        y: round(z.yaw),
+        s: z.state,
+        b: z.burning ? 1 : 0,
+        d: z.dead ? 1 : 0,
+        k:
+          z.kind === "boss" ? "b" : z.kind === "wolf" ? "w" : "z",
+      };
+      if (z.kind === "boss" && z.maxHealth > 0) {
+        row.hp = round(z.health / z.maxHealth);
+      }
+      return row;
+    });
   }
 }
 

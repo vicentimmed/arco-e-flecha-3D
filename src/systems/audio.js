@@ -93,6 +93,37 @@ function makeToneBuffer(ctx, freq, duration) {
  * guincho agudo do pássaro até o berro grave do alce — e é uma função pura do
  * tempo, então não depende de arquivo nenhum e nunca chega atrasada.
  */
+/** Risada instável do chefão — aguda, quebrada, curta. */
+function makeBossLaughBuffer(ctx) {
+  const duration = 1.75;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+  let phase = 0;
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const burst = Math.sin(TAU * 7.5 * t) > 0.15 ? 1 : 0.35;
+    const frequency =
+      420 +
+      180 * Math.sin(TAU * 2.8 * t) +
+      90 * Math.sin(TAU * 11 * t) * (1 - p) +
+      Math.sin(t * 19) * 55;
+    phase += (TAU * frequency) / sampleRate;
+    const voice =
+      Math.sin(phase) * 0.42 +
+      Math.sin(phase * 2.03) * 0.28 +
+      Math.sin(phase * 3.11) * 0.16;
+    const noise = (Math.random() * 2 - 1) * 0.22;
+    const attack = Math.min(1, t / 0.04);
+    const release = Math.pow(1 - p, 1.4);
+    data[i] = (voice + noise) * attack * release * burst;
+  }
+  return buffer;
+}
+
 function makeCryBuffer(ctx, { duration, from, to, vibrato, rasp, growl = 0 }) {
   const sampleRate = ctx.sampleRate;
   const length = Math.floor(sampleRate * duration);
@@ -354,7 +385,13 @@ export class AudioSystem {
        um `PositionalAudio` cria um nó de panner no contexto de áudio, e quem
        nunca entrar no modo zumbi não deve pagar por oito deles. */
     this.dedicated = new Map();
-    this.dedicatedSize = { zombieMoan: 8, elkVoice: 4, wolfHowl: 6 };
+    this.dedicatedSize = {
+      zombieMoan: 8,
+      bossMoan: 2,
+      bossLaugh: 1,
+      elkVoice: 4,
+      wolfHowl: 6,
+    };
 
     this._initBuffers();
 
@@ -493,6 +530,24 @@ export class AudioSystem {
       vibrato: 13,
       rasp: 0.3,
       growl: 0.8,
+    });
+
+    this.buffers.bossMoan = makeCryBuffer(this.ctx, {
+      duration: 2.25,
+      from: 72,
+      to: 46,
+      vibrato: 6,
+      rasp: 0.38,
+      growl: 0.96,
+    });
+    this.buffers.bossLaugh = makeBossLaughBuffer(this.ctx);
+    this.buffers.bossDeath = makeCryBuffer(this.ctx, {
+      duration: 1.45,
+      from: 88,
+      to: 24,
+      vibrato: 8,
+      rasp: 0.42,
+      growl: 1.0,
     });
 
     /* Lobo: fallback sintetizado até os MP3 chegarem. */
@@ -819,14 +874,15 @@ export class AudioSystem {
     if (!buffer) return;
 
     const dedicado = this.dedicatedSize[soundId] !== undefined;
-    this._playClip3D(buffer, position, volume, dedicado ? soundId : null);
+    this._playClip3D(buffer, position, volume, dedicado ? soundId : null, soundId);
   }
 
   /**
    * Toca um buffer já decodificado num ponto 3D.
    * @param {string|null} dedicatedId quando setado, usa o anel dedicado desse som.
+   * @param {string} [soundId] id original — usado só para alcance 3D do chefão.
    */
-  _playClip3D(buffer, position, volume = 1, dedicatedId = null) {
+  _playClip3D(buffer, position, volume = 1, dedicatedId = null, soundId = null) {
     const dedicado = dedicatedId != null;
     const audio = dedicado
       ? this._dedicatedVoice(dedicatedId)
@@ -840,6 +896,18 @@ export class AudioSystem {
 
     audio.setBuffer(buffer);
     audio.setVolume(volume);
+    /* Chefão: gemido longo e grave — precisa atravessar o vale. O pool padrão
+       corta em 80 m; com spawn a ~130 m o som sumia até ele já estar perto. */
+    const id = soundId ?? dedicatedId;
+    if (id === "bossMoan" || id === "bossLaugh" || id === "bossDeath") {
+      audio.setRefDistance(18);
+      audio.setRolloffFactor(0.85);
+      audio.setMaxDistance(220);
+    } else {
+      audio.setRefDistance(3);
+      audio.setRolloffFactor(1.2);
+      audio.setMaxDistance(80);
+    }
     audio.setLoop(false);
     audio.play();
 

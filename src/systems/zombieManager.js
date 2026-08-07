@@ -45,6 +45,7 @@ export class ZombieManager {
       }
 
       if (!bicho) {
+        const isBoss = item.k === "b";
         const isWolf = item.k === "w";
         bicho = isWolf
           ? new Wolf(
@@ -62,13 +63,20 @@ export class ZombieManager {
               zombieEntity(item.id),
               item.p[0],
               item.p[2],
+              { isBoss },
             );
         this.byNetId.set(item.id, bicho);
       }
 
+      /* Snapshot vivo manda: se o cliente matou por otimismo e o servidor
+         ainda não confirmou (ou rejeitou o acerto), o bicho volta. Sem isso
+         o mesh fica tombado e a IA real chega invisível. */
+      if (bicho.dead) bicho.reviveLocal();
+
       if (bicho.kind === "wolf") {
         bicho.setNetworkTarget(item.p, item.y, item.s);
       } else {
+        if (item.hp != null) bicho.setHealth(item.hp);
         bicho.setNetworkTarget(item.p, item.y, item.s, item.b === 1);
       }
     }

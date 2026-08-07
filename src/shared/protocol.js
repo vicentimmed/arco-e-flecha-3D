@@ -184,7 +184,7 @@ export const S2C = {
   ZOMBIES: "zombies",
   /** Zumbi derrubado: `{ id, killer, points, head }`. `head` = pegou fogo. */
   ZOMBIE_DEATH: "zombieDeath",
-  /** Horda nova: `{ n, size }`. Vira a faixa "HORDA n" na tela. */
+  /** Horda nova: `{ n, size, boss? }`. Vira a faixa "HORDA n" na tela. */
   HORDE: "horde",
   /** Estado das quatro tochas: `{ t4: [true,true,false,true] }`.
    *  A chave é `t4` e não `t` porque `t` é o tipo da mensagem — ver o cabeçalho. */

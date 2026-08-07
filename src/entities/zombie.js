@@ -76,6 +76,31 @@ const MAT = {
   }),
 };
 
+/** Materiais do chefão — mais escuro, olhos âmbar. */
+const BOSS_MAT = {
+  flesh: new THREE.MeshStandardMaterial({
+    color: "#1e2418",
+    roughness: 0.99,
+    metalness: 0.04,
+  }),
+  wound: new THREE.MeshStandardMaterial({
+    color: "#0a0606",
+    roughness: 0.88,
+    metalness: 0.06,
+  }),
+  cloth: new THREE.MeshStandardMaterial({ color: "#080a06", roughness: 1.0 }),
+  bone: new THREE.MeshStandardMaterial({
+    color: "#6a5a42",
+    roughness: 0.72,
+    metalness: 0.1,
+  }),
+  eye: new THREE.MeshBasicMaterial({
+    color: CONFIG.modes.zombie.boss?.eyeColor ?? 0xffaa22,
+    fog: false,
+  }),
+  fire: MAT.fire,
+};
+
 /* As geometrias são construídas UMA VEZ e reaproveitadas por todos os zumbis.
    Com 21 em campo, reconstruir seis geometrias por bicho a cada horda seria
    trabalho jogado fora — e um pico de GC bem no instante em que a horda entra. */
@@ -191,12 +216,120 @@ function buildShared() {
   return SHARED;
 }
 
+/** Geometria do chefão — ombros largos, corcova, crânio assimétrico, braços longos. */
+let BOSS_SHARED = null;
+
+function buildBossShared() {
+  if (BOSS_SHARED) return BOSS_SHARED;
+
+  const peito = new THREE.BoxGeometry(0.56, 0.42, 0.3);
+  peito.translate(0.03, 1.24, -0.04);
+
+  const abdomen = new THREE.BoxGeometry(0.38, 0.3, 0.24);
+  abdomen.translate(-0.02, 0.96, 0.02);
+
+  const ombroL = new THREE.SphereGeometry(0.12, 7, 5);
+  ombroL.scale(1.35, 0.95, 1.1);
+  ombroL.translate(-0.34, 1.4, 0.02);
+
+  const ombroR = new THREE.SphereGeometry(0.13, 7, 5);
+  ombroR.scale(1.4, 1.0, 1.12);
+  ombroR.translate(0.36, 1.38, -0.03);
+
+  const quadril = new THREE.BoxGeometry(0.34, 0.18, 0.22);
+  quadril.translate(0, 0.8, 0);
+
+  const coluna = new THREE.BoxGeometry(0.12, 0.52, 0.14);
+  coluna.translate(0.02, 1.12, 0.14);
+
+  const corpo = mergeGeometries([peito, abdomen, ombroL, ombroR, quadril, coluna]);
+
+  const costelas = [];
+  for (let i = 0; i < 6; i++) {
+    const c = new THREE.BoxGeometry(0.024, 0.022, 0.16);
+    c.translate(-0.08 + i * 0.032, 1.16 - i * 0.035, -0.14);
+    costelas.push(c);
+  }
+  const rasgo = new THREE.BoxGeometry(0.18, 0.28, 0.05);
+  rasgo.translate(0.08, 1.1, -0.15);
+  const feridas = mergeGeometries([...costelas, rasgo]);
+
+  const cranio = new THREE.SphereGeometry(0.155, 9, 7);
+  cranio.scale(1.08, 1.22, 0.92);
+  cranio.translate(0.04, 1.72, -0.03);
+
+  const maxila = new THREE.BoxGeometry(0.12, 0.06, 0.1);
+  maxila.translate(0.02, 1.58, -0.12);
+
+  const mandibula = new THREE.BoxGeometry(0.11, 0.05, 0.1);
+  mandibula.translate(-0.02, 1.5, -0.14);
+
+  const pescoco = new THREE.CylinderGeometry(0.055, 0.075, 0.14, 6);
+  pescoco.translate(0, 1.5, 0.03);
+
+  const cabeca = mergeGeometries([cranio, maxila, mandibula, pescoco]);
+
+  const denteL = new THREE.BoxGeometry(0.022, 0.042, 0.02);
+  denteL.translate(-0.035, 1.52, -0.17);
+  const denteR = new THREE.BoxGeometry(0.022, 0.048, 0.02);
+  denteR.translate(0.03, 1.515, -0.17);
+  const osso = mergeGeometries([denteL, denteR]);
+
+  // Olhos maiores na geometria (não via mesh.scale — scale na origem
+  // empurraria os vértices para cima da cabeça).
+  const olhos = mergeGeometries(
+    [-1, 1].map((lado) => {
+      const g = new THREE.SphereGeometry(0.068, 6, 5);
+      g.translate(lado * 0.065, 1.76, -0.12);
+      return g;
+    }),
+  );
+
+  const bracoSup = new THREE.CapsuleGeometry(0.065, 0.28, 3, 6);
+  bracoSup.rotateX(Math.PI / 2);
+  bracoSup.translate(0, 0, -0.18);
+  const cotovelo = new THREE.SphereGeometry(0.058, 6, 4);
+  cotovelo.translate(0, -0.02, -0.42);
+  const bracoInf = new THREE.CapsuleGeometry(0.052, 0.26, 3, 6);
+  bracoInf.rotateX(Math.PI / 2 + 0.12);
+  bracoInf.translate(0, -0.05, -0.62);
+  const mao = new THREE.BoxGeometry(0.1, 0.05, 0.12);
+  mao.translate(0, -0.06, -0.82);
+  const garras = [0, 1, 2].map((i) => {
+    const g = new THREE.ConeGeometry(0.015, 0.09, 4);
+    g.rotateX(Math.PI / 2);
+    g.translate((i - 1) * 0.03, -0.07, -0.92);
+    return g;
+  });
+  const braco = mergeGeometries([bracoSup, cotovelo, bracoInf, mao, ...garras]);
+
+  const coxa = new THREE.CapsuleGeometry(0.08, 0.28, 3, 6);
+  coxa.translate(0, -0.2, 0);
+  const joelho = new THREE.SphereGeometry(0.062, 6, 4);
+  joelho.translate(0, -0.42, 0.02);
+  const canela = new THREE.CapsuleGeometry(0.054, 0.28, 3, 6);
+  canela.translate(0, -0.6, 0);
+  const pe = new THREE.BoxGeometry(0.1, 0.06, 0.22);
+  pe.translate(0, -0.84, -0.05);
+  const perna = mergeGeometries([coxa, joelho, canela, pe]);
+
+  const chama = new THREE.ConeGeometry(0.95, 3.2, 7, 1, true);
+  chama.translate(0, 1.05, 0);
+
+  BOSS_SHARED = { corpo, feridas, cabeca, osso, olhos, braco, perna, chama };
+  return BOSS_SHARED;
+}
+
 export class Zombie {
-  constructor(scene, physics, terrain, entityId, x, z) {
+  constructor(scene, physics, terrain, entityId, x, z, opts = {}) {
     this.scene = scene;
     this.physics = physics;
     this.terrain = terrain;
     this.entityId = entityId;
+    this.isBoss = opts.isBoss === true;
+    this.kind = this.isBoss ? "boss" : "zombie";
+    this.bodyHeight = this.isBoss ? H * (CONFIG.modes.zombie.boss?.scale ?? 8.5) : H;
+    this.health = 1;
     this.netTarget = null;
     this.dead = false;
     this.state = "walk";
@@ -208,6 +341,7 @@ export class Zombie {
     this.deathRoll = 0;
     this.animPhase = Math.random() * Math.PI * 2;
     this.moanTimer = this._nextMoanDelay();
+    this.laughTimer = this.isBoss ? this._nextLaughDelay() : Infinity;
 
     const y = terrain.heightAt(x, z);
     this.position = new THREE.Vector3(x, y, z);
@@ -221,11 +355,18 @@ export class Zombie {
     scene.add(this.group);
 
     const Z = CONFIG.modes.zombie;
+    const scBody = this.isBoss ? Z.boss?.scale ?? 8.5 : 1;
+    const capH = this.bodyHeight / 2 - 0.28 * scBody;
+    const capR = 0.28 * scBody;
     this.body = physics.createBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(x, y + H / 2, z),
+      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
+        x,
+        y + this.bodyHeight / 2,
+        z,
+      ),
     );
     this.collider = physics.createCollider(
-      RAPIER.ColliderDesc.capsule(H / 2 - 0.28, 0.28).setActiveEvents(
+      RAPIER.ColliderDesc.capsule(capH, capR).setActiveEvents(
         RAPIER.ActiveEvents.COLLISION_EVENTS,
       ),
       this.body,
@@ -235,42 +376,34 @@ export class Zombie {
   }
 
   buildMesh() {
-    const S = buildShared();
+    const S = this.isBoss ? buildBossShared() : buildShared();
     const root = new THREE.Group();
+    const mats = this.isBoss ? BOSS_MAT : MAT;
+    const sc = this.isBoss ? (CONFIG.modes.zombie.boss?.scale ?? 8.5) : 1;
 
-    /* LOD (ver `utils/lod.js`). Aqui ele é DESENHADO PELA NÉVOA, não escolhido:
-       com `fogDensityNight` a 0,017, um corpo a 60 m já está 65 % apagado e a
-       80 m não existe mais na imagem. Desenhá-lo é pagar cinco chamadas por
-       zumbi para pintar névoa. Na horda 10 são 21 bichos — cem chamadas.
-
-       Os OLHOS ficam de fora das duas listas de propósito: eles têm
-       `fog: false` e continuam visíveis até o nível 3. É a regra do modo — a
-       horda se anuncia como pares de pontos vermelhos vindo do breu, muito
-       antes de haver corpo para mirar. Cortá-los junto com o corpo mataria o
-       modo para economizar uma chamada de desenho. */
     this.lodDetail = null;
     this.lodBulk = [];
 
-    this.corpo = new THREE.Mesh(S.corpo, MAT.flesh);
+    this.corpo = new THREE.Mesh(S.corpo, mats.flesh);
     this.corpo.castShadow = true;
     root.add(this.corpo);
     this.lodBulk.push(this.corpo);
 
-    this.feridas = new THREE.Mesh(S.feridas, MAT.wound);
+    this.feridas = new THREE.Mesh(S.feridas, mats.wound);
     this.feridas.castShadow = true;
     root.add(this.feridas);
     this.lodBulk.push(this.feridas);
 
-    this.cabeca = new THREE.Mesh(S.cabeca, MAT.flesh);
+    this.cabeca = new THREE.Mesh(S.cabeca, mats.flesh);
     this.cabeca.castShadow = true;
     root.add(this.cabeca);
     this.lodBulk.push(this.cabeca);
 
-    this.osso = new THREE.Mesh(S.osso, MAT.bone);
+    this.osso = new THREE.Mesh(S.osso, mats.bone);
     root.add(this.osso);
     this.lodBulk.push(this.osso);
 
-    this.olhos = new THREE.Mesh(S.olhos, MAT.eye);
+    this.olhos = new THREE.Mesh(S.olhos, mats.eye);
     // Nunca descartado pelo frustum: os olhos são pontos de 3 cm a 40 m de
     // distância, e o teste por caixa envolvente os elimina em ângulos rasantes
     // justamente quando eles são a única coisa visível do bicho.
@@ -279,10 +412,15 @@ export class Zombie {
     root.add(this.olhos);
 
     this.bracos = [];
+    // Posições em espaço local do root — o `root.scale` já aplica o tamanho do
+    // chefão. Multiplicar de novo por `sc` empurrava os braços para cima da
+    // cabeça (pareciam chifres flutuando).
+    const ombroX = this.isBoss ? 0.34 : 0.24;
+    const ombroY = this.isBoss ? 1.38 : 1.36;
     for (const lado of [-1, 1]) {
       const b = new THREE.Group();
-      b.position.set(lado * 0.24, 1.36, 0);
-      const m = new THREE.Mesh(S.braco, MAT.cloth);
+      b.position.set(lado * ombroX, ombroY, 0);
+      const m = new THREE.Mesh(S.braco, mats.cloth);
       m.castShadow = true;
       b.add(m);
       // Braços esticados para a frente, um pouco abertos: a pose que se lê como
@@ -298,7 +436,7 @@ export class Zombie {
     for (const lado of [-1, 1]) {
       const p = new THREE.Group();
       p.position.set(lado * 0.1, 0.88, 0);
-      const m = new THREE.Mesh(S.perna, MAT.cloth);
+      const m = new THREE.Mesh(S.perna, mats.cloth);
       m.castShadow = true;
       p.add(m);
       root.add(p);
@@ -306,7 +444,7 @@ export class Zombie {
       this.lodBulk.push(p);
     }
 
-    this.chama = new THREE.Mesh(S.chama, MAT.fire);
+    this.chama = new THREE.Mesh(S.chama, mats.fire);
     this.chama.visible = false;
     this.chama.frustumCulled = false;
     this.chama.renderOrder = 6;
@@ -314,11 +452,34 @@ export class Zombie {
 
     this.group.add(root);
     this.visualRoot = root;
+    if (this.isBoss) {
+      root.scale.set(sc, sc, sc);
+      root.rotation.x = 0.28;
+    }
   }
 
   _nextMoanDelay() {
     const Z = CONFIG.modes.zombie;
+    if (this.isBoss) {
+      const B = Z.boss ?? {};
+      return (
+        (B.moanMinInterval ?? 1.8) +
+        Math.random() * ((B.moanMaxInterval ?? 3.5) - (B.moanMinInterval ?? 1.8))
+      );
+    }
     return Z.moanMinInterval + Math.random() * (Z.moanMaxInterval - Z.moanMinInterval);
+  }
+
+  _nextLaughDelay() {
+    const B = CONFIG.modes.zombie.boss ?? {};
+    return (
+      (B.laughMinInterval ?? 18) +
+      Math.random() * ((B.laughMaxInterval ?? 35) - (B.laughMinInterval ?? 18))
+    );
+  }
+
+  setHealth(frac) {
+    if (typeof frac === "number") this.health = Math.max(0, Math.min(1, frac));
   }
 
   /* -------------------------------------------------------------- impacto -- */
@@ -332,6 +493,7 @@ export class Zombie {
     gameEvents.emit(EventType.ZOMBIE_HIT, {
       zombieId: this.entityId,
       head,
+      boss: this.isBoss,
       impact: vec3Payload(impact),
       arrowId: arrow?.id,
       ownerId: arrow?.ownerEntityId ?? null,
@@ -358,6 +520,7 @@ export class Zombie {
     this.dead = true;
     this.state = "dead";
     this.speed = 0;
+    this.collider?.setEnabled(false);
     if (head) {
       this.burning = true;
       this.burnTime = 0;
@@ -382,10 +545,36 @@ export class Zombie {
       });
     }
     gameEvents.emit(EventType.AUDIO_PLAY, {
-      sound: "zombieDeath",
+      sound: this.isBoss ? "bossDeath" : "zombieDeath",
       position: vec3Payload(this.position),
-      volume: 1.0,
+      volume: this.isBoss ? 2.2 : 1.0,
     });
+  }
+
+  /**
+   * Desfaz kill otimista quando o servidor ainda manda o bicho vivo.
+   * Sem isso o mesh fica morto no cliente enquanto a IA real continua andando.
+   */
+  reviveLocal() {
+    if (!this.dead) return;
+    this.dead = false;
+    this.state = "walk";
+    this.speed = 0;
+    this.burning = false;
+    this.burnTime = 0;
+    this.deathRoll = 0;
+    if (this.visualRoot) {
+      this.visualRoot.rotation.x = this.isBoss ? 0.28 : 0.18;
+      this.visualRoot.rotation.z = 0;
+      this.visualRoot.position.y = 0;
+    }
+    if (this.chama) {
+      this.chama.visible = false;
+      this.chama.material.opacity = 0.92;
+    }
+    this.collider?.setEnabled(true);
+    this.group.visible = true;
+    this._lod = undefined;
   }
 
   dispose() {
@@ -449,6 +638,7 @@ export class Zombie {
 
     this.animate(dt);
     this.updateMoan(dt);
+    if (this.isBoss) this.updateLaugh(dt);
     this.cullEyes(camera);
     this.syncPhysics();
   }
@@ -531,7 +721,8 @@ export class Zombie {
 
     // O tronco pende e balança: o zumbi não tem tônus, ele se joga para a frente
     // e o corpo acompanha meio passo atrasado.
-    this.visualRoot.rotation.x = 0.18 + Math.sin(this.animPhase * 2) * 0.04;
+    const lean = this.isBoss ? 0.28 : 0.18;
+    this.visualRoot.rotation.x = lean + Math.sin(this.animPhase * 2) * 0.04;
     this.visualRoot.rotation.z = Math.sin(this.animPhase) * 0.08;
 
     // Os braços oscilam pouco e fora de fase com as pernas.
@@ -546,21 +737,38 @@ export class Zombie {
     }
   }
 
-  /** O gemido. Sorteado LOCALMENTE, como o ronco do porco — é som ambiente. */
+  /** Gemido (ou risada rara no chefão). */
   updateMoan(dt) {
     this.moanTimer -= dt;
     if (this.moanTimer > 0) return;
     this.moanTimer = this._nextMoanDelay();
+    const B = CONFIG.modes.zombie.boss ?? {};
     gameEvents.emit(EventType.AUDIO_PLAY, {
-      sound: "zombieMoan",
+      sound: this.isBoss ? "bossMoan" : "zombieMoan",
       position: vec3Payload(this.position),
-      volume: CONFIG.modes.zombie.moanVolume,
+      volume: this.isBoss ? (B.moanVolume ?? 2.8) : CONFIG.modes.zombie.moanVolume,
+    });
+  }
+
+  updateLaugh(dt) {
+    this.laughTimer -= dt;
+    if (this.laughTimer > 0) return;
+    this.laughTimer = this._nextLaughDelay();
+    const B = CONFIG.modes.zombie.boss ?? {};
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "bossLaugh",
+      position: vec3Payload(this.position),
+      volume: B.laughVolume ?? 1.35,
     });
   }
 
   syncPhysics() {
     this.body.setTranslation(
-      { x: this.position.x, y: this.position.y + H / 2, z: this.position.z },
+      {
+        x: this.position.x,
+        y: this.position.y + this.bodyHeight / 2,
+        z: this.position.z,
+      },
       true,
     );
   }

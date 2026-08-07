@@ -472,11 +472,34 @@ export class Wolf {
     this.dead = true;
     this.state = "dead";
     this.speed = 0;
+    // Cadáver não recebe flecha nem bloqueia o mundo — senão o próximo tiro
+    // "acerta" um corpo morto e o lobo vivo (servidor) segue invisível.
+    this.collider?.setEnabled(false);
     gameEvents.emit(EventType.AUDIO_PLAY, {
       sound: "wolfDeath",
       position: vec3Payload(this.position),
       volume: 2.0,
     });
+  }
+
+  /**
+   * O cliente pode ter matado por otimismo (feedback imediato do tiro). Se o
+   * servidor ainda manda o lobo vivo, ele TEM de voltar — senão o mesh fica
+   * tombado no chão enquanto a IA real chega e mata sem silhueta.
+   */
+  reviveLocal() {
+    if (!this.dead) return;
+    this.dead = false;
+    this.state = "walk";
+    this.speed = 0;
+    this.deathRoll = 0;
+    if (this.visualRoot) {
+      this.visualRoot.rotation.z = 0;
+      this.visualRoot.position.y = 0;
+    }
+    this.collider?.setEnabled(true);
+    this.group.visible = true;
+    this._lod = undefined;
   }
 
   dispose() {

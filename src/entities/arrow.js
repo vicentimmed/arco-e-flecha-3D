@@ -390,6 +390,7 @@ export class Arrow {
     // Não colide mais com nada (nem gera eventos).
     this.collider.setCollisionGroups(0);
     this.collider.setActiveEvents(0);
+    this.collider.setEnabled(false);
     this.physics.unregister(this.collider);
 
     if (isDynamic && otherBody) {

@@ -4,6 +4,7 @@
 
 import { RAPIER } from "./physics.js";
 import { CONFIG } from "../config.js";
+import { RECEITAS } from "../systems/impactFx.js";
 import { gameEvents, EventType, vec3Payload } from "./events.js";
 
 const _impulse = { x: 0, y: 0, z: 0 };
@@ -213,14 +214,31 @@ function resolveZombieHit({ arrow, other, impact, deps }) {
   const zombie = other.zombie;
   if (!zombie || zombie.dead) return null;
 
-  const head = impact.y - zombie.position.y >= CONFIG.modes.zombie.headMinY;
+  const headMin = zombie.isBoss
+    ? (CONFIG.modes.zombie.boss?.headMinY ?? CONFIG.modes.zombie.headMinY * 8.5)
+    : CONFIG.modes.zombie.headMinY;
+  const head = impact.y - zombie.position.y >= headMin;
   zombie.registerHit(impact, arrow, head);
+  const label = zombie.isBoss
+    ? head
+      ? "chefão (cabeça)"
+      : "chefão"
+    : head
+      ? "zumbi (cabeça)"
+      : "zumbi";
   emitImpact(arrow, "zombie", zombie.entityId, impact, null, {
-    label: head ? "zumbi (cabeça)" : "zumbi",
+    label,
     head,
     hit: true,
   });
   deps.spawnPuff?.(impact, null);
+  if (zombie.isBoss) {
+    gameEvents.emit(EventType.PARTICLES, {
+      ...RECEITAS.boss,
+      position: vec3Payload(impact),
+      direction: { x: 0, y: 1, z: 0 },
+    });
+  }
 
   arrow.stick(zombie.body, true, zombie);
   deps.retireArrow?.(arrow);
@@ -228,6 +246,7 @@ function resolveZombieHit({ arrow, other, impact, deps }) {
     kind: "zombie",
     entityId: zombie.entityId,
     head,
+    boss: zombie.isBoss === true,
     speed: arrow.launchSpeed ?? 0,
   };
 }

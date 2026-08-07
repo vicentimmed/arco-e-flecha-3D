@@ -296,6 +296,9 @@ export class Input {
         case "Digit6":
           this.actions.setMode = "zombie";
           break;
+        case "Digit7":
+          this.actions.setMode = "zombieBoss";
+          break;
         case "KeyC":
           this.firstPerson = true;
           break;

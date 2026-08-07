@@ -22,7 +22,7 @@
 import { gameEvents, EventType } from "../core/events.js";
 
 /** Receitas por tipo de alvo. A chave é o `targetKind` do evento de impacto. */
-const RECEITAS = {
+export const RECEITAS = {
   // Terra levantada: muitas partículas, pesadas, que caem rápido e curto.
   terrain: {
     count: 12,
@@ -125,6 +125,19 @@ const RECEITAS = {
     gravity: -5,
     drag: 2.0,
     alpha: 0.7,
+  },
+  boss: {
+    count: 22,
+    color: 0xffaa44,
+    speed: 3.2,
+    spread: 1.0,
+    size: 0.1,
+    grow: 0.6,
+    life: 0.45,
+    gravity: -2,
+    drag: 1.8,
+    alpha: 1,
+    additive: true,
   },
   // Tocha: fagulhas. A única receita aditiva — ela EMITE luz.
   torch: {

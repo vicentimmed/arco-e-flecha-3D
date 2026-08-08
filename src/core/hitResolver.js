@@ -4,7 +4,6 @@
 
 import { RAPIER } from "./physics.js";
 import { CONFIG } from "../config.js";
-import { RECEITAS } from "../systems/impactFx.js";
 import { gameEvents, EventType, vec3Payload } from "./events.js";
 
 const _impulse = { x: 0, y: 0, z: 0 };
@@ -232,13 +231,7 @@ function resolveZombieHit({ arrow, other, impact, deps }) {
     hit: true,
   });
   deps.spawnPuff?.(impact, null);
-  if (zombie.isBoss) {
-    gameEvents.emit(EventType.PARTICLES, {
-      ...RECEITAS.boss,
-      position: vec3Payload(impact),
-      direction: { x: 0, y: 1, z: 0 },
-    });
-  }
+  // Partículas do chefão saem de spawnBossFlash (local + rede), para todos verem.
 
   arrow.stick(zombie.body, true, zombie);
   deps.retireArrow?.(arrow);

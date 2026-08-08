@@ -951,6 +951,20 @@ export class Room {
     const isWolf = r.zombie.kind === "wolf";
     const isBoss = r.zombie.kind === "boss";
 
+    /* Clarão de impacto do chefão: quem atirou já viu localmente; os outros
+       recebem o evento da sala (mesmo padrão do berro do alce em ELK_HIT). */
+    if (isBoss) {
+      this.broadcast(
+        {
+          t: S2C.ZOMBIE_HIT,
+          id,
+          c: Array.isArray(msg.c) ? msg.c : null,
+          head: r.head === true,
+        },
+        player.id,
+      );
+    }
+
     if (!r.morreu) {
       if (isBoss) {
         this.broadcastAll({ t: S2C.ZOMBIES, time: this.now(), z: this.zombies.view() });

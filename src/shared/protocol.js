@@ -91,7 +91,7 @@ export const C2S = {
   WIND: "wind",
   /** Zerar o placar de todos. */
   RESET_SCORES: "resetScores",
-  /** "Acertei este zumbi": `{ id, head, d }`. `head` decide se morre na hora. */
+  /** "Acertei este zumbi": `{ id, head, d, v, c? }`. `c` = contato (chefão). */
   ZOMBIE_HIT: "zombieHit",
   /** "Matei este zumbi/lobo com a faca": `{ id, d }`. */
   KNIFE_HIT: "knifeHit",
@@ -190,6 +190,8 @@ export const S2C = {
   SCORES_RESET: "scoresReset",
   /** Transformações dos zumbis, 10 Hz: `{ z: [...] }`. */
   ZOMBIES: "zombies",
+  /** Chefão levou flecha: `{ id, c?, head }` — clarão vermelho nas outras telas. */
+  ZOMBIE_HIT: "zombieHit",
   /** Zumbi derrubado: `{ id, killer, points, head }`. `head` = pegou fogo. */
   ZOMBIE_DEATH: "zombieDeath",
   /** Horda nova: `{ n, size, boss? }`. Vira a faixa "HORDA n" na tela. */

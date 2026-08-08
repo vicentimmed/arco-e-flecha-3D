@@ -76,24 +76,59 @@ const MAT = {
   }),
 };
 
-/** Materiais do chefão — mais escuro, olhos âmbar. */
+/**
+ * Rim light no mesh do chefão — o mesmo truque do arqueiro (`player.js`):
+ * só as bordas onde a normal é perpendicular ao olhar. Sem aura, sem luz
+ * extra: o corpo continua escuro, mas a silhueta se lê no breu.
+ */
+function withBossRimLight(material, forca) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.rimStrength = { value: forca };
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <opaque_fragment>",
+      `{
+         vec3 rimV = normalize( vViewPosition );
+         float rim = pow( 1.0 - abs( dot( normalize( normal ), rimV ) ), 3.0 );
+         outgoingLight += vec3( 0.62, 0.74, 1.0 ) * rim * rimStrength;
+       }
+       #include <opaque_fragment>`,
+    );
+  };
+  material.customProgramCacheKey = () => `boss-rim-${forca}`;
+  return material;
+}
+
+/** Materiais do chefão — escuros, olhos âmbar, rim light de silhueta. */
+const BOSS_RIM = CONFIG.modes.zombie.boss?.rimStrength ?? 0.34;
 const BOSS_MAT = {
-  flesh: new THREE.MeshStandardMaterial({
-    color: "#1e2418",
-    roughness: 0.99,
-    metalness: 0.04,
-  }),
-  wound: new THREE.MeshStandardMaterial({
-    color: "#0a0606",
-    roughness: 0.88,
-    metalness: 0.06,
-  }),
-  cloth: new THREE.MeshStandardMaterial({ color: "#080a06", roughness: 1.0 }),
-  bone: new THREE.MeshStandardMaterial({
-    color: "#6a5a42",
-    roughness: 0.72,
-    metalness: 0.1,
-  }),
+  flesh: withBossRimLight(
+    new THREE.MeshStandardMaterial({
+      color: "#1e2418",
+      roughness: 0.99,
+      metalness: 0.04,
+    }),
+    BOSS_RIM,
+  ),
+  wound: withBossRimLight(
+    new THREE.MeshStandardMaterial({
+      color: "#0a0606",
+      roughness: 0.88,
+      metalness: 0.06,
+    }),
+    BOSS_RIM * 0.85,
+  ),
+  cloth: withBossRimLight(
+    new THREE.MeshStandardMaterial({ color: "#080a06", roughness: 1.0 }),
+    BOSS_RIM * 0.9,
+  ),
+  bone: withBossRimLight(
+    new THREE.MeshStandardMaterial({
+      color: "#6a5a42",
+      roughness: 0.72,
+      metalness: 0.1,
+    }),
+    BOSS_RIM * 0.75,
+  ),
   eye: new THREE.MeshBasicMaterial({
     color: CONFIG.modes.zombie.boss?.eyeColor ?? 0xffaa22,
     fog: false,
@@ -329,6 +364,8 @@ export class Zombie {
     this.isBoss = opts.isBoss === true;
     this.kind = this.isBoss ? "boss" : "zombie";
     this.bodyHeight = this.isBoss ? H * (CONFIG.modes.zombie.boss?.scale ?? 8.5) : H;
+    /* Chefão: LOD bem mais largo — a silhueta precisa sobreviver a 100+ m. */
+    this.lodScale = this.isBoss ? (CONFIG.modes.zombie.boss?.lodScale ?? 5) : 1;
     this.health = 1;
     this.netTarget = null;
     this.dead = false;
@@ -342,6 +379,8 @@ export class Zombie {
     this.animPhase = Math.random() * Math.PI * 2;
     this.moanTimer = this._nextMoanDelay();
     this.laughTimer = this.isBoss ? this._nextLaughDelay() : Infinity;
+    /** Brilho vermelho de impacto no mesh do chefão (s). */
+    this._hitGlow = 0;
 
     const y = terrain.heightAt(x, z);
     this.position = new THREE.Vector3(x, y, z);
@@ -502,6 +541,53 @@ export class Zombie {
     });
   }
 
+  /**
+   * Brilho vermelho no corpo do chefão — dura o suficiente para ler o hit
+   * de longe, mesmo quando o clarão da PointLight já sumiu.
+   */
+  flashHit() {
+    if (!this.isBoss) return;
+    const F = CONFIG.modes.zombie.boss?.hitFlash ?? {};
+    this._hitGlow = F.meshLife ?? 0.42;
+    const color = F.meshEmissive ?? 0xff1808;
+    const peak = F.meshIntensity ?? 3.2;
+    for (const key of ["flesh", "wound", "cloth", "bone"]) {
+      const mat = BOSS_MAT[key];
+      if (!mat?.emissive) continue;
+      mat.emissive.setHex(color);
+      mat.emissiveIntensity = peak;
+    }
+  }
+
+  /** Aplica / esvai o emissive compartilhado do chefão. */
+  updateHitGlow(dt) {
+    if (!this.isBoss || this._hitGlow <= 0) return;
+    const F = CONFIG.modes.zombie.boss?.hitFlash ?? {};
+    const life = F.meshLife ?? 0.42;
+    this._hitGlow = Math.max(0, this._hitGlow - dt);
+    const p = this._hitGlow / life;
+    const peak = F.meshIntensity ?? 3.2;
+    const color = F.meshEmissive ?? 0xff1808;
+    const inten = peak * p * p;
+    for (const key of ["flesh", "wound", "cloth", "bone"]) {
+      const mat = BOSS_MAT[key];
+      if (!mat?.emissive) continue;
+      mat.emissive.setHex(color);
+      mat.emissiveIntensity = inten;
+    }
+    if (this._hitGlow <= 0) this._clearHitGlow();
+  }
+
+  _clearHitGlow() {
+    this._hitGlow = 0;
+    for (const key of ["flesh", "wound", "cloth", "bone"]) {
+      const mat = BOSS_MAT[key];
+      if (!mat?.emissive) continue;
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+    }
+  }
+
   /* -------------------------------------------------------------- em rede -- */
 
   setNetworkTarget(p, yaw, state, burning) {
@@ -547,7 +633,7 @@ export class Zombie {
     gameEvents.emit(EventType.AUDIO_PLAY, {
       sound: this.isBoss ? "bossDeath" : "zombieDeath",
       position: vec3Payload(this.position),
-      volume: this.isBoss ? 2.2 : 1.0,
+      volume: this.isBoss ? 1.35 : 1.0,
     });
   }
 
@@ -578,6 +664,7 @@ export class Zombie {
   }
 
   dispose() {
+    if (this.isBoss) this._clearHitGlow();
     this.physics.unregister(this.collider);
     this.physics.removeBody(this.body);
     entityRegistry.unregister(this.entityId);
@@ -615,6 +702,7 @@ export class Zombie {
   }
 
   update(dt, camera) {
+    if (this.isBoss) this.updateHitGlow(dt);
     if (this.dead) {
       this.updateDeath(dt);
       this.cullEyes(camera);
@@ -746,7 +834,7 @@ export class Zombie {
     gameEvents.emit(EventType.AUDIO_PLAY, {
       sound: this.isBoss ? "bossMoan" : "zombieMoan",
       position: vec3Payload(this.position),
-      volume: this.isBoss ? (B.moanVolume ?? 2.8) : CONFIG.modes.zombie.moanVolume,
+      volume: this.isBoss ? (B.moanVolume ?? 1.45) : CONFIG.modes.zombie.moanVolume,
     });
   }
 
@@ -758,7 +846,7 @@ export class Zombie {
     gameEvents.emit(EventType.AUDIO_PLAY, {
       sound: "bossLaugh",
       position: vec3Payload(this.position),
-      volume: B.laughVolume ?? 1.35,
+      volume: B.laughVolume ?? 1.25,
     });
   }
 

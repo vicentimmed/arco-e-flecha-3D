@@ -85,6 +85,7 @@ export function applyLod(entity, nivel) {
 export function updateLodMap(mapa, cameraPos, escala = 1) {
   if (!cameraPos) return;
   for (const e of mapa.values()) {
-    applyLod(e, lodLevel(e.position.distanceTo(cameraPos), e._lod ?? 0, escala));
+    const sc = e.lodScale ?? escala;
+    applyLod(e, lodLevel(e.position.distanceTo(cameraPos), e._lod ?? 0, sc));
   }
 }

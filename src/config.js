@@ -733,12 +733,16 @@ export const CONFIG = {
         points: 500,
         headBonusPoints: 200,
         eyeColor: 0xffaa22,
+        /* LOD: o colosso precisa permanecer legível bem além dos zumbis comuns. */
+        lodScale: 5,
+        /* Rim light no mesh (mesmo truque do arqueiro) — contorno no breu. */
+        rimStrength: 0.34,
         moanMinInterval: 1.8,
         moanMaxInterval: 3.5,
-        moanVolume: 2.8,
+        moanVolume: 1.45,
         laughMinInterval: 18,
         laughMaxInterval: 35,
-        laughVolume: 2.4,
+        laughVolume: 1.25,
         /* Matilhas de escolta: nascem no corredor do chefão, não na arena.
            pack = min(packMax, packBase + packPerPlayer × (N − 1)). */
         wolves: {
@@ -753,14 +757,17 @@ export const CONFIG = {
           spawnOffsetMax: 36,
           spawnLateral: 8,
         },
-        /* Flash no impacto: clarão que revela o corpo inteiro à distância. */
+        /* Flash no impacto: clarão vermelho visível de longe — todos veem o hit. */
         hitFlash: {
-          color: 0xffdd88,
-          intensity: 360,
-          fillIntensity: 0.55,
-          range: 95,
-          decay: 1.05,
-          life: 0.38,
+          color: 0xff1a14,
+          intensity: 520,
+          fillIntensity: 0.72,
+          range: 150,
+          decay: 0.85,
+          life: 0.48,
+          meshEmissive: 0xff1808,
+          meshIntensity: 3.2,
+          meshLife: 0.42,
         },
         /* Tempestade só no chefão: nuvens escuras + raios volumétricos + trovão.
            Chuva opcional = Points leves (~48 gotas, 1 draw). */

@@ -29,7 +29,7 @@ import { Input } from "./systems/input.js";
 import { PlayerPhysics } from "./systems/playerPhysics.js";
 import { AudioSystem } from "./systems/audio.js";
 import { ParticleSystem } from "./systems/particles.js";
-import { installImpactEffects } from "./systems/impactFx.js";
+import { installImpactEffects, RECEITAS } from "./systems/impactFx.js";
 import { BoarManager } from "./systems/boarManager.js";
 import { ElkManager } from "./systems/elkManager.js";
 import { BirdManager } from "./systems/birdManager.js";
@@ -295,12 +295,17 @@ class Game {
       const fullDraw = (e.speed ?? 0) >= limiar;
       // Lobo, headshot ou tensão máxima: caem na hora — chefão só cai no servidor.
       if (e.wolf || (!e.boss && (e.head || fullDraw))) this.zombies.kill(id, e.head === true);
-      this.net.send(C2S.ZOMBIE_HIT, {
+      const payload = {
         id,
         head: e.head === true,
         d: Math.round(e.distance * 100) / 100,
         v: Math.round((e.speed ?? 0) * 10) / 10,
-      });
+      };
+      /* Ponto de contato: as outras telas usam para o clarão vermelho do chefão. */
+      if (e.boss && e.impact) {
+        payload.c = [mm(e.impact.x), mm(e.impact.y), mm(e.impact.z)];
+      }
+      this.net.send(C2S.ZOMBIE_HIT, payload);
     });
 
     /* Tocha acertada. Sai do impacto e não de um evento próprio porque não há
@@ -672,6 +677,21 @@ class Game {
     net.on(S2C.ZOMBIES, (msg) => {
       if (msg.clear) this.zombies.clear();
       else this.zombies.applyNetwork(msg.z);
+    });
+
+    /* Clarão vermelho do chefão nas telas de quem NÃO atirou. Quem atirou
+       já viu no evento local — este pacote é só para o resto da sala. */
+    net.on(S2C.ZOMBIE_HIT, (msg) => {
+      const boss = this.zombies.byNetId.get(msg.id);
+      if (!boss || boss.kind !== "boss") return;
+      const impact = Array.isArray(msg.c)
+        ? { x: msg.c[0], y: msg.c[1], z: msg.c[2] }
+        : {
+            x: boss.position.x,
+            y: boss.position.y + (boss.bodyHeight ?? 15) * 0.55,
+            z: boss.position.z,
+          };
+      this.spawnBossFlash(impact, msg.id);
     });
 
     net.on(S2C.ZOMBIE_DEATH, (msg) => {
@@ -1542,22 +1562,22 @@ class Game {
     return false;
   }
 
-  /** Flash de luz no impacto de flecha no chefão (sem sombra). */
+  /** Flash vermelho no impacto de flecha no chefão — luz + mesh + partículas. */
   spawnBossFlash(impact, zombieId = null) {
     const F = CONFIG.modes.zombie.boss?.hitFlash ?? {};
-    const peak = F.intensity ?? 360;
-    const range = F.range ?? 95;
-    const decay = F.decay ?? 1.05;
-    const life = F.life ?? 0.38;
-    const color = F.color ?? 0xffdd88;
+    const peak = F.intensity ?? 520;
+    const range = F.range ?? 150;
+    const decay = F.decay ?? 0.85;
+    const life = F.life ?? 0.48;
+    const color = F.color ?? 0xff1a14;
 
     this._pushBossFlashLight(impact.x, impact.y + 0.4, impact.z, peak, range, decay, life, color);
 
     /* Segunda luz no tronco: o impacto acende um ponto; esta revela o corpo
        inteiro quando o tiro vem de longe. */
     const boss = zombieId != null ? this.zombies.byNetId.get(zombieId) : null;
-    if (boss && !boss.dead) {
-      const fill = peak * (F.fillIntensity ?? 0.55);
+    if (boss) {
+      const fill = peak * (F.fillIntensity ?? 0.72);
       const torsoY = boss.position.y + (boss.bodyHeight ?? 15) * 0.52;
       this._pushBossFlashLight(
         boss.position.x,
@@ -1569,7 +1589,15 @@ class Game {
         life,
         color,
       );
+      boss.flashHit?.();
     }
+
+    /* Fagulhas vermelhas no ponto do acerto — leem de longe como “hit”. */
+    gameEvents.emit(EventType.PARTICLES, {
+      ...RECEITAS.boss,
+      position: vec3Payload(impact),
+      direction: { x: 0, y: 1, z: 0 },
+    });
   }
 
   _pushBossFlashLight(x, y, z, peak, range, decay, life, color) {

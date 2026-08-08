@@ -883,14 +883,14 @@ export const CONFIG = {
      investida a tempo. É por isso que ele acumula flechas cravadas no corpo em
      vez de morrer no primeiro acerto: a barra de vida é o cronômetro da briga. */
   elk: {
-    /* Vida base = 20 flechas × 1 jogador. No spawn do modo multiplica por N. */
-    arrowsToKillPerPlayer: 20,
-    arrowDamage: 5, // ⇒ 20 flechas por jogador (vida = damage × 20 × N)
-    maxHealth: 100, // fallback / alce fun (1 jogador)
+    /* Vida base = 12 flechas × 1 jogador. No spawn do modo multiplica por N. */
+    arrowsToKillPerPlayer: 12,
+    arrowDamage: 5, // ⇒ 12 flechas por jogador (vida = damage × 12 × N)
+    maxHealth: 60, // fallback / alce fun (1 jogador)
 
     /* ------------------------------------------------------------- ritmo --- */
     walkSpeed: 2.6, // m/s — pastando
-    fleeSpeed: 12.0, // m/s — fugindo (era 15; demais na subida da trilha)
+    fleeSpeed: 7.2, // m/s — fugindo (−40% vs 12; era 15 antes do primeiro ajuste)
     chargeSpeed: 12.5, // m/s — investida
     chargeSpeedPerHit: 0.3, // m/s a mais por flecha levada
     chargeSpeedMax: 14.5, // m/s
@@ -908,8 +908,8 @@ export const CONFIG = {
 
     /* ----------------------------------------------------- lobos do alce --- */
     wolfSummonHealth: 0.7, // fração de vida: chama a primeira horda
-    wolfPackBase: 4,
-    wolfPackPerPlayer: 2, // total = base + perPlayer × (N − 1)
+    wolfPackBase: 2,
+    wolfPackPerPlayer: 1, // total = base + perPlayer × (N − 1) — −40% vs 4+2(N−1)
     wolfWaveGap: 8, // s entre ondas se a pack foi limpa e vida ≤ limiar
     /* Limpar a matilha não basta para chamar a próxima: o alce precisa levar
        mais flechas. Sem isso, quem matasse os lobos e recuasse via matilha nova
@@ -920,9 +920,9 @@ export const CONFIG = {
     wolfSpawnRadiusMin: 5, // m — alguns mais perto do alce
     wolfSpawnRadiusMax: 14, // m — outros nascem longe e demoram a chegar
     wolfSpawnStagger: 1.2, // s entre cada lobo da onda
-    // Modo alce (e demais fora do zumbi): mais rápido (3× legacy).
-    wolfSpeed: WOLF_SPEED_FAST,
-    wolfLeapSpeed: WOLF_LEAP_FAST,
+    // Modo alce: WOLF_SPEED_FAST − 30%.
+    wolfSpeed: WOLF_SPEED_FAST * 0.7,
+    wolfLeapSpeed: WOLF_LEAP_FAST * 0.7,
     wolfAI: {
       turnRateMax: 3.2,
       turnRateMin: 1.1,
@@ -978,8 +978,8 @@ export const CONFIG = {
 
     /* --------------------------------------------------- desvio de flecha --- */
     // Gradual com a vida: quase não desvia intacto; perto da morte esquiva muito.
-    dodgeChance: 0.08,
-    dodgeChanceAtDeath: 0.88,
+    dodgeChance: 0.0273, // proporcional a 8/88 com dodgeChanceAtDeath = 30%
+    dodgeChanceAtDeath: 0.30,
     dodgeRadius: 2.5, // m — distância mínima da trajetória ao corpo
     dodgeLeadTime: 0.9, // s — ETA máxima para considerar ameaça
     dodgeDuration: 0.65, // s

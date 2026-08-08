@@ -2,7 +2,7 @@
    O alce, no servidor.
 
    CHEFÃO: mira com lead, reinveste após miss, desvia flechas às vezes, e a
-   vida escala com o número de jogadores (20 flechas × N).
+   vida escala com o número de jogadores (12 flechas × N).
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";

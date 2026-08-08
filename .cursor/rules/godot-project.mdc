@@ -1,0 +1,17 @@
+---
+description: Orientações permanentes para o cliente Godot e o protótipo Arco & Flecha
+alwaysApply: true
+---
+
+# Regra Godot do projeto
+
+- Leia esta regra antes de alterar o protótipo ou qualquer futura parte Godot do jogo.
+- Antes de cada tarefa, consulte o [arquivo oficial de releases](https://godotengine.org/download/archive/) e use a versão estável mais recente disponível. Nunca escolha dev, beta ou release candidate.
+- Confirme a versão instalada com `godot --version`. Se a versão estável mudou, atualize somente após importar, executar os testes e verificar a compatibilidade do projeto.
+- Consulte a [documentação estável do Godot](https://docs.godotengine.org/en/stable/), não `/en/latest/` quando ela apontar para conteúdo instável.
+- Use como referências primárias: [GDScript](https://docs.godotengine.org/en/stable/tutorials/scripting/gdscript/index.html), [classes](https://docs.godotengine.org/en/stable/classes/index.html), [Project Manager](https://docs.godotengine.org/en/stable/tutorials/editor/project_manager.html), [linha de comando](https://docs.godotengine.org/en/stable/tutorials/editor/command_line_tutorial.html), [Project Settings](https://docs.godotengine.org/en/stable/tutorials/editor/project_settings.html), [física](https://docs.godotengine.org/en/stable/tutorials/physics/index.html), [interpolação](https://docs.godotengine.org/en/stable/tutorials/rendering/jitter_stutter.html) e [performance](https://docs.godotengine.org/en/stable/tutorials/performance/index.html).
+- Prefira APIs atuais documentadas para a versão estável instalada; não copie exemplos antigos sem verificar obsolescência.
+- O projeto Godot fica em `godot-prototype/`; use caminhos `res://` e não dependa de caminhos absolutos, Node.js, Three.js, Rapier ou WebSocket no protótipo offline.
+- Não altere `src/`, `server/`, `package.json` ou o protocolo multiplayer ao trabalhar apenas no protótipo, salvo solicitação explícita.
+- Depois de mudanças Godot, valide `project.godot`, importe o projeto no Project Manager, abra `Main.tscn` na IDE e rode a validação headless.
+- Não declare a tarefa concluída se houver erro de parse, recurso ausente, referência quebrada, warning novo relevante ou falha no self-test.

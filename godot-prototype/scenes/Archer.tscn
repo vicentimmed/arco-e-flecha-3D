@@ -1,0 +1,22 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/archer_controller.gd" id="1_archer"]
+[ext_resource type="PackedScene" path="res://scenes/CameraRig.tscn" id="2_camera"]
+[ext_resource type="PackedScene" path="res://scenes/Bow.tscn" id="3_bow"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_archer"]
+radius = 0.35
+height = 1.72
+
+[node name="Archer" type="CharacterBody3D"]
+collision_layer = 2
+collision_mask = 1
+script = ExtResource("1_archer")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.86, 0)
+shape = SubResource("CapsuleShape3D_archer")
+
+[node name="CameraRig" parent="." instance=ExtResource("2_camera")]
+
+[node name="Bow" parent="." instance=ExtResource("3_bow")]

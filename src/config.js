@@ -281,12 +281,10 @@ export const CONFIG = {
     // contraste que a pedra ao lado do pé, e o cérebro lê as duas à mesma
     // distância. O campo de tiro (até ~120 m) mal sente.
     fogDensity: 0.0046,
-    /* Névoa da noite do modo zumbi. Quase quatro vezes mais fechada: a 60 m já
-       não se enxerga nada, e é ela — mais do que a falta de luz — que garante
-       que o mundo acabe na borda do círculo das tochas. Sem ela, a silhueta da
-       serra contra o céu estrelado daria referência de distância e o vale
-       continuaria legível no escuro. */
-    fogDensityNight: 0.017,
+    /* No modo zumbi a cena já é limitada pela noite e pelo círculo de luz. A
+       névoa exponencial multiplicava o custo de fragmento justamente durante a
+       transição e não acrescentava leitura útil ao cenário escuro. */
+    fogDensityNight: 0,
 
     // ------------------------------------------------------------- arena ---
     // A área jogável é uma bacia fechada: piso plano cercado por sopé gramado
@@ -328,9 +326,9 @@ export const CONFIG = {
        jogo continua lendo `CONFIG.render.shadowMapSize` sem saber que existe
        preset nenhum. É o que permite trocar de qualidade sem caçar leitores.
 
-       O modo zumbi é o mais pesado do jogo — noite, quatro luzes pontuais e
-       vinte e um corpos —, e é ele que dita o que cai primeiro no `low`:
-       resolução de sombra, bloom, estrelas e o pixel ratio. */
+       O modo zumbi é o mais pesado do jogo — noite, uma luz central e uma
+       multidão de NPCs —, e é ele que dita o que cai primeiro no `low`: resolução
+       de sombra, bloom, estrelas e o pixel ratio. */
     quality: "high", // "low" | "medium" | "high"
     presets: {
       low: {
@@ -416,6 +414,9 @@ export const CONFIG = {
     // impedir trapaça.
     hitTolerance: 4, // m
     reconnectDelays: [0.4, 0.8, 1.6, 3, 5], // s — backoff, depois repete o último
+    // Tempo máximo para uma sala esperar o aquecimento dos clientes antes de
+    // iniciar a noite. Em condições normais a barra termina em menos de 2 s.
+    modePrepareTimeout: 12,
     cull: {
       shadow: 25, // m — além disso o jogador remoto para de projetar sombra
       hide: 160, // m — além disso nem é desenhado
@@ -423,8 +424,8 @@ export const CONFIG = {
   },
 
   /* ---------------------------------------------------------------- nascer --
-     Todo mundo nasce igual: caindo de 10 m, piscando, num ponto plano perto do
-     centro. Vale para quem entra na sala e para quem acabou de morrer. */
+     O nascimento padrão cai de 10 m e pisca. A noite dos zumbis sobrescreve o
+     drop para 0: todos entram diretamente no chão do quadrado de tochas. */
   spawn: {
     centerX: SPAWN_CENTER_X, // centro da bacia jogável
     centerZ: SPAWN_CENTER_Z,
@@ -621,12 +622,12 @@ export const CONFIG = {
       torchHalf: 7, // m
       torchHeight: 2.5, // m — altura da chama acima do chão
       torchRange: 14, // m — alcance da luz de cada tocha
-      torchIntensity: 30, // intensidade da PointLight
+      torchIntensity: 30, // legado — cantos não usam mais PointLight (ver torches.js)
       torchColor: 0xffa542,
-      // Luz extra no centro do quadrado — sem ela o meio fica mais escuro que
-      // os cantos, e o cerco some na sombra entre as tochas.
-      centerLightIntensity: 22,
-      centerLightRange: 12, // m
+      // Luz extra no centro do quadrado — única PointLight do modo; alcance
+      // maior cobre o quadrado sem luz por canto (ver `systems/torches.js`).
+      centerLightIntensity: 32,
+      centerLightRange: 17, // m
       centerLightHeight: 3.2, // m acima do chão
       // Uma flecha apaga a tocha. É risco de verdade: errar o zumbi e acertar a
       // tocha escurece o próprio canto de quem errou.
@@ -661,6 +662,13 @@ export const CONFIG = {
       // ------------------------------------------------------------- bicho --
       speed: 1.15,
       speedVariation: 0.18,
+      // Guarda-corpos para o modo multiplayer: mortos ainda ficam visíveis por
+      // alguns segundos, então o limite precisa considerar vivos + cadáveres.
+      maxAlive: 48,
+      maxEntities: 64,
+      // A separação é resolvida no servidor, não pelo solver físico do cliente.
+      npcSeparationRadius: 0.9,
+      npcSeparationWeight: 1.35,
       bodyHits: 2,
       fullDrawKillSpeed: 118,
       headMinY: 1.45,
@@ -676,12 +684,13 @@ export const CONFIG = {
       bodyPoints: 40,
       headPoints: 100,
 
-      wolfCounts: [1, 2, 3, 4, 5, 6, 8, 10],
+      // Metade dos lobos por horda, mantendo ao menos um nas primeiras ondas.
+      wolfCounts: [1, 1, 2, 2, 3, 3, 4, 5],
       // Lobos não nascem todos no start: 1 a cada N zumbis mortos nesta horda.
       wolfEveryZombieKills: 3,
-      wolfSpawnDelay: 1.0, // s de espera antes do lobo entrar (após gatilho)
+      wolfSpawnDelay: 1.5, // s de espera antes do lobo entrar (após gatilho)
       wolfSpawnRadiusBonus: 6, // m a mais que zumbis — chegam depois, de longe
-      wolfSpawnStagger: 1.4, // s entre lobos da mesma horda
+      wolfSpawnStagger: 2.5, // s entre lobos da mesma horda
       // Modo zumbi: 2× a velocidade base lenta (legacy −30%, depois dobrado).
       wolfSpeed: WOLF_SPEED_SLOW * 2,
       wolfSpeedVariation: 0.08,
@@ -746,15 +755,16 @@ export const CONFIG = {
         /* Matilhas de escolta: nascem no corredor do chefão, não na arena.
            pack = min(packMax, packBase + packPerPlayer × (N − 1)). */
         wolves: {
-          packBase: 4,
-          packPerPlayer: 2,
-          packMax: 8,
+          // Metade da escolta do chefão; a chegada continua escalonada.
+          packBase: 2,
+          packPerPlayer: 1,
+          packMax: 4,
           waves: 4,
           healthThresholds: [0.75, 0.5, 0.25],
           /* Entrada escalonada: matilha grande não desaba toda no centro. */
-          stagger: 1.4,
-          spawnOffsetMin: 8,
-          spawnOffsetMax: 36,
+          stagger: 2.4,
+          spawnOffsetMin: 14,
+          spawnOffsetMax: 48,
           spawnLateral: 8,
         },
         /* Flash no impacto: clarão vermelho visível de longe — todos veem o hit. */

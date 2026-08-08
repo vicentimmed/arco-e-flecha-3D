@@ -78,6 +78,9 @@ const MODE_LABELS = {
 /** Milímetro de precisão: de sobra para a rede e metade dos bytes. */
 const mm = (v) => Math.round(v * 1000) / 1000;
 
+const nextFrame = () =>
+  new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
 class Game {
   constructor(physics, setStep = () => {}) {
     this.physics = physics;
@@ -143,6 +146,11 @@ class Game {
     this._elkHudCountdown = false;
     /** A tela de vitória da caçada está na tela, esperando o Enter que a fecha. */
     this.huntVictoryOpen = false;
+    /** Preparação coordenada da noite — bloqueia a entrada até o aquecimento. */
+    this.modePreparing = false;
+    this.modePrepareToken = null;
+    this.modePrepareTarget = null;
+    this.modePreparePromise = null;
 
     this.aim = new AimSolver(physics);
     this.aim.setExcludedCollider(this.playerPhysics.collider);
@@ -402,6 +410,9 @@ class Game {
       this.elkState = msg.snapshot.elkStatus ?? null;
       this.series.setTarget(msg.snapshot.series ?? null);
       this.applyMode(msg.snapshot.mode);
+      if (msg.snapshot.mode?.preparing) {
+        this.beginModePreparation(msg.snapshot.mode.preparing);
+      }
       this.scoreboard.setScores(msg.snapshot.scores);
       this.hud.setConnection(true);
     });
@@ -594,7 +605,10 @@ class Game {
       }
     });
 
-    net.on(S2C.BIRDS, (msg) => this.birds.applyNetwork(msg.k));
+    net.on(S2C.BIRDS, (msg) => {
+      if (msg.clear) this.birds.clear();
+      else this.birds.applyNetwork(msg.k);
+    });
 
     net.on(S2C.BIRD_DEATH, (msg) => {
       this.birds.kill(msg.id);
@@ -622,6 +636,7 @@ class Game {
     net.on(S2C.WORLD_RESET, () => {
       this.arrows.clearAll();
       this.remoteArrows.clear();
+      this.birds.clear();
       this.zombies.clear();
       this.cancelKnifeAttack();
       this.series.clear();
@@ -752,6 +767,8 @@ class Game {
       }
     });
 
+    net.on(S2C.MODE_PREPARE, (msg) => this.beginModePreparation(msg));
+    net.on(S2C.MODE_PREPARE_CANCEL, () => this.cancelModePreparation());
     net.on(S2C.MODE, (msg) => this.applyMode(msg));
 
     net.on(S2C.SCORES, (msg) => this.scoreboard.setScores(msg.scores));
@@ -824,6 +841,7 @@ class Game {
     this.solveAim();
     if (
       actions.release &&
+      !this.modePreparing &&
       !this.death.dying &&
       !this.player.isReloading &&
       !this.player.isKnifeAttacking
@@ -885,6 +903,7 @@ class Game {
   }
 
   handleActions(a) {
+    if (this.modePreparing) return;
     if (a.knifeAttack) this.beginKnifeAttack();
     if (a.dismissArrowCam) this.rig.returnToArcher();
     // Limpa só as SUAS flechas: em rede, varrer as dos outros da tela seria
@@ -944,6 +963,71 @@ class Game {
   /* ---------------------------------------------------------------- modos -- */
 
   /**
+   * Prepara a noite enquanto a sala ainda está no modo anterior. A tela cobre
+   * os poucos frames em que o renderer compila as variantes de luz pontual e os
+   * meshes da horda; só depois o cliente se declara pronto para a sala.
+   */
+  beginModePreparation(msg) {
+    if (!isZombieMode(msg?.mode) || msg.token == null) return;
+
+    if (this.modePreparing && this.modePrepareToken === msg.token) {
+      this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "aguardando os outros jogadores…");
+      return;
+    }
+
+    this.cancelModePreparation();
+    this.modePreparing = true;
+    this.modePrepareToken = msg.token;
+    this.modePrepareTarget = msg.mode;
+    this.hud.showModeLoading(msg.mode === "zombieBoss" ? "preparando o chefão…" : "preparando a noite…");
+    this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "limpando o céu e preparando a arena…");
+    this.playerPhysics.setHorizontalMove(0, 0);
+    this.birds.clear();
+    this.torches.build({ dormant: true });
+    this.zombies.prepare();
+
+    const token = msg.token;
+    this.modePreparePromise = this.finishModePreparation(token).finally(() => {
+      if (this.modePrepareToken === token) this.modePreparePromise = null;
+    });
+  }
+
+  async finishModePreparation(token) {
+    this.zombies.setWarmupVisible(true);
+    this.torches.setWarmupVisible(true);
+    this.hud.updateModeLoading(0, 1, "aquecendo iluminação e shaders…");
+
+    // Dá ao navegador um frame para pintar o overlay antes de compilar.
+    await nextFrame();
+    if (this.modePrepareToken !== token) return;
+
+    try {
+      await this.renderer.prewarmNight();
+    } catch (err) {
+      // A compilação paralela é uma otimização. Um navegador sem suporte não
+      // pode impedir a partida; o primeiro frame apenas compila de forma normal.
+      console.warn("pré-aquecimento da noite indisponível:", err);
+    }
+
+    if (this.modePrepareToken !== token || !this.modePreparing) return;
+    this.zombies.setWarmupVisible(false);
+    this.torches.setWarmupVisible(false);
+    this.hud.updateModeLoading(1, 1, "sincronizando a entrada…");
+    this.net.send(C2S.MODE_READY, { mode: this.modePrepareTarget, token });
+  }
+
+  cancelModePreparation() {
+    if (!this.modePreparing && this.modePrepareToken == null) return;
+    this.modePreparing = false;
+    this.modePrepareToken = null;
+    this.modePrepareTarget = null;
+    this.modePreparePromise = null;
+    this.zombies.setWarmupVisible(false);
+    this.torches.setWarmupVisible(false);
+    this.hud.hideModeLoading();
+  }
+
+  /**
    * O modo mudou (ou um convite de duelo apareceu).
    *
    * O duelo é convite e não decreto: apertar `2` marca você como pronto e
@@ -952,6 +1036,7 @@ class Game {
    */
   applyMode(msg) {
     if (!msg) return;
+    if (this.modePreparing) this.cancelModePreparation();
     const mudouModo = this.mode !== msg.mode;
     if (mudouModo) this.cancelKnifeAttack();
     this.mode = msg.mode;
@@ -1040,7 +1125,13 @@ class Game {
     this.rig.setFollowArrow(!ligado);
 
     if (ligado) {
+      // O servidor deixa de emitir aves imediatamente ao preparar a noite. A
+      // limpeza local cobre o pacote que já estava na fila e evita voadores
+      // congelados no céu durante a transição.
+      this.birds.clear();
       this.torches.build();
+      this.torches.setNight(this.night);
+      this.syncCreatureShadows();
     } else {
       this.torches.clear();
       this.zombies.clear();
@@ -1191,7 +1282,8 @@ class Game {
   updateAimAndPose(dt, actions) {
     // Morto, o corpo cai e nada mais responde: não anda, não pula, não tensiona.
     // Sem isso o cadáver continuaria correndo pelo campo enquanto tomba.
-    const morto = this.death.dying;
+    const preparando = this.modePreparing;
+    const morto = this.death.dying || preparando;
 
     /* Timer do reload: avança mesmo andando/correndo, mas fica congelado durante
        a faca. Assim o golpe pode interromper a busca e ela continua depois. */
@@ -1225,15 +1317,17 @@ class Game {
     this.player.setReload(recarregando && dur > 0 ? 1 - this.reloadTimer / dur : 0);
 
     this.input.blockDraw = this.rig.isArrowCam || morto || recarregando || atacando;
-    this.input.blockDrawReason = morto
-      ? "dead"
-      : atacando
+    this.input.blockDrawReason = preparando
+      ? "modePrepare"
+      : this.death.dying
+        ? "dead"
+        : atacando
         ? "knife"
-      : this.rig.isArrowCam
-        ? "arrowCam"
-        : recarregando
-          ? "reload"
-          : null;
+        : this.rig.isArrowCam
+          ? "arrowCam"
+          : recarregando
+            ? "reload"
+            : null;
     if (atacando) {
       this.drawTime = 0;
       this.input.drawing = false;
@@ -1487,13 +1581,12 @@ class Game {
   }
 
   stepPhysics(dt) {
-    this.playerPhysics.step(dt);
-
     const h = CONFIG.physics.fixedStep;
     this.accumulator += dt;
     let steps = 0;
     while (this.accumulator >= h && steps < CONFIG.physics.maxSubSteps) {
       this.sync.saveState();
+      this.playerPhysics.step(h);
       this.physics.step();
       this.sync.captureState();
       this.accumulator -= h;
@@ -1527,14 +1620,26 @@ class Game {
    * ver as tochas acendendo antes de a primeira horda aparecer.
    */
   updateNight(dt) {
-    if (this.night === this.nightTarget) return;
-    const passo = dt / 1.2;
-    if (this.night < this.nightTarget) {
-      this.night = Math.min(this.nightTarget, this.night + passo);
-    } else {
-      this.night = Math.max(this.nightTarget, this.night - passo);
+    if (this.night !== this.nightTarget) {
+      const passo = dt / 1.2;
+      if (this.night < this.nightTarget) {
+        this.night = Math.min(this.nightTarget, this.night + passo);
+      } else {
+        this.night = Math.max(this.nightTarget, this.night - passo);
+      }
+      this.renderer.setNight(this.night);
+      this.syncCreatureShadows();
     }
-    this.renderer.setNight(this.night);
+    this.torches.setNight(this.night);
+  }
+
+  /** Zumbis/lobos não projetam sombra no modo zumbi — o passe não compensa o ganho. */
+  syncCreatureShadows() {
+    if (this._zombieOn) {
+      this.zombies.setCastShadow(false);
+      return;
+    }
+    this.zombies.setCastShadow(this.night < 0.5);
   }
 
   /**
@@ -1548,6 +1653,10 @@ class Game {
 
   isBossStormActive() {
     if (!isZombieMode(this.mode) || !this._zombieOn) return false;
+    // A tempestade adiciona nuvens, partículas e flashes. Deixe a virada
+    // terminar primeiro para que esses efeitos não concorram com a compilação
+    // da noite e com o teleporte inicial dos jogadores.
+    if (this.night < 0.98) return false;
     const st = this.zombieState;
     if (st?.over) return false;
 
@@ -1600,12 +1709,22 @@ class Game {
     });
   }
 
-  _pushBossFlashLight(x, y, z, peak, range, decay, life, color) {
-    const light = new THREE.PointLight(color, peak, range, decay);
-    light.position.set(x, y, z);
-    light.castShadow = false;
-    this.scene.add(light);
-    this._bossFlashes.push({ light, t: 0, life, peak });
+  _pushBossFlashLight(x, y, z, _peak, _range, _decay, life, color) {
+    const geo = new THREE.SphereGeometry(2.8, 8, 6);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      fog: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 58;
+    this.scene.add(mesh);
+    this._bossFlashes.push({ mesh, mat, t: 0, life });
   }
 
   updateBossFlashes(dt) {
@@ -1613,10 +1732,13 @@ class Game {
       const f = this._bossFlashes[i];
       f.t += dt;
       const p = f.t / f.life;
-      f.light.intensity = f.peak * (1 - p) * (1 - p);
+      const env = (1 - p) * (1 - p);
+      f.mat.opacity = 0.9 * env;
+      f.mesh.scale.setScalar(1 + p * 2.2);
       if (f.t >= f.life) {
-        this.scene.remove(f.light);
-        f.light.dispose();
+        this.scene.remove(f.mesh);
+        f.mesh.geometry.dispose();
+        f.mat.dispose();
         this._bossFlashes.splice(i, 1);
       }
     }

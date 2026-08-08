@@ -10,12 +10,12 @@
      próprio canto de quem errou. E o estado é do SERVIDOR (`room.torches`),
      porque uma tocha apagada numa tela e acesa na outra seriam dois jogos.
 
-   • SEM SOMBRA. As quatro `PointLight` têm `castShadow = false`. Uma point light
-     com sombra custa SEIS renderizações da cena (as faces de um cubemap); quatro
-     delas seriam vinte e quatro passes por quadro, com vinte e um zumbis dentro.
-     O que se perde é a sombra projetada dos zumbis no chão; o que se ganha é o
-     modo rodar. A silhueta continua legível porque o corpo é iluminado de um
-     lado só.
+   • SEM LUZ POR CANTO. As quatro tochas são chama emissiva (`MeshBasicMaterial`)
+     — não `PointLight`. Cinco luzes pontuais (quatro cantos + centro) viravam
+     dezenas quando somadas às flechas incendiárias de todos os jogadores, e cada
+     zumbi pagava iluminação PBR por luz. Ficou UMA luz central cujo brilho
+     escala com quantas tochas ainda estão acesas: apagar um canto escurece o
+     quadrado inteiro, mas sem multiplicar luzes dinâmicas.
 
    • ALCANCE FINITO. `distance` recortado faz a luz morrer numa borda definida em
      metros, e é essa borda que o jogador aprende a ler como "até aqui eu vejo".
@@ -42,6 +42,15 @@ const MAT = {
     fog: false,
   }),
   brasa: new THREE.MeshBasicMaterial({ color: 0x3a1c0c, fog: false }),
+  /* Halo barato no poste: dá calor visual no canto sem PointLight. */
+  glow: new THREE.MeshBasicMaterial({
+    color: 0xff9030,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    fog: false,
+    blending: THREE.AdditiveBlending,
+  }),
 };
 
 class Torch {
@@ -89,10 +98,11 @@ class Torch {
     this.chama.renderOrder = 6;
     this.group.add(this.chama);
 
-    this.light = new THREE.PointLight(Z.torchColor, Z.torchIntensity, Z.torchRange, 1.6);
-    this.light.castShadow = false; // ver o cabeçalho: seriam 6 passes por tocha
-    this.light.position.y = alturaPoste + 0.36;
-    this.group.add(this.light);
+    this.glowMat = MAT.glow.clone();
+    this.glow = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 6), this.glowMat);
+    this.glow.position.y = alturaPoste + 0.36;
+    this.glow.renderOrder = 5;
+    this.group.add(this.glow);
 
     scene.add(this.group);
 
@@ -115,8 +125,13 @@ class Torch {
     if (this.lit === lit) return;
     this.lit = lit;
     this.chama.visible = lit;
-    this.light.visible = lit;
-    if (!lit) this.light.intensity = 0;
+    this.glow.visible = lit;
+    this.brasa.visible = lit;
+  }
+
+  setEnabled(enabled) {
+    this.group.visible = enabled;
+    this.collider?.setEnabled(enabled);
   }
 
   update(dt, time) {
@@ -131,9 +146,10 @@ class Torch {
       0.11 * Math.sin(t * 8.3) +
       0.07 * Math.sin(t * 13.7) +
       0.05 * Math.sin(t * 27.1);
-    this.light.intensity = Z.torchIntensity * f;
     this.chama.scale.set(0.9 + f * 0.2, 0.82 + f * 0.35, 0.9 + f * 0.2);
     this.chamaMat.opacity = 0.8 + f * 0.18;
+    this.glowMat.opacity = 0.14 + f * 0.12;
+    this.glow.scale.setScalar(0.85 + f * 0.35);
   }
 
   dispose() {
@@ -142,6 +158,7 @@ class Torch {
     this.scene.remove(this.group);
     this.group.traverse((o) => o.geometry?.dispose());
     this.chamaMat.dispose();
+    this.glowMat.dispose();
   }
 }
 
@@ -149,7 +166,7 @@ class Torch {
  * O quadrado de tochas.
  *
  * Nasce e morre com o modo: `build()` na entrada, `clear()` na saída. Não existe
- * fora do modo zumbi, então nenhum outro modo paga as quatro luzes.
+ * fora do modo zumbi, então nenhum outro modo paga a luz central.
  */
 export class TorchRing {
   constructor(scene, physics, terrain) {
@@ -160,6 +177,8 @@ export class TorchRing {
     this.torches = [];
     this.centerLight = null;
     this.time = 0;
+    this.night = 0;
+    this.dormant = false;
   }
 
   get active() {
@@ -167,8 +186,12 @@ export class TorchRing {
   }
 
   /** Quatro tochas nos cantos de um quadrado centrado na arena. */
-  build() {
-    if (this.torches.length) return;
+  build({ dormant = false } = {}) {
+    if (this.torches.length) {
+      if (!dormant) this.activate();
+      return;
+    }
+    this.dormant = dormant;
     const Z = CONFIG.modes.zombie;
     const h = Z.torchHalf;
     // A ordem dos cantos é FIXA e é ela que dá sentido ao índice que viaja na
@@ -190,21 +213,48 @@ export class TorchRing {
           Z.centerZ + dz,
         ),
       );
+      this.torches.at(-1).setEnabled(!dormant);
     });
 
-    // Luz extra no meio do quadrado: sem ela o centro fica na sombra entre as
-    // quatro tochas, e o cerco some justamente onde os arqueiros se reúnem.
+    // Uma única luz no centro: alcance maior compensa a falta das quatro dos
+    // cantos; o brilho escala com quantas tochas ainda estão acesas.
     const yCentro =
       this.terrain.heightAt(Z.centerX, Z.centerZ) + (Z.centerLightHeight ?? 3.2);
+    const intensidade =
+      (Z.centerLightIntensity ?? 32) * (CONFIG.render.torchIntensityScale ?? 1);
     this.centerLight = new THREE.PointLight(
       Z.torchColor,
-      Z.centerLightIntensity ?? 22,
-      Z.centerLightRange ?? 12,
+      intensidade,
+      Z.centerLightRange ?? 17,
       1.8,
     );
     this.centerLight.castShadow = false;
     this.centerLight.position.set(Z.centerX, yCentro, Z.centerZ);
     this.scene.add(this.centerLight);
+    this._syncCenterLight();
+  }
+
+  /** Torna a preparação invisível jogável sem recriar geometrias ou luz. */
+  activate() {
+    if (!this.torches.length) return;
+    this.dormant = false;
+    for (const torch of this.torches) torch.setEnabled(true);
+    this._syncCenterLight();
+  }
+
+  /**
+   * Mostra os meshes durante a compilação dos shaders, mas mantém os colisores
+   * desligados. O overlay cobre este único frame de aquecimento.
+   */
+  setWarmupVisible(visible) {
+    if (!this.torches.length) return;
+    for (const torch of this.torches) torch.group.visible = visible;
+    if (this.centerLight) this.centerLight.visible = true;
+  }
+
+  setNight(value) {
+    this.night = Math.max(0, Math.min(1, value));
+    this._syncCenterLight();
   }
 
   clear() {
@@ -212,15 +262,17 @@ export class TorchRing {
     this.torches.length = 0;
     if (this.centerLight) {
       this.scene.remove(this.centerLight);
-      this.centerLight.dispose();
       this.centerLight = null;
     }
+    this.dormant = false;
+    this.night = 0;
   }
 
   /** Aplica o estado que veio da sala. */
   setStates(estados) {
     if (!estados) return;
     estados.forEach((aceso, i) => this.torches[i]?.setLit(aceso));
+    this._syncCenterLight();
   }
 
   /** Quantas ainda estão acesas — o HUD mostra isso. */
@@ -228,9 +280,21 @@ export class TorchRing {
     return this.torches.reduce((n, t) => n + (t.lit ? 1 : 0), 0);
   }
 
+  /** Brilho central proporcional às tochas vivas — apagar canto escurece tudo. */
+  _syncCenterLight() {
+    if (!this.centerLight) return;
+    const Z = CONFIG.modes.zombie;
+    const base =
+      (Z.centerLightIntensity ?? 32) * (CONFIG.render.torchIntensityScale ?? 1);
+    const lit = this.litCount;
+    const frac = lit === 0 ? 0.1 : 0.42 + 0.58 * (lit / 4);
+    this.centerLight.intensity = this.dormant ? 0 : base * frac * this.night;
+  }
+
   update(dt) {
-    if (!this.torches.length) return;
+    if (!this.torches.length || this.dormant) return;
     this.time += dt;
     for (const t of this.torches) t.update(dt, this.time);
+    this._syncCenterLight();
   }
 }

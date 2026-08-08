@@ -53,8 +53,11 @@
  *
  * 9 — entrou o modo caça aos pássaros (`birdHunt`), com pássaro raro e placar
  * de vitória. Uma aba antiga não saberia desenhar o modo nem a tela final.
+ *
+ * 10 — preparação coordenada da noite dos zumbis. A sala espera os clientes
+ * aquecerem os shaders e limparem a fauna antes de confirmar a troca.
  */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -71,8 +74,10 @@ export const C2S = {
   KILL: "kill",
   /** Pedido de renascimento manual (tecla K). */
   RESPAWN: "respawn",
-  /** Modo de jogo: `{ mode, ready }`. */
+  /** Pedido de modo de jogo: `{ mode }`. */
   MODE: "mode",
+  /** Cliente terminou de preparar uma troca: `{ mode, token }`. */
+  MODE_READY: "modeReady",
   /** "Acertei este porco": `{ id, distance }`. */
   BOAR_HIT: "boarHit",
   /** Soltar um porco avulso, só por diversão — não vale ponto. */
@@ -127,6 +132,10 @@ export const S2C = {
   SPAWN: "spawn",
   /** Estado dos modos: `{ mode, members, invites, until }`. */
   MODE: "mode",
+  /** Preparação de modo: `{ mode, token, ready, total }`. */
+  MODE_PREPARE: "modePrepare",
+  /** Cancela uma preparação que não chegou a virar troca. */
+  MODE_PREPARE_CANCEL: "modePrepareCancel",
   /** Transformações dos porcos, 10 Hz. */
   BOARS: "boars",
   /** Porco morto: `{ id, killer, points, distance }`. */

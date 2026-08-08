@@ -46,6 +46,7 @@ export class Death {
   begin(serverTime, msg) {
     this.since = serverTime;
     this.lastTime = serverTime;
+    this.player.setOpacity(1);
     this.player.ragdoll = this.ragdoll;
     this.ragdoll.begin(
       this.player.position,
@@ -60,6 +61,7 @@ export class Death {
     this.ragdoll.stop();
     this.player.ragdoll = null;
     this.player.deathFall = 0;
+    this.player.setOpacity(1);
   }
 
   update(serverTime) {

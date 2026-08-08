@@ -54,7 +54,7 @@ export class Input {
     /** Quando true, o clique não tensiona o arco — ele só encerra a câmera da
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
     this.blockDraw = false;
-    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | `"knife"` | null */
+    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | `"knife"` | `"modePrepare"` | null */
     this.blockDrawReason = null;
 
     /**

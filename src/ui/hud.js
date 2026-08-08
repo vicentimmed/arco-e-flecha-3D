@@ -216,6 +216,18 @@ export class HUD {
         <div id="zombie-center-sub"></div>
       </div>
 
+      <!-- Preparação coordenada da noite. O jogo fica coberto enquanto os
+           clientes aquecem iluminação, shaders e a primeira silhueta da horda. -->
+      <div id="mode-loading" hidden>
+        <div class="mode-loading-card">
+          <div class="mode-loading-title" id="mode-loading-title">preparando…</div>
+          <div class="mode-loading-track">
+            <div id="mode-loading-fill"></div>
+          </div>
+          <div class="mode-loading-status" id="mode-loading-status"></div>
+        </div>
+      </div>
+
       <!-- Vitória da caçada: entra ao fechar a quinta onda (ver S2C.HUNT_OVER).
            Fica na tela até o Enter, por isso a dica mora dentro do próprio
            card — é a única tecla que a fecha, e ninguém adivinha sozinho. -->
@@ -270,6 +282,10 @@ export class HUD {
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
+      modeLoading: root.querySelector("#mode-loading"),
+      modeLoadingTitle: root.querySelector("#mode-loading-title"),
+      modeLoadingFill: root.querySelector("#mode-loading-fill"),
+      modeLoadingStatus: root.querySelector("#mode-loading-status"),
       huntVictory: root.querySelector("#hunt-victory"),
       huntVictoryTitle: root.querySelector("#hunt-victory-title"),
       huntVictoryWinnerName: root.querySelector(".hv-winner-name"),
@@ -473,6 +489,24 @@ export class HUD {
 
   hideZombieCenter() {
     this.el.zombieCenter.hidden = true;
+  }
+
+  showModeLoading(title) {
+    this.el.modeLoadingTitle.textContent = title;
+    this.el.modeLoading.hidden = false;
+    this.el.modeLoadingFill.style.width = "0%";
+    this.el.modeLoadingStatus.textContent = "preparando a arena…";
+  }
+
+  updateModeLoading(ready, total, status) {
+    const fraction =
+      total > 0 ? Math.max(0, Math.min(1, Number(ready) / Number(total))) : 0;
+    this.el.modeLoadingFill.style.width = `${fraction * 100}%`;
+    if (status) this.el.modeLoadingStatus.textContent = status;
+  }
+
+  hideModeLoading() {
+    this.el.modeLoading.hidden = true;
   }
 
   /** Faixa de horda nova — mesma mecânica da onda da caçada. */

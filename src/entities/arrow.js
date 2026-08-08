@@ -22,17 +22,9 @@ import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { resolveArrowHit } from "../core/hitResolver.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
+import { ARROW_COLLISION_GROUPS } from "../core/collisionGroups.js";
 
 const UP = new THREE.Vector3(0, 1, 0);
-
-/*
- * A flecha pertence ao grupo 1 e aceita todos os grupos, EXCETO o próprio
- * grupo 1. Assim ela continua acertando cenário, alvos e criaturas, mas duas
- * flechas nunca entram no mesmo par de colisão.
- *
- * Rapier codifica membership nos 16 bits altos e filter nos 16 baixos.
- */
-const ARROW_COLLISION_GROUPS = 0x0001fffe;
 
 /* ------------------------------------------------------------- geometria -- */
 
@@ -130,17 +122,13 @@ const WHITE_REF = new THREE.Color(1, 1, 1);
 let sharedFire = null;
 
 /**
- * A parte acesa de uma flecha incendiária: labareda + luz.
+ * A parte acesa de uma flecha incendiária: só a labareda emissiva.
  *
- * A LUZ É O PONTO, não o enfeite. No modo zumbi o mundo acaba na borda das
- * tochas, e uma flecha que ilumina o próprio caminho é a única forma de o
- * jogador ver alguma coisa lá fora — atirar vira, também, acender uma lanterna
- * por dois segundos. É por isso que ela tem alcance generoso e decaimento
- * suave, em vez de ser um brilho colado na ponta.
- *
- * Uma `PointLight` por flecha VIVA, e só neste modo. Sem sombra, pelo mesmo
- * motivo das tochas (seriam seis passes por flecha). Com o teto de flechas
- * simultâneas do jogo isso fica em poucas luzes ao mesmo tempo.
+ * Sem `PointLight`: em multiplayer, cada flecha (inclusive a dos amigos) gerava
+ * uma luz dinâmica a mais, e dezenas de `MeshStandardMaterial` recalculavam
+ * iluminação por fragmento — o gargalo que sobrevivia ao preset `low`. A chama
+ * em `MeshBasicMaterial` continua legível no escuro; quem precisa enxergar além
+ * das tochas usa o círculo de luz central do quadrado.
  */
 function buildFireParts() {
   if (!sharedFire) {
@@ -163,11 +151,7 @@ function buildFireParts() {
   chama.position.y = CONFIG.arrow.length / 2 - 0.1;
   chama.renderOrder = 6;
 
-  const luz = new THREE.PointLight(0xff8c2a, 14, 26, 1.5);
-  luz.castShadow = false;
-  luz.position.y = CONFIG.arrow.length / 2;
-
-  return { chama, luz, material };
+  return { chama, material };
 }
 
 /* ---------------------------------------------------------------- flecha -- */
@@ -459,7 +443,6 @@ export class Arrow {
     if (this.fire) return;
     this.fire = buildFireParts();
     this.mesh.add(this.fire.chama);
-    this.mesh.add(this.fire.luz);
     this.fireAge = 0;
   }
 
@@ -478,17 +461,15 @@ export class Arrow {
     const tremor = 0.82 + 0.12 * Math.sin(t * 31) + 0.06 * Math.sin(t * 47);
 
     if (this.stuck) {
-      // Cravada: some em 4 s.
+      // Cravada: some em 4 s — só brasa visual, sem luz dinâmica.
       const p = Math.min(1, (this.stuckAge = (this.stuckAge ?? 0) + dt) / 4);
       const f = (1 - p) * tremor;
-      this.fire.luz.intensity = 14 * f * 0.5;
       this.fire.material.opacity = 0.9 * f;
       this.fire.chama.scale.setScalar(0.6 + f * 0.5);
       if (p >= 1) this.extinguish();
       return;
     }
 
-    this.fire.luz.intensity = 14 * tremor;
     this.fire.material.opacity = 0.9;
     // Em voo a labareda estica: quanto mais rápido, mais longo o rastro.
     const v = this.lastVelocity;
@@ -499,8 +480,6 @@ export class Arrow {
   extinguish() {
     if (!this.fire) return;
     this.mesh.remove(this.fire.chama);
-    this.mesh.remove(this.fire.luz);
-    this.fire.luz.dispose?.();
     this.fire.material.dispose();
     this.fire = null;
   }

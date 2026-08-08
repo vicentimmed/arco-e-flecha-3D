@@ -42,6 +42,7 @@ export class BirdManager {
   }
 
   applyNetwork(lista) {
+    if (!Array.isArray(lista)) return;
     const vistos = new Set();
 
     for (const item of lista) {

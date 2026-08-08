@@ -58,6 +58,9 @@ export class Room {
     /** @type {Map<object, object>} conexão → jogador */
     this.players = new Map();
     this.mode = "free";
+    /** Troca de noite aguardando o aquecimento de todos os clientes. */
+    this.pendingMode = null;
+    this.nextModeToken = 1;
 
     /**
      * Flechas já cravadas no cenário e nos alvos.
@@ -148,11 +151,17 @@ export class Room {
       modo === "zombie" ||
       modo === "zombieBoss"
     ) {
-      this.setMode(modo);
+      if (isZombieMode(modo)) {
+        this.prepareMode(modo);
+      } else {
+        this.cancelModePreparation();
+        this.setMode(modo);
+      }
       return;
     }
 
     if (modo === "free") {
+      this.cancelModePreparation();
       // Sair do duelo: some da lista, e se sobrar menos de dois a partida acaba.
       this.duelInvites.delete(player.id);
       player.duelReady = false;
@@ -162,6 +171,7 @@ export class Room {
 
     if (modo !== "duel") return;
 
+    this.cancelModePreparation();
     if (this.mode === "duel") {
       // Já duelando: reinicia a partida com quem já está dentro.
       this.setMode("duel");
@@ -201,16 +211,60 @@ export class Room {
    * transforma "trocar de modo" em "começar uma partida" — e roda mesmo que o
    * modo pedido já seja o atual: é assim que a tecla do modo também reinicia.
    */
+  prepareMode(modo) {
+    if (!isZombieMode(modo) || !this.players.size) return;
+
+    this.cancelModePreparation();
+    const token = this.nextModeToken++;
+    this.pendingMode = {
+      mode: modo,
+      token,
+      ready: new Set(),
+      timer: setTimeout(() => {
+        if (this.pendingMode?.token !== token) return;
+        // Um navegador lento não deve deixar a sala travada para sempre. Os
+        // clientes que já terminaram entram sincronizados; os demais recebem
+        // o commit e concluem a preparação localmente enquanto o overlay some.
+        this.log(`preparo da noite expirou (${modo})`);
+        this.commitPreparedMode(token);
+      }, (CONFIG.net.modePrepareTimeout ?? 12) * 1000),
+    };
+
+    this.broadcastAll({
+      t: S2C.MODE_PREPARE,
+      mode: modo,
+      token,
+      ready: 0,
+      total: this.players.size,
+    });
+    this.log(`preparando modo: ${modo}`);
+  }
+
+  commitPreparedMode(token) {
+    const pending = this.pendingMode;
+    if (!pending || pending.token !== token) return;
+    clearTimeout(pending.timer);
+    this.pendingMode = null;
+    this.setMode(pending.mode);
+  }
+
+  cancelModePreparation() {
+    const pending = this.pendingMode;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingMode = null;
+    this.broadcastAll({ t: S2C.MODE_PREPARE_CANCEL });
+  }
+
   setMode(modo) {
     const anterior = this.mode;
     this.mode = modo;
 
     this.resetWorld();
 
-    /* Em todo modo, ao entrar: todo mundo renasce piscando, em pé, e cai no
-       chão. Sem isso, quem estava morto ou deitado no ragdoll entraria no modo
-       novo ainda caindo — e quem estava longe do ponto certo do modo (linha de
-       tiro, quadrado de luz) começaria desnorteado. */
+    /* Em todo modo, ao entrar: todo mundo renasce piscando e é reposicionado.
+       O drop padrão faz uma queda legível; a noite passa `drop: 0` para que a
+       horda comece no chão, sem o pico visual da queda durante a transição. */
     if (modo === "series") {
       this.series.start();
       this.lineUpForSeries();
@@ -292,6 +346,7 @@ export class Room {
 
     this.broadcastAll({ t: S2C.BOARS, b: [], clear: true });
     this.broadcastAll({ t: S2C.ELKS, e: [], clear: true });
+    this.broadcastAll({ t: S2C.BIRDS, k: [], clear: true });
     this.broadcastAll({ t: S2C.ZOMBIES, z: [], clear: true });
     this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
     this.broadcastAll({ t: S2C.SERIES, target: null });
@@ -781,7 +836,7 @@ export class Room {
         x: round(x),
         z: round(z),
         y: round(this.terrain.heightAt(x, z)),
-        drop: CONFIG.spawn.dropHeight,
+        drop: 0,
         invulnUntil: p.invulnUntil,
       });
     });
@@ -909,7 +964,7 @@ export class Room {
       x: round(x),
       z: round(z),
       y: round(this.terrain.heightAt(x, z)),
-      drop: 2,
+      drop: 0,
       invulnUntil: player.invulnUntil,
     });
   }
@@ -1514,6 +1569,15 @@ export class Room {
     });
     this.broadcast({ t: S2C.JOIN, player: publicView(player) }, player.id);
     this.spawn(player);
+    if (this.pendingMode) {
+      send(conn, {
+        t: S2C.MODE_PREPARE,
+        mode: this.pendingMode.mode,
+        token: this.pendingMode.token,
+        ready: this.pendingMode.ready.size,
+        total: this.players.size,
+      });
+    }
     this.broadcastScores();
 
     this.log(`entrou: ${player.name} (#${player.id}) — ${this.size} na sala`);
@@ -1551,6 +1615,12 @@ export class Room {
     this.players.delete(conn);
     this.colors.release(player.color);
     this.duelInvites.delete(player.id);
+    if (this.pendingMode) {
+      this.pendingMode.ready.delete(player.id);
+      if (this.pendingMode.ready.size >= this.players.size) {
+        this.commitPreparedMode(this.pendingMode.token);
+      }
+    }
     // O duelo acaba se sobrar menos de dois: uma pessoa duelando sozinha é só
     // uma pessoa presa num modo.
     if (this.mode === "duel" && this.duelInvites.size < CONFIG.modes.duel.minPlayers) {
@@ -1708,6 +1778,29 @@ export class Room {
       case C2S.MODE:
         this.requestMode(player, msg.mode);
         break;
+
+      case C2S.MODE_READY: {
+        const pending = this.pendingMode;
+        if (
+          !pending ||
+          msg.token !== pending.token ||
+          msg.mode !== pending.mode
+        ) {
+          break;
+        }
+        pending.ready.add(player.id);
+        this.broadcastAll({
+          t: S2C.MODE_PREPARE,
+          mode: pending.mode,
+          token: pending.token,
+          ready: pending.ready.size,
+          total: this.players.size,
+        });
+        if (pending.ready.size >= this.players.size) {
+          this.commitPreparedMode(pending.token);
+        }
+        break;
+      }
 
       case C2S.BOAR_HIT:
         this.registerBoarKill(player, msg);
@@ -1914,7 +2007,7 @@ export class Room {
       z: round(ponto.z),
       y: round(ponto.y),
       ...(yaw != null ? { yaw: round(yaw) } : {}),
-      drop: CONFIG.spawn.dropHeight,
+      drop: isZombieMode(this.mode) ? 0 : CONFIG.spawn.dropHeight,
       invulnUntil,
     });
   }
@@ -1992,6 +2085,14 @@ export class Room {
         .map((p) => ({ id: p.id, name: p.name })),
       needed: CONFIG.modes.duel.minPlayers,
       windInfluence: this.windInfluence,
+      preparing: this.pendingMode
+        ? {
+            mode: this.pendingMode.mode,
+            token: this.pendingMode.token,
+            ready: this.pendingMode.ready.size,
+            total: this.players.size,
+          }
+        : null,
     };
   }
 
@@ -2027,6 +2128,8 @@ export class Room {
     clearInterval(this.stateTimer);
     clearInterval(this.sweepTimer);
     clearInterval(this.boarTimer);
+    if (this.pendingMode) clearTimeout(this.pendingMode.timer);
+    this.pendingMode = null;
     this.hunt.stop();
     this.elks.stop();
     this.players.clear();

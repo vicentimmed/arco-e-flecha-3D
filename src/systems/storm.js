@@ -2,7 +2,7 @@
    Tempestade do chefão — nuvens, raios volumétricos e trovão (cosmético).
 
    Só no cliente. Custo baixo: 2 camadas de nuvem + fitas do raio (core+halo)
-   + PointLights sem sombra + chuva de ~48 Points. Raios preferem cair perto
+   + clarões emissivos (sem PointLight) + chuva de ~48 Points. Raios preferem cair perto
    do chefão para o clarão revelar a silhueta — todo mundo com o boss syncado
    vê o mesmo tipo de queda no mundo (posição do chefão é compartilhada).
    --------------------------------------------------------------------------- */
@@ -201,17 +201,23 @@ export class StormSystem {
 
   _flashAt(x, y, z, scale = 1) {
     const S = cfg();
-    const peak = (S.lightIntensity ?? 420) * scale;
-    const range = (S.lightRange ?? 72) * (0.85 + 0.2 * scale);
-    const decay = S.lightDecay ?? 1.25;
     const life = S.lightLife ?? 0.22;
     const color = S.lightColor ?? 0xc8e0ff;
-
-    const light = new THREE.PointLight(color, peak, range, decay);
-    light.position.set(x, y, z);
-    light.castShadow = false;
-    this.scene.add(light);
-    this._flashes.push({ light, t: 0, life, peak });
+    const geo = new THREE.SphereGeometry(2.2 * scale, 8, 6);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.88,
+      depthWrite: false,
+      fog: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 58;
+    this.scene.add(mesh);
+    this._flashes.push({ mesh, mat, t: 0, life });
   }
 
   /**
@@ -358,10 +364,11 @@ export class StormSystem {
       f.t += dt;
       const p = f.t / f.life;
       const env = p < 0.1 ? 1 : (1 - (p - 0.1) / 0.9) ** 2;
-      f.light.intensity = f.peak * Math.max(0, env);
+      f.mat.opacity = 0.88 * Math.max(0, env);
       if (f.t >= f.life) {
-        this.scene.remove(f.light);
-        f.light.dispose();
+        this.scene.remove(f.mesh);
+        f.mesh.geometry.dispose();
+        f.mat.dispose();
         this._flashes.splice(i, 1);
       }
     }
@@ -486,8 +493,9 @@ export class StormSystem {
 
   _clearFx() {
     for (const f of this._flashes) {
-      this.scene.remove(f.light);
-      f.light.dispose();
+      this.scene.remove(f.mesh);
+      f.mesh.geometry.dispose();
+      f.mat.dispose();
     }
     this._flashes.length = 0;
     for (const b of this._bolts) {

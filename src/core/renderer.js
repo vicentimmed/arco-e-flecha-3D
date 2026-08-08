@@ -146,10 +146,11 @@ export class Renderer {
     this.renderer.info.autoReset = false;
 
     this.scene = new THREE.Scene();
-    // Perspectiva aérea: é o que dá escala à serra. Sem névoa, um cume a 250 m
-    // tem o mesmo contraste que a pedra ao lado do pé e a montanha vira adesivo.
-    // A cor tem de bater com a do horizonte do céu, senão aparece uma linha.
-    this.scene.fog = new THREE.FogExp2(0xc4d8e8, CONFIG.world.fogDensity);
+    // Perspectiva aérea: é o que dá escala à serra durante o dia. A cor tem de
+    // bater com a do horizonte do céu, senão aparece uma linha. A densidade da
+    // noite é zerada pela configuração: no escuro o círculo das tochas faz o
+    // recorte visual sem pagar um passe de fragmento ainda mais caro.
+    this.scene.fog = new THREE.FogExp2(FOG_DAY, CONFIG.world.fogDensity);
 
     this.camera = new THREE.PerspectiveCamera(
       CONFIG.camera.fov,
@@ -310,7 +311,9 @@ export class Renderer {
        direcional com intensidade quase zero continua custando o passe inteiro de
        shadow map, que é o item mais caro do frame e não desenharia nada. */
     this.sun.intensity = SUN_DAY * (1 - n);
-    this.sun.castShadow = n < 0.85;
+    /* À noite plena a sombra direcional não ilumina quase nada — mas o passe
+       do shadow map continua custando com dezenas de zumbis projetando. */
+    this.sun.castShadow = n < 0.3;
     this.sun.visible = n < 0.98;
 
     // Um resto de luz do céu, frio e muito fraco: sem ele o terreno fora das
@@ -329,8 +332,8 @@ export class Renderer {
        "há fogo ali" em vez de "há uma mancha ali". */
     if (this.bloom) {
       const R = CONFIG.render;
-      this.bloom.threshold = R.bloomThreshold * (1 - n) + 0.62 * n;
-      this.bloom.strength = R.bloomStrength * (1 - n * 0.42);
+      this.bloom.threshold = R.bloomThreshold * (1 - n) + 0.72 * n;
+      this.bloom.strength = R.bloomStrength * (1 - n * 0.55);
     }
 
     // A névoa fecha e escurece: é ela que impede de ver a serra iluminada ao
@@ -364,6 +367,23 @@ export class Renderer {
       const starBase = Math.max(0, (this._night - 0.15) / 0.85);
       this.stars.material.opacity = starBase * (1 - a * 0.9);
     }
+  }
+
+  /**
+   * Compila uma vez os programas que mudam quando a noite entra: iluminação
+   * pontual, materiais dos NPCs e variantes do fog. O servidor chama isto
+   * durante a tela de preparação, quando o jogador ainda não está vendo a cena.
+   *
+   * `compileAsync` evita bloquear a aba por um único pico quando o navegador
+   * oferece a extensão de compilação paralela. O fallback síncrono mantém a
+   * compatibilidade com navegadores que não a suportam.
+   */
+  async prewarmNight() {
+    if (typeof this.renderer.compileAsync === "function") {
+      await this.renderer.compileAsync(this.scene, this.camera);
+      return;
+    }
+    this.renderer.compile(this.scene, this.camera);
   }
 
   buildLights() {

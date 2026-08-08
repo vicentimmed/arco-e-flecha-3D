@@ -20,7 +20,10 @@ export class ZombieManager {
     this.arrows = arrows;
     /** @type {Map<number, Zombie|Wolf>} id do servidor → casca local */
     this.byNetId = new Map();
+    /** Pequeno conjunto oculto usado para aquecer os programas da noite. */
+    this._warmups = [];
     this._cam = new THREE.Vector3();
+    this._castShadow = true;
   }
 
   get counts() {
@@ -66,6 +69,7 @@ export class ZombieManager {
               { isBoss },
             );
         this.byNetId.set(item.id, bicho);
+        bicho.setCastShadow(this._castShadow);
       }
 
       /* Snapshot vivo manda: se o cliente matou por otimismo e o servidor
@@ -103,6 +107,45 @@ export class ZombieManager {
       z.dispose();
     }
     this.byNetId.clear();
+  }
+
+  /**
+   * Constrói uma amostra de cada silhueta durante a tela de preparação. Os
+   * meshes ficam vivos e ocultos (em vez de serem criados e destruídos), então
+   * o primeiro zumbi real reaproveita os programas já compilados sem gerar um
+   * pico de shader no instante da entrada.
+   */
+  prepare() {
+    if (this._warmups.length) return;
+
+    const specs = [
+      ["warm-zombie", "zombie"],
+      ["warm-wolf", "wolf"],
+      ["warm-boss", "boss"],
+    ];
+
+    for (const [id, kind] of specs) {
+      const bicho =
+        kind === "wolf"
+          ? new Wolf(this.scene, this.physics, this.terrain, id, 0, 0)
+          : new Zombie(this.scene, this.physics, this.terrain, id, 0, 0, {
+              isBoss: kind === "boss",
+            });
+      bicho.collider?.setEnabled(false);
+      bicho.group.visible = false;
+      bicho.setCastShadow(false);
+      this._warmups.push(bicho);
+    }
+  }
+
+  setWarmupVisible(visible) {
+    for (const bicho of this._warmups) bicho.group.visible = visible;
+  }
+
+  /** Sincroniza sombra projetada em todos os bichos (noite do modo zumbi). */
+  setCastShadow(on) {
+    this._castShadow = on;
+    for (const z of this.byNetId.values()) z.setCastShadow?.(on);
   }
 
   update(dt, camera) {

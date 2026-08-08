@@ -11,6 +11,7 @@ let proximoId = 1;
 
 const DEFLECTIONS = [0, 0.45, -0.45, 0.95, -0.95, 1.6, -1.6];
 const TAU = Math.PI * 2;
+const NPC_GRID_CELL = 2.5; // maior que o raio de separação dos lobos
 
 function angleDelta(from, to) {
   let d = to - from;
@@ -52,13 +53,13 @@ export class Zombie {
     this.speed = base * (1 + (Math.random() * 2 - 1) * varFrac);
   }
 
-  update(dt, jogadores, agora) {
+  update(dt, jogadores, agora, vizinhos = []) {
     if (this.dead) return null;
     const Z = CONFIG.modes.zombie;
 
     const alvo = this.pickTarget(jogadores);
     if (!alvo) {
-      this.walkToward(Z.centerX, Z.centerZ, dt);
+      this.walkToward(Z.centerX, Z.centerZ, dt, vizinhos);
       this.state = "walk";
       return null;
     }
@@ -67,6 +68,7 @@ export class Zombie {
 
     if (d <= this.attackRadius) {
       this.state = "attack";
+      this.applySeparation(dt, vizinhos);
       this.faceToward(alvo.x, alvo.z);
       if (agora - this.lastAttack < Z.attackInterval * 1000) return null;
       this.lastAttack = agora;
@@ -74,7 +76,7 @@ export class Zombie {
     }
 
     this.state = "walk";
-    this.walkToward(alvo.x, alvo.z, dt);
+    this.walkToward(alvo.x, alvo.z, dt, vizinhos);
     return null;
   }
 
@@ -96,8 +98,20 @@ export class Zombie {
     this.yaw = Math.atan2(x - this.x, z - this.z);
   }
 
-  walkToward(tx, tz, dt) {
-    this.faceToward(tx, tz);
+  walkToward(tx, tz, dt, vizinhos = []) {
+    let sx = tx - this.x;
+    let sz = tz - this.z;
+    const len = Math.hypot(sx, sz);
+    if (len > 1e-4) {
+      sx /= len;
+      sz /= len;
+    }
+
+    const separacao = this.separationForce(vizinhos);
+    sx += separacao.x;
+    sz += separacao.z;
+
+    this.yaw = Math.atan2(sx, sz);
     for (const desvio of DEFLECTIONS) {
       const ang = this.yaw + desvio;
       if (this.step(Math.sin(ang), Math.cos(ang), dt)) {
@@ -106,6 +120,47 @@ export class Zombie {
       }
     }
     return false;
+  }
+
+  separationForce(vizinhos = []) {
+    const Z = CONFIG.modes.zombie;
+    const radius = Z.npcSeparationRadius ?? 0.9;
+    const weight = Z.npcSeparationWeight ?? 1.35;
+    const radiusSq = radius * radius;
+    let sx = 0;
+    let sz = 0;
+
+    /* A separação fica no servidor para ser igual em todas as telas. Sem ela,
+       desligar zumbi–zumbi no Rapier economizaria CPU, mas a horda poderia
+       atravessar o próprio centro e formar uma pilha visual. */
+    for (const outro of vizinhos) {
+      if (outro === this || outro.dead || outro.kind === "boss") continue;
+      const dx = this.x - outro.x;
+      const dz = this.z - outro.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= radiusSq) continue;
+
+      if (d2 < 1e-6) {
+        const sinal = this.id < outro.id ? -1 : 1;
+        sx += sinal * weight;
+        sz += (this.id % 2 ? 1 : -1) * weight * 0.35;
+        continue;
+      }
+
+      const d = Math.sqrt(d2);
+      const força = ((radius - d) / radius) * weight;
+      sx += (dx / d) * força;
+      sz += (dz / d) * força;
+    }
+    return { x: sx, z: sz };
+  }
+
+  applySeparation(dt, vizinhos = []) {
+    const força = this.separationForce(vizinhos);
+    const len = Math.hypot(força.x, força.z);
+    if (len < 1e-4) return;
+    this.yaw = Math.atan2(força.x, força.z);
+    this.step(força.x / len, força.z / len, dt);
   }
 
   step(fx, fz, dt) {
@@ -270,6 +325,7 @@ export class Wolf {
       this.state = "attack";
       this.y = this.baseY;
       this.vel = Math.max(0, this.vel - (this._ai().brake ?? 11) * dt);
+      this.applySeparation(dt, vizinhos);
       this.faceToward(alvo.x, alvo.z);
       this.heading = this.yaw;
       if (agora - this.lastAttack < (Z.wolfAttackInterval ?? 1) * 1000) return null;
@@ -391,6 +447,45 @@ export class Wolf {
     const fz = Math.cos(this.heading);
     if (!this.step(fx, fz, dt)) {
       this.vel = Math.max(0, this.vel - brake * dt * 1.5);
+    }
+    this.yaw = this.heading;
+  }
+
+  applySeparation(dt, vizinhos = []) {
+    const AI = this._ai();
+    const sepRadius = AI.separationRadius ?? 1.8;
+    let sx = 0;
+    let sz = 0;
+
+    for (const outro of vizinhos) {
+      if (outro === this || outro.dead) continue;
+      const ox = this.x - outro.x;
+      const oz = this.z - outro.z;
+      const od = Math.hypot(ox, oz);
+      if (od >= sepRadius) continue;
+      if (od < 1e-4) {
+        const sinal = this.id < outro.id ? -1 : 1;
+        sx += sinal;
+        sz += this.id % 2 ? 0.35 : -0.35;
+        continue;
+      }
+      const peso = (sepRadius - od) / sepRadius;
+      sx += (ox / od) * peso * 1.4;
+      sz += (oz / od) * peso * 1.4;
+    }
+
+    const len = Math.hypot(sx, sz);
+    if (len < 1e-4) return;
+
+    const velocidadeParaEmpurrar = Math.max(this.vel, this.baseSpeed * 0.45);
+    const desired = Math.atan2(sx, sz);
+    /* No estado de ataque a velocidade normal já foi freada. Se o solver
+       também estiver desligado para NPCs, uma separação limitada pelo turn
+       rate demoraria vários segundos para desfazer uma sobreposição. */
+    this.heading = desired;
+    this.vel = velocidadeParaEmpurrar;
+    if (!this.step(Math.sin(this.heading), Math.cos(this.heading), dt)) {
+      this.vel = Math.max(0, this.vel - (AI.brake ?? 11) * dt);
     }
     this.yaw = this.heading;
   }
@@ -591,6 +686,41 @@ export class ZombieNight {
     return stagger;
   }
 
+  /** Índice espacial barato para separar apenas vizinhos próximos. */
+  buildNpcGrid() {
+    const grid = new Map();
+    for (const bicho of this.zombies) {
+      if (bicho.dead) continue;
+      const cx = Math.floor(bicho.x / NPC_GRID_CELL);
+      const cz = Math.floor(bicho.z / NPC_GRID_CELL);
+      const key = `${cx}:${cz}`;
+      let bucket = grid.get(key);
+      if (!bucket) {
+        bucket = [];
+        grid.set(key, bucket);
+      }
+      bucket.push(bicho);
+    }
+    return grid;
+  }
+
+  /** Retorna no máximo os 9 quadrados ao redor do NPC. */
+  nearbyNpcs(bicho, grid) {
+    const cx = Math.floor(bicho.x / NPC_GRID_CELL);
+    const cz = Math.floor(bicho.z / NPC_GRID_CELL);
+    const vizinhos = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const bucket = grid.get(`${cx + dx}:${cz + dz}`);
+        if (!bucket) continue;
+        for (const outro of bucket) {
+          if (outro !== bicho) vizinhos.push(outro);
+        }
+      }
+    }
+    return vizinhos;
+  }
+
   start(nPlayers = 1) {
     this.playerCount = Math.max(1, nPlayers | 0);
     this.active = true;
@@ -786,10 +916,23 @@ export class ZombieNight {
   }
 
   tickPendingSpawns(dt) {
+    const Z = CONFIG.modes.zombie;
+    const maxAlive = Z.maxAlive ?? Infinity;
+    const maxEntities = Z.maxEntities ?? Infinity;
+
     for (let j = this.pendingSpawns.length - 1; j >= 0; j--) {
       const ps = this.pendingSpawns[j];
       ps.timer -= dt;
       if (ps.timer <= 0) {
+        /* Cadáveres ainda estão no array e ainda são desenhados pelo cliente.
+           Contar o array inteiro evita trocar uma horda de 48 vivos por
+           centenas de vivos + mortos acumulados. */
+        if (
+          this.zombies.length >= maxEntities ||
+          (!ps.isBoss && this.vivos >= maxAlive)
+        ) {
+          continue;
+        }
         if (ps.bossWolf) {
           const boss = ps.bossId != null ? this.byId(ps.bossId) : null;
           if (boss && !boss.dead) {
@@ -918,11 +1061,11 @@ export class ZombieNight {
     this.tickPendingSpawns(dt);
     this.tickBossWolfWaves();
 
-    const lobosVivos = this.zombies.filter((z) => !z.dead && z.kind === "wolf");
+    const npcGrid = this.buildNpcGrid();
 
     for (const zumbi of this.zombies) {
       if (zumbi.dead) continue;
-      const vizinhos = zumbi.kind === "wolf" ? lobosVivos : [];
+      const vizinhos = this.nearbyNpcs(zumbi, npcGrid);
       const alvo = zumbi.update(dt, jogadores, agora, vizinhos);
       if (alvo != null) ataques.push({ zombieId: zumbi.id, playerId: alvo });
     }

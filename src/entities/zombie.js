@@ -25,6 +25,7 @@ import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 import { entityRegistry } from "../core/entityRegistry.js";
+import { NPC_COLLISION_GROUPS } from "../core/collisionGroups.js";
 import { damp } from "../utils/math.js";
 
 const H = 1.8; // m — altura do zumbi de pé
@@ -33,6 +34,7 @@ const H = 1.8; // m — altura do zumbi de pé
    quadro e não pode alocar. Ver o comentário do método. */
 const _dir = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
+const _antesPos = new THREE.Vector3();
 /** cos(99°) — além deste ângulo em relação ao eixo da câmera, os olhos saem. */
 const COS_EYE_CULL = Math.cos(Math.PI * 0.55);
 
@@ -405,9 +407,9 @@ export class Zombie {
       ),
     );
     this.collider = physics.createCollider(
-      RAPIER.ColliderDesc.capsule(capH, capR).setActiveEvents(
-        RAPIER.ActiveEvents.COLLISION_EVENTS,
-      ),
+      RAPIER.ColliderDesc.capsule(capH, capR)
+        .setCollisionGroups(NPC_COLLISION_GROUPS)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       this.body,
     );
     physics.register(this.collider, { kind: "zombie", entityId, zombie: this });
@@ -543,7 +545,7 @@ export class Zombie {
 
   /**
    * Brilho vermelho no corpo do chefão — dura o suficiente para ler o hit
-   * de longe, mesmo quando o clarão da PointLight já sumiu.
+   * de longe, mesmo quando o clarão emissivo do impacto já sumiu.
    */
   flashHit() {
     if (!this.isBoss) return;
@@ -701,6 +703,15 @@ export class Zombie {
     this.olhos.visible = _dir.dot(_fwd) > COS_EYE_CULL;
   }
 
+  /** Liga/desliga sombra projetada — à noite o passe pesa com dezenas de corpos. */
+  setCastShadow(on) {
+    if (this._castShadow === on) return;
+    this._castShadow = on;
+    this.group.traverse((o) => {
+      if (o.isMesh && o !== this.olhos && o !== this.chama) o.castShadow = on;
+    });
+  }
+
   update(dt, camera) {
     if (this.isBoss) this.updateHitGlow(dt);
     if (this.dead) {
@@ -712,7 +723,7 @@ export class Zombie {
     const alvo = this.netTarget;
     if (alvo) {
       const k = 11;
-      const antes = this.position.clone();
+      _antesPos.copy(this.position);
       this.position.x = damp(this.position.x, alvo.x, k, dt);
       this.position.y = damp(this.position.y, alvo.y, k, dt);
       this.position.z = damp(this.position.z, alvo.z, k, dt);
@@ -720,7 +731,7 @@ export class Zombie {
       while (d > Math.PI) d -= Math.PI * 2;
       while (d < -Math.PI) d += Math.PI * 2;
       this.yaw += d * (1 - Math.exp(-k * dt));
-      this.speed = antes.distanceTo(this.position) / Math.max(dt, 1e-4);
+      this.speed = _antesPos.distanceTo(this.position) / Math.max(dt, 1e-4);
       this.state = alvo.state;
     }
 

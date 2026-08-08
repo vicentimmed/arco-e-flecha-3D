@@ -1,10 +1,9 @@
 /* ---------------------------------------------------------------------------
    Nascer.
 
-   Um caminho só para entrar na sala e para renascer depois de morrer: aparecer
-   a 10 m do chão e CAIR. Não é enfeite — é o que torna o renascimento legível
-   para quem está olhando. Um jogador que simplesmente reaparece de pé parece um
-   erro de rede; um que despenca do céu piscando é obviamente alguém voltando.
+   O caminho padrão para entrar na sala e renascer é aparecer a 10 m do chão e
+   CAIR. A sala pode informar `drop: 0` em modos que precisam começar
+   imediatamente no piso.
 
    A queda não tem física própria: é o mesmo controlador cinemático de sempre,
    só que começando lá em cima. Por isso ela acerta o relevo, escorrega em
@@ -44,7 +43,8 @@ export class Respawn {
   }
 
   /**
-   * Coloca o jogador no ar sobre (x, z) e liga a invencibilidade.
+   * Coloca o jogador sobre (x, z), respeitando o drop do pacote, e liga a
+   * invencibilidade.
    * @param {{x:number, z:number, y:number, drop:number, invulnUntil:number}} spawn
    */
   begin(spawn) {

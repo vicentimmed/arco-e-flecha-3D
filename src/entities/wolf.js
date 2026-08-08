@@ -14,12 +14,14 @@ import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 import { entityRegistry } from "../core/entityRegistry.js";
+import { NPC_COLLISION_GROUPS } from "../core/collisionGroups.js";
 import { damp } from "../utils/math.js";
 
 const H = () => CONFIG.modes.zombie.wolfBodyHeight ?? 1.45;
 
 const _dir = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
+const _antesPos = new THREE.Vector3();
 const COS_EYE_CULL = Math.cos(Math.PI * 0.55);
 
 const MAT = {
@@ -227,9 +229,9 @@ export class Wolf {
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(x, y + hh / 2, z),
     );
     this.collider = physics.createCollider(
-      RAPIER.ColliderDesc.capsule(hh / 2 - 0.22, 0.32).setActiveEvents(
-        RAPIER.ActiveEvents.COLLISION_EVENTS,
-      ),
+      RAPIER.ColliderDesc.capsule(hh / 2 - 0.22, 0.32)
+        .setCollisionGroups(NPC_COLLISION_GROUPS)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       this.body,
     );
     physics.register(this.collider, { kind: "wolf", entityId, wolf: this });
@@ -522,6 +524,15 @@ export class Wolf {
     this.olhos.visible = _dir.dot(_fwd) > COS_EYE_CULL;
   }
 
+  /** Liga/desliga sombra projetada — à noite o passe pesa com dezenas de corpos. */
+  setCastShadow(on) {
+    if (this._castShadow === on) return;
+    this._castShadow = on;
+    this.group.traverse((o) => {
+      if (o.isMesh && o !== this.olhos) o.castShadow = on;
+    });
+  }
+
   update(dt, camera) {
     if (this.dead) {
       this.updateDeath(dt);
@@ -532,7 +543,7 @@ export class Wolf {
     const alvo = this.netTarget;
     if (alvo) {
       const k = 14;
-      const antes = this.position.clone();
+      _antesPos.copy(this.position);
       this.position.x = damp(this.position.x, alvo.x, k, dt);
       this.position.y = damp(this.position.y, alvo.y, k, dt);
       this.position.z = damp(this.position.z, alvo.z, k, dt);
@@ -540,7 +551,7 @@ export class Wolf {
       while (d > Math.PI) d -= Math.PI * 2;
       while (d < -Math.PI) d += Math.PI * 2;
       this.yaw += d * (1 - Math.exp(-k * dt));
-      this.speed = antes.distanceTo(this.position) / Math.max(dt, 1e-4);
+      this.speed = _antesPos.distanceTo(this.position) / Math.max(dt, 1e-4);
       this.state = alvo.state;
     }
 

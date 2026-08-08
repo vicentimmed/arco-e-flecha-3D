@@ -805,24 +805,17 @@ export class Player {
   }
 
   /**
-   * Transparência do corpo inteiro — é isto que faz o piscar da invencibilidade.
+   * Pisca sem mudar flags de material.
    *
-   * A flag `transparent` só é tocada na VIRADA (duas vezes por renascimento),
-   * porque mudá-la obriga o Three a recompilar o material. A opacidade em si é
-   * de graça, então piscar a 6 Hz não custa nada.
+   * Alternar `transparent`, `depthWrite` e `needsUpdate` a cada fase do piscar
+   * invalida programas do Three e pode recompilar todos os materiais do jogador
+   * no meio do respawn. A invulnerabilidade é um estado curto: esconder o grupo
+   * nos vales da curva produz o mesmo sinal visual sem tocar no pipeline PBR.
    */
   setOpacity(alpha) {
     if (alpha === this._opacity) return;
-    const wasTransparent = this._opacity < 0.999;
-    const isTransparent = alpha < 0.999;
     this._opacity = alpha;
-    for (const m of this.materials) {
-      m.opacity = alpha;
-      if (isTransparent === wasTransparent) continue;
-      m.transparent = isTransparent;
-      m.depthWrite = !isTransparent;
-      m.needsUpdate = true;
-    }
+    this.root.visible = alpha >= 0.5;
   }
 
   /** Libera GPU ao tirar um jogador remoto da cena. */
@@ -856,12 +849,15 @@ export class Player {
         const wdx = (-sin * fx + cos * sx) * step;
         const wdz = (-cos * fx - sin * sx) * step;
         if (this.physicsBody) {
-          const cur = this.physicsBody.desiredHorizontal;
-          this.physicsBody.setHorizontalMove(cur.x + wdx, cur.z + wdz);
+          const frameDt = Math.max(dt, 1e-4);
+          this.physicsBody.setHorizontalMove(wdx / frameDt, wdz / frameDt);
         } else {
           this.stepTo(wdx, wdz);
         }
       }
+    }
+    if (this.physicsBody && (!moving || step <= 1e-6)) {
+      this.physicsBody.setHorizontalMove(0, 0);
     }
 
     /* Composição do passo. `moveF`/`moveS` guardam o vetor de movimento em

@@ -60,9 +60,9 @@ export class PlayerPhysics {
     if (this.grounded) this.jumpQueued = true;
   }
 
-  /** Deslocamento horizontal desejado (m) antes do passo fixo. */
-  setHorizontalMove(dx, dz) {
-    this.desiredHorizontal.set(dx, 0, dz);
+  /** Velocidade horizontal desejada (m/s), consumida em cada passo fixo. */
+  setHorizontalMove(vx, vz) {
+    this.desiredHorizontal.set(vx, 0, vz);
   }
 
   /** Integra movimento no passo fixo — chamar antes de world.step(). */
@@ -83,9 +83,9 @@ export class PlayerPhysics {
 
     const t = this.body.translation();
     const desired = {
-      x: this.desiredHorizontal.x,
+      x: this.desiredHorizontal.x * h,
       y: this.grounded ? 0 : this.verticalVelocity * h,
-      z: this.desiredHorizontal.z,
+      z: this.desiredHorizontal.z * h,
     };
 
     this.controller.computeColliderMovement(this.collider, desired);
@@ -150,7 +150,6 @@ export class PlayerPhysics {
     // o centro do colisor; colá-la sempre no heightAt escondia todo o salto.
     p.position.y = ny - CONFIG.player.height / 2;
 
-    this.desiredHorizontal.set(0, 0, 0);
   }
 
   getHitBody() {

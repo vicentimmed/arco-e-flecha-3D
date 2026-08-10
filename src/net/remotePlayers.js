@@ -327,6 +327,27 @@ class RemotePlayer {
     p.setKnife(b.knifeFraction ?? 0);
   }
 
+  /**
+   * A fase mudou debaixo deste boneco.
+   *
+   * Três coisas ficam desatualizadas de uma vez: o terreno que ele usa para
+   * achar o chão, o terreno do corpo mole e a cápsula de colisão, que morreu
+   * junto com o mundo de física antigo.
+   *
+   * O buffer de interpolação é DESCARTADO pelo mesmo motivo do teleporte de
+   * nascimento: as amostras guardadas descrevem uma posição na fase anterior, e
+   * interpolar entre os dois mundos faria o boneco atravessar a arena
+   * deslizando em vez de simplesmente aparecer no lugar novo.
+   */
+  relevel(terrain) {
+    this.player.terrain = terrain;
+    this.ragdoll.terrain = terrain;
+    this.ragdoll.stop();
+    this.dyingSince = 0;
+    this.buffer.length = 0;
+    this.body.rebuild();
+  }
+
   dispose(scene) {
     entityRegistry.unregister(this.entityId);
     this.tag.dispose();
@@ -346,8 +367,15 @@ class RemotePlayer {
 class RemoteBody {
   constructor(physics, entityId, player) {
     this.physics = physics;
+    this.entityId = entityId;
+    this.player = player;
     this.verticalVelocity = 0;
+    this.build();
+  }
 
+  /** Cria a cápsula no mundo de física atual. Ver `PlayerPhysics.build`. */
+  build() {
+    const { physics, entityId, player } = this;
     const raio = CONFIG.player.colliderRadius;
     const meia = Math.max(0.1, (CONFIG.player.height - 2 * raio) / 2);
 
@@ -370,6 +398,17 @@ class RemoteBody {
       character: player,
       isLocal: false,
     });
+    return this;
+  }
+
+  /**
+   * Refaz a cápsula depois de uma troca de fase.
+   *
+   * Sem destruir nada: o mundo antigo já foi liberado inteiro, e remover o
+   * corpo velho seria mexer em ponteiro morto.
+   */
+  rebuild() {
+    return this.build();
   }
 
   moveTo(position) {
@@ -464,5 +503,17 @@ export class RemotePlayers {
 
   clear() {
     for (const id of [...this.byId.keys()]) this.remove(id);
+  }
+
+  /**
+   * Aponta a coleção inteira para o terreno da fase nova e refaz as cápsulas.
+   *
+   * Os bonecos NÃO são destruídos: quem está na sala continua na sala do outro
+   * lado da troca de fase, com o mesmo nome, a mesma cor e o mesmo placar. O
+   * que muda é o chão sob eles e o mundo de física em que colidem.
+   */
+  setTerrain(terrain) {
+    this.terrain = terrain;
+    for (const remoto of this.byId.values()) remoto.relevel(terrain);
   }
 }

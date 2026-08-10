@@ -12,6 +12,26 @@ export class PlayerPhysics {
     this.player = player;
     this.entityId = entityId;
 
+    this.desiredHorizontal = new THREE.Vector3();
+    this._corrected = new THREE.Vector3();
+
+    this.build();
+  }
+
+  /**
+   * Cria o controlador, o corpo e a cápsula no mundo de física ATUAL.
+   *
+   * Separado do construtor porque a troca de fase joga fora o `RAPIER.World`
+   * inteiro (ver `PhysicsWorld.recreate`), e com ele vão o controlador de
+   * personagem e a cápsula do jogador. O que sobrevive é este objeto e as
+   * referências a ele espalhadas pelo jogo — daí a reconstrução ser um método
+   * e não um `new`.
+   *
+   * Lê `player.terrain`, então quem troca a fase precisa apontar o jogador
+   * para o terreno novo ANTES de chamar isto: a altura dos pés sai daí.
+   */
+  build() {
+    const { physics, player } = this;
     const radius = CONFIG.player.colliderRadius;
     const halfHeight = Math.max(0.1, (CONFIG.player.height - 2 * radius) / 2);
 
@@ -44,7 +64,7 @@ export class PlayerPhysics {
 
     physics.register(this.collider, {
       kind: "character",
-      entityId,
+      entityId: this.entityId,
       character: player,
       isLocal: true,
     });
@@ -52,8 +72,18 @@ export class PlayerPhysics {
     this.verticalVelocity = 0;
     this.grounded = true;
     this.jumpQueued = false;
-    this.desiredHorizontal = new THREE.Vector3();
-    this._corrected = new THREE.Vector3();
+    this.desiredHorizontal.set(0, 0, 0);
+    return this;
+  }
+
+  /**
+   * Refaz a cápsula depois de uma troca de fase.
+   *
+   * Não há nada a destruir: o mundo antigo inteiro já foi liberado, e tentar
+   * remover o corpo velho seria mexer num ponteiro morto.
+   */
+  rebuild() {
+    return this.build();
   }
 
   queueJump() {

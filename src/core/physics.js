@@ -49,6 +49,54 @@ export class PhysicsWorld {
     this.world.gravity = { x: 0, y, z: 0 };
   }
 
+  /**
+   * Joga fora o mundo inteiro e começa outro. É a troca de fase.
+   *
+   * A alternativa seria varrer uma lista de corpos e removê-los um a um. Ela
+   * funciona até alguém esquecer um — e o esquecido não dá erro: ele vira um
+   * colisor invisível no meio da fase seguinte, que segura o jogador no ar ou
+   * crava uma flecha no nada. Trocar o mundo torna esse bug **impossível de
+   * escrever**, e não apenas improvável.
+   *
+   * O que NÃO muda é este objeto. Meia dúzia de sistemas guardam
+   * `this.physics` no construtor (o arco, a mira, as flechas, os bichos), e se
+   * a troca de fase criasse um `PhysicsWorld` novo todos eles ficariam
+   * apontando para um mundo morto. Aqui o invólucro é o mesmo — só o
+   * `RAPIER.World` de dentro é outro —, então nenhuma dessas referências
+   * precisa saber que a fase mudou.
+   *
+   * Pela mesma razão, `beforeStep` e `onContact` são PRESERVADOS: quem se
+   * inscreveu uma vez continua inscrito. O que se perde, e tem de ser
+   * refeito por quem é dono, são os corpos: a cápsula do jogador local, as
+   * cápsulas dos remotos e o controlador de personagem — todos com `rebuild()`.
+   *
+   * @param {number} [gravity] gravidade em Y da nova fase (m/s²).
+   */
+  recreate(gravity = this.world.gravity.y) {
+    this.world.free?.();
+    this.eventQueue.free?.();
+
+    this.world = new RAPIER.World({ x: 0, y: gravity, z: 0 });
+    this.world.timestep = CONFIG.physics.fixedStep;
+    this.eventQueue = new RAPIER.EventQueue(true);
+
+    // O mapa de donos era do mundo antigo: os handles do mundo novo começam a
+    // contar do zero e reaproveitariam números já usados. Não limpar aqui é a
+    // receita para um colisor da fase nova ser atendido pelo dono de um da
+    // fase velha — e para uma flecha acertar uma árvore que não existe mais.
+    this.colliderOwners.clear();
+    this.pendingContacts.length = 0;
+
+    this.stepCount = 0;
+    this.simulatedTime = 0;
+    return this;
+  }
+
+  /** Quantos corpos existem agora. Usado pelo critério de aceite da troca. */
+  get bodyCount() {
+    return this.world.bodies.len();
+  }
+
   /** Registra a quem pertence um colisor, para resolver eventos de contato. */
   register(collider, owner) {
     this.colliderOwners.set(collider.handle, owner);

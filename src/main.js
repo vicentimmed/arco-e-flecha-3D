@@ -17,10 +17,9 @@ import { BodySync } from "./core/sync.js";
 import { entityRegistry } from "./core/entityRegistry.js";
 import { gameEvents, EventType, vec3Payload } from "./core/events.js";
 import { Renderer } from "./core/renderer.js";
-import { createEnvironment } from "./entities/environment.js";
+import { LevelManager, DEFAULT_LEVEL } from "./levels/index.js";
 import { Player } from "./entities/player.js";
 import { ArrowManager } from "./entities/arrow.js";
-import { createTargets } from "./entities/target.js";
 import { Wind } from "./systems/wind.js";
 import { CameraRig } from "./systems/camera.js";
 import { AimSolver } from "./systems/aim.js";
@@ -78,10 +77,57 @@ const MODE_LABELS = {
 /** Milímetro de precisão: de sobra para a rede e metade dos bytes. */
 const mm = (v) => Math.round(v * 1000) / 1000;
 
+/**
+ * Espera o próximo quadro — ou 100 ms, o que vier primeiro.
+ *
+ * O `requestAnimationFrame` sozinho parece a escolha óbvia e tem uma armadilha:
+ * **navegador não entrega rAF para aba em segundo plano**. Quem troca de aba no
+ * meio de um carregamento (e trocar de aba durante um carregamento é
+ * exatamente o que as pessoas fazem) volta para um jogo travado para sempre no
+ * meio da troca, sem erro no console e sem nada na tela explicando.
+ *
+ * Com a corrida, o carregamento continua na aba oculta — mais devagar, porque
+ * 100 ms é bem mais que um quadro, mas continua. E quando a aba está visível o
+ * rAF ganha sempre, então o caminho normal não paga nada por isto.
+ */
 const nextFrame = () =>
-  new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  new Promise((resolve) => {
+    let pronto = false;
+    const fim = () => {
+      if (pronto) return;
+      pronto = true;
+      resolve();
+    };
+    requestAnimationFrame(fim);
+    setTimeout(fim, 100);
+  });
 
 class Game {
+  /* ------------------------------------------------------- a fase em cena --
+
+     Terreno, cenário e alvos pertencem à FASE, não ao jogo. Estes acessores
+     existem para que o resto do arquivo continue escrevendo `this.terrain` sem
+     saber disso — e, mais importante, para que ninguém guarde a referência.
+
+     Guardar era o problema antigo: dez lugares copiavam `this.terrain` no
+     construtor, e depois de uma troca de fase todos apontariam para o vale que
+     já foi demolido. Lido de dentro, o terreno certo é sempre o da fase que
+     está em cena. */
+
+  get terrain() {
+    return this.levels.terrain;
+  }
+
+  /** A fase em si. Quem chamava `environment.update`/`.flags` continua valendo. */
+  get environment() {
+    return this.levels.current;
+  }
+
+  /** Os alvos fixos do campo de tiro. Fases sem eles devolvem lista vazia. */
+  get targets() {
+    return this.levels.current?.targets ?? [];
+  }
+
   constructor(physics, setStep = () => {}) {
     this.physics = physics;
     this.sync = new BodySync();
@@ -90,12 +136,23 @@ class Game {
     this.renderer = new Renderer(document.getElementById("scene"));
     this.scene = this.renderer.scene;
 
-    setStep("esculpindo o vale…");
-    this.environment = createEnvironment(this.scene, physics);
-    this.terrain = this.environment.terrain;
+    /* ---------------------------------------------------------------- fase --
+       O cenário não é mais construído aqui: ele é uma FASE, com dono e ciclo de
+       vida, e o gerente é quem sabe montá-la e desmontá-la. Ver `levels/`.
 
-    setStep("posicionando alvos…");
-    this.targets = createTargets(this.scene, physics, this.sync, this.terrain);
+       O contexto abaixo é tudo o que uma fase precisa para nascer, mais os dois
+       ganchos que religam o jogo depois de uma troca. */
+    this.levels = new LevelManager({
+      scene: this.scene,
+      physics,
+      sync: this.sync,
+      nextFrame,
+      beforeDispose: () => this.beforeLevelDispose(),
+      onLevelReady: (fase) => this.onLevelReady(fase),
+    });
+
+    setStep("esculpindo o vale…");
+    this.levels.build(DEFAULT_LEVEL, (_f, texto) => setStep(texto));
 
     this.wind = new Wind();
 
@@ -117,10 +174,12 @@ class Game {
     );
     this.boars = new BoarManager(this.scene, physics, this.terrain);
     this.elks = new ElkManager(this.scene, physics, this.terrain);
-    // O bando precisa saber onde ficam as copas, e só o ambiente sabe: o
-    // servidor manda "pouse por aqui" com um (x, z) e a árvore é achada aqui.
+    /* O bando precisa saber onde ficam as copas, e só a fase sabe: o servidor
+       manda "pouse por aqui" com um (x, z) e a árvore é achada aqui. O `?.` não
+       é zelo excessivo — há fase sem árvore nenhuma, e lá a resposta certa é
+       null, que deixa a ave no ar em vez de pousá-la no vazio. */
     this.birds = new BirdManager(this.scene, physics, this.terrain, (x, z) =>
-      this.environment.nearestPerch(x, z),
+      this.environment?.nearestPerch?.(x, z) ?? null,
     );
     this.zombies = new ZombieManager(this.scene, physics, this.terrain, this.arrows);
     this.torches = new TorchRing(this.scene, physics, this.terrain);
@@ -146,6 +205,8 @@ class Game {
     this._elkHudCountdown = false;
     /** A tela de vitória da caçada está na tela, esperando o Enter que a fecha. */
     this.huntVictoryOpen = false;
+    /** Troca de fase em curso: o mundo não existe e o laço fica congelado. */
+    this.swappingLevel = false;
     /** Preparação coordenada da noite — bloqueia a entrada até o aquecimento. */
     this.modePreparing = false;
     this.modePrepareToken = null;
@@ -827,6 +888,24 @@ class Game {
     this.fps = this.fps * 0.92 + (1 / Math.max(rawDt, 1e-4)) * 0.08;
     gameEvents.setTick(this.simTick);
 
+    /* DURANTE A TROCA DE FASE não existe mundo: o cenário antigo foi demolido,
+       o mundo de física foi liberado e o novo ainda está sendo construído. Nada
+       aqui embaixo tem o que simular — `terrain` é null, a cápsula do jogador
+       não existe e o passo da física operaria sobre corpos que já não estão lá.
+
+       Congelar o quadro inteiro é mais seguro do que espalhar trinta guardas
+       pelo laço, e é mais honesto: o jogo não está rodando devagar, ele está
+       parado, que é exatamente o que a barra de carregamento está dizendo.
+
+       O `render` continua para a barra pintar, e o `rAF` continua para o laço
+       não morrer — sem ele, a troca terminaria e ninguém retomaria o jogo. */
+    if (this.swappingLevel) {
+      this.input.consume(); // descarta a entrada acumulada no carregamento
+      this.renderer.render(0, this.wind.vector);
+      requestAnimationFrame(this.frame.bind(this));
+      return;
+    }
+
     const actions = this.input.consume();
     this.handleActions(actions);
 
@@ -1098,6 +1177,105 @@ class Game {
         "miss",
       );
     }
+  }
+
+  /* ------------------------------------------------------ troca de fase --- */
+
+  /**
+   * Troca a fase em cena, com carregamento.
+   *
+   * O `swappingLevel` congela o laço principal enquanto o mundo não existe
+   * (ver `frame`), e o `finally` o desliga mesmo se a construção estourar —
+   * sem isso, um erro no meio da troca deixaria o jogo parado para sempre,
+   * sem nada na tela explicando o quê.
+   *
+   * @returns {Promise<object|null>} diagnóstico da troca (`ms`, `freed`)
+   */
+  async changeLevel(id, { titulo = "carregando fase…", force = false } = {}) {
+    if (this.swappingLevel) return null;
+    // `force` existe para o critério de aceite: reconstruir a MESMA fase é o
+    // teste que prova a mecânica sem nenhuma variável nova — se `vale → vale`
+    // não muda nada na tela e não vaza memória, a troca está certa.
+    if (this.levels.id === id && !force) return null;
+
+    this.swappingLevel = true;
+    this.hud.showModeLoading(titulo);
+    try {
+      const info = await this.levels.swap(id, (f, texto) => {
+        this.hud.updateModeLoading(f, 1, texto);
+      });
+      return info;
+    } catch (err) {
+      console.error("troca de fase falhou:", err);
+      this.hud.toast("falha ao trocar de fase", "miss");
+      return null;
+    } finally {
+      this.swappingLevel = false;
+      this.hud.hideModeLoading();
+      this.lastTime = performance.now(); // não cobra o carregamento como dt
+    }
+  }
+
+  /**
+   * Última chamada antes de a fase ser demolida.
+   *
+   * Aqui morre tudo o que tem CORPO no mundo de física atual e não pertence à
+   * fase: bichos, flechas voando, flechas cravadas, tochas, o alvo da série.
+   *
+   * A ordem importa e é o motivo de este gancho existir separado. Cada um
+   * desses `clear()` remove os próprios corpos do mundo — e se rodassem depois
+   * do `physics.recreate()`, estariam removendo corpos de um mundo já
+   * liberado. O Rapier não avisa quando isso acontece: ele quebra, e quebra
+   * um passo depois, longe da causa.
+   */
+  beforeLevelDispose() {
+    this.boars.clear();
+    this.elks.clear();
+    this.birds.clear();
+    this.zombies.clear();
+    this.torches.clear();
+    this.series.clear();
+    this.arrows.clearAll();
+    this.trails.clear();
+    this.storm.setActive(false);
+    this.death.ragdoll.stop();
+  }
+
+  /**
+   * A fase nova está de pé: religar quem atravessou a troca.
+   *
+   * São duas famílias de conserto. A primeira é o TERRENO: meia dúzia de
+   * sistemas precisam saber onde é o chão, e o chão é outro. A segunda é a
+   * FÍSICA: o mundo é novo, então a cápsula do jogador, as cápsulas dos
+   * remotos e o colisor que a mira ignora deixaram de existir.
+   *
+   * Roda também na primeira montagem, quando quase nada disto existe ainda —
+   * daí as guardas. É de propósito: um caminho só para montar e para trocar
+   * significa que a troca exercita o mesmo código todo dia, em vez de um
+   * caminho especial que só roda quando alguém aperta a tecla.
+   */
+  onLevelReady(fase) {
+    const terrain = fase.terrain;
+
+    if (this.player) this.player.terrain = terrain;
+    if (this.death) {
+      this.death.terrain = terrain;
+      this.death.ragdoll.terrain = terrain;
+    }
+    for (const sistema of [this.boars, this.elks, this.birds, this.zombies, this.torches, this.series]) {
+      if (sistema) sistema.terrain = terrain;
+    }
+
+    /* O poleiro das aves NÃO precisa ser religado: o callback que o
+       `BirdManager` recebeu lê `this.environment`, que é um acessor para a fase
+       em cena. Ele acompanha a troca sozinho — que é o ponto inteiro de ter
+       trocado as capturas por acessores. */
+
+    if (this.playerPhysics) {
+      this.playerPhysics.rebuild();
+      this.aim.setExcludedCollider(this.playerPhysics.collider);
+    }
+    if (this.remotes) this.remotes.setTerrain(terrain);
   }
 
   /**

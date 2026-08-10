@@ -26,6 +26,7 @@ import { CONFIG } from "../config.js";
 import { TerrainField, pathCenterX } from "../shared/terrainField.js";
 import { SUN_DIR } from "../core/sun.js";
 import { clamp, smoothstep, makeRandom } from "../utils/math.js";
+import { shared } from "../levels/resources.js";
 
 // Reexportado porque metade do jogo importa `pathCenterX` daqui.
 export { pathCenterX };
@@ -365,6 +366,12 @@ function detailTexture(seed = 4242) {
   return tex;
 }
 
+/* Textura de grão do terreno: criada uma vez e reaproveitada por TODAS as
+   fases. Vai marcada como recurso de módulo porque ela é o exemplo perfeito do
+   que a regra protege — não é `material.map` de ninguém, ela entra como uniform
+   de shader em `applyTerrainDetail`, então uma varredura de texturas por
+   material não a enxergaria e uma varredura mais completa a destruiria sem
+   perceber. Ver `levels/resources.js`. */
 let sharedDetail = null;
 
 /**
@@ -379,7 +386,7 @@ let sharedDetail = null;
  * variação macro (~22 m) vivem só aqui, no fragmento, onde não custam vértice.
  */
 function applyTerrainDetail(material) {
-  if (!sharedDetail) sharedDetail = detailTexture();
+  if (!sharedDetail) sharedDetail = shared(detailTexture());
   const uniforms = {
     detailMap: { value: sharedDetail },
     detailScale: { value: 0.42 }, // repetições por metro ⇒ ladrilho de ~2,4 m
@@ -1591,7 +1598,22 @@ class WindFlag {
 
 export function createEnvironment(scene, physics) {
   const random = makeRandom(90210);
-  const terrain = new Terrain().build(scene, physics);
+
+  /* Tudo o que este módulo cria pendura AQUI, e não direto na cena.
+     É o que torna a demolição uma operação só: uma raiz para remover e uma
+     subárvore para varrer. Sem ela, desmontar o vale seria uma lista de seis
+     grupos que alguém teria de manter em sincronia com o construtor — e é
+     dessa lista que sempre escapa a peça nova.
+
+     Quem destrói NÃO é este módulo: é a fase dona dele (`levels/valleyLevel.js`).
+     Dois donos para a mesma memória é exatamente a ambiguidade que o sistema de
+     fases existe para eliminar — ver `levels/resources.js`. */
+  const root = new THREE.Group();
+  root.name = "environment";
+  scene.add(root);
+  const alvo = root; // os construtores abaixo recebem a raiz no lugar da cena
+
+  const terrain = new Terrain().build(alvo, physics);
 
   // Uniformes compartilhados com o shader de balanço da grama.
   const sway = {
@@ -1599,10 +1621,10 @@ export function createEnvironment(scene, physics) {
     wind: { value: new THREE.Vector2() },
   };
 
-  const rochas = scatterBoulders(scene, physics, terrain, random);
-  const arvores = scatterTrees(scene, physics, terrain, random, sway);
-  buildFences(scene, physics, terrain, random);
-  scatterGrass(scene, terrain, random, sway);
+  const rochas = scatterBoulders(alvo, physics, terrain, random);
+  const arvores = scatterTrees(alvo, physics, terrain, random, sway);
+  buildFences(alvo, physics, terrain, random);
+  scatterGrass(alvo, terrain, random, sway);
 
   /* O assado tem de vir DEPOIS da vegetação: ele lê onde cada copa e cada
      pedra ficaram. É a única coisa neste arquivo que depende da ordem, e é
@@ -1655,11 +1677,12 @@ export function createEnvironment(scene, physics) {
     new WindFlag(terrain, pathCenterX(-58) - 5.6, -58),
     new WindFlag(terrain, pathCenterX(-92) + 6.0, -92),
   ];
-  for (const f of flags) scene.add(f.group);
+  for (const f of flags) alvo.add(f.group);
 
   return {
     terrain,
     flags,
+    root,
     /** Topos de copa onde um pássaro pode pousar (ver `scatterTrees`). */
     perches: arvores.perches,
 
@@ -1689,5 +1712,6 @@ export function createEnvironment(scene, physics) {
       const amp = 0.055 + 0.11 * smoothstep(0, 12, speed);
       sway.wind.value.set((wind.x / speed) * amp, (wind.z / speed) * amp);
     },
+
   };
 }

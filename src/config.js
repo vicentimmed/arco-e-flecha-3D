@@ -689,11 +689,11 @@ export const CONFIG = {
 
       // ------------------------------------------------------------ hordas --
       /* Bases para N=1; tamanho real = ceil(base × jogadores). Horda 9 = boss. */
-      hordeSizes: [2, 4, 8, 12, 16, 20, 26, 34],
+      hordeSizes: [2, 4, 6, 9, 12, 16, 21, 27],
       hordes: 9,
       hordeSpeeds: [1.0, 1.1, 1.2, 1.35, 1.5, 1.65, 1.8, 1.95],
       hordeDelay: 3.0, // s entre a última morte e a horda seguinte
-      lateHordeFrom: 6, // hordas ≥6: ETA ao centro espaçado
+      lateHordeFrom: 6, // hordas ≥6: nascem mais longe e com mais variação
       lateHordeSizeFrom: 16,
       spawnRadius: 36, // m — legado
       spawnRadiusMin: 28,
@@ -702,6 +702,34 @@ export const CONFIG = {
       spawnJitter: 4,
       spawnStagger: 0.85,
       speedVariationLate: 0.28, // hordas ≥6: quebra pelotão
+
+      /* --------------------------------------------- ritmo de CHEGADA -------
+         O que define a dificuldade de uma horda não é quantos zumbis nascem,
+         é de quanto em quanto tempo um deles ENCOSTA no círculo de luz. E as
+         duas coisas não são a mesma: o raio de nascimento varia ~20 m, o que
+         são ~15 s de caminhada, enquanto o intervalo entre nascimentos é de
+         menos de 1 s. Espaçar o nascimento, portanto, não espaça nada — quem
+         nasce depois e perto ultrapassa quem nasceu antes e longe, e a horda
+         que saiu enfileirada chega em bloco.
+
+         Por isso o agendamento é pela CHEGADA (ver `ZombieNight.nextHorde`):
+         estes números são o intervalo alvo entre dois zumbis alcançarem o
+         jogador, e o instante de nascimento é derivado deles descontando a
+         viagem. O raio volta a ser só variedade visual, sem efeito no ritmo.
+
+         Um abate custa ~2 flechas × (tensão + 0,65 s de recarga) ≈ 3 s, então
+         a faixa de 3,4 s a 2,2 s vai de "dá para respirar" a "não dá conta
+         sozinho de todos" sem nunca virar a parede que era antes. */
+      hordeArrivalGaps: [4.2, 3.8, 3.4, 3.1, 2.9, 2.7, 2.4, 2.2], // s
+      /* Hordas 1–2 são pequenas demais para o agendamento importar; até lá o
+         `spawnStagger` simples continua valendo. */
+      arrivalPacingFrom: 3,
+      /* Mais gente = mais zumbis (o tamanho já multiplica por N), então o
+         intervalo precisa encolher junto, senão a horda de 4 jogadores levaria
+         quatro vezes mais tempo. Encolhe SUBLINEARMENTE (0,85 por jogador
+         extra): quatro arqueiros somam mais poder de fogo que um, mas dividem
+         um círculo de luz de 14 m e atrapalham a linha de tiro um do outro. */
+      playerGapScale: 0.85,
 
       // ------------------------------------------------------------- bicho --
       speed: 1.15,
@@ -728,10 +756,16 @@ export const CONFIG = {
       bodyPoints: 40,
       headPoints: 100,
 
-      // Metade dos lobos por horda, mantendo ao menos um nas primeiras ondas.
-      wolfCounts: [1, 1, 2, 2, 3, 3, 4, 5],
+      /* Metade dos lobos por horda, mantendo ao menos um nas primeiras ondas.
+         O lobo corre a 6,7 m/s — quase 6× o zumbi — então ele não entra no
+         agendamento por chegada: ele É a quebra de ritmo, e some dentro da
+         horda em vez de ocupar um lugar na fila. Justamente por isso a conta
+         dele desceu um degrau: com os zumbis chegando espaçados, o lobo passou
+         a ser a única coisa que força o jogador a largar a mira do que está à
+         frente, e dois desses ao mesmo tempo já resolvem a horda inteira. */
+      wolfCounts: [1, 1, 1, 2, 2, 3, 3, 4],
       // Lobos não nascem todos no start: 1 a cada N zumbis mortos nesta horda.
-      wolfEveryZombieKills: 3,
+      wolfEveryZombieKills: 4,
       wolfSpawnDelay: 1.5, // s de espera antes do lobo entrar (após gatilho)
       wolfSpawnRadiusBonus: 6, // m a mais que zumbis — chegam depois, de longe
       wolfSpawnStagger: 2.5, // s entre lobos da mesma horda

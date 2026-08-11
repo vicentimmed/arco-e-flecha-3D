@@ -672,6 +672,24 @@ export class ZombieNight {
     return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? Z.speed;
   }
 
+  /**
+   * Segundos entre dois zumbis ALCANÇAREM o círculo de luz. É este número, e
+   * não o tamanho da horda, que decide se ela é jogável (ver o comentário de
+   * `hordeArrivalGaps` no config). Encolhe com a sala cheia porque o tamanho
+   * da horda já multiplicou por N — sem isso, quatro jogadores esperariam
+   * quatro vezes mais pela mesma horda.
+   */
+  arrivalGap(n) {
+    const Z = CONFIG.modes.zombie;
+    const lista = Z.hordeArrivalGaps ?? [];
+    const base =
+      lista[Math.max(0, Math.min(lista.length, n) - 1)] ??
+      lista[lista.length - 1] ??
+      3;
+    const escala = Z.playerGapScale ?? 0.85;
+    return base / (1 + escala * Math.max(0, this.playerCount - 1));
+  }
+
   isLateHorde(horde, size) {
     const Z = CONFIG.modes.zombie;
     return horde >= (Z.lateHordeFrom ?? 6) || size >= (Z.lateHordeSizeFrom ?? 16);
@@ -786,13 +804,44 @@ export class ZombieNight {
     this.pendingSpawns = [];
 
     const stagger = this.effectiveStagger(size, this.horde);
+    const paced = this.horde >= (Z.arrivalPacingFrom ?? 3);
+    const gap = this.arrivalGap(this.horde);
+    const walkSpeed = this.hordeSpeed(this.horde);
+    /* Viagem do raio MÉDIO: é o zero do relógio de chegada. Descontar a viagem
+       real contra esta referência é o que faz um zumbi sorteado longe nascer
+       antes e um sorteado perto nascer depois, de modo que os dois cheguem no
+       intervalo pedido apesar dos ~15 s que separam as duas caminhadas. */
+    const rRef =
+      ((Z.spawnRadiusMin ?? 28) +
+        (this.isLateHorde(this.horde, size)
+          ? (Z.spawnRadiusMaxLate ?? 58)
+          : (Z.spawnRadiusMax ?? 50))) /
+      2;
+    const travelRef = this.travelTime(rRef, walkSpeed);
+    const varFrac = this.isLateHorde(this.horde, size)
+      ? (Z.speedVariationLate ?? 0.28)
+      : Z.speedVariation;
+
     for (let i = 0; i < size; i++) {
-      this.pendingSpawns.push({
-        timer: i * stagger + Math.random() * stagger * 0.35,
-        i,
-        total: size,
-        isWolf: false,
-      });
+      const radius = this.spawnRadiusFor(i, size, false);
+      /* A velocidade é sorteada AQUI, e não no construtor do zumbi, porque ela
+         entra na conta da viagem. Deixá-la para o nascimento devolveria ±28 %
+         sobre uma caminhada de ~17 s — quase 5 s de dispersão contra um
+         intervalo alvo de 2,7 s, ou seja, o bastante para reembaralhar a fila
+         que este agendamento acabou de montar. */
+      const speed = walkSpeed * (1 + (Math.random() * 2 - 1) * varFrac);
+      let timer;
+      if (paced) {
+        const chegada = i * gap + (Math.random() - 0.5) * gap * 0.25;
+        /* O piso em zero só morde nos primeiros: ninguém pode nascer antes do
+           início da horda, então um bicho sorteado no raio máximo logo no
+           começo chega um pouco atrasado. É o trecho fácil da horda, e o preço
+           é menor que o de encurtar o raio e entregar sempre a mesma silhueta. */
+        timer = Math.max(0, chegada - (this.travelTime(radius, speed) - travelRef));
+      } else {
+        timer = i * stagger + Math.random() * stagger * 0.35;
+      }
+      this.pendingSpawns.push({ timer, i, total: size, isWolf: false, radius, speed });
     }
 
     return { n: this.horde, size: size + wolves };
@@ -890,8 +939,19 @@ export class ZombieNight {
     }
   }
 
-  /** Raio de spawn variado: alterna perto/longe; hordas grandes usam ETA ao centro. */
-  spawnRadiusFor(i, total, isWolf, walkSpeed) {
+  /**
+   * Raio de nascimento: alterna perto/longe só para o breu não entregar sempre
+   * a mesma distância de silhueta.
+   *
+   * Ele NÃO tem mais papel no ritmo. Existia aqui um ramo que tentava derivar
+   * o raio de um "ETA ao centro" (`walkSpeed × i × gap`) para espaçar as
+   * chegadas — mas esquecia de somar o raio base, e como o produto só passa de
+   * 28 m lá pelo 21º zumbi, o `clamp` devolvia `rMin` para a horda inteira: os
+   * bichos nasciam todos à mesma distância e chegavam em bloco, exatamente o
+   * oposto do pretendido. O espaçamento agora é feito no relógio, por
+   * `nextHorde`, que desconta esta viagem em vez de tentar codificá-la aqui.
+   */
+  spawnRadiusFor(i, total, isWolf) {
     const Z = CONFIG.modes.zombie;
     const rMin = Z.spawnRadiusMin ?? Z.spawnRadius - (Z.spawnJitter ?? 5);
     const rMaxDefault = Z.spawnRadiusMax ?? Z.spawnRadius + (Z.spawnJitter ?? 5);
@@ -899,20 +959,18 @@ export class ZombieNight {
       ? (Z.spawnRadiusMaxLate ?? rMaxDefault)
       : rMaxDefault;
 
-    if (!isWolf && walkSpeed > 0 && this.isLateHorde(this.horde, total)) {
-      const gap = clamp(0.55 + 0.012 * total, 0.55, 0.85);
-      const eta = i * gap + (Math.random() - 0.5) * gap * 0.25;
-      const r = clamp(walkSpeed * eta, rMin, rMax);
-      const bonus = isWolf ? (Z.wolfSpawnRadiusBonus ?? 6) : 0;
-      return r + bonus;
-    }
-
     const t = total > 1 ? i / (total - 1) : 0.5;
     const wave = 0.5 + 0.5 * Math.sin(i * 2.17 + this.spawnPhase);
     const base = rMin + (rMax - rMin) * (t * 0.35 + wave * 0.65);
     const jitter = (Math.random() - 0.5) * (Z.spawnJitter ?? 4);
     const bonus = isWolf ? (Z.wolfSpawnRadiusBonus ?? 6) : 0;
-    return base + jitter + bonus;
+    return clamp(base + jitter, rMin, rMax) + bonus;
+  }
+
+  /** Segundos que um zumbi desta horda leva do raio `r` até a borda da luz. */
+  travelTime(r, walkSpeed) {
+    const safe = CONFIG.modes.zombie.safeRadius ?? 16;
+    return Math.max(0, r - safe) / Math.max(0.1, walkSpeed);
   }
 
   tickPendingSpawns(dt) {
@@ -931,6 +989,13 @@ export class ZombieNight {
           this.zombies.length >= maxEntities ||
           (!ps.isBoss && this.vivos >= maxAlive)
         ) {
+          /* Segura o relógio no zero em vez de deixá-lo afundar. Acumulando
+             dívida negativa, uma fila represada pelo teto de vivos nasceria
+             INTEIRA no quadro em que a primeira vaga abrisse — e é o teto que
+             manda numa sala cheia, justamente onde o paredão dói mais. Preso em
+             zero, ele drena no ritmo em que os zumbis morrem: uma vaga, um
+             nascimento. */
+          ps.timer = 0;
           continue;
         }
         if (ps.bossWolf) {
@@ -939,14 +1004,29 @@ export class ZombieNight {
             this.spawnBossWolfNear(boss, ps.i, ps.total);
           }
         } else {
-          this.spawnAt(ps.i, ps.total, ps.isWolf, ps.isBoss === true);
+          this.spawnAt(
+            ps.i,
+            ps.total,
+            ps.isWolf,
+            ps.isBoss === true,
+            ps.radius,
+            ps.speed,
+          );
         }
         this.pendingSpawns.splice(j, 1);
       }
     }
   }
 
-  spawnAt(i, total, isWolf = false, isBoss = false) {
+  /**
+   * @param {number|null} radius — raio já sorteado no enfileiramento.
+   * @param {number|null} speed — velocidade já sorteada no enfileiramento.
+   *
+   * Os dois precisam vir de lá, e não ser sorteados aqui: é deles que saiu o
+   * instante de nascimento (ver `nextHorde`), e re-sortear qualquer um
+   * desfaria o espaçamento das chegadas.
+   */
+  spawnAt(i, total, isWolf = false, isBoss = false, radius = null, speed = null) {
     const Z = CONFIG.modes.zombie;
     const B = Z.boss ?? {};
     const setor = (Math.PI * 2) / Math.max(1, total);
@@ -961,7 +1041,7 @@ export class ZombieNight {
     let raio = isBoss
       ? (B.spawnRadius ??
         Math.max(100, (B.speed ?? 0.9) * (B.arrowsToKillPerPlayer ?? 40) * 7))
-      : this.spawnRadiusFor(i, total, isWolf, hordeSpd);
+      : (radius ?? this.spawnRadiusFor(i, total, isWolf));
     if (isBoss) {
       ang = Math.PI + (Math.random() - 0.5) * 0.55;
     }
@@ -988,7 +1068,13 @@ export class ZombieNight {
     } else {
       const late = this.isLateHorde(this.horde, total);
       const varFrac = late ? (Z.speedVariationLate ?? 0.28) : Z.speedVariation;
-      bicho = new Zombie(this.terrain, x, z, hordeSpd, varFrac);
+      /* Velocidade já sorteada ⇒ variação zero, senão ela seria aplicada duas
+         vezes e a viagem deixaria de bater com o horário que agendou este
+         nascimento. Sem ela (lobos, chamadas avulsas) o sorteio é aqui. */
+      bicho =
+        speed != null
+          ? new Zombie(this.terrain, x, z, speed, 0)
+          : new Zombie(this.terrain, x, z, hordeSpd, varFrac);
     }
     bicho.faceToward(Z.centerX, Z.centerZ);
     this.zombies.push(bicho);

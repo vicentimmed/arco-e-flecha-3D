@@ -1329,6 +1329,10 @@ class Game {
        sem nenhum `if (lua)` dentro do caminho do salto. */
     this.jetpack = f.jetpack ? new Jetpack(f.jetpack) : null;
     this.playerPhysics?.setJetpack(this.jetpack);
+    this.player?.setJetpackVisible(!!this.jetpack);
+    // Os remotos usam a mesma fase, então ganham e perdem a mochila junto —
+    // inclusive quem entrar DEPOIS da troca (ver `RemotePlayers.add`).
+    this.remotes?.setJetpackVisible(!!this.jetpack);
 
     this.levelPhysicsInfo = f;
   }
@@ -1693,6 +1697,9 @@ class Game {
    */
   updateJetFlame(dt) {
     const j = this.jetpack;
+    // O fogo nos bocais do PRÓPRIO boneco. Vai antes do `return` porque apagar
+    // também é trabalho: sem isto a chama fica acesa depois de soltar a tecla.
+    this.player.setJetFlame(j?.active ? 1 : 0);
     if (!j?.active) return;
 
     this._jetPuff = (this._jetPuff ?? 0) + dt;

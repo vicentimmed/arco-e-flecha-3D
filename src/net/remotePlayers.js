@@ -325,6 +325,10 @@ class RemotePlayer {
     p.setDraw(b.drawFraction);
     p.setReload(b.reloadFraction ?? 0);
     p.setKnife(b.knifeFraction ?? 0);
+    /* O jato NÃO é interpolado entre amostras: é um bit, e meio jato não
+       existe. Interpolar produziria uma chama que cresce e encolhe a 20 Hz
+       enquanto o dono a liga e desliga em pulsos. */
+    p.setJetFlame(b.jetFlame ?? 0);
   }
 
   /**
@@ -438,6 +442,19 @@ export class RemotePlayers {
     /** @type {Map<number, RemotePlayer>} */
     this.byId = new Map();
     this._cam = new THREE.Vector3();
+    /* A fase atual tem jetpack? Guardado aqui porque quem ENTRA depois da troca
+       precisa nascer com a mochila certa — sem isso, o jogador que chega na Lua
+       aparece sem nada nas costas e voando. */
+    this.jetpackVisible = false;
+  }
+
+  /** A fase mudou: todo mundo ganha ou perde a mochila junto. */
+  setJetpackVisible(on) {
+    this.jetpackVisible = on;
+    for (const r of this.byId.values()) {
+      r.player.setJetpackVisible(on);
+      r.player.setJetFlame(0);
+    }
   }
 
   get count() {
@@ -447,6 +464,7 @@ export class RemotePlayers {
   add(info) {
     if (this.byId.has(info.id)) return this.byId.get(info.id);
     const remoto = new RemotePlayer(this.scene, this.physics, this.terrain, info);
+    remoto.player.setJetpackVisible(this.jetpackVisible);
     this.byId.set(info.id, remoto);
     return remoto;
   }

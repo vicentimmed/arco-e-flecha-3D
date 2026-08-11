@@ -56,8 +56,12 @@
  *
  * 10 — preparação coordenada da noite dos zumbis. A sala espera os clientes
  * aquecerem os shaders e limparem a fauna antes de confirmar a troca.
+ *
+ * 11 — entraram as FASES: o jogo deixou de ter um cenário só. A pose passou a
+ * carregar o estado do jetpack (`j`), sem o qual o arqueiro alheio sobe pelo ar
+ * na Lua com as costas apagadas e nada explicando por que ele voa.
  */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -247,6 +251,8 @@ export function packState(player) {
     f: r3(player.moveF),
     s: r3(player.moveS),
     a: player.airborne ? 1 : 0,
+    // Jato aceso. Um bit, e é o que faz a chama do amigo existir na sua tela.
+    j: player.jetFlame > 0.01 ? 1 : 0,
   };
 }
 
@@ -266,6 +272,9 @@ export function unpackState(state, out) {
   out.moveF = state.f;
   out.moveS = state.s;
   out.airborne = state.a === 1;
+  // `?? 0` porque a pose pode vir de um cliente que ainda não tem jetpack
+  // nenhum: fora da Lua o campo não significa nada.
+  out.jetFlame = state.j ?? 0;
   return out;
 }
 

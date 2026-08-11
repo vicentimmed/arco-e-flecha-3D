@@ -396,6 +396,8 @@ export class Player {
     bandoleira.rotation.z = 0.42;
     this.spine.add(bandoleira);
 
+    this.buildJetpack();
+
     /* Aljava nas costas, com as empenas aparecendo. */
     const aljava = new THREE.Mesh(
       new THREE.CylinderGeometry(0.052, 0.044, 0.34, 10),
@@ -892,6 +894,130 @@ export class Player {
    * `PlayerPhysics` — ele é quem sabe se os pés estão no chão. Aqui a tecla
    * continua sendo só "a tecla de pular".
    */
+  /**
+   * A mochila do jetpack e o fogo dos bocais.
+   *
+   * Nasce SEMPRE, e fica invisível fora da Lua. A alternativa — construir na
+   * troca de fase — parece mais econômica e é pior: são nove malhas por
+   * arqueiro vezes doze jogadores para alocar no instante em que o mundo está
+   * sendo reconstruído, que é justamente o pico de trabalho do quadro. Escondida
+   * ela não custa desenho nenhum; o Three descarta objeto invisível antes de
+   * qualquer coisa.
+   *
+   * A chama é `MeshBasicMaterial` com `fog: false`: ela EMITE, não recebe. Um
+   * material iluminado ficaria escuro no vácuo — apareceria preta no meio do
+   * próprio fogo, que é o mesmo motivo pelo qual as tochas do modo zumbi usam
+   * este material.
+   */
+  buildJetpack() {
+    const g = new THREE.Group();
+    g.name = "jetpack";
+    g.visible = false;
+    const y = (BODY.shoulderY - BODY.hipY) * 0.55;
+
+    const casco = new THREE.MeshStandardMaterial({
+      color: "#cfd2d6",
+      roughness: 0.5,
+      metalness: 0.35,
+    });
+    const cinta = new THREE.MeshStandardMaterial({
+      color: "#2c3036",
+      roughness: 0.75,
+      metalness: 0.2,
+    });
+
+    // Dois tanques e a placa que os une às costas.
+    const placa = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.30, 0.07), casco);
+    placa.position.set(0, y, 0.155);
+    g.add(placa);
+
+    this.jetNozzles = [];
+    for (const lado of [-1, 1]) {
+      const tanque = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.062, 0.18, 4, 10),
+        casco,
+      );
+      tanque.position.set(lado * 0.105, y, 0.215);
+      g.add(tanque);
+
+      const bocal = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.038, 0.055, 0.09, 8),
+        cinta,
+      );
+      bocal.position.set(lado * 0.105, y - 0.185, 0.205);
+      bocal.rotation.x = -0.22;
+      g.add(bocal);
+
+      /* A chama: um cone virado para BAIXO, saindo do bocal. É o gás que
+         empurra o corpo, então ele aponta para onde o empuxo não vai. */
+      const chama = new THREE.Mesh(
+        new THREE.ConeGeometry(0.05, 0.42, 8, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xffb347,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          fog: false,
+        }),
+      );
+      chama.position.set(lado * 0.105, y - 0.44, 0.19);
+      chama.rotation.x = Math.PI;
+      g.add(chama);
+
+      // Halo aditivo: dá calor sem uma luz pontual, que é o que derruba o
+      // desempenho quando doze jogadores acendem ao mesmo tempo.
+      const halo = new THREE.Mesh(
+        new THREE.ConeGeometry(0.10, 0.62, 8, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xff8a30,
+          transparent: true,
+          opacity: 0.26,
+          depthWrite: false,
+          fog: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      halo.position.copy(chama.position);
+      halo.rotation.x = Math.PI;
+      g.add(halo);
+
+      this.jetNozzles.push({ chama, halo });
+    }
+
+    for (const m of [placa, ...g.children]) m.castShadow = true;
+
+    this.jetpackGroup = g;
+    /** 0 = jato apagado, 1 = queimando. Chega pela rede nos remotos (`j`). */
+    this.jetFlame = 0;
+    this.spine.add(g);
+  }
+
+  /** A fase tem jetpack? Mostra ou esconde a mochila inteira. */
+  setJetpackVisible(on) {
+    if (this.jetpackGroup) this.jetpackGroup.visible = on;
+  }
+
+  /**
+   * Estado do fogo (0..1). Chamado com o próprio jetpack no jogador local e com
+   * o campo `j` da rede nos remotos — os dois caminhos terminam aqui, então a
+   * chama do amigo é desenhada pelo mesmo código que a sua.
+   */
+  setJetFlame(t) {
+    this.jetFlame = Math.max(0, Math.min(1, t));
+    if (!this.jetNozzles) return;
+    const on = this.jetFlame > 0.01;
+    for (const n of this.jetNozzles) {
+      n.chama.visible = on;
+      n.halo.visible = on;
+      if (!on) continue;
+      /* Tremula. O comprimento varia com um seno rápido de fase deslocada por
+         bocal — sem isso são dois cones parados, que leem como plástico. */
+      const f = 0.78 + 0.22 * Math.sin(this.gaitPhase * 9 + n.chama.position.x * 60);
+      n.chama.scale.set(1, f * this.jetFlame, 1);
+      n.halo.scale.set(1, f * this.jetFlame * 1.1, 1);
+    }
+  }
+
   jump() {
     if (this.physicsBody?.onJumpPressed) this.physicsBody.onJumpPressed();
     else this.physicsBody?.queueJump();

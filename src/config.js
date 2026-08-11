@@ -84,7 +84,7 @@ export const CONFIG = {
        espera. Vale para TODOS os modos e para os bots — a recarga deles sai
        deste mesmo número (ver `server/botSim.js`), senão baixar a do jogador
        transformaria o adversário em alvo parado. */
-    reloadTime: 0.5, // s
+    reloadTime: 0.65, // s (0,5 + 30 %)
   },
 
   knife: {
@@ -348,6 +348,11 @@ export const CONFIG = {
         msaaSamples: 0,
         vignette: 0.28,
         grain: 0.0,
+        /* Sem flare, e não por escolha de gosto: sem bloom e sem MSAA não há
+           cadeia de pós-processamento, e o flare mora no passe de acabamento
+           dela (ver `core/gradePass.js`). Zero aqui é a documentação do que a
+           máquina fraca já não recebia. */
+        flare: 0,
         /* O assado de AO fica LIGADO até no preset mais baixo. Ele não custa
            nada em runtime (é cor de vértice) e o build dele sai em
            milissegundos — a oclusão é analítica sobre a lista de árvores, não
@@ -368,6 +373,7 @@ export const CONFIG = {
         msaaSamples: 2,
         vignette: 0.34,
         grain: 0.02,
+        flare: 0.8,
         terrainAO: true,
         cullDistance: 60,
         pausaChance: 0.35,
@@ -391,6 +397,12 @@ export const CONFIG = {
         msaaSamples: 4,
         vignette: 0.38,
         grain: 0.028,
+        /* Força do reflexo de lente ao olhar para o Sol na Lua — 0 desliga.
+           Não é um item de custo: o efeito é aritmética dentro de um passe que
+           já roda, e fora da Lua o desvio de uniforme o salta inteiro. O número
+           está no preset porque é aqui que mora TODA decisão de imagem, e
+           porque a média pede um véu um pouco mais discreto. */
+        flare: 1.0,
         terrainAO: true,
         cullDistance: 60,
       },
@@ -1019,9 +1031,12 @@ export const CONFIG = {
          cada tela tivesse os seus, duas pessoas morreriam de coisas
          diferentes. */
       alien: {
-        maxAlive: 6,
-        spawnMin: 16, // s entre nascimentos
-        spawnMax: 36,
+        /* Seis vivos ao mesmo tempo enchiam a planície: a Lua virava corredor
+           de bichos e o duelo entre jogadores não achava espaço. Três, nascendo
+           mais devagar, mantêm a ameaça sem tomar conta do cenário. */
+        maxAlive: 3,
+        spawnMin: 26, // s entre nascimentos
+        spawnMax: 52,
         spawnDistMin: 48, // m — nasce longe, e é o tempo de chegar que dá
         spawnDistMax: 88, //     tempo de reagir em vez de ser surpreendido
         speed: 2.6, // m/s
@@ -1087,13 +1102,19 @@ export const CONFIG = {
            cima da cabeça de alguém — inclusive da sua. Um pedaço parado no chão
            que continuasse matando viraria uma mina invisível, que é o oposto de
            legível. */
-        fragCount: 12,
+        fragCount: 16,
         fragRaioMin: 0.25, // m
         fragRaioMax: 0.7,
         fragSpeedMin: 5, // m/s radiais
         fragSpeedMax: 13,
         fragKillSpeed: 3.5, // m/s — abaixo disto já não machuca ninguém
-        fragKillRadius: 1.1, // m — raio de acerto do pedaço em voo
+        /* m — raio de acerto do pedaço em voo, somado ao raio DELE.
+           A 1,1 m os estilhaços eram decorativos: dezesseis pedras espalhadas
+           por uma esfera de vinte metros quase nunca cruzam o metro cúbico
+           ocupado por uma pessoa, e o estouro terminava sem consequência para
+           quem estava fora do raio da explosão. Dois metros e vinte é "passou
+           raspando e me pegou" — a leitura que o jogador já esperava. */
+        fragKillRadius: 2.2,
         fragRestitution: 0.25, // quique ao bater no chão
         fragSettleTime: 4.0, // s no chão até sumir
         fragFadeTime: 1.0, // s de desaparecimento

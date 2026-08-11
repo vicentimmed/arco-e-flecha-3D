@@ -179,7 +179,7 @@ export class MoonBase {
 
     this.buildRocket(lote, physics, B.x, B.z, solo);
     this.buildHabitats(lote, physics, B, chao);
-    this.buildSolarFarm(lote, B, chao);
+    this.buildSolarFarm(lote, physics, B, chao);
     this.buildDish(lote, physics, B, chao);
     this.buildLander(lote, physics, B, chao);
     this.buildCargo(lote, physics, B, chao);
@@ -377,10 +377,11 @@ export class MoonBase {
 
   /* ------------------------------------------------------------ painéis --- */
 
-  buildSolarFarm(lote, B, chao) {
-    /* Sem colisor de propósito: as placas ficam a 2,4 m e passa-se por baixo.
-       Um colisor aqui só criaria parede invisível num lugar em que o olho diz
-       que dá para passar. */
+  buildSolarFarm(lote, physics, B, chao) {
+    /* As placas SÃO sólidas: com jetpack passa-se por cima delas o tempo todo,
+       e uma placa atravessável desmentia o olho tanto quanto uma parede
+       invisível desmentiria. Continua-se passando por baixo — o colisor é só a
+       chapa, inclinada como ela, a 2,4 m; o mastro é fino e fica livre. */
     for (let fila = 0; fila < 2; fila++) {
       for (let i = 0; i < 6; i++) {
         const x = B.x + 38 + fila * 14;
@@ -389,6 +390,7 @@ export class MoonBase {
         // Inclinadas para o Sol rasante, como painel de verdade.
         lote.add("painel", new THREE.BoxGeometry(6.4, 0.12, 3.6), trs(x, y + 2.4, z, 0, 0, -0.42));
         lote.add("metal", new THREE.CylinderGeometry(0.12, 0.16, 2.4, 7), trs(x, y + 1.2, z));
+        this.solid(physics, RAPIER.ColliderDesc.cuboid(3.2, 0.06, 1.8), x, y + 2.4, z, "painel solar", 0, -0.42);
       }
     }
   }
@@ -489,13 +491,19 @@ export class MoonBase {
   /* ------------------------------------------------------------ auxiliar -- */
 
   /** Corpo fixo + colisor, já registrado como cenário (a flecha crava neles). */
-  solid(physics, desc, x, y, z, nome, giroY = 0) {
+  solid(physics, desc, x, y, z, nome, giroY = 0, giroZ = 0) {
+    /* O giro é aplicado em Y e depois em Z — a mesma ordem do `trs()` visual,
+       para o colisor não sair torto em relação à peça que ele representa. */
+    const sy = Math.sin(giroY / 2);
+    const cy = Math.cos(giroY / 2);
+    const sz = Math.sin(giroZ / 2);
+    const cz = Math.cos(giroZ / 2);
     const body = physics.createBody(
       RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z).setRotation({
-        x: 0,
-        y: Math.sin(giroY / 2),
-        z: 0,
-        w: Math.cos(giroY / 2),
+        x: sy * sz,
+        y: sy * cz,
+        z: cy * sz,
+        w: cy * cz,
       }),
     );
     const collider = physics.createCollider(

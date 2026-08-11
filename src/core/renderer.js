@@ -12,6 +12,7 @@ import { CONFIG } from "../config.js";
 import { installDirectionalFog } from "./directionalFog.js";
 import { GradeShader } from "./gradePass.js";
 import { SUN_DIR } from "./sun.js";
+import { smoothstep } from "../utils/math.js";
 import { shared } from "../levels/resources.js";
 import earthUrl from "../assets/images/terra.png";
 
@@ -335,6 +336,12 @@ export class Renderer {
     this._space = 0;
     /** 0 = céu limpo, 1 = tempestade do chefão. Ver `setStorm`. */
     this._storm = 0;
+    /* Rascunhos do flare. São de instância porque `_updateFlare` roda TODO
+       QUADRO: dois vetores alocados ali dentro seriam 120 objetos por segundo
+       para o coletor de lixo recolher, e pausa de coletor num jogo aparece como
+       engasgo. */
+    this._flareNdc = new THREE.Vector3();
+    this._flareFwd = new THREE.Vector3();
 
     this.buildSky();
     this.buildLights();
@@ -400,7 +407,16 @@ export class Renderer {
     this.grade = new ShaderPass(GradeShader);
     this.grade.uniforms.vignette.value = R.vignette;
     this.grade.uniforms.grain.value = R.grain;
+    this.grade.uniforms.aspect.value = this.width / this.height;
     this.composer.addPass(this.grade);
+
+    /* Quanto de flare esta máquina paga. Lido UMA vez, aqui, porque o preset já
+       está achatado em `CONFIG.render` desde o arranque (ver `applyQuality`) e
+       trocar de qualidade recarrega a página.
+       No preset `low` isto nem chega a ser consultado: sem bloom e sem MSAA não
+       existe cadeia de pós, e sem cadeia não existe este passe. A máquina fraca
+       não paga nem o desvio. */
+    this._flareStrength = R.flare ?? 0;
   }
 
   /**
@@ -669,6 +685,68 @@ export class Renderer {
     this.scene.add(this.fill);
   }
 
+  /* --------------------------------------------------------------- flare ----
+   *
+   * Onde o Sol está na tela, e o quanto de flare isso vale.
+   *
+   * Esta é a metade de CPU do efeito — o desenho dele está no fragmento de
+   * `core/gradePass.js`. Aqui se decide apenas ONDE e QUANTO, e é esta função
+   * que garante o "não pesa": um produto escalar, uma projeção de vetor e duas
+   * rampas por quadro, sem alocar nada. A GPU recebe três números.
+   *
+   * SÓ NA LUA. No vale o Sol já tem halo no céu — ele é espalhamento
+   * atmosférico de verdade, feito no shader do céu ali em cima (SKY_FRAG), e
+   * somar um reflexo de lente por cima seria contar a mesma coisa duas vezes.
+   * Na Lua não há ar, o disco é um recorte duro, e o clarão da lente é o único
+   * que pode existir.
+   */
+  _updateFlare() {
+    const u = this.grade.uniforms;
+    if (this._space < 0.5 || !this._flareStrength) {
+      u.flare.value = 0;
+      return;
+    }
+
+    const cam = this.camera;
+    /* As matrizes são atualizadas À MÃO, e é o mesmo par de linhas que o
+       `WebGLRenderer.render` faz sozinho — só que ele as faz DEPOIS daqui.
+       Sem isto, a conta usaria a câmera do quadro anterior e o flare andaria um
+       quadro atrás da imagem: girando o rato, ele escorregaria visivelmente
+       atrás do disco do Sol, que é exatamente onde ele não pode estar. */
+    cam.updateMatrixWorld();
+    cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+
+    /* Sol ATRÁS da câmera não tem posição de tela: a projeção de um ponto com
+       w negativo devolve coordenadas que caem no quadro de novo, espelhadas, e
+       o flare apareceria ao olhar para o lado oposto ao Sol. Este produto
+       escalar é o guarda-corpo, e é ele que descarta o caso antes da conta. */
+    this._flareFwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    if (this._flareFwd.dot(this.sunDirection) <= 0) {
+      u.flare.value = 0;
+      return;
+    }
+
+    /* 400 m à frente, na direção do Sol. Qualquer distância serve — o Sol está
+       no infinito e a direção é o que importa —, mas ela fica DENTRO do `far`
+       da câmera (900 m) para a projeção não depender de um z fora do volume. */
+    const p = this._flareNdc
+      .copy(cam.position)
+      .addScaledVector(this.sunDirection, 400)
+      .project(cam);
+    u.flarePos.value[0] = p.x * 0.5 + 0.5;
+    u.flarePos.value[1] = p.y * 0.5 + 0.5;
+
+    /* Duas rampas sobre a distância do Sol ao centro do quadro (1 = borda):
+       uma APAGA o efeito quando ele sai de cena, e a outra o faz CRESCER
+       conforme se encara o Sol. A segunda é o pedido em si — "ao olhar para o
+       sol" —, e a primeira é o que impede o flare de ficar ancorado na beirada
+       da tela quando o Sol já saiu por ela. */
+    const r = Math.hypot(p.x, p.y);
+    const dentro = 1 - smoothstep(0.95, 1.7, r);
+    const encarando = 0.45 + 0.55 * (1 - smoothstep(0.1, 1.05, r));
+    u.flare.value = this._flareStrength * dentro * encarando;
+  }
+
   /** Mantém o frustum de sombra centrado na área de jogo relevante. */
   updateShadowFocus(target) {
     const d = 70;
@@ -692,6 +770,8 @@ export class Renderer {
       this.composer.setSize(width, height);
     }
     this.bloom?.setSize(width, height);
+    // A proporção entra no flare para o fantasma ser redondo; ela só muda aqui.
+    if (this.grade) this.grade.uniforms.aspect.value = width / height;
   }
 
   render(dt = 0, wind = null) {
@@ -707,7 +787,10 @@ export class Renderer {
 
     if (this.postEnabled && this.composer) {
       // O grão precisa se mexer, senão o padrão congela na tela e vira textura.
-      if (this.grade) this.grade.uniforms.time.value += dt;
+      if (this.grade) {
+        this.grade.uniforms.time.value += dt;
+        this._updateFlare();
+      }
       this.composer.render(dt);
       return;
     }

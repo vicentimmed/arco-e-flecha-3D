@@ -76,6 +76,16 @@ export function passoEstilhaco(f, dt, gravity, heightAt, cfg) {
     return f.tempoNoChao > cfg.fragSettleTime + cfg.fragFadeTime;
   }
 
+  /* Onde ele estava ANTES deste passo.
+     A 10 Hz um pedaço a 13 m/s salta 1,3 m por quadro — mais que o raio de
+     acerto. Testar só a posição de chegada é sortear se o quadro caiu em cima
+     do jogador, e o resultado era um estilhaço que atravessava gente sem
+     machucar. Guardando a origem, o teste vira um SEGMENTO (ver
+     `distanciaSegmento`) e o pedaço acerta o que ele de fato atravessou. */
+  f.px = f.x;
+  f.py = f.y;
+  f.pz = f.z;
+
   f.vy += gravity * dt;
   f.x += f.vx * dt;
   f.y += f.vy * dt;
@@ -109,6 +119,25 @@ export function opacidadeEstilhaco(f, cfg) {
 /** Este pedaço está voando rápido o bastante para matar? */
 export function estilhacoLetal(f, cfg) {
   return !f.assentado && !f.jaAcertou && velocidade(f) >= cfg.fragKillSpeed;
+}
+
+/**
+ * Menor distância entre o caminho do estilhaço neste passo e um ponto.
+ *
+ * O caminho é o segmento (px,py,pz)→(x,y,z); sem `px` (pedaço recém-criado,
+ * que ainda não deu um passo) cai na distância ao ponto atual.
+ */
+export function distanciaSegmento(f, px, py, pz) {
+  if (f.px === undefined) return Math.hypot(f.x - px, f.y - py, f.z - pz);
+  const ax = f.px, ay = f.py, az = f.pz;
+  const dx = f.x - ax, dy = f.y - ay, dz = f.z - az;
+  const len2 = dx * dx + dy * dy + dz * dz;
+  let t = 0;
+  if (len2 > 1e-9) {
+    t = ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / len2;
+    t = Math.max(0, Math.min(1, t));
+  }
+  return Math.hypot(ax + dx * t - px, ay + dy * t - py, az + dz * t - pz);
 }
 
 function velocidade(f) {

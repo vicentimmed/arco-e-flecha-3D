@@ -30,7 +30,12 @@
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
-import { criarEstilhacos, passoEstilhaco, estilhacoLetal } from "../src/shared/fragments.js";
+import {
+  criarEstilhacos,
+  passoEstilhaco,
+  estilhacoLetal,
+  distanciaSegmento,
+} from "../src/shared/fragments.js";
 
 const TAU = Math.PI * 2;
 let proximoId = 1;
@@ -536,10 +541,16 @@ export class SpaceField {
       if (!estilhacoLetal(f, cfgM)) continue;
       for (const j of jogadores) {
         if (!j.alive) continue;
-        // O corpo tem 1,72 m: mede-se do pé ao peito, não ao ponto do chão.
-        const dy = Math.max(0, Math.min(1.4, f.y - j.y));
-        const d = Math.hypot(f.x - j.x, f.y - (j.y + dy), f.z - j.z);
-        if (d <= cfgM.fragKillRadius + 0.4) {
+        /* Contra o CAMINHO do pedaço neste passo, não contra o ponto em que ele
+           parou: a 10 Hz um estilhaço rápido pula mais que o próprio raio de
+           acerto, e o teste pontual deixava pedaços atravessarem o jogador
+           entre dois quadros — era isso que fazia o estouro parecer inofensivo.
+
+           O corpo tem 1,72 m: mede-se do pé ao peito, escolhendo a altura do
+           tronco mais próxima do pedaço em vez do ponto do chão. */
+        const alvoY = j.y + Math.max(0, Math.min(1.4, f.y - j.y));
+        const d = distanciaSegmento(f, j.x, alvoY, j.z);
+        if (d <= cfgM.fragKillRadius + f.raio + 0.4) {
           f.jaAcertou = true;
           mortes.push({ vitima: j.id, causa: "meteoro" });
           break;
@@ -548,7 +559,7 @@ export class SpaceField {
       if (f.jaAcertou) continue;
       for (const al of this.aliens) {
         if (al.dead) continue;
-        if (Math.hypot(f.x - al.x, f.z - al.z) <= cfgM.fragKillRadius + 0.5) {
+        if (distanciaSegmento(f, al.x, al.y + 0.9, al.z) <= cfgM.fragKillRadius + f.raio + 0.5) {
           al.atingir();
           f.jaAcertou = true;
           break;

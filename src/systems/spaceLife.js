@@ -311,18 +311,21 @@ class Nave extends CorpoDeRede {
      * lado escuro ficava quase preto contra um céu preto: a silhueta sumia, e
      * a única pista de que havia uma nave eram as luzinhas piscando.
      *
-     * Três mudanças, e as três atacam isso: um casco quase branco puxado para
-     * o lilás (o Sol da Lua é branco, e um branco puro leria como papel), MENOS
-     * metal — metal só reflete o que existe em volta, e em volta é o vazio — e
-     * uma EMISSIVA fria de sustentação, que é o que impede a barriga de cair
-     * para o preto. Ela não é um brilho: é o piso de luminosidade. */
+     * Mas o remédio anterior — casco quase branco puxado ao lilás e cúpula
+     * ciano-neon — passou do ponto: a nave lia como brinquedo aceso num cenário
+     * que é todo cinza de regolito.
+     *
+     * O acerto é um cinza de casco de sonda (#9ba1a8), metal moderado — metal
+     * só reflete o que existe em volta, e em volta é o vazio — e uma EMISSIVA
+     * fria e discreta que NÃO é brilho: é o piso de luminosidade, o que impede
+     * a barriga de cair para o preto sem transformar a nave em lanterna. */
     const casco = new THREE.MeshStandardMaterial({
-      color: "#e6e3f2", roughness: 0.42, metalness: 0.35,
-      emissive: new THREE.Color("#6a6f96"), emissiveIntensity: 0.55,
+      color: "#9ba1a8", roughness: 0.55, metalness: 0.4,
+      emissive: new THREE.Color("#4a4f57"), emissiveIntensity: 0.4,
     });
     const vidro = new THREE.MeshStandardMaterial({
-      color: "#7ce8ff", roughness: 0.1, metalness: 0.2,
-      emissive: new THREE.Color("#3fb8e0"), emissiveIntensity: 1.15,
+      color: "#6d7a86", roughness: 0.18, metalness: 0.25,
+      emissive: new THREE.Color("#39505e"), emissiveIntensity: 0.5,
     });
 
     // Disco voador: dois pratos e uma cúpula. É a silhueta que se lê contra o
@@ -342,7 +345,9 @@ class Nave extends CorpoDeRede {
       const a = (i / 6) * TAU;
       const luz = new THREE.Mesh(
         new THREE.SphereGeometry(0.2, 8, 6),
-        new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff3b30 : 0x39ff7a, fog: false }),
+        // Luzes de navegação: são o único acento saturado que sobrou, e é o que
+        // marca a nave no céu agora que o casco não brilha mais.
+        new THREE.MeshBasicMaterial({ color: i % 2 ? 0xd4573f : 0x5fbf7f, fog: false }),
       );
       luz.position.set(Math.cos(a) * 2.9, -0.15, Math.sin(a) * 2.9);
       this.group.add(luz);

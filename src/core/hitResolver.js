@@ -49,33 +49,48 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "torch") {
     return resolveTorchHit(ctx);
   }
-  if (other.kind === "ship" || other.kind === "alien") {
+  if (
+    other.kind === "ship" ||
+    other.kind === "alien" ||
+    other.kind === "dropship" ||
+    other.kind === "meteor"
+  ) {
     return resolveSpaceHit(ctx);
   }
   return resolveSceneryHit(ctx);
 }
 
 /**
- * Nave ou alien: a flecha ATRAVESSA e o alvo reage.
+ * Coisa do espaço: a flecha ATRAVESSA e a SALA decide o resto.
  *
- * A flecha não crava em nenhum dos dois, e por motivos opostos. A nave está
+ * A flecha não crava em nenhuma delas, e por motivos que se somam. A nave está
  * caindo e girando — uma flecha presa nela viraria um enfeite rodopiando. O
  * alien derrete ao morrer, e o que sobraria seria uma flecha parada no ar onde
- * o corpo estava. Nos dois casos, atravessar é mais limpo que fingir.
+ * o corpo estava. O meteorito e a nave de transporte explodem. Nos quatro
+ * casos, atravessar é mais limpo que fingir.
+ *
+ * O que mudou quando a Lua virou do servidor: aqui NÃO se abate mais nada. Quem
+ * atira continua sendo a autoridade sobre o próprio acerto — é o contrato do
+ * jogo —, mas quem decide se a nave caiu é a sala, que é uma só para todo mundo.
+ * Este lado só anuncia; `main.js` transforma o anúncio num `C2S.SPACE_HIT`.
  */
-function resolveSpaceHit({ arrow, other, impact, deps }) {
-  const nave = other.kind === "ship";
-  const alvo = nave ? other.ship : other.alien;
-  if (!alvo || alvo.morta || alvo.dead) return null;
+const ROTULO_ESPACO = {
+  ship: "nave",
+  alien: "alien",
+  dropship: "nave de transporte",
+  meteor: "meteorito",
+};
 
-  const abateu = nave ? alvo.abater() : alvo.atingir();
-  emitImpact(arrow, other.kind, alvo.entityId, impact, null, {
-    label: nave ? "nave" : "alien",
+function resolveSpaceHit({ arrow, other, impact, deps }) {
+  emitImpact(arrow, other.kind, other.netId ?? other.entityId, impact, null, {
+    label: ROTULO_ESPACO[other.kind] ?? other.kind,
+    spaceKind: other.kind,
+    spaceId: other.netId ?? null,
     hit: true,
   });
   deps.spawnPuff?.(impact, null);
   deps.removeArrow?.(arrow);
-  return { kind: other.kind, entityId: alvo.entityId, killed: !!abateu };
+  return { kind: other.kind, netId: other.netId ?? null };
 }
 
 function resolveCharacterHit({ arrow, other, impact, normal, deps }) {

@@ -1,12 +1,10 @@
 /* ---------------------------------------------------------------------------
    O rover da base lunar — e o único veículo do jogo.
 
-   Ele PATRULHA um circuito de pontos em volta da base (não uma reta para
-   longe: os pontos ficam sempre a uma distância curta do centro, então o
-   passeio sempre volta a passar perto do foguete), desviando sozinho do que
-   encontra pela frente com três sondas de raio — a mesma ideia do "bigode" que
-   os lobos já usam em `entities/wolf.js`, só que mais simples porque aqui
-   ninguém está caçando ninguém.
+   ELE NÃO DECIDE MAIS PARA ONDE IR. A ronda, a esquiva e o atropelamento são
+   da SALA (`server/spaceSim.js`), porque o rover carrega gente: se cada tela o
+   pusesse num lugar, o passageiro flutuaria no ar para os outros. O que sobrou
+   aqui é o corpo, o colisor em que se sobe e a perseguição da pose recebida.
 
    Se o jogador estiver EM CIMA quando ele anda, é carregado junto: a cada
    quadro, a posição dele é reprojetada do referencial do rover no instante
@@ -16,13 +14,12 @@
    está em pé sobre ele — sem isto, o rover andaria por baixo dos pés de quem
    está parado nele.
 
-   Trombar com um alien MATA o alien — ver `killAliensNear` em `spaceLife.js`,
-   chamado por `levels/moonLevel.js` depois de mover os dois.
+   Trombar com um alien MATA o alien — e isso também é decidido no servidor,
+   para valer nas duas telas ao mesmo tempo.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
-import { CONFIG } from "../config.js";
 import { entityRegistry } from "../core/entityRegistry.js";
 import { Plataforma } from "./rideable.js";
 
@@ -43,9 +40,6 @@ const WAYPOINTS = [
   { dx: 32, dz: -34 },
   { dx: 0, dz: -44 },
 ];
-
-/** rad — abertura das sondas laterais em relação à frente. */
-const SONDA_ANGULO = 0.7;
 
 export class Rover {
   /**
@@ -154,20 +148,15 @@ export class Rover {
     );
     physics.register(this.collider, { kind: "scenery", name: "rover" });
 
-    /* -------------------------------------------------------- patrulha --- */
-    const R = CONFIG.levels.moon.rover;
-    this.waypoints = WAYPOINTS.map((w) => ({ x: baseX + w.dx, z: baseZ + w.dz }));
-    this.wpIndex = 0;
-    this.speed = R.speed;
-    this.turnRate = R.turnRate;
-
-    /* Vigia de travamento: `marcoDist` é a distância até o destino no começo da
-       janela de observação, e `escapeT` é o tempo restante de fuga em linha
-       reta. Ver o comentário longo em `update()` para por que a métrica é
-       progresso, e não distância andada. */
-    this.stuckT = 0;
-    this.escapeT = 0;
-    this.marcoDist = Infinity;
+    /* ---------------------------------------------------------- pose --- */
+    /* A pose vem da rede. `primeiraPose` faz o primeiro pacote ser COPIADO em
+       vez de perseguido: sem isso o rover nasceria no waypoint zero e deslizaria
+       até a posição real na frente de quem está olhando. */
+    this.alvoX = null;
+    this.alvoY = null;
+    this.alvoZ = null;
+    this.alvoYaw = 0;
+    this.primeiraPose = true;
 
     /** m — contato com um alien dentro deste raio o mata (ver moonLevel.js). */
     this.contactRadius = Math.hypot(this.halfW, this.halfL) + 0.6;
@@ -179,142 +168,61 @@ export class Rover {
     this._ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 });
   }
 
-  /** toi da primeira colisão à frente, no ângulo `desvio` (rad) a partir do rumo atual. */
-  sondar(desvio) {
-    const ang = this.yaw + desvio;
-    this._ray.origin.x = this.x;
-    this._ray.origin.y = this.y + this.centerY;
-    this._ray.origin.z = this.z;
-    this._ray.dir.x = Math.sin(ang);
-    this._ray.dir.y = 0;
-    this._ray.dir.z = Math.cos(ang);
-    const hit = this.physics.world.castRay(
-      this._ray,
-      CONFIG.levels.moon.rover.propRayDist,
-      true,
-      undefined,
-      undefined,
-      this.collider,
-      undefined,
-      /* O TERRENO NÃO É OBSTÁCULO para a sonda.
-       *
-       * Dentro de uma cratera a parede é o próprio terreno, e com ela contando
-       * como obstáculo as três sondas acusavam bloqueio em toda direção — o
-       * rover girava no lugar até o fim do mundo. Relevo é problema do teste de
-       * ALTURA (`subidaAdiante`), que sabe distinguir rampa de parede; a sonda
-       * existe só para caixas de carga, domos e o foguete. */
-      (c) => this.physics.ownerOf(c.handle)?.kind !== "terrain",
-    );
-    return hit ? hit.timeOfImpact : Infinity;
+  /** A pose que a sala mandou. Quem decide a rota é `server/spaceSim.js`. */
+  setNetworkTarget(x, y, z, yaw) {
+    this.alvoX = x;
+    this.alvoY = y;
+    this.alvoZ = z;
+    this.alvoYaw = yaw;
+    if (this.primeiraPose) {
+      this.primeiraPose = false;
+      this.x = x;
+      this.y = y;
+      this.z = z;
+      this.yaw = yaw;
+    }
   }
 
   /**
-   * Quanto o chão SOBE numa direção, a `probeDist` metros daqui.
+   * Desenha o rover na pose que a sala mandou.
    *
-   * É o teste certo para relevo, e o que a sonda de raio não sabe fazer: uma
-   * rampa suave e uma parede de cratera devolvem o mesmo "tem terreno à frente"
-   * para um raio, e coisas completamente diferentes para uma diferença de
-   * altura. Negativo = o chão desce.
+   * Ele NÃO decide mais para onde ir — a ronda, a esquiva e o atropelamento
+   * são do servidor. Aqui só se persegue a pose recebida com amortecimento (a
+   * amostra chega a 10 Hz; sem isso cada uma seria um salto visível) e se gira
+   * a roda pela distância REALMENTE percorrida, que é o que impede o pneu de
+   * patinar.
    *
-   * @param {number} desvio rad a partir do rumo atual
+   * A pose é perseguida e não copiada por um segundo motivo, mais importante:
+   * o passageiro é carregado por ESTA posição. Se ela saltasse, ele saltaria
+   * junto.
    */
-  subidaAdiante(desvio) {
-    const d = CONFIG.levels.moon.rover.probeDist;
-    const ang = this.yaw + desvio;
-    const px = this.x + Math.sin(ang) * d;
-    const pz = this.z + Math.cos(ang) * d;
-    if (!this.terrain.isWalkable(px, pz)) return Infinity;
-    return this.terrain.heightAt(px, pz) - this.y;
-  }
-
   update(dt) {
+    if (this.alvoX == null) return;
     // O "ontem" da reprojeção do passageiro, antes de qualquer movimento.
     this.plat.marcarPose(this.x, this.z, this.yaw);
 
-    const alvo = this.waypoints[this.wpIndex];
-    const dx = alvo.x - this.x;
-    const dz = alvo.z - this.z;
-    if (Math.hypot(dx, dz) < 4.5) {
-      this.wpIndex = (this.wpIndex + 1) % this.waypoints.length;
-      // Destino novo, distância nova: sem zerar a marca, a troca de waypoint
-      // pareceria uma piora enorme de progresso e dispararia a fuga à toa.
-      this.marcoDist = Infinity;
-      this.stuckT = 0;
-    }
-
-    let rumo = Math.atan2(dx, dz);
-    const R = CONFIG.levels.moon.rover;
-
-    /* ---------------------------------------------------- vigia de travamento
-       O que se mede é PROGRESSO ATÉ O DESTINO, não distância andada — e a
-       diferença é tudo.
-
-       Dentro de uma cratera o rover não fica parado: ele CIRCULA a tigela. Toda
-       direção para fora sobe, a esquiva por altura o manda sempre para o lado, e
-       ele passa a orbitar o fundo indefinidamente andando muitos metros por
-       segundo. Um vigia que perguntasse "andou?" veria um veículo saudável e
-       nunca dispararia — foi exatamente o que aconteceu no primeiro teste: trinta
-       segundos lá dentro, sem sair.
-
-       Perguntando "chegou mais perto de onde quer ir?", a órbita é reconhecida
-       pelo que é: movimento sem progresso. Aí ele entra em fuga e vai RETO ao
-       destino, ignorando as sondas — que é o que sobe a parede e o tira de lá. */
-    const distAlvo = Math.hypot(dx, dz);
-    this.stuckT += dt;
-    if (this.escapeT > 0) {
-      this.escapeT -= dt;
-    } else if (this.stuckT >= R.stuckWindow) {
-      const aproximou = this.marcoDist - distAlvo;
-      if (aproximou < R.stuckDistance) this.escapeT = R.unstuckTime;
-      this.stuckT = 0;
-      this.marcoDist = distAlvo;
-    }
-
-    if (this.escapeT <= 0) {
-      /* A ESQUIVA, em dois testes de naturezas diferentes.
-
-         SÓLIDO à frente (caixa de carga, domo, foguete): a sonda de raio acha,
-         e ele vira para o lado mais livre.
-
-         RELEVO íngreme à frente: a sonda de raio não serve — para ela, rampa e
-         parede são a mesma coisa. Quem decide é a diferença de altura, e o
-         critério é virar para o lado que SOBE MENOS. Numa cratera isso aponta
-         para a borda mais baixa, que é exatamente por onde se sai. */
-      if (this.sondar(0) < R.propRayDist) {
-        const esq = this.sondar(-SONDA_ANGULO);
-        const dir = this.sondar(SONDA_ANGULO);
-        rumo = this.yaw + (esq > dir ? -SONDA_ANGULO * 1.3 : SONDA_ANGULO * 1.3);
-      } else if (this.subidaAdiante(0) > R.maxClimb) {
-        const esq = this.subidaAdiante(-SONDA_ANGULO);
-        const dir = this.subidaAdiante(SONDA_ANGULO);
-        rumo = this.yaw + (esq < dir ? -SONDA_ANGULO * 1.3 : SONDA_ANGULO * 1.3);
-      }
-    }
-
-    let dYaw = rumo - this.yaw;
-    while (dYaw > Math.PI) dYaw -= TAU;
-    while (dYaw < -Math.PI) dYaw += TAU;
-    const giroMax = this.turnRate * dt;
-    this.yaw += Math.max(-giroMax, Math.min(giroMax, dYaw));
-
-    const passo = this.speed * dt;
-    const nx = this.x + Math.sin(this.yaw) * passo;
-    const nz = this.z + Math.cos(this.yaw) * passo;
-    if (this.terrain.isWalkable(nx, nz)) {
-      this.x = nx;
-      this.z = nz;
-    }
-    this.y = this.terrain.heightAt(this.x, this.z);
+    const k = 1 - Math.exp(-12 * dt);
+    const antesX = this.x;
+    const antesZ = this.z;
+    this.x += (this.alvoX - this.x) * k;
+    this.y += (this.alvoY - this.y) * k;
+    this.z += (this.alvoZ - this.z) * k;
+    let d = this.alvoYaw - this.yaw;
+    while (d > Math.PI) d -= TAU;
+    while (d < -Math.PI) d += TAU;
+    this.yaw += d * k;
 
     this.group.position.set(this.x, this.y, this.z);
     this.group.rotation.y = this.yaw;
 
-    // As rodas giram com a velocidade real — sem isto o rover desliza.
-    const giroRoda = passo / 0.5;
-    for (const roda of this.wheels) roda.rotation.x += giroRoda;
+    // As rodas giram com a distância real — sem isto o rover desliza.
+    const andou = Math.hypot(this.x - antesX, this.z - antesZ);
+    for (const roda of this.wheels) roda.rotation.x += andou / 0.5;
 
     this.body.setNextKinematicTranslation({ x: this.x, y: this.y + this.centerY, z: this.z });
-    this.body.setNextKinematicRotation({ x: 0, y: Math.sin(this.yaw / 2), z: 0, w: Math.cos(this.yaw / 2) });
+    this.body.setNextKinematicRotation({
+      x: 0, y: Math.sin(this.yaw / 2), z: 0, w: Math.cos(this.yaw / 2),
+    });
   }
 
   /** Altura do convés (mundo) — onde os pés de quem está em cima devem ficar. */

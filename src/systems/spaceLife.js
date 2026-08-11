@@ -1,19 +1,23 @@
 /* ---------------------------------------------------------------------------
-   O que se mexe na Lua: poeira em suspensão, estrelas cadentes, naves que
-   cruzam o céu e aliens que vêm atrás de você.
+   O que se vê na Lua.
 
-   Estão os quatro no mesmo arquivo porque são a mesma resposta a um problema
-   só: **um cenário sem ar não tem nada se mexendo**. Não há grama balançando,
-   não há nuvem passando, não há bandeira tremulando — e um mundo parado lê
-   como tela congelada por mais bonito que seja. Cada peça daqui existe para
-   dar movimento a uma camada de profundidade diferente: a poeira ao redor do
-   jogador, as cadentes no infinito, as naves na média distância e os aliens no
-   chão, onde a coisa vira jogo.
+   Este arquivo já foi o CÉREBRO da fase — ele decidia onde o alien andava, que
+   rota a nave fazia e quando cada um nascia. Não decide mais nada disso: alien,
+   nave, rover, nave de transporte e meteorito viraram entidades da SALA
+   (`server/spaceSim.js`), porque todos eles matam ou carregam alguém, e um
+   mundo por aba fazia duas pessoas morrerem de coisas diferentes.
 
-   ORÇAMENTO. Poeira e cadentes são DOIS `Points` — dois draw calls para o
-   ambiente inteiro, e nenhum deles toca a física. As naves e os aliens são
-   objetos de verdade com colisor, mas em contagem pequena e com corpo
-   cinemático simples.
+   O que sobrou aqui é o que só existe dentro dos olhos de quem está olhando:
+
+   • **a poeira em suspensão**, que é definida em torno da CÂMERA — não existe
+     "a mesma poeira" para duas pessoas, a ideia não tem sentido;
+   • **as estrelas cadentes**, que não têm efeito de jogo nenhum e sincronizam
+     de graça pelo relógio da sala, sem trafegar um byte (ver `Ambiente`).
+
+   Todo o resto é reconciliação: `applyNetwork` recebe a amostra de 10 Hz e cria,
+   atualiza ou descarta — o mesmo padrão de `systems/boarManager.js`. Os corpos
+   de física continuam existindo aqui porque é com eles que a SUA flecha acerta;
+   o que muda é que o acerto virou um pedido à sala em vez de uma decisão local.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -22,6 +26,12 @@ import { CONFIG } from "../config.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 import { makeRandom } from "../utils/math.js";
 import { entityRegistry } from "../core/entityRegistry.js";
+import { Plataforma } from "../entities/rideable.js";
+import {
+  criarEstilhacos,
+  passoEstilhaco,
+  opacidadeEstilhaco,
+} from "../shared/fragments.js";
 
 const TAU = Math.PI * 2;
 
@@ -32,31 +42,29 @@ const TAU = Math.PI * 2;
 const CADENTE_JANELA = 26; // s
 const CADENTE_CHANCE = 0.7;
 
+/** Quão depressa uma pose de rede é alcançada. Ver `aproximar`. */
+const SUAVIZA = 12;
+
 /* ------------------------------------------------------------- ambiente --- */
 
 /**
- * Poeira em suspensão e estrelas cadentes.
+ * Poeira em suspensão e estrelas cadentes — as duas coisas locais da Lua.
  *
  * A poeira é um truque de PROFUNDIDADE, não de realismo: no vácuo não há nada
  * pairando, mas sem partículas próximas o jogador perde toda a noção de
- * movimento ao voar de jetpack — o chão distante desliza devagar e o céu é
- * fixo, então nada diz "você está a doze metros por segundo". Os grãos passando
- * perto da câmera resolvem isso, e ficam raros o bastante para não virarem
- * neve.
+ * movimento ao voar de jetpack. Os grãos passando perto da câmera resolvem
+ * isso, e ficam raros o bastante para não virarem neve.
  */
 class Ambiente {
   constructor(parent, camera) {
     this.camera = camera;
     this.rnd = makeRandom(5150);
 
-    /* ---------------------------------------------------------- poeira --- */
     this.N = 220;
     this.raio = 34; // m — a bolha que acompanha a câmera
     const pos = new Float32Array(this.N * 3);
     this.vel = new Float32Array(this.N * 3);
-    for (let i = 0; i < this.N; i++) {
-      this.semear(pos, i, true);
-    }
+    for (let i = 0; i < this.N; i++) this.semear(pos, i, true);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     this.poeira = new THREE.Points(
@@ -74,9 +82,6 @@ class Ambiente {
     this.poeira.frustumCulled = false;
     parent.add(this.poeira);
 
-    /* -------------------------------------------------------- cadentes --- */
-    /* Uma risca só de cada vez, reaproveitada. Um pool de meteoros para algo
-       que aparece a cada quinze segundos seria memória parada. */
     const rastro = new THREE.BufferGeometry();
     rastro.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
     this.cadente = new THREE.Line(
@@ -92,18 +97,8 @@ class Ambiente {
     this.cadente.frustumCulled = false;
     parent.add(this.cadente);
 
-    /* A cadente é uma FUNÇÃO DO RELÓGIO, não um cronômetro.
-     *
-     * O tempo é fatiado em janelas de `CADENTE_JANELA` segundos, e o índice da
-     * janela alimenta um sorteio determinístico que decide se há cadente nela,
-     * por onde ela entra e para onde vai. Duas telas com o mesmo relógio da
-     * sala calculam a mesma cadente sem trocar um único byte — é o mesmo
-     * contrato que o vento já usa (`systems/wind.js`), e pela mesma razão.
-     *
-     * Sozinho, sem sala, o relógio local serve igual: a conta não depende de
-     * haver servidor, só de haver um tempo. */
-    this.cadenteJanela = -1; // índice da janela cujo trajeto já foi resolvido
-    this.cadenteTem = false; // esta janela tem cadente?
+    this.cadenteJanela = -1;
+    this.cadenteTem = false;
     this.cadenteDuracao = 1.6;
     this._de = new THREE.Vector3();
     this._para = new THREE.Vector3();
@@ -119,14 +114,12 @@ class Ambiente {
     pos[i * 3] = c.x + Math.sin(b) * Math.cos(a) * r;
     pos[i * 3 + 1] = c.y + Math.cos(b) * r;
     pos[i * 3 + 2] = c.z + Math.sin(b) * Math.sin(a) * r;
-    // Deriva lenta e sem direção comum: é poeira, não vento.
     this.vel[i * 3] = (this.rnd() - 0.5) * 0.5;
     this.vel[i * 3 + 1] = (this.rnd() - 0.5) * 0.3;
     this.vel[i * 3 + 2] = (this.rnd() - 0.5) * 0.5;
   }
 
   /**
-   * @param {number} dt
    * @param {number} tempoSala relógio da SALA em ms — é ele que sincroniza a
    *   cadente entre as telas. Sem sala vale o relógio local, e o efeito é o
    *   mesmo para quem joga sozinho.
@@ -141,7 +134,6 @@ class Ambiente {
       pos[k] += this.vel[k] * dt;
       pos[k + 1] += this.vel[k + 1] * dt;
       pos[k + 2] += this.vel[k + 2] * dt;
-
       /* A bolha ACOMPANHA a câmera: o grão que sai por trás reaparece na
          frente. Sem isso, voar 200 m deixaria a poeira toda para trás e o
          efeito sumiria justamente quando a velocidade é maior. */
@@ -152,7 +144,6 @@ class Ambiente {
     }
     this.poeira.geometry.attributes.position.needsUpdate = true;
 
-    /* -------------------------------------------------------- cadentes --- */
     const relogio = (tempoSala || performance.now()) / 1000;
     const janela = Math.floor(relogio / CADENTE_JANELA);
     if (janela !== this.cadenteJanela) this.resolverJanela(janela, c);
@@ -173,20 +164,18 @@ class Ambiente {
    * Resolve o trajeto da cadente desta janela de tempo.
    *
    * Determinístico a partir do ÍNDICE da janela: mesma janela, mesmo trajeto,
-   * em qualquer máquina. É isso que dispensa qualquer mensagem de rede.
-   *
-   * O trajeto é montado em torno da câmera de quem olha — mas alto (220–400 m)
-   * e longe (420 m), então a diferença de posição entre dois jogadores da mesma
-   * arena é irrelevante contra a distância: os dois veem a risca no mesmo canto
-   * do céu, no mesmo instante.
+   * em qualquer máquina. É isso que dispensa qualquer mensagem de rede. O
+   * trajeto é montado em torno da câmera de quem olha — mas alto (220–400 m) e
+   * longe (420 m), então a diferença de posição entre dois jogadores da mesma
+   * arena é irrelevante contra a distância.
    */
   resolverJanela(janela, c) {
     this.cadenteJanela = janela;
     const rnd = makeRandom(4242 + janela);
 
     // Nem toda janela tem cadente: sem isso elas viriam com regularidade de
-    // metrônomo, e o que faz uma estrela cadente ser um acontecimento é
-    // justamente não dar para prever quando vem a próxima.
+    // metrônomo, e o que faz uma cadente ser um acontecimento é não dar para
+    // prever quando vem a próxima.
     this.cadenteTem = rnd() < CADENTE_CHANCE;
     if (!this.cadenteTem) return;
 
@@ -207,16 +196,15 @@ class Ambiente {
   /**
    * Um METEORO cruzando o céu, não um palito que acende e apaga.
    *
-   * A cabeça avança pelo trajeto sorteado; o RASTRO cresce atrás dela no
-   * primeiro terço do voo (nasce sem cauda e ela se estica), se mantém no
-   * meio e ENCOLHE no último terço — a cauda alcança a cabeça e as duas
-   * somem juntas. É essa variação de comprimento, e não um fade abrupto,
-   * que lê como "atravessando o céu" em vez de "piscou".
+   * A cabeça avança pelo trajeto; o RASTRO cresce atrás dela no primeiro terço
+   * do voo, se mantém no meio e ENCOLHE no último terço — a cauda alcança a
+   * cabeça e as duas somem juntas. É essa variação de comprimento, e não um
+   * fade abrupto, que lê como "atravessando o céu" em vez de "piscou".
    */
   atualizarCadente(t) {
     const CRESCE_ATE = 0.3;
     const ENCOLHE_DE = 0.72;
-    const RASTRO_MAX = 0.4; // fração do trajeto total, no pico do rastro
+    const RASTRO_MAX = 0.4;
 
     let rastro;
     if (t < CRESCE_ATE) rastro = RASTRO_MAX * (t / CRESCE_ATE);
@@ -232,43 +220,68 @@ class Ambiente {
     p[3] = this._cadHead.x; p[4] = this._cadHead.y; p[5] = this._cadHead.z;
     this.cadente.geometry.attributes.position.needsUpdate = true;
 
-    // Entra e sai suave: sem isto a risca aparece e some num salto de
-    // opacidade no primeiro e no último quadro do voo.
     const fadeIn = Math.min(1, t / 0.06);
     const fadeOut = Math.min(1, (1 - t) / 0.12);
     this.cadente.material.opacity = 0.85 * Math.min(fadeIn, fadeOut);
   }
 }
 
+/* ------------------------------------------------------------- corpos ----- */
+
+/**
+ * Base das coisas que a SALA move e este lado só desenha.
+ *
+ * A pose chega a 10 Hz e é perseguida com amortecimento — o mesmo que os
+ * porcos fazem. Sem isso, cada amostra seria um salto visível.
+ */
+class CorpoDeRede {
+  constructor() {
+    this.alvo = new THREE.Vector3();
+    this.alvoYaw = 0;
+    this.primeiro = true;
+  }
+
+  setNetworkTarget(x, y, z, yaw = 0) {
+    this.alvo.set(x, y, z);
+    this.alvoYaw = yaw;
+    if (this.primeiro) {
+      this.primeiro = false;
+      this.group.position.copy(this.alvo);
+      this.group.rotation.y = yaw;
+    }
+  }
+
+  aproximar(dt) {
+    const k = 1 - Math.exp(-SUAVIZA * dt);
+    this.group.position.lerp(this.alvo, k);
+    let d = this.alvoYaw - this.group.rotation.y;
+    while (d > Math.PI) d -= TAU;
+    while (d < -Math.PI) d += TAU;
+    this.group.rotation.y += d * k;
+  }
+}
+
 /* ---------------------------------------------------------------- naves --- */
 
 /**
- * Uma nave cruzando o céu — e derrubável.
+ * Um disco voador cruzando o céu — e derrubável.
  *
  * O colisor é uma esfera generosa (4 m) e não a silhueta: acertar algo que
- * atravessa o campo de visão a 26 m/s a duzentos metros de distância já é
- * difícil o suficiente sem exigir precisão de centímetro. A generosidade aqui
- * é o que transforma "impossível" em "difícil", que é onde está a graça.
+ * atravessa o campo de visão a 26 m/s a duzentos metros já é difícil o
+ * suficiente sem exigir precisão de centímetro. A generosidade aqui é o que
+ * transforma "impossível" em "difícil", que é onde está a graça.
  */
-class Nave {
-  constructor(scene, physics, rnd, centro) {
+class Nave extends CorpoDeRede {
+  constructor(scene, physics, id) {
+    super();
     this.physics = physics;
-    this.morta = false;
-    this.vidaAposMorte = 0;
-
+    this.netId = id;
     this.group = new THREE.Group();
 
-    const casco = new THREE.MeshStandardMaterial({
-      color: "#c9ccd2",
-      roughness: 0.35,
-      metalness: 0.8,
-    });
+    const casco = new THREE.MeshStandardMaterial({ color: "#c9ccd2", roughness: 0.35, metalness: 0.8 });
     const vidro = new THREE.MeshStandardMaterial({
-      color: "#39d6ff",
-      roughness: 0.1,
-      metalness: 0.2,
-      emissive: new THREE.Color("#1e7fa8"),
-      emissiveIntensity: 0.9,
+      color: "#39d6ff", roughness: 0.1, metalness: 0.2,
+      emissive: new THREE.Color("#1e7fa8"), emissiveIntensity: 0.9,
     });
 
     // Disco voador: dois pratos e uma cúpula. É a silhueta que se lê contra o
@@ -278,14 +291,11 @@ class Nave {
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 3.0, 0.7, 18), casco);
     base.position.y = -0.5;
     const cupula = new THREE.Mesh(
-      new THREE.SphereGeometry(1.5, 16, 10, 0, TAU, 0, Math.PI / 2),
-      vidro,
+      new THREE.SphereGeometry(1.5, 16, 10, 0, TAU, 0, Math.PI / 2), vidro,
     );
     cupula.position.y = 0.5;
     this.group.add(prato, base, cupula);
 
-    // Luzes de navegação em volta do prato: piscam e denunciam a nave antes de
-    // a silhueta aparecer.
     this.luzes = [];
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * TAU;
@@ -297,80 +307,25 @@ class Nave {
       this.group.add(luz);
       this.luzes.push(luz);
     }
-
-    /* Rota: uma reta que atravessa a arena inteira, numa altura de voo baixo o
-       bastante para ser alvo e alta o bastante para não bater no foguete. */
-    const ang = rnd() * TAU;
-    const raio = 260;
-    this.altura = 52 + rnd() * 26;
-    this.de = new THREE.Vector3(
-      centro.x + Math.cos(ang) * raio,
-      this.altura,
-      centro.z + Math.sin(ang) * raio,
-    );
-    const desvio = (rnd() - 0.5) * 120;
-    this.para = new THREE.Vector3(
-      centro.x - Math.cos(ang) * raio + Math.sin(ang) * desvio,
-      this.altura - 6,
-      centro.z - Math.sin(ang) * raio - Math.cos(ang) * desvio,
-    );
-    this.t = 0;
-    this.duracao = this.de.distanceTo(this.para) / (22 + rnd() * 12);
-
-    this.group.position.copy(this.de);
-    this.group.lookAt(this.para);
-    this.group.rotateX(Math.PI / 2); // o prato voa deitado
+    for (const o of this.group.children) o.castShadow = true;
     scene.add(this.group);
 
-    // Corpo cinemático + colisor esférico, registrado como alvo abatível.
     this.entityId = `ship${entityRegistry.createId()}`;
-    this.body = physics.createBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
-        this.de.x, this.de.y, this.de.z,
-      ),
-    );
+    this.body = physics.createBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
     this.collider = physics.createCollider(
       RAPIER.ColliderDesc.ball(4.0).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       this.body,
     );
-    physics.register(this.collider, {
-      kind: "ship",
-      entityId: this.entityId,
-      ship: this,
-    });
+    physics.register(this.collider, { kind: "ship", entityId: this.entityId, netId: id });
 
     this.piscar = 0;
-    this._v = new THREE.Vector3();
+    this.somT = 0;
+    this.morta = false;
+    this.giro = 0;
   }
 
-  /** Levou uma flecha: perde o controle e cai girando. */
-  abater() {
-    if (this.morta) return false;
-    this.morta = true;
-    this.queda = 0;
-    this.giro = (Math.random() - 0.5) * 4;
-    // O colisor sai na hora: uma nave já abatida não deve consumir a segunda
-    // flecha de ninguém enquanto desce.
-    this.physics.removeBody(this.body);
-    this.body = null;
-
-    gameEvents.emit(EventType.PARTICLES, {
-      position: vec3Payload(this.group.position),
-      count: 40,
-      color: 0xffc457,
-      speed: 12,
-      spread: 1,
-      size: 0.5,
-      grow: 2,
-      life: 1.1,
-      gravity: -1.62,
-      drag: 0.4,
-      alpha: 0.9,
-    });
-    return true;
-  }
-
-  update(dt, chaoY) {
+  update(dt) {
+    this.aproximar(dt);
     this.piscar += dt;
     const on = Math.sin(this.piscar * 6) > 0;
     for (let i = 0; i < this.luzes.length; i++) {
@@ -378,91 +333,59 @@ class Nave {
     }
 
     if (this.morta) {
-      /* A QUEDA. Sem propulsão e em 1/6 de g, ela desce devagar e girando —
-         o que dá tempo de ver o resultado do próprio tiro, que é metade da
-         recompensa de acertar. */
-      this.queda += CONFIG.levels.moon.gravity * dt;
-      this.group.position.y += this.queda * dt;
-      this.group.rotation.z += this.giro * dt;
-      this.group.rotation.x += this.giro * 0.6 * dt;
-
-      // Fumaça enquanto cai.
+      this.giro += dt;
+      this.group.rotation.z += 2.2 * dt;
+      this.group.rotation.x += 1.3 * dt;
       this.fumo = (this.fumo ?? 0) + dt;
       if (this.fumo > 0.06) {
         this.fumo = 0;
         gameEvents.emit(EventType.PARTICLES, {
           position: vec3Payload(this.group.position),
-          count: 2,
-          color: 0x6b6b6b,
-          speed: 1.2,
-          spread: 0.8,
-          size: 0.4,
-          grow: 2.4,
-          life: 1.4,
-          gravity: -0.3,
-          drag: 0.6,
-          alpha: 0.5,
+          count: 2, color: 0x6b6b6b, speed: 1.2, spread: 0.8, size: 0.4,
+          grow: 2.4, life: 1.4, gravity: -0.3, drag: 0.6, alpha: 0.5,
         });
       }
-
-      if (this.group.position.y <= chaoY + 1.5) return "explodiu";
-      return null;
     }
 
-    this.t += dt / this.duracao;
-    if (this.t >= 1) return "saiu";
-    this.group.position.lerpVectors(this.de, this.para, this.t);
+    /* O ZUMBIDO ACOMPANHA A NAVE. É reemitido na posição ATUAL dela a cada
+       poucos segundos em vez de tocado uma vez na entrada: o som do Three é
+       posicionado onde nasce e não segue nada, e uma nave que atravessa 500 m
+       soaria parada no ponto de onde veio. */
+    this.somT -= dt;
+    if (this.somT <= 0) {
+      const S = CONFIG.levels.moon.ship;
+      this.somT = S.humInterval;
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "ufoHum",
+        position: vec3Payload(this.group.position),
+        volume: S.humVolume,
+      });
+    }
+
     this.body?.setNextKinematicTranslation(this.group.position);
-    return null;
   }
 
   dispose(scene) {
     if (this.body) this.physics.removeBody(this.body);
     this.body = null;
     scene.remove(this.group);
-    this.group.traverse((o) => {
-      o.geometry?.dispose();
-      o.material?.dispose();
-    });
+    disposeGrupo(this.group);
   }
 }
 
 /* --------------------------------------------------------------- aliens --- */
 
-/** m — distância em que o alien para de perseguir e ataca. */
-const ALIEN_ATTACK_RANGE = 1.6;
-/** s — quanto tempo os braços ficam subindo antes do golpe valer. */
-const ALIEN_ATTACK_WINDUP = 0.5;
-/** s — pausa depois de golpear, antes de poder golpear de novo. */
-const ALIEN_ATTACK_COOLDOWN = 1.6;
-
-/**
- * O alien: pequeno, verde e teimoso.
- *
- * Ele anda no chão em direção ao jogador mais próximo, e é isso. Não desvia,
- * não flanqueia, não salta — a graça dele é ser uma pressão constante enquanto
- * você está tentando fazer outra coisa, e uma IA elaborada aqui competiria com
- * o duelo pela atenção em vez de temperá-lo.
- */
-class Alien {
-  constructor(scene, physics, terrain, x, z) {
+/** O alien: pequeno, verde e teimoso. A IA é da sala; aqui é só o corpo. */
+class Alien extends CorpoDeRede {
+  constructor(scene, physics, id) {
+    super();
     this.physics = physics;
-    this.terrain = terrain;
+    this.netId = id;
     this.dead = false;
-    // Uma flechada mata — como o resto do bestiário pequeno do jogo (porco,
-    // pássaro). Vida em dobro aqui só faria o jogador gastar a segunda flecha
-    // achando que a primeira falhou, quando ela só não tinha efeito nenhum.
-    this.hp = 1;
-    /** Ataque corpo a corpo: "perseguindo" | "golpeando" | "recuando". */
-    this.attackState = "perseguindo";
-    this.attackT = 0;
 
     const pele = new THREE.MeshStandardMaterial({
-      color: "#4fd44f",
-      roughness: 0.55,
-      metalness: 0.1,
-      emissive: new THREE.Color("#0d3a0d"),
-      emissiveIntensity: 0.5,
+      color: "#4fd44f", roughness: 0.55, metalness: 0.1,
+      emissive: new THREE.Color("#0d3a0d"), emissiveIntensity: 0.5,
     });
     const olhoMat = new THREE.MeshBasicMaterial({ color: 0x0a0a0a, fog: false });
 
@@ -495,46 +418,71 @@ class Alien {
       else this.pernaD = perna;
     }
     for (const o of this.group.children) o.castShadow = true;
-
-    this.group.position.set(x, terrain.heightAt(x, z), z);
     scene.add(this.group);
 
     this.entityId = `alien${entityRegistry.createId()}`;
-    this.body = physics.createBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(x, terrain.heightAt(x, z) + 0.9, z),
-    );
+    this.body = physics.createBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
     this.collider = physics.createCollider(
       RAPIER.ColliderDesc.capsule(0.45, 0.42).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       this.body,
     );
-    physics.register(this.collider, {
-      kind: "alien",
-      entityId: this.entityId,
-      alien: this,
-    });
+    physics.register(this.collider, { kind: "alien", entityId: this.entityId, netId: id });
 
     this.fase = Math.random() * TAU;
-    this._alvo = new THREE.Vector3();
+    this.golpeando = 0;
+    const A = CONFIG.levels.moon.alien;
+    this.chirpT = A.chirpMinInterval + Math.random() * (A.chirpMaxInterval - A.chirpMinInterval);
+    this._ultimo = new THREE.Vector3();
   }
 
-  /** Levou uma flecha. Devolve true se morreu com esta. */
-  atingir() {
-    if (this.dead) return false;
-    this.hp--;
-    gameEvents.emit(EventType.PARTICLES, {
-      position: vec3Payload(this.group.position),
-      count: 14,
-      color: 0x5cff5c,
-      speed: 4,
-      spread: 1,
-      size: 0.16,
-      grow: 1.6,
-      life: 0.6,
-      gravity: -1.62,
-      drag: 1.2,
-      alpha: 0.9,
+  update(dt) {
+    if (this.dead) {
+      // Derrete no chão em vez de sumir num quadro.
+      this.group.scale.multiplyScalar(Math.max(0, 1 - dt * 1.6));
+      return;
+    }
+
+    this._ultimo.copy(this.group.position);
+    this.aproximar(dt);
+    const andou = this.group.position.distanceTo(this._ultimo);
+
+    // Passada: as pernas alternam com a DISTÂNCIA, como a do arqueiro.
+    if (andou > 1e-4) {
+      this.fase += andou / 0.6;
+      const s = Math.sin(this.fase) * 0.28;
+      if (this.pernaE) this.pernaE.position.z = s;
+      if (this.pernaD) this.pernaD.position.z = -s;
+    }
+
+    /* Os braços erguidos são o AVISO do golpe. Sem eles a morte chegaria no
+       mesmo quadro em que o alien encosta, e não haveria o que reagir. */
+    const alvoBraco = this.golpeando ? -2.2 : 0;
+    const kb = 1 - Math.exp(-9 * dt);
+    if (this.bracoE) this.bracoE.rotation.x += (alvoBraco - this.bracoE.rotation.x) * kb;
+    if (this.bracoD) this.bracoD.rotation.x += (alvoBraco - this.bracoD.rotation.x) * kb;
+
+    /* A VOZ, espaçada. Um alien que guincha a cada quadro vira alarme de carro;
+       o que assusta é ouvir um deles atrás de você de vez em quando. */
+    this.chirpT -= dt;
+    if (this.chirpT <= 0) {
+      const A = CONFIG.levels.moon.alien;
+      this.chirpT = A.chirpMinInterval + Math.random() * (A.chirpMaxInterval - A.chirpMinInterval);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "alienChirp",
+        position: vec3Payload(this.group.position),
+        volume: A.chirpVolume,
+      });
+    }
+
+    this.body?.setNextKinematicTranslation({
+      x: this.group.position.x,
+      y: this.group.position.y + 0.9,
+      z: this.group.position.z,
     });
-    if (this.hp > 0) return false;
+  }
+
+  morrer() {
+    if (this.dead) return;
     this.dead = true;
     if (this.body) {
       this.physics.removeBody(this.body);
@@ -542,129 +490,285 @@ class Alien {
     }
     gameEvents.emit(EventType.PARTICLES, {
       position: vec3Payload(this.group.position),
-      count: 30,
-      color: 0x39ff7a,
-      speed: 7,
-      spread: 1,
-      size: 0.24,
-      grow: 2,
-      life: 0.9,
-      gravity: -1.62,
-      drag: 0.8,
-      alpha: 0.9,
+      count: 30, color: 0x39ff7a, speed: 7, spread: 1, size: 0.24,
+      grow: 2, life: 0.9, gravity: -1.62, drag: 0.8, alpha: 0.9,
     });
-    return true;
-  }
-
-  update(dt, alvos) {
-    if (this.dead) {
-      // Derrete no chão em vez de sumir num quadro.
-      this.group.scale.multiplyScalar(Math.max(0, 1 - dt * 1.6));
-      return this.group.scale.x < 0.05;
-    }
-
-    // O mais próximo, e só.
-    let melhor = null;
-    let melhorD = Infinity;
-    for (const a of alvos) {
-      const d = (a.x - this.group.position.x) ** 2 + (a.z - this.group.position.z) ** 2;
-      if (d < melhorD) {
-        melhorD = d;
-        melhor = a;
-      }
-    }
-
-    /* O GOLPE. Chegou perto, para de perseguir, ergue os braços — o aviso —
-       e só depois do preparo é que o ataque conecta. Sem o aviso a morte
-       chegaria no mesmo quadro em que o alien encostou, e não haveria o que
-       reagir: nem recuar, nem virar e atirar nele primeiro. */
-    if (this.attackState === "golpeando") {
-      this.attackT += dt;
-      this.ergueBracos(Math.min(1, this.attackT / ALIEN_ATTACK_WINDUP));
-      if (melhor) {
-        this.group.rotation.y = Math.atan2(
-          melhor.x - this.group.position.x,
-          melhor.z - this.group.position.z,
-        );
-      }
-      if (this.attackT >= ALIEN_ATTACK_WINDUP) {
-        // Ainda ao alcance? O alvo pode ter se afastado durante o preparo —
-        // aí o golpe erra em vez de matar a distância.
-        if (melhor) {
-          const dGolpe = Math.hypot(
-            melhor.x - this.group.position.x,
-            melhor.z - this.group.position.z,
-          );
-          if (dGolpe <= ALIEN_ATTACK_RANGE + 0.4) {
-            gameEvents.emit(EventType.ALIEN_MELEE_HIT, { position: melhor });
-          }
-        }
-        this.attackState = "recuando";
-        this.attackT = 0;
-      }
-      return false;
-    }
-
-    if (this.attackState === "recuando") {
-      this.attackT += dt;
-      this.ergueBracos(Math.max(0, 1 - this.attackT / 0.35));
-      if (this.attackT >= ALIEN_ATTACK_COOLDOWN) {
-        this.attackState = "perseguindo";
-        this.attackT = 0;
-      }
-      return false;
-    }
-
-    if (!melhor) return false;
-
-    const dx = melhor.x - this.group.position.x;
-    const dz = melhor.z - this.group.position.z;
-    const d = Math.hypot(dx, dz) || 1;
-
-    if (d <= ALIEN_ATTACK_RANGE) {
-      this.attackState = "golpeando";
-      this.attackT = 0;
-      this.group.rotation.y = Math.atan2(dx, dz);
-      return false;
-    }
-
-    const v = 2.6;
-    if (d > 1.4) {
-      const nx = this.group.position.x + (dx / d) * v * dt;
-      const nz = this.group.position.z + (dz / d) * v * dt;
-      if (this.terrain.isWalkable(nx, nz)) {
-        this.group.position.set(nx, this.terrain.heightAt(nx, nz), nz);
-      }
-      // Passada: as pernas alternam com a distância, como a do arqueiro.
-      this.fase += (v * dt) / 0.6;
-      const s = Math.sin(this.fase) * 0.28;
-      if (this.pernaE) this.pernaE.position.z = s;
-      if (this.pernaD) this.pernaD.position.z = -s;
-    }
-    this.group.rotation.y = Math.atan2(dx, dz);
-    this.body?.setNextKinematicTranslation({
-      x: this.group.position.x,
-      y: this.group.position.y + 0.9,
-      z: this.group.position.z,
-    });
-    return false;
-  }
-
-  /** Pose do golpe: os dois braços sobem juntos, `t` = 0 (repouso) .. 1 (erguidos). */
-  ergueBracos(t) {
-    const ang = -t * 2.2;
-    if (this.bracoE) this.bracoE.rotation.x = ang;
-    if (this.bracoD) this.bracoD.rotation.x = ang;
   }
 
   dispose(scene) {
     if (this.body) this.physics.removeBody(this.body);
     this.body = null;
     scene.remove(this.group);
-    this.group.traverse((o) => {
-      o.geometry?.dispose();
-      o.material?.dispose();
+    disposeGrupo(this.group);
+  }
+}
+
+/* ------------------------------------------------------ nave de transporte -- */
+
+/**
+ * A nave grande: circunda a base, pousa e decola — com quem tiver subido.
+ *
+ * Ela não some sozinha: a órbita é fechada e a única saída é ser destruída. É o
+ * que permite viajar nela sem o chão desaparecer no meio do caminho.
+ */
+class Dropship extends CorpoDeRede {
+  constructor(scene, physics) {
+    super();
+    this.physics = physics;
+    const D = CONFIG.levels.moon.dropship;
+    this.raio = D.raio;
+    this.group = new THREE.Group();
+
+    const casco = new THREE.MeshStandardMaterial({ color: "#d0d3d8", roughness: 0.4, metalness: 0.7 });
+    const escuro = new THREE.MeshStandardMaterial({ color: "#242a31", roughness: 0.6, metalness: 0.5 });
+    const vidro = new THREE.MeshStandardMaterial({
+      color: "#4ae0c2", roughness: 0.1, metalness: 0.2,
+      emissive: new THREE.Color("#1c7f6d"), emissiveIntensity: 0.9,
     });
+
+    // Disco com CONVÉS PLANO por cima: é ele que se pisa, e a silhueta precisa
+    // dizer isso de longe — daí o topo ser uma chapa e não uma cúpula inteira.
+    const disco = new THREE.Mesh(new THREE.CylinderGeometry(D.raio, D.raio * 0.72, 1.1, 24), casco);
+    const conves = new THREE.Mesh(new THREE.CylinderGeometry(D.raio * 0.92, D.raio * 0.92, 0.18, 24), escuro);
+    conves.position.y = 0.62;
+    const cupula = new THREE.Mesh(
+      new THREE.SphereGeometry(D.raio * 0.3, 14, 10, 0, TAU, 0, Math.PI / 2), vidro,
+    );
+    cupula.position.y = 0.7;
+    this.group.add(disco, conves, cupula);
+
+    this.luzes = [];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU;
+      const luz = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 8, 6),
+        new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff8a30 : 0x4ae0c2, fog: false }),
+      );
+      luz.position.set(Math.cos(a) * D.raio * 0.95, -0.2, Math.sin(a) * D.raio * 0.95);
+      this.group.add(luz);
+      this.luzes.push(luz);
+    }
+
+    // Pés de pouso: só aparecem quando ela vai encostar.
+    this.pes = [];
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * TAU;
+      const pe = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.6, 6), escuro);
+      pe.position.set(Math.cos(a) * D.raio * 0.6, -1.0, Math.sin(a) * D.raio * 0.6);
+      this.group.add(pe);
+      this.pes.push(pe);
+    }
+    for (const o of this.group.children) o.castShadow = true;
+    scene.add(this.group);
+
+    this.entityId = `dropship${entityRegistry.createId()}`;
+    this.body = physics.createBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+    this.collider = physics.createCollider(
+      RAPIER.ColliderDesc.cylinder(0.55, D.raio * 0.92).setActiveEvents(
+        RAPIER.ActiveEvents.COLLISION_EVENTS,
+      ),
+      this.body,
+    );
+    physics.register(this.collider, { kind: "dropship", entityId: this.entityId });
+
+    this.plat = new Plataforma();
+    this.estado = "cruzeiro";
+    this.piscar = 0;
+  }
+
+  get deckY() {
+    return this.group.position.y + 0.71;
+  }
+
+  isOnDeck(pos) {
+    if (this.estado === "destruida") return false;
+    return this.plat.pisandoEmDisco(
+      pos, this.group.position.x, this.group.position.z, this.deckY, this.raio * 0.85, 0.6,
+    );
+  }
+
+  carry(pos) {
+    this.plat.carregar(pos, this.group.position.x, this.group.position.z, this.group.rotation.y, this.deckY);
+  }
+
+  update(dt) {
+    this.plat.marcarPose(this.group.position.x, this.group.position.z, this.group.rotation.y);
+    this.aproximar(dt);
+
+    this.piscar += dt;
+    const on = Math.sin(this.piscar * 4) > 0;
+    for (let i = 0; i < this.luzes.length; i++) {
+      this.luzes[i].visible = i % 2 === 0 ? on : !on;
+    }
+    const pousando = this.estado === "descendo" || this.estado === "pousada";
+    for (const pe of this.pes) pe.visible = pousando;
+
+    this.group.visible = this.estado !== "destruida";
+    if (this.body) {
+      this.body.setNextKinematicTranslation({
+        x: this.group.position.x,
+        y: this.group.position.y + 0.3,
+        z: this.group.position.z,
+      });
+    }
+  }
+
+  dispose(scene) {
+    if (this.body) this.physics.removeBody(this.body);
+    this.body = null;
+    scene.remove(this.group);
+    disposeGrupo(this.group);
+  }
+}
+
+/* ------------------------------------------------------------ meteoritos --- */
+
+/**
+ * Uma rocha, esculpida a partir de um icosaedro.
+ *
+ * Três coisas, na ordem: um ALONGAMENTO por eixo (é ele que separa "batata" de
+ * "seixo" de "lasca" — a silhueta é o que se lê de longe), um ruído para a
+ * superfície não ser lisa, e algumas CRATERAS, que são vértices puxados para
+ * dentro num raio angular em torno de pontos sorteados.
+ *
+ * Tudo assado na geometria, uma vez: não custa nada por quadro. A semente vem
+ * do ÍNDICE do formato, então os três são estáveis entre sessões e iguais em
+ * todas as telas.
+ */
+function esculpir(raio, formato) {
+  const rnd = makeRandom(7000 + formato * 131);
+  const geo = new THREE.IcosahedronGeometry(raio, 2);
+  const pos = geo.attributes.position;
+
+  const eixos = [
+    [1.0, 0.78, 1.15],
+    [1.25, 0.62, 0.9],
+    [0.9, 1.0, 0.85],
+  ][formato % 3];
+
+  const crateras = [];
+  const n = 3 + Math.floor(rnd() * 4);
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * TAU;
+    const b = Math.acos(2 * rnd() - 1);
+    crateras.push({
+      x: Math.sin(b) * Math.cos(a),
+      y: Math.cos(b),
+      z: Math.sin(b) * Math.sin(a),
+      r: 0.22 + rnd() * 0.24,
+      d: 0.1 + rnd() * 0.12,
+    });
+  }
+
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const nrm = v.clone().normalize();
+    let escala = 1 + (rnd() - 0.5) * 0.16;
+    for (const c of crateras) {
+      const d = Math.hypot(nrm.x - c.x, nrm.y - c.y, nrm.z - c.z);
+      if (d < c.r) escala -= c.d * (1 - d / c.r) ** 2;
+    }
+    v.copy(nrm).multiplyScalar(raio * escala);
+    v.x *= eixos[0];
+    v.y *= eixos[1];
+    v.z *= eixos[2];
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Rocha grande em deriva lenta, em que dá para pousar de jetpack. */
+class Meteor extends CorpoDeRede {
+  constructor(scene, physics, id, raio, formato) {
+    super();
+    this.physics = physics;
+    this.netId = id;
+    this.raio = raio;
+    const M = CONFIG.levels.moon.meteors;
+
+    this.group = new THREE.Group();
+    /* O TOMBO gira só um grupo INTERNO. Girar o grupo externo faria o
+       passageiro girar junto — e o externo é o que define a pose de
+       plataforma. */
+    this.giroGroup = new THREE.Group();
+    this.group.add(this.giroGroup);
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: "#8a8880", roughness: 0.95, metalness: 0.05, flatShading: true,
+    });
+    const rocha = new THREE.Mesh(esculpir(raio, formato), mat);
+    rocha.castShadow = true;
+    this.giroGroup.add(rocha);
+
+    /* A ESCOLTA: pedrinhas em órbita própria, concentradas um pouco atrás para
+       lerem como cauda. Sem colisor — são visuais. */
+    const rnd = makeRandom(id * 977 + 13);
+    const nEsc = M.escoltaMin + Math.floor(rnd() * (M.escoltaMax - M.escoltaMin + 1));
+    this.escolta = [];
+    for (let i = 0; i < nEsc; i++) {
+      const r = 0.15 + rnd() * 0.25;
+      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
+      this.giroGroup.add(m);
+      this.escolta.push({
+        mesh: m,
+        raio: raio * (1.4 + rnd() * 1.1),
+        ang: rnd() * TAU,
+        vel: (0.2 + rnd() * 0.5) * (rnd() < 0.5 ? 1 : -1),
+        alt: (rnd() - 0.5) * raio * 1.2,
+      });
+    }
+
+    scene.add(this.group);
+
+    this.entityId = `meteor${entityRegistry.createId()}`;
+    this.body = physics.createBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+    this.collider = physics.createCollider(
+      RAPIER.ColliderDesc.ball(raio).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      this.body,
+    );
+    physics.register(this.collider, { kind: "meteor", entityId: this.entityId, netId: id });
+
+    this.plat = new Plataforma();
+  }
+
+  get deckY() {
+    return this.group.position.y + this.raio * 0.9;
+  }
+
+  isOnDeck(pos) {
+    return this.plat.pisandoEmDisco(
+      pos, this.group.position.x, this.group.position.z, this.deckY, this.raio * 0.7, 0.6,
+    );
+  }
+
+  carry(pos) {
+    this.plat.carregar(pos, this.group.position.x, this.group.position.z, 0, this.deckY);
+  }
+
+  update(dt) {
+    this.plat.marcarPose(this.group.position.x, this.group.position.z, 0);
+    this.aproximar(dt);
+
+    const g = CONFIG.levels.moon.meteors.giro;
+    this.giroGroup.rotation.x += g * dt;
+    this.giroGroup.rotation.y += g * 0.7 * dt;
+
+    for (const e of this.escolta) {
+      e.ang += e.vel * dt;
+      e.mesh.position.set(Math.cos(e.ang) * e.raio, e.alt, Math.sin(e.ang) * e.raio);
+    }
+
+    this.body?.setNextKinematicTranslation(this.group.position);
+  }
+
+  dispose(scene) {
+    if (this.body) this.physics.removeBody(this.body);
+    this.body = null;
+    scene.remove(this.group);
+    disposeGrupo(this.group);
   }
 }
 
@@ -679,121 +783,213 @@ export class SpaceLife {
     this.scene = scene;
     this.physics = physics;
     this.terrain = terrain;
-    this.rnd = makeRandom(24601);
 
     this.ambiente = new Ambiente(parent, camera);
-    this.naves = [];
-    this.aliens = [];
-    this.tNave = 6;
-    this.tAlien = 12;
-    this.centro = { x: terrain.centerX, z: terrain.centerZ };
+    /** @type {Map<number, Nave>} */
+    this.naves = new Map();
+    /** @type {Map<number, Alien>} */
+    this.aliensById = new Map();
+    /** @type {Map<number, Meteor>} */
+    this.meteorsById = new Map();
+    this.dropship = null;
+    /** Estilhaços em voo — integrados aqui pela MESMA conta do servidor. */
+    this.estilhacos = [];
+    this.fragGeo = null;
+    this.fragMat = null;
+  }
+
+  /** Lista para quem precisa iterar (a carona, em `main.js`). */
+  get meteors() {
+    return [...this.meteorsById.values()];
+  }
+
+  /** Lista dos aliens vivos — o rover e o HUD perguntam. */
+  get aliens() {
+    return [...this.aliensById.values()];
   }
 
   /**
-   * @param {Array<{x:number,z:number}>} jogadores quem os aliens perseguem
+   * A amostra de 10 Hz da sala. Cria o que é novo, atualiza o que existe e
+   * descarta o que sumiu — o mesmo padrão de `BoarManager.applyNetwork`.
+   */
+  applyNetwork(msg) {
+    /* ------------------------------------------------------------ naves -- */
+    const vistasN = new Set();
+    for (const it of msg.s ?? []) {
+      vistasN.add(it.i);
+      let n = this.naves.get(it.i);
+      if (!n) {
+        n = new Nave(this.scene, this.physics, it.i);
+        this.naves.set(it.i, n);
+      }
+      n.morta = !!it.m;
+      n.setNetworkTarget(it.x, it.y, it.z);
+    }
+    for (const [id, n] of [...this.naves]) {
+      if (vistasN.has(id)) continue;
+      this.naves.delete(id);
+      n.dispose(this.scene);
+    }
+
+    /* ----------------------------------------------------------- aliens -- */
+    const vistosA = new Set();
+    for (const it of msg.a ?? []) {
+      vistosA.add(it.i);
+      let a = this.aliensById.get(it.i);
+      if (!a) {
+        a = new Alien(this.scene, this.physics, it.i);
+        this.aliensById.set(it.i, a);
+      }
+      a.golpeando = it.s === 1;
+      a.setNetworkTarget(it.x, it.y, it.z, it.w);
+    }
+    for (const [id, a] of [...this.aliensById]) {
+      if (vistosA.has(id)) continue;
+      /* Sumiu da lista: morreu. O corpo não some num quadro — ele derrete, e é
+         o `morrer()` que começa isso. O descarte real vem no `update`. */
+      a.morrer();
+      if (a.group.scale.x < 0.06) {
+        this.aliensById.delete(id);
+        a.dispose(this.scene);
+      }
+    }
+
+    /* ------------------------------------------------------ meteoritos -- */
+    const vistosM = new Set();
+    for (const it of msg.m ?? []) {
+      vistosM.add(it.i);
+      let m = this.meteorsById.get(it.i);
+      if (!m) {
+        m = new Meteor(this.scene, this.physics, it.i, it.r, it.f);
+        this.meteorsById.set(it.i, m);
+      }
+      m.setNetworkTarget(it.x, it.y, it.z);
+    }
+    for (const [id, m] of [...this.meteorsById]) {
+      if (vistosM.has(id)) continue;
+      this.meteorsById.delete(id);
+      m.dispose(this.scene);
+    }
+
+    /* ------------------------------------------- nave de transporte ----- */
+    if (msg.d) {
+      if (!this.dropship) this.dropship = new Dropship(this.scene, this.physics);
+      this.dropship.estado = msg.d.st;
+      this.dropship.setNetworkTarget(msg.d.x, msg.d.y, msg.d.z, msg.d.w);
+    }
+
+    /* O rover é da base — quem o guarda é `MoonBase`, e a pose chega por lá. */
+    this.roverAlvo = msg.r ?? null;
+  }
+
+  /**
+   * Um acontecimento pontual da Lua: explosão de nave, ou meteorito estourando.
+   *
+   * A DECISÃO de quem morreu é do servidor (ela já veio, ou vem, num `S2C.KILL`).
+   * Aqui só se desenha e se ouve.
+   */
+  onEvent(msg) {
+    const p = { x: msg.p[0], y: msg.p[1], z: msg.p[2] };
+
+    gameEvents.emit(EventType.PARTICLES, {
+      position: p, count: 90, color: 0xffb340, speed: 20, spread: 1,
+      size: 0.7, grow: 2.6, life: 1.6, gravity: -1.62, drag: 0.5, alpha: 1,
+    });
+    gameEvents.emit(EventType.PARTICLES, {
+      position: p, count: 60, color: 0x5a5a5a, speed: 9, spread: 1,
+      size: 1.2, grow: 3.2, life: 2.6, gravity: -0.4, drag: 0.8, alpha: 0.6,
+    });
+    gameEvents.emit(EventType.AUDIO_PLAY, { sound: "explosion", position: p, volume: 1.3 });
+
+    if (msg.kind === "meteorBurst") {
+      /* Os MESMOS estilhaços que o servidor está integrando para decidir quem
+         morre — mesma semente, mesma conta, sem trafegar uma única posição.
+         Ver `shared/fragments.js`. */
+      const cfg = CONFIG.levels.moon.meteors;
+      const novos = criarEstilhacos(p, msg.seed, cfg);
+      if (!this.fragGeo) {
+        this.fragGeo = new THREE.IcosahedronGeometry(1, 0);
+        this.fragMat = new THREE.MeshStandardMaterial({
+          color: "#8a8880", roughness: 0.95, metalness: 0.05,
+          flatShading: true, transparent: true,
+        });
+      }
+      for (const f of novos) {
+        const mesh = new THREE.Mesh(this.fragGeo, this.fragMat);
+        mesh.scale.setScalar(f.raio);
+        mesh.position.set(f.x, f.y, f.z);
+        mesh.castShadow = true;
+        this.scene.add(mesh);
+        f.mesh = mesh;
+        this.estilhacos.push(f);
+      }
+    }
+  }
+
+  /**
+   * @param {Array<{x:number,z:number}>} _jogadores mantido por compatibilidade
    * @param {number} tempoSala relógio da sala (ms) — sincroniza as cadentes
    */
-  update(dt, jogadores, tempoSala = 0) {
+  update(dt, _jogadores, tempoSala = 0) {
     this.ambiente.update(dt, tempoSala);
 
-    /* ----------------------------------------------------------- naves --- */
-    this.tNave -= dt;
-    if (this.tNave <= 0 && this.naves.length < 2) {
-      this.tNave = 14 + this.rnd() * 22;
-      this.naves.push(new Nave(this.parent, this.physics, this.rnd, this.centro));
-    }
-    for (let i = this.naves.length - 1; i >= 0; i--) {
-      const n = this.naves[i];
-      const chao = this.terrain.heightAt(n.group.position.x, n.group.position.z);
-      const fim = n.update(dt, chao);
-      if (fim === "explodiu") {
-        this.explodir(n.group.position, chao);
-        n.dispose(this.parent);
-        this.naves.splice(i, 1);
-      } else if (fim === "saiu") {
-        n.dispose(this.parent);
-        this.naves.splice(i, 1);
+    for (const n of this.naves.values()) n.update(dt);
+    for (const [id, a] of [...this.aliensById]) {
+      a.update(dt);
+      if (a.dead && a.group.scale.x < 0.06) {
+        this.aliensById.delete(id);
+        a.dispose(this.scene);
       }
     }
+    for (const m of this.meteorsById.values()) m.update(dt);
+    this.dropship?.update(dt);
 
-    /* ---------------------------------------------------------- aliens --- */
-    this.tAlien -= dt;
-    if (this.tAlien <= 0 && this.aliens.length < 6 && jogadores.length) {
-      this.tAlien = 16 + this.rnd() * 20;
-      // Nasce longe, na direção de um jogador sorteado: chegar leva tempo, e é
-      // esse tempo que dá para reagir em vez de ser surpreendido.
-      const alvo = jogadores[Math.floor(this.rnd() * jogadores.length)];
-      const a = this.rnd() * TAU;
-      const d = 48 + this.rnd() * 40;
-      const x = alvo.x + Math.cos(a) * d;
-      const z = alvo.z + Math.sin(a) * d;
-      if (this.terrain.isWalkable(x, z)) {
-        this.aliens.push(new Alien(this.scene, this.physics, this.terrain, x, z));
+    /* Os estilhaços: a mesma integração do servidor, só que aqui para
+       DESENHAR. Quem decide quem morreu é lá; este lado nunca mata ninguém. */
+    if (this.estilhacos.length) {
+      const cfg = CONFIG.levels.moon.meteors;
+      const g = CONFIG.levels.moon.gravity;
+      const heightAt = (x, z) => this.terrain.heightAt(x, z);
+      for (let i = this.estilhacos.length - 1; i >= 0; i--) {
+        const f = this.estilhacos[i];
+        const acabou = passoEstilhaco(f, dt, g, heightAt, cfg);
+        f.mesh.position.set(f.x, f.y, f.z);
+        f.mesh.rotation.set(f.rotX, 0, f.rotZ);
+        if (acabou) {
+          this.scene.remove(f.mesh);
+          this.estilhacos.splice(i, 1);
+        }
       }
-    }
-    for (let i = this.aliens.length - 1; i >= 0; i--) {
-      if (this.aliens[i].update(dt, jogadores)) {
-        this.aliens[i].dispose(this.scene);
-        this.aliens.splice(i, 1);
+      // O fade é do material compartilhado: todos somem juntos, e o pedaço mais
+      // novo domina — é barato e ninguém percebe a diferença.
+      const maisNovo = this.estilhacos[this.estilhacos.length - 1];
+      if (maisNovo && this.fragMat) {
+        this.fragMat.opacity = opacidadeEstilhaco(maisNovo, cfg);
       }
-    }
-  }
-
-  /** A nave bateu no chão. */
-  explodir(pos, chaoY) {
-    gameEvents.emit(EventType.PARTICLES, {
-      position: { x: pos.x, y: chaoY + 1, z: pos.z },
-      count: 90,
-      color: 0xffb340,
-      speed: 20,
-      spread: 1,
-      size: 0.7,
-      grow: 2.6,
-      life: 1.6,
-      gravity: -1.62,
-      drag: 0.5,
-      alpha: 1,
-    });
-    gameEvents.emit(EventType.PARTICLES, {
-      position: { x: pos.x, y: chaoY + 1, z: pos.z },
-      count: 60,
-      color: 0x5a5a5a,
-      speed: 9,
-      spread: 1,
-      size: 1.2,
-      grow: 3.2,
-      life: 2.6,
-      gravity: -0.4,
-      drag: 0.8,
-      alpha: 0.6,
-    });
-    gameEvents.emit(EventType.AUDIO_PLAY, {
-      sound: "hitScenery",
-      position: { x: pos.x, y: chaoY + 1, z: pos.z },
-      volume: 1.6,
-    });
-  }
-
-  /**
-   * O rover atropelou. Mesmo caminho de morte de uma flechada — `atingir()`
-   * já mata em um golpe (`hp = 1`) — só que sem flecha nenhuma envolvida.
-   * Chamado por `levels/moonLevel.js`, que é quem conhece os dois lados
-   * (o rover mora em `base`, os aliens moram aqui).
-   */
-  killAliensNear(x, z, radius) {
-    const r2 = radius * radius;
-    for (const a of this.aliens) {
-      if (a.dead) continue;
-      const dx = a.group.position.x - x;
-      const dz = a.group.position.z - z;
-      if (dx * dx + dz * dz <= r2) a.atingir();
     }
   }
 
   dispose() {
-    for (const n of this.naves) n.dispose(this.parent);
-    for (const a of this.aliens) a.dispose(this.scene);
-    this.naves = [];
-    this.aliens = [];
+    for (const n of this.naves.values()) n.dispose(this.scene);
+    for (const a of this.aliensById.values()) a.dispose(this.scene);
+    for (const m of this.meteorsById.values()) m.dispose(this.scene);
+    this.dropship?.dispose(this.scene);
+    for (const f of this.estilhacos) this.scene.remove(f.mesh);
+    this.naves.clear();
+    this.aliensById.clear();
+    this.meteorsById.clear();
+    this.estilhacos = [];
+    this.dropship = null;
+    this.fragGeo?.dispose();
+    this.fragMat?.dispose();
+    this.fragGeo = null;
+    this.fragMat = null;
   }
+}
+
+function disposeGrupo(group) {
+  group.traverse((o) => {
+    o.geometry?.dispose();
+    o.material?.dispose();
+  });
 }

@@ -27,6 +27,7 @@ import { CONFIG } from "../src/config.js";
 import { pathCenterX } from "../src/shared/terrainField.js";
 import { BotSquad } from "./botSim.js";
 import { simularFlechaDoBot, orientacaoDe } from "./botArrow.js";
+import { SpaceField } from "./spaceSim.js";
 import {
   DEFAULT_LEVEL,
   LEVEL_IDS,
@@ -99,6 +100,10 @@ export class Room {
        humano em quase todo o resto desta classe. */
     this.bots = new BotSquad(this.terrain, this.level);
 
+    /* A fase da Lua. Vazia fora dela — ver `spaceSim.js` para o que mora ali e
+       o que ficou de propósito no cliente. */
+    this.space = new SpaceField(this.terrain);
+
     this.hunt = new BoarHunt(this.terrain);
     this.elks = new ElkHunt(this.terrain);
     this.elkWolves = new ElkWolfPack(this.terrain);
@@ -152,6 +157,72 @@ export class Room {
     this.botStep = 1 / net.stateHz;
     this.botLast = Date.now();
     this.botTimer = setInterval(() => this.tickBots(), 1000 / net.stateHz);
+  }
+
+  /* ----------------------------------------------------------------- espaço -- */
+
+  /**
+   * Um passo da Lua, e o que ele produziu.
+   *
+   * Roda no relógio dos bichos (10 Hz): alien, nave e meteorito têm a mesma
+   * cadência de um javali, e nenhum deles precisa de mais. Fora da Lua o campo
+   * está desligado e isto custa um `if`.
+   */
+  tickSpace(dt) {
+    if (this.level !== "moon") {
+      if (this.space.ativo) this.space.clear();
+      return;
+    }
+    if (!this.space.ativo) this.space.ligar();
+
+    const jogadores = this.playerPositions();
+    const { mortes, eventos } = this.space.update(dt, jogadores);
+
+    for (const ev of eventos) this.broadcastAll({ t: S2C.SPACE_EVENT, ...ev });
+    for (const m of mortes) this.matarPeloEspaco(m.vitima, m.causa);
+
+    this.broadcastAll({ t: S2C.SPACE, time: this.now(), ...this.space.view() });
+  }
+
+  /**
+   * A Lua matou alguém: alien, explosão de nave ou estilhaço de meteorito.
+   *
+   * Passa pelo MESMO `S2C.KILL` de uma flechada. Antes isto era resolvido só na
+   * tela da vítima (`killedByLocalNPC`), porque o servidor não conhecia nem o
+   * alien nem a nave — e o resultado era um corpo caindo numa tela e um
+   * arqueiro em pé nas outras.
+   */
+  matarPeloEspaco(vitimaId, causa) {
+    const vitima = this.playerById(vitimaId);
+    if (!vitima || !vitima.alive) return;
+    if (this.now() < vitima.invulnUntil) return;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      killer: null,
+      killerName: causa === "alien" ? "um alien" : "a Lua",
+      killerColor: "#9aa0a6",
+      victimColor: vitima.color,
+      distance: null,
+      c: null,
+      v: null,
+      cause: causa,
+    });
+    this.broadcastScores();
+
+    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+    setTimeout(() => {
+      if (vitima.isBot) {
+        if (this.bots.byId(vitima.id)) this.spawn(vitima);
+      } else if (this.players.has(vitima.conn)) {
+        this.spawn(vitima);
+      }
+    }, espera).unref?.();
   }
 
   /* ------------------------------------------------------------------ bots -- */
@@ -592,6 +663,9 @@ export class Room {
        * de ideia, se um dia um modo quiser o contrário. */
       this.clearBots();
       this.bots.relevel(this.terrain, this.level);
+      // O campo do espaço é da FASE: sai inteiro com ela e renasce do outro
+      // lado (vazio, se o outro lado for o vale).
+      this.space.setTerrain(this.terrain);
     }
     this.setMode(pending.mode);
   }
@@ -946,6 +1020,10 @@ export class Room {
     if (this.players.size === 0) return;
     const agora = this.now();
     const jogadores = this.playerPositions();
+
+    // A Lua anda no mesmo relógio dos bichos: alien, nave e meteorito têm a
+    // cadência de um javali, e nenhum deles precisa de mais.
+    this.tickSpace(this.boarStep);
 
     // Convite de duelo que ninguém aceitou expira sozinho: um aviso pendurado
     // para sempre na tela vira ruído.
@@ -2186,6 +2264,19 @@ export class Room {
         if (msg.remove) this.removeBot();
         else this.addBot();
         break;
+
+      case C2S.SPACE_HIT: {
+        /* Quem atira é a autoridade sobre o próprio acerto — o mesmo contrato
+           do porco e do zumbi. Mas quem decide se a nave caiu é a sala. */
+        const { mortes, eventos } = this.space.registrarAcerto(
+          msg.kind,
+          msg.id,
+          this.playerPositions(),
+        );
+        for (const ev of eventos) this.broadcastAll({ t: S2C.SPACE_EVENT, ...ev });
+        for (const m of mortes) this.matarPeloEspaco(m.vitima, m.causa);
+        break;
+      }
 
       case C2S.BOT_DIFFICULTY: {
         /* A perícia é UMA SÓ, da sala — os bots vivem todos aqui. Por isso

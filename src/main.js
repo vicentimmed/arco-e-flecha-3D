@@ -354,12 +354,21 @@ class Game {
      * dele é o servidor — e a morte chega pelo `S2C.KILL` de sempre, igual à de
      * um humano, com o corpo caindo no mesmo lugar em todas as telas. */
 
-    /* O alien chegou perto e golpeou. Mesma razão do bot: sem servidor por
-       trás, então só quem é o alvo (você) reage — os outros clientes nem
-       sabem que este alien específico existe. */
-    gameEvents.on(EventType.ALIEN_MELEE_HIT, (e) => {
-      if (e.position !== this.player.position) return;
-      this.killedByLocalNPC(null);
+    /* O golpe do alien e a explosão de nave TAMBÉM não são tratados aqui.
+     *
+     * Eles eram, enquanto a Lua era cenário local. Agora alien, nave, meteorito
+     * e estilhaço vivem na sala (`server/spaceSim.js`), que é quem sabe quem
+     * estava no raio — e a morte chega pelo `S2C.KILL` de sempre, valendo em
+     * todas as telas ao mesmo tempo em vez de só na da vítima. */
+
+    /* Acertei algo da Lua. Quem atira é a autoridade sobre o PRÓPRIO acerto —
+       o mesmo contrato do porco e do zumbi —, mas quem decide se a nave caiu é
+       a sala: ela é uma só, e duas telas não podem discordar sobre uma nave que
+       explodiu. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (!e.spaceKind || e.spaceId == null) return;
+      this.net.send(C2S.SPACE_HIT, { kind: e.spaceKind, id: e.spaceId });
     });
 
     // Alvo da série: quem acertar primeiro leva. O servidor arbitra, porque
@@ -878,6 +887,21 @@ class Game {
       this.hud.toast(`bots: dificuldade ${rotulo}`, "hit");
     });
 
+    /* A Lua, a 10 Hz. O cliente não simula nada dela: cria, atualiza e descarta
+       o que a sala mandou — o mesmo padrão dos porcos. */
+    net.on(S2C.SPACE, (msg) => {
+      const space = this.environment?.space;
+      if (!space) return;
+      space.applyNetwork(msg);
+      // O rover mora na base, não no campo do espaço; a pose vem no mesmo pacote.
+      const rover = this.environment?.base?.rover;
+      if (rover && msg.r) rover.setNetworkTarget(msg.r.x, msg.r.y, msg.r.z, msg.r.w);
+    });
+
+    /* Explosão e estilhaço: aqui é SÓ o efeito. Quem morreu já foi decidido
+       pela sala e chega (ou chegou) por `S2C.KILL`. */
+    net.on(S2C.SPACE_EVENT, (msg) => this.environment?.space?.onEvent(msg));
+
     net.on(S2C.SCORES, (msg) => this.scoreboard.setScores(msg.scores));
     net.on(S2C.SCORES_RESET, (msg) => {
       this.hud.toast(`${msg.by} zerou o placar`, "miss");
@@ -898,67 +922,6 @@ class Game {
     if (victimId === this.net.me?.id) return vec3Payload(this.player.position);
     const remoto = this.remotes.get(victimId);
     return remoto ? vec3Payload(remoto.player.position) : null;
-  }
-
-  /**
-   * Morrer para algo que o servidor não conhece — bot ou alien.
-   *
-   * Os dois são inteiramente locais (a sala nunca ouviu falar deles), e
-   * `registerKill` recusa um `C2S.KILL` autoinfligido de propósito. O caminho
-   * normal (atirar → declarar → servidor confirma → `S2C.KILL` volta) não
-   * existe aqui, então o tombo e o renascimento acontecem só nesta tela —
-   * exatamente como o bot e o alien já só existem nesta tela.
-   *
-   * @param {{c:number[], v:number[]}|null} msg impacto e velocidade, como o
-   *   `S2C.KILL` traria; `null` para uma morte sem flecha (a cabeçada do alien).
-   */
-  killedByLocalNPC(msg) {
-    if (this.death.dying || this.respawn.isInvulnerable(this.net.serverTime)) return;
-    this.cancelKnifeAttack();
-    this.death.begin(this.net.serverTime, msg);
-    gameEvents.emit(EventType.AUDIO_PLAY, {
-      sound: "playerDeath",
-      position: vec3Payload(this.player.position),
-      volume: 1.1,
-    });
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
-    setTimeout(() => this.reviveFromLocalDeath(), espera);
-  }
-
-  /** O renascimento de `killedByLocalNPC`: mesmo formato de `S2C.SPAWN`, sorteado aqui. */
-  reviveFromLocalDeath() {
-    if (!this.death.dying) return; // trocou de fase, renasceu por outro caminho etc.
-    this.arrows.removeAttachedTo(this.player);
-    this.death.revive();
-
-    const terrain = this.terrain;
-    const cx = terrain.spawnCenter?.x ?? CONFIG.spawn.centerX;
-    const cz = terrain.spawnCenter?.z ?? CONFIG.spawn.centerZ;
-    let x = cx;
-    let z = cz;
-    for (let i = 0; i < CONFIG.spawn.maxAttempts; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const r = CONFIG.spawn.minRadius + Math.random() * (CONFIG.spawn.radius - CONFIG.spawn.minRadius);
-      const tx = cx + Math.cos(a) * r;
-      const tz = cz + Math.sin(a) * r;
-      if (terrain.isWalkable(tx, tz)) {
-        x = tx;
-        z = tz;
-        break;
-      }
-    }
-
-    this.respawn.begin({
-      x,
-      z,
-      y: terrain.heightAt(x, z),
-      drop: CONFIG.spawn.dropHeight,
-      invulnUntil: this.net.serverTime + CONFIG.spawn.invulnerability * 1000,
-    });
-    this.reloadTimer = 0;
-    this.cancelKnifeAttack();
-    this.drawTime = 0;
-    this.input.drawing = false;
   }
 
   /**

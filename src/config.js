@@ -960,6 +960,95 @@ export const CONFIG = {
       /* -------------------------------------------------------------- base -- */
       base: { x: 0, z: -97 },
 
+      /* ------------------------------------------------------------ aliens --
+         Perseguem e MATAM, então vivem no servidor (`server/spaceSim.js`): se
+         cada tela tivesse os seus, duas pessoas morreriam de coisas
+         diferentes. */
+      alien: {
+        maxAlive: 6,
+        spawnMin: 16, // s entre nascimentos
+        spawnMax: 36,
+        spawnDistMin: 48, // m — nasce longe, e é o tempo de chegar que dá
+        spawnDistMax: 88, //     tempo de reagir em vez de ser surpreendido
+        speed: 2.6, // m/s
+        attackRange: 1.6, // m — para de perseguir e ataca
+        attackWindup: 0.5, // s de braços erguidos antes do golpe valer
+        attackCooldown: 1.6, // s de pausa depois de golpear
+        chirpMinInterval: 5, // s — a voz é tocada no cliente, na posição da rede
+        chirpMaxInterval: 15,
+        chirpVolume: 0.7,
+      },
+
+      /* ------------------------------------------------------------- naves --
+         O disco voador que cruza o céu: abatível, e o estouro mata. */
+      ship: {
+        maxAlive: 2,
+        spawnMin: 14, // s
+        spawnMax: 36,
+        alturaMin: 52, // m acima do chão
+        alturaMax: 78,
+        velMin: 22, // m/s
+        velMax: 34,
+        raioRota: 260, // m — a reta atravessa a arena inteira
+        humInterval: 1.9, // s entre repetições do zumbido enquanto ela passa
+        humVolume: 0.75,
+        explosionRadius: 13, // m — quem estiver dentro quando ela cai, morre
+      },
+
+      /* -------------------------------------------------- nave de transporte --
+         Grande o bastante para se ficar em cima, e é isso que ela é: um posto de
+         tiro que anda. */
+      dropship: {
+        raio: 6.0, // m — raio do disco (o convés)
+        alturaVoo: 26, // m acima do chão em cruzeiro
+        raioOrbita: 70, // m — a órbita em volta da base
+        velOrbita: 0.16, // rad/s
+        velVertical: 4.0, // m/s na subida e na descida
+        tempoPousada: 14, // s parada no chão, esperando passageiro
+        tempoVoando: 26, // s de cruzeiro antes de procurar onde pousar
+        raioPouso: 55, // m — distância máxima do centro da base para pousar
+        hp: 3, // flechas até explodir
+        explosionRadius: 14, // m
+        reaparecerEm: 20, // s fora de cena depois de destruída
+      },
+
+      /* -------------------------------------------------------- meteoritos --
+         Rocha grande em deriva lenta, em que dá para pousar de jetpack. */
+      meteors: {
+        max: 3,
+        spawnMin: 16, // s
+        spawnMax: 34,
+        raioMin: 2.4, // m — grande o bastante para caber um jogador em cima
+        raioMax: 3.6,
+        velMin: 1.2, // m/s — deriva, não meteoro em queda
+        velMax: 2.6,
+        alturaMin: 11, // m acima do chão
+        alturaMax: 26,
+        giro: 0.12, // rad/s de tombo lento
+        hp: 3, // flechas para estourar
+        escoltaMin: 5, // pedrinhas acompanhando, como cauda
+        escoltaMax: 9,
+        explosionRadius: 7, // m
+        formatos: 3, // variantes de silhueta
+
+        /* -------------------------------------------------------- estilhaços --
+           Eles MATAM ENQUANTO VOAM e param de matar assim que assentam. Não é
+           detalhe de física: é o que dá consequência a estourar um meteorito em
+           cima da cabeça de alguém — inclusive da sua. Um pedaço parado no chão
+           que continuasse matando viraria uma mina invisível, que é o oposto de
+           legível. */
+        fragCount: 12,
+        fragRaioMin: 0.25, // m
+        fragRaioMax: 0.7,
+        fragSpeedMin: 5, // m/s radiais
+        fragSpeedMax: 13,
+        fragKillSpeed: 3.5, // m/s — abaixo disto já não machuca ninguém
+        fragKillRadius: 1.1, // m — raio de acerto do pedaço em voo
+        fragRestitution: 0.25, // quique ao bater no chão
+        fragSettleTime: 4.0, // s no chão até sumir
+        fragFadeTime: 1.0, // s de desaparecimento
+      },
+
       /* ------------------------------------------------------------- rover --
          O veículo que ronda a base. Ver `entities/rover.js`. */
       rover: {

@@ -66,8 +66,13 @@
  * ninguém mais os via: dois amigos jogavam contra adversários invisíveis um
  * para o outro. Uma aba antiga veria os outros atirando em alguém que, para
  * ela, não existe — e levaria flechada de um arqueiro que não está lá.
+ *
+ * 13 — a fase da Lua deixou de ser cenário local. Alien, nave, rover, nave de
+ * transporte e meteorito passaram a viver na sala, porque todos eles MATAM ou
+ * CARREGAM alguém: com um mundo por aba, duas pessoas morriam de coisas
+ * diferentes e o passageiro de um rover flutuava no ar para o outro.
  */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -122,6 +127,10 @@ export const C2S = {
   BOT: "bot",
   /** Muda a perícia dos bots: `{ step: 1 | -1 }` ou `{ level: "easy" }`. */
   BOT_DIFFICULTY: "botDifficulty",
+  /** "Acertei esta coisa do espaço": `{ kind: "alien"|"ship"|"dropship"|"meteor", id }`.
+   *  Quem atira continua sendo a autoridade sobre o próprio acerto; quem decide
+   *  se o alvo caiu é a sala, que é uma só para todo mundo. */
+  SPACE_HIT: "spaceHit",
 };
 
 /* --------------------------------------------------------- servidor → cliente */
@@ -215,6 +224,12 @@ export const S2C = {
   SCORES_RESET: "scoresReset",
   /** A perícia dos bots mudou: `{ level }`. Vira aviso na tela de todos. */
   BOT_DIFFICULTY: "botDifficulty",
+  /** Tudo o que se mexe na Lua, 10 Hz: `{ a, s, m, r, d }` — aliens, naves,
+   *  meteoritos, rover e nave de transporte. Só sai na fase lunar. */
+  SPACE: "space",
+  /** Acontecimento do espaço que não cabe numa amostra de 10 Hz:
+   *  `{ kind: "explosion"|"meteorBurst", p, r, seed? }`. */
+  SPACE_EVENT: "spaceEvent",
   /** Transformações dos zumbis, 10 Hz: `{ z: [...] }`. */
   ZOMBIES: "zombies",
   /** Chefão levou flecha: `{ id, c?, head }` — clarão vermelho nas outras telas. */

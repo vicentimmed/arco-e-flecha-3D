@@ -1,5 +1,22 @@
 # Plano — O bot no servidor, e a vida na Lua
 
+> **CONCLUÍDO.** As 19 tarefas foram implementadas e enviadas, nos commits
+> `a137ddd` (Bloco A), `9ec9b9b` (B), `b2bc8a5` (C), `a6cdd76` (D) e `47095d8`
+> (a visada compartilhada). O documento fica como registro do porquê de cada
+> decisão — em especial as duas que mudaram no caminho, anotadas abaixo.
+>
+> **O que saiu diferente do planejado, e por quê:**
+>
+> 1. **A ordem inverteu para a nave de transporte e os meteoritos.** O plano os
+>    punha no Bloco A, no cliente. Ao decidir o Bloco C, ficou claro que
+>    construí-los locais e migrar depois seria escrever duas vezes a mesma
+>    coisa — eles nasceram direto como entidade de servidor.
+> 2. **A tarefa 11 (obstáculos compartilhados) foi por último, não antes.** O
+>    plano a marcava como pré-requisito do Bloco B. Ela é pré-requisito de
+>    JUSTIÇA, não de funcionamento: o bot roda sem ela, só atirando através de
+>    árvore. Deixá-la por último tirou o risco de um refactor grande travar a
+>    migração inteira.
+
 Documento de **implementação**, escrito para ser seguido passo a passo. Cada
 tarefa traz: **Objetivo → Arquivos → Passos → Critério de aceite**.
 

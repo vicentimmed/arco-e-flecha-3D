@@ -33,6 +33,7 @@ import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
 import { PlayerPhysics } from "./systems/playerPhysics.js";
 import { Jetpack } from "./systems/jetpack.js";
+import { JetSmokeTrail } from "./systems/jetSmoke.js";
 import { AudioSystem } from "./systems/audio.js";
 import { ParticleSystem } from "./systems/particles.js";
 import { installImpactEffects, RECEITAS } from "./systems/impactFx.js";
@@ -1942,6 +1943,18 @@ class Game {
     // O rugido acompanha, e enfraquece junto com o tanque: o motor morrendo
     // é o aviso que se ouve sem tirar o olho da mira.
     this.audio.setJet(!!j?.active, j ? 0.55 + 0.45 * j.fuelFraction : 0);
+
+    /* O RASTRO. Ele é o mesmo dos outros jogadores, pelo mesmo código: o que
+       você deixa no céu é exatamente o que eles veem de você. Distância 0 —
+       o rastro do próprio jogador nunca é ralinho pela distância.
+       Ver `systems/jetSmoke.js`. */
+    if (this.jetpack) {
+      this._jetSmoke ??= new JetSmokeTrail();
+      this._jetSmoke.step(
+        dt, !!j?.active, this.player.position, this.player.yaw, 0, !!j?.isLow,
+      );
+    }
+
     if (!j?.active) return;
 
     this._jetPuff = (this._jetPuff ?? 0) + dt;

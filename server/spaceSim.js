@@ -47,6 +47,12 @@ const faixa = (min, max) => min + Math.random() * (max - min);
  * depois do preparo o golpe conecta. O aviso não é enfeite: sem ele a morte
  * chega no mesmo quadro em que o alien encosta, e não há o que reagir — nem
  * recuar, nem virar e atirar nele primeiro.
+ *
+ * O alcance tem DUAS medidas, e a segunda é a que faltava: a horizontal
+ * (`attackRange`) e a VERTICAL (`attackMaxHeight`). Só com a primeira, quem
+ * subisse de jetpack continuava sendo golpeado do chão — o alien media a sombra
+ * da vítima, não a vítima. Agora o golpe só pega quem está no chão; quem voa,
+ * pula ou está em cima de um meteorito passa por cima dele.
  */
 class Alien {
   constructor(terrain, x, z) {
@@ -62,6 +68,20 @@ class Alien {
     this.estado = "perseguindo"; // | "golpeando" | "recuando"
     this.t = 0;
     this.A = A;
+  }
+
+  /**
+   * A vítima está ao alcance do braço — nas duas medidas?
+   *
+   * A altura é contada a partir do TERRENO SOB ELA, e não da altura do próprio
+   * alien: é assim que a conta continua certa quando ele está no fundo de uma
+   * cratera e a pessoa na borda, e é a definição literal de "está no chão".
+   */
+  aoAlcance(j, folga = 0) {
+    const d = Math.hypot(j.x - this.x, j.z - this.z);
+    if (d > this.A.attackRange + folga) return false;
+    const alturaChao = j.y - this.terrain.heightAt(j.x, j.z);
+    return alturaChao <= (this.A.attackMaxHeight ?? 1.2);
   }
 
   /** @returns {{vitima:number}|null} o golpe que conectou neste passo */
@@ -85,12 +105,11 @@ class Alien {
       if (this.t >= this.A.attackWindup) {
         this.estado = "recuando";
         this.t = 0;
-        // Ainda ao alcance? O alvo pode ter se afastado durante o preparo — aí
-        // o golpe erra, em vez de matar à distância.
-        if (melhor) {
-          const d = Math.hypot(melhor.x - this.x, melhor.z - this.z);
-          if (d <= this.A.attackRange + 0.4) return { vitima: melhor.id };
-        }
+        /* Ainda ao alcance? O alvo pode ter se afastado durante o preparo — a
+           pé ou PARA CIMA, e os dois são fuga legítima: meio segundo de braços
+           erguidos é exatamente o tempo de acionar o jetpack e sair de cima
+           dele. Nos dois casos o golpe passa no vazio em vez de matar. */
+        if (melhor && this.aoAlcance(melhor, 0.4)) return { vitima: melhor.id };
       }
       return null;
     }
@@ -111,7 +130,12 @@ class Alien {
     const d = Math.hypot(dx, dz) || 1;
     this.yaw = Math.atan2(dx, dz);
 
-    if (d <= this.A.attackRange) {
+    /* Só ERGUE OS BRAÇOS para quem ele poderia acertar. Contra alguém voando
+       por cima ele continua perseguindo — fica embaixo, andando e guinchando,
+       que é a leitura certa: a ameaça não sumiu, ela está esperando você
+       pousar. Um alien golpeando o ar sob um jogador a trinta metros seria
+       cômico, e pior, prometeria um perigo que não existe. */
+    if (d <= this.A.attackRange && this.aoAlcance(melhor)) {
       this.estado = "golpeando";
       this.t = 0;
       return null;

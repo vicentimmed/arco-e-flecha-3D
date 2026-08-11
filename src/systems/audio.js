@@ -293,6 +293,140 @@ function makeAlienChirpBuffer(ctx) {
 }
 
 /**
+ * O ABATIMENTO DO ALIEN: o guincho que quebra no meio e derrete.
+ *
+ * Três coisas em sequência, e a ordem é o som inteiro:
+ *
+ * 1. um GUINCHO que despenca de 1.100 para 140 Hz em meio segundo — é a mesma
+ *    voz de `makeAlienChirpBuffer`, só que caindo em vez de trinar. Quem já
+ *    ouviu o bicho falar reconhece que é ele morrendo, e não outra coisa;
+ * 2. uma QUEBRA: a modulação em anel acelera de 30 para 140 Hz no meio da
+ *    queda, e o timbre desmancha em vez de simplesmente descer. É o instante em
+ *    que a coisa deixa de estar viva;
+ * 3. o BORBULHAR do fim — ruído filtrado com um passa-baixa que fecha, sobre um
+ *    grave que some. É ele que casa com o derretimento que o corpo faz na tela.
+ *
+ * Nada disso é humano de propósito: o grito do arqueiro (`playerDeath`) e o
+ * berro do alce ocupam a faixa da voz, e um alien que morresse ali soaria como
+ * mais um bicho. Ele morre ACIMA e ao lado dessa faixa.
+ */
+function makeAlienDeathBuffer(ctx) {
+  const duration = 0.95;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+  let phase = 0;
+  let lp = 0;
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+
+    // A queda: rápida no começo, arrastada no fim — a mesma curva da voz que
+    // perde força em `makeCryBuffer`, só que uma oitava e meia acima.
+    const freq = 140 + 960 * Math.pow(1 - p, 2.2) + Math.sin(t * 46) * 90 * (1 - p);
+    phase += (TAU * freq) / sampleRate;
+    const voz = Math.sin(phase) * 0.6 + Math.sin(phase * 2.3) * 0.22;
+
+    // O anel acelera: 30 Hz (bordinha metálica) → 140 Hz (timbre desmanchando).
+    const anel = 0.55 + 0.45 * Math.sin(TAU * (30 + 110 * p) * t);
+
+    // O borbulhar, que só entra na segunda metade.
+    const branco = Math.random() * 2 - 1;
+    lp += (branco - lp) * (0.5 - 0.42 * p); // o filtro fecha com o tempo
+    const gosma = lp * Math.max(0, p - 0.35) * 1.9;
+
+    const ataque = Math.min(1, t / 0.012);
+    const queda = Math.pow(1 - p, 1.3);
+    data[i] = Math.tanh((voz * anel + gosma) * ataque * queda * 1.5);
+  }
+  return buffer;
+}
+
+/**
+ * O ronco da nave de transporte — a grande, a que pousa.
+ *
+ * Ela NÃO pode soar como o disco voador: os dois estão no céu ao mesmo tempo e
+ * fazem coisas opostas (um passa e some, a outra pousa e espera). A diferença é
+ * de FAIXA e de textura — onde o disco é um tom puro agudo com batimento, esta é
+ * um acorde grave (55/82/110 Hz) sobre um jato de ruído, com um throb lento de
+ * 5 Hz por cima. Grave = pesada; ruído = motor de verdade; throb = turbina.
+ */
+function makeDropshipBuffer(ctx) {
+  const duration = 2.8;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+  let lp = 0;
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const deriva = Math.sin(TAU * 0.4 * t) * 3; // o motor não é um metrônomo
+    const motor =
+      Math.sin(TAU * (55 + deriva) * t) * 0.42 +
+      Math.sin(TAU * (82.5 + deriva) * t) * 0.26 +
+      Math.sin(TAU * (110 + deriva * 2) * t) * 0.16;
+
+    // O jato: ruído bem filtrado, o ar (ou o propelente) saindo sob pressão.
+    const branco = Math.random() * 2 - 1;
+    lp += (branco - lp) * 0.045;
+    const jato = lp * 0.75;
+
+    const throb = 0.78 + 0.22 * Math.sin(TAU * 5 * t);
+    // Entra e sai suave, para as repetições emendarem sem estalo.
+    const env = Math.sin(Math.PI * p) ** 0.7;
+    data[i] = Math.tanh((motor + jato) * throb * env * 1.15);
+  }
+  return buffer;
+}
+
+/**
+ * O meteorito estourando: PEDRA, não metal.
+ *
+ * A explosão da nave (`makeExplosionBuffer`) é fogo — estalo e ronco. Uma rocha
+ * partindo é outra coisa: um CRACK seco e curto, e depois o CASCALHO, que é o
+ * som que conta a história. O cascalho aqui são impulsos sorteados (~90 por
+ * segundo, ralentando) de ruído bem curto: cada um é um pedaço batendo em outro,
+ * e é a irregularidade deles que soa como pedra se despedaçando em vez de
+ * chiado. O grave por baixo dá o tamanho — sem ele, três metros de rocha soariam
+ * como um vaso quebrando.
+ */
+function makeRockBurstBuffer(ctx) {
+  const duration = 1.6;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  let low = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const branco = Math.random() * 2 - 1;
+
+    // 1. O crack: banda larga, morto em 60 ms.
+    const crack = branco * Math.exp(-t * 46) * 0.95;
+
+    // 2. O corpo grave, que dá a massa da rocha.
+    low += (branco - low) * 0.07;
+    const corpo = low * Math.exp(-t * 3.4) * 0.8;
+    const ronco = Math.sin(TAU * (44 - 20 * p) * t) * Math.exp(-t * 3.8) * 0.28;
+
+    // 3. O cascalho: a chance de um novo impulso cai com o tempo, então os
+    //    pedaços vão rareando — como cascalho de verdade assentando.
+    const densidade = 0.09 * Math.exp(-t * 1.7);
+    const lasca =
+      Math.random() < densidade ? (Math.random() * 2 - 1) * (0.5 - 0.32 * p) : 0;
+
+    data[i] = Math.tanh((crack + corpo + ronco + lasca) * 1.35);
+  }
+  return buffer;
+}
+
+/**
  * Explosão: estalo seco na frente, estrondo grave arrastando atrás.
  *
  * Sem altura definida — explosão não tem nota. O que a torna GRANDE é a cauda:
@@ -556,6 +690,9 @@ export class AudioSystem {
       // reemite o zumbido a cada dois segundos enquanto atravessa o céu.
       alienChirp: 4,
       ufoHum: 2,
+      // A nave de transporte é UMA só, e o ronco dela se repete enquanto ela
+      // estiver em cena: duas vozes bastam para uma repetição emendar na outra.
+      dropshipHum: 2,
     };
 
     this._initBuffers();
@@ -638,7 +775,11 @@ export class AudioSystem {
     // A Lua: a nave que passa, o alien que fala e o que estoura.
     this.buffers.ufoHum = makeUfoBuffer(this.ctx);
     this.buffers.alienChirp = makeAlienChirpBuffer(this.ctx);
+    this.buffers.alienDeath = makeAlienDeathBuffer(this.ctx);
     this.buffers.explosion = makeExplosionBuffer(this.ctx);
+    // A nave grande tem motor próprio, e a rocha se parte com som de rocha.
+    this.buffers.dropshipHum = makeDropshipBuffer(this.ctx);
+    this.buffers.rockBurst = makeRockBurstBuffer(this.ctx);
 
     // Alce: berro de peito, grave e com rosnado. O de dor é curto e sobe de
     // volta; o de morte é longo e só desce.
@@ -1130,10 +1271,17 @@ export class AudioSystem {
       audio.setRefDistance(28);
       audio.setRolloffFactor(0.7);
       audio.setMaxDistance(260);
-    } else if (id === "ufoHum" || id === "explosion") {
+    } else if (
+      id === "ufoHum" ||
+      id === "explosion" ||
+      id === "dropshipHum" ||
+      id === "rockBurst"
+    ) {
       /* A nave cruza o céu a 50–80 m de altura e a explosão precisa ser ouvida
          do outro lado da arena. Com o alcance padrão (80 m) as duas sumiam
-         justamente quando são o acontecimento da cena. */
+         justamente quando são o acontecimento da cena. Vale igual para o motor
+         da nave de transporte (26 m de altitude em órbita, a 70 m da base) e
+         para o meteorito se partindo lá em cima. */
       audio.setRefDistance(22);
       audio.setRolloffFactor(0.8);
       audio.setMaxDistance(240);

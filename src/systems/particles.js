@@ -230,7 +230,18 @@ const _c = new THREE.Color();
  * e é onde se garante que nada disso aloque nada.
  */
 export class ParticleSystem {
-  constructor(scene, { additive = 192, alpha = 256 } = {}) {
+  /**
+   * O teto do lote opaco subiu de 256 para 384 por causa do RASTRO DE FUMAÇA do
+   * jetpack (`systems/jetSmoke.js`): ele é o único efeito contínuo E multiplicado
+   * por jogador do jogo — ~29 partículas vivas por pessoa voando. Com 256, meia
+   * dúzia de gente no ar na Lua consumia o lote inteiro e a poeira dos pés, a
+   * terra da flechada e o estilhaço do meteorito paravam de aparecer.
+   *
+   * As 128 a mais custam 9 KB de `Float32Array` e 128 iterações de aritmética
+   * simples por quadro no pior caso — não há chamada de desenho nova, porque o
+   * lote inteiro continua sendo UMA geometria instanciada.
+   */
+  constructor(scene, { additive = 192, alpha = 384 } = {}) {
     this.fire = new Batch(scene, additive, THREE.AdditiveBlending, 7);
     this.dust = new Batch(scene, alpha, THREE.NormalBlending, 6);
     // Como o áudio: quem emite manda um evento e não conhece este objeto.

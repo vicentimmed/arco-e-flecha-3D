@@ -616,7 +616,12 @@ export class Bot {
 
     this.drawTime = 0;
     this.drawFraction = 0;
-    this.recarga = CONFIG.bow.reloadTime + 0.35;
+    /* A recarga dele acompanha a do jogador, e a folga também encolheu junto
+       (0,35 → 0,18 s): a folga existe para o bot não sacar mais rápido que uma
+       pessoa, e mantê-la inteira depois de cortar `reloadTime` pela metade
+       deixaria o adversário num ritmo antigo enquanto o jogador atira no dobro
+       da cadência. */
+    this.recarga = CONFIG.bow.reloadTime + 0.18;
     this.reagirEm = this.pericia.reacao;
     this._decidiuPausa = false;
 

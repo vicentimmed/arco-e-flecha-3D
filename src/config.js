@@ -79,7 +79,12 @@ export const CONFIG = {
        encaixa no arco. Enquanto isso, mira e tiro ficam bloqueados — sem isso
        o arco vira metralhadora. Desligável no painel ~. */
     reloadAnimation: true,
-    reloadTime: 1.0, // s
+    /* Meio segundo, e não um. A recarga longa demais era sentida como travar:
+       entre duas flechas dava tempo do alvo sair de cena, e o duelo virava
+       espera. Vale para TODOS os modos e para os bots — a recarga deles sai
+       deste mesmo número (ver `server/botSim.js`), senão baixar a do jogador
+       transformaria o adversário em alvo parado. */
+    reloadTime: 0.5, // s
   },
 
   knife: {
@@ -955,6 +960,36 @@ export const CONFIG = {
         maxAirSpeed: 12.0, // m/s
         airDrag: 0.7, // 1/s — controle sem virar "andar no ar"
         lowFuel: 0.25, // fração em que o medidor começa a pulsar
+
+        /* ------------------------------------------------------------ fumaça --
+           O RASTRO é informação, não enfeite: um arqueiro voando contra o preto
+           do céu é quase invisível, e a chama do bocal só se vê de perto. O
+           caminho de fumaça que fica para trás diz, de qualquer distância e
+           mesmo depois de o sujeito passar, POR ONDE alguém voou e há quanto
+           tempo — é o mesmo papel do rastro de condensação de um avião.
+
+           Ele sai do pool de partículas que já existe (`systems/particles.js`),
+           então não custa uma chamada de desenho nova. O que custa é a
+           QUANTIDADE VIVA, e é ela que está limitada aqui: um sopro a cada
+           `interval` com `life` de vida dá ~`life/interval` partículas por
+           jogador voando. Ver `systems/jetSmoke.js` para o corte por distância,
+           que é o que impede uma sala cheia de estourar o pool. */
+        smoke: {
+          interval: 0.055, // s entre sopros (≈29 partículas vivas por jogador)
+          intervalFar: 0.13, // s além de `nearDistance` — metade do custo
+          nearDistance: 45, // m
+          maxDistance: 130, // m — além disto ninguém lê um sopro de 30 cm
+          life: 1.6, // s até sumir de vez
+          size: 0.26, // m — lado inicial do sopro
+          grow: 2.8, // ele se abre enquanto se dissipa
+          alpha: 0.34, // translúcido: é fumaça rala, não uma bola de algodão
+          speed: 1.1, // m/s de sopro inicial, para baixo
+          drag: 2.2, // 1/s — freia quase de imediato e o sopro FICA no lugar,
+          //                   que é o que transforma sopros num caminho
+          gravity: -0.3, // m/s² — no vácuo ela não sobe; assenta devagar
+          color: 0xc3c7cf,
+          colorLow: 0xd8b9a6, // tanque no fim: fumaça mais suja
+        },
       },
 
       /* -------------------------------------------------------------- base -- */
@@ -972,6 +1007,14 @@ export const CONFIG = {
         spawnDistMax: 88, //     tempo de reagir em vez de ser surpreendido
         speed: 2.6, // m/s
         attackRange: 1.6, // m — para de perseguir e ataca
+        /* O BRAÇO DELE NÃO ALCANÇA O CÉU.
+           O alcance sempre foi medido só no plano (x, z), e o resultado é que
+           quem passava de jetpack cinquenta metros acima de um alien morria do
+           golpe de um bicho que nem estava olhando para cima. Agora o golpe só
+           conecta em quem está COM OS PÉS NO CHÃO: até 1,2 m acima do solo sob
+           a vítima, que cobre estar em pé numa lombada e não cobre pulo nenhum
+           (o salto lunar sobe 2,6 m). */
+        attackMaxHeight: 1.2, // m acima do terreno sob a vítima
         attackWindup: 0.5, // s de braços erguidos antes do golpe valer
         attackCooldown: 1.6, // s de pausa depois de golpear
         chirpMinInterval: 5, // s — a voz é tocada no cliente, na posição da rede
@@ -1010,6 +1053,15 @@ export const CONFIG = {
         hp: 3, // flechas até explodir
         explosionRadius: 14, // m
         reaparecerEm: 20, // s fora de cena depois de destruída
+        /* O MOTOR DELA SE OUVE. Pelo mesmo motivo do disco voador: o som é
+           posicionado onde nasce e não segue nada, então o ronco é reemitido na
+           posição atual a cada `humInterval`. É mais grave e mais espaçado que o
+           do disco — ela é grande e anda devagar. */
+        humInterval: 2.4, // s entre repetições do ronco
+        humVolume: 0.8,
+        // Manobra (descida e subida): os retrofoguetes acendem e ela fica mais
+        // alta, que é o aviso de que dá para correr e subir nela.
+        humVolumeManobra: 1.05,
       },
 
       /* -------------------------------------------------------- meteoritos --

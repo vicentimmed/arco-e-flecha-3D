@@ -488,6 +488,16 @@ class Alien extends CorpoDeRede {
       this.physics.removeBody(this.body);
       this.body = null;
     }
+    /* O guincho de abatimento. Sai AQUI e não no impacto da flecha porque
+       `morrer()` é chamado quando a SALA tira o alien da lista — ou seja, uma
+       vez só e na mesma hora em todas as telas, seja quem for que atirou, seja
+       o rover que o atropelou ou um estilhaço que o pegou. É o mesmo motivo de
+       o berro do alce sair do evento da sala. */
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "alienDeath",
+      position: vec3Payload(this.group.position),
+      volume: 0.95,
+    });
     gameEvents.emit(EventType.PARTICLES, {
       position: vec3Payload(this.group.position),
       count: 30, color: 0x39ff7a, speed: 7, spread: 1, size: 0.24,
@@ -574,6 +584,9 @@ class Dropship extends CorpoDeRede {
     this.plat = new Plataforma();
     this.estado = "cruzeiro";
     this.piscar = 0;
+    /* O ronco começa quase de imediato (0,4 s) e não em `humInterval`: quem
+       entra na fase com ela já em cena precisa ouvi-la antes de vê-la. */
+    this.somT = 0.4;
   }
 
   get deckY() {
@@ -604,6 +617,27 @@ class Dropship extends CorpoDeRede {
     for (const pe of this.pes) pe.visible = pousando;
 
     this.group.visible = this.estado !== "destruida";
+
+    /* O MOTOR. Reemitido na posição atual, pelo mesmo motivo do disco voador: o
+       som do Three nasce parado onde foi tocado, e uma nave que orbita 70 m
+       soaria pregada no ponto de onde saiu.
+
+       Destruída, ela cala: o que se ouve no lugar é a explosão que a sala
+       mandou (`SPACE_EVENT`), e um motor roncando num destroço invisível seria
+       a pior pista possível sobre onde ela está. */
+    this.somT -= dt;
+    if (this.somT <= 0 && this.estado !== "destruida") {
+      const D = CONFIG.levels.moon.dropship;
+      this.somT = D.humInterval ?? 2.4;
+      // Manobrando ela acende os retrofoguetes: mais alto, e é o aviso de que
+      // dá para correr até ela e subir.
+      const manobra = this.estado === "descendo" || this.estado === "subindo";
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "dropshipHum",
+        position: vec3Payload(this.group.position),
+        volume: manobra ? (D.humVolumeManobra ?? 1.05) : (D.humVolume ?? 0.8),
+      });
+    }
     if (this.body) {
       this.body.setNextKinematicTranslation({
         x: this.group.position.x,
@@ -901,7 +935,15 @@ export class SpaceLife {
     });
     gameEvents.emit(EventType.AUDIO_PLAY, { sound: "explosion", position: p, volume: 1.3 });
 
+    /* A rocha se partindo, POR CIMA da explosão.
+     *
+     * As duas juntas e não uma no lugar da outra: a explosão dá o baque que
+     * chega do outro lado da arena, e o cascalho (`rockBurst`) é o que diz que
+     * o que estourou era pedra e não uma nave. Quem estourou o meteorito sabe
+     * disso pela tela; quem estava de costas, a cem metros, só tem o som. */
     if (msg.kind === "meteorBurst") {
+      gameEvents.emit(EventType.AUDIO_PLAY, { sound: "rockBurst", position: p, volume: 1.15 });
+
       /* Os MESMOS estilhaços que o servidor está integrando para decidir quem
          morre — mesma semente, mesma conta, sem trafegar uma única posição.
          Ver `shared/fragments.js`. */

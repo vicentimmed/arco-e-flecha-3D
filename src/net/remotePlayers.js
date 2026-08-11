@@ -27,6 +27,7 @@ import { playerEntity, unpackState } from "../shared/protocol.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
 import { blinkOpacity } from "../game/respawn.js";
 import { Ragdoll } from "../game/ragdoll.js";
+import { JetSmokeTrail } from "../systems/jetSmoke.js";
 import { NameTag } from "./nameTag.js";
 
 const TAU = Math.PI * 2;
@@ -84,6 +85,8 @@ class RemotePlayer {
     this.visible = true;
     this.shadowsOn = true;
     this.opacity = 1;
+    /** O caminho de fumaça que ele deixa ao voar. Ver `systems/jetSmoke.js`. */
+    this.jetSmoke = new JetSmokeTrail();
 
     this.body = new RemoteBody(physics, this.entityId, this.player);
     this.player.physicsBody = this.body;
@@ -181,6 +184,17 @@ class RemotePlayer {
     this.lastKnifeFraction = p.knifeFraction;
     this.body.moveTo(p.position);
 
+    /* O rastro de fumaça do jetpack DELE, desenhado aqui.
+     *
+     * Nada disso trafega: o que chega é o bit `j` do jato (um bit, na pose que
+     * já vinha), e o rastro é a consequência local de ele estar aceso. Mandar
+     * partículas pela rede para um efeito contínuo seria caríssimo e não
+     * acrescentaria nada — a posição, que é o que importa, já está aqui.
+     *
+     * O corte por distância é o mesmo do jogador local, e é ele que impede uma
+     * sala cheia de gente voando de estourar o pool. Ver `systems/jetSmoke.js`. */
+    this.jetSmoke.step(dt, p.jetFlame > 0.01, p.position, p.yaw, distancia);
+
     // Rosto só de perto: acima de 12 m as nove peças da face não desenham nada
     // que a cabeça já não desenhe. Ver `Player.setFaceDetail`.
     p.setFaceDetail(distancia <= FACE_DETAIL_DISTANCE);
@@ -265,6 +279,7 @@ class RemotePlayer {
       p.setDraw(a.drawFraction);
       p.setReload(a.reloadFraction ?? 0);
       p.setKnife(a.knifeFraction ?? 0);
+      p.setJetFlame(a.jetFlame ?? 0);
       this.body.verticalVelocity = 0;
       return;
     }
@@ -283,6 +298,12 @@ class RemotePlayer {
     p.setDraw(lerp(a.drawFraction, b.drawFraction, t));
     p.setReload(lerp(a.reloadFraction ?? 0, b.reloadFraction ?? 0, t));
     p.setKnife(lerp(a.knifeFraction ?? 0, b.knifeFraction ?? 0, t));
+    /* O jato NÃO é interpolado: é um bit, e meio jato não existe (o mesmo
+       critério de `extrapolate`, e o mesmo do `airborne` logo acima). Ele
+       faltava aqui — e como este é o caminho NORMAL, o de interpolar entre duas
+       amostras, a chama e o rastro do vizinho só existiam nos raros quadros em
+       que um pacote atrasava e caíamos na extrapolação. */
+    p.setJetFlame((t < 0.5 ? a.jetFlame : b.jetFlame) ?? 0);
 
     // Velocidade vertical estimada das amostras: é o que a pose de pulo usa
     // para encolher as pernas na subida.

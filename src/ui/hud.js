@@ -71,6 +71,8 @@ const ATALHOS = [
     itens: [
       // A mesma tecla leva e traz — ver `askLevelChange`.
       [["9"], "Lua (ir e voltar)"],
+      [["B"], "adicionar bot"],
+      [["Shift", "B"], "remover bot"],
     ],
   },
   {

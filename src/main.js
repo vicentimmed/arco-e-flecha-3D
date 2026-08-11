@@ -33,6 +33,7 @@ import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
 import { PlayerPhysics } from "./systems/playerPhysics.js";
 import { Jetpack } from "./systems/jetpack.js";
+import { BotManager } from "./systems/bot.js";
 import { AudioSystem } from "./systems/audio.js";
 import { ParticleSystem } from "./systems/particles.js";
 import { installImpactEffects, RECEITAS } from "./systems/impactFx.js";
@@ -266,6 +267,22 @@ class Game {
     this.remotes = new RemotePlayers(this.scene, physics, this.terrain);
     this.remoteArrows = new RemoteArrows(this.arrows, () => this.targets);
     this.series = new TargetSeriesView(this.scene, physics, this.terrain, this.arrows);
+    /* Os adversários de CPU. Vivem FORA da fase, como você e os remotos: quem
+       troca de cenário continua duelando com o mesmo bot do outro lado.
+
+       O `terrain` entra como ACESSOR, não como valor: o contexto é guardado uma
+       vez e a fase muda várias, e um bot com a referência do vale demolido
+       procuraria o chão num terreno que já não existe. */
+    this.bots = new BotManager({
+      scene: this.scene,
+      physics,
+      arrows: this.arrows,
+      get terrain() {
+        return this.jogo.terrain;
+      },
+      jogo: this,
+    });
+
     this.respawn = new Respawn(this.player, this.playerPhysics);
     this.death = new Death(this.player, this.terrain);
     this.lastStateSent = -Infinity;
@@ -971,6 +988,7 @@ class Game {
     // da etiqueta de nome.
     this.series.update(dt, this.renderer.camera);
     this.remotes.update(dt, this.net.serverTime, this.renderer.camera);
+    this.bots.update(dt, this.botTargets());
     this.pushState();
 
     this.updateHud();
@@ -1036,6 +1054,20 @@ class Game {
 
     if (a.setMode) this.askModeChange(a.setMode);
     if (a.setLevel) this.askLevelChange(a.setLevel);
+    if (a.toggleBot) {
+      if (a.toggleBot === "add") {
+        const bot = this.bots.add();
+        this.hud.toast(
+          bot ? `${bot.nome} entrou no duelo` : "limite de bots atingido",
+          bot ? "hit" : "miss",
+        );
+      } else {
+        this.hud.toast(
+          this.bots.removeLast() ? "bot removido" : "nenhum bot em campo",
+          "miss",
+        );
+      }
+    }
     if (a.toggleMusic) {
       const on = this.audio.toggleMusic();
       this.hud.toast(on ? "música ligada" : "música desligada", "miss");
@@ -1261,6 +1293,31 @@ class Game {
     for (const r of this.remotes.byId.values()) {
       if (!r.dyingSince) lista.push(r.player.position);
     }
+    // O bot também é gente em campo: alien persegue e flecha acerta.
+    this.bots.positions(lista);
+    return lista;
+  }
+
+  /**
+   * Quem o bot pode caçar: você, os remotos e os OUTROS bots.
+   *
+   * Dois bots numa sala vazia duelam entre si — que é, de longe, a melhor
+   * forma de olhar a IA jogando sem estar no meio do tiroteio.
+   */
+  botTargets() {
+    const lista = (this._botTargets ??= []);
+    lista.length = 0;
+    if (!this.death.dying) {
+      lista.push({ position: this.player.position, entityId: this.player.entityId });
+    }
+    for (const r of this.remotes.byId.values()) {
+      if (!r.dyingSince) {
+        lista.push({ position: r.player.position, entityId: r.entityId });
+      }
+    }
+    for (const b of this.bots.bots) {
+      if (b.vivo) lista.push({ position: b.player.position, entityId: b.entityId });
+    }
     return lista;
   }
 
@@ -1475,6 +1532,9 @@ class Game {
       this.aim.setExcludedCollider(this.playerPhysics.collider);
     }
     if (this.remotes) this.remotes.setTerrain(terrain);
+    // Os bots atravessam a troca junto com os humanos: terreno novo, cápsula
+    // nova e um nascimento no anel de duelo da fase que entrou.
+    this.bots?.relevel(terrain);
   }
 
   /**

@@ -25,7 +25,7 @@
 
 import { CONFIG } from "../src/config.js";
 import { pathCenterX } from "../src/shared/terrainField.js";
-import { BotSquad } from "./botSim.js";
+import { BotSquad, obstaculosDe } from "./botSim.js";
 import { simularFlechaDoBot, orientacaoDe } from "./botArrow.js";
 import { SpaceField } from "./spaceSim.js";
 import {
@@ -330,6 +330,8 @@ export class Room {
       donoId: bot.id,
       bichos: this.botPrey(),
       agora: this.now(),
+      // Tronco e rocha param a flecha do bot, como param a de qualquer um.
+      blockers: obstaculosDe(this.terrain, this.level),
     });
 
     if (r.kind === "sumiu") return; // saiu do mundo: nada a encaixar

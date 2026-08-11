@@ -21,17 +21,38 @@
    Three.js (vetores viraram `{x,y,z}` cru) e Rapier (a linha de visada virou
    amostragem do relevo, e a flecha é integrada à mão em `botArrow.js`).
 
-   ------------------------------------------------------------------ a lacuna
+   ------------------------------------------------------------------ a visada
 
-   O servidor não conhece vegetação — ver `birdSim.js`, que documenta o mesmo
-   limite para os poleiros. Então a visada do bot enxerga o RELEVO (um morro
-   entre os dois bloqueia) mas não enxerga tronco nem rocha. Enquanto a lista de
-   obstáculos não for compartilhada, o bot atira através de árvore. É dívida
-   conhecida e está anotada no plano; não é motivo para ele não existir.
+   O servidor não tem malha nenhuma, mas TEM a lista de obstáculos: as posições
+   de árvores e rochas foram extraídas para `shared/valleyProps.js`, que os dois
+   lados importam. Sem ela o defeito seria pior do que a ausência de visada no
+   cliente: em vez de cravar todas as flechas na mesma árvore, o bot passaria a
+   acertar ATRAVÉS dela — injusto de um jeito que o jogador não consegue ler.
+
+   A visada olha as duas coisas: o RELEVO (um morro entre os dois bloqueia, por
+   amostragem de altura) e os TRONCOS (segmento contra cilindro).
    --------------------------------------------------------------------------- */
 
 import { CONFIG, drawSpeed } from "../src/config.js";
 import { levelPhysics } from "../src/shared/levels.js";
+import { valleyBlockers, bloqueado } from "../src/shared/valleyProps.js";
+
+/* Os obstáculos do vale, calculados uma vez por campo de altura.
+   `valleyBlockers` refaz o sorteio inteiro; num teste de visada por quadro com
+   seis bots isso seria absurdo. O cache é por terreno porque a fase troca. */
+const blockersPorTerreno = new WeakMap();
+
+export function obstaculosDe(terrain, levelId) {
+  // Só o vale tem vegetação. A Lua tem a base, que o servidor também não
+  // conhece — dívida menor, porque lá o cenário é esparso e aberto.
+  if (levelId !== "valley") return [];
+  let lista = blockersPorTerreno.get(terrain);
+  if (!lista) {
+    lista = valleyBlockers(terrain);
+    blockersPorTerreno.set(terrain, lista);
+  }
+  return lista;
+}
 
 const TAU = Math.PI * 2;
 
@@ -445,13 +466,18 @@ export class Bot {
   }
 
   /**
-   * Há caminho livre do arco até este ponto — pelo RELEVO?
+   * Há caminho livre do arco até este ponto?
    *
-   * Amostra a altura do terreno ao longo da reta: se em algum ponto o chão está
-   * acima da trajetória reta, há morro no meio. É o que o servidor consegue
-   * saber; tronco e rocha ele não conhece (ver o cabeçalho do arquivo).
+   * Duas perguntas com respostas de naturezas diferentes. O RELEVO é resolvido
+   * por amostragem de altura ao longo da reta — se em algum ponto o chão está
+   * acima da trajetória, há morro no meio. Os TRONCOS e as ROCHAS são um teste
+   * de segmento contra cilindro, com a lista compartilhada de
+   * `shared/valleyProps.js`.
    */
   temVisada(alvoPonto) {
+    if (bloqueado(obstaculosDe(this.terrain, this.levelId), this._muzzle, alvoPonto)) {
+      return false;
+    }
     const dx = alvoPonto.x - this._muzzle.x;
     const dy = alvoPonto.y - this._muzzle.y;
     const dz = alvoPonto.z - this._muzzle.z;

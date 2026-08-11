@@ -24,6 +24,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { TerrainField, pathCenterX } from "../shared/terrainField.js";
+import { valleyBoulders, valleyTrees } from "../shared/valleyProps.js";
 import { SUN_DIR } from "../core/sun.js";
 import { clamp, smoothstep, makeRandom } from "../utils/math.js";
 import { shared } from "../levels/resources.js";
@@ -506,30 +507,20 @@ function scatterBoulders(scene, physics, terrain, random) {
   ];
 
   const buckets = Array.from({ length: VARIANTS }, () => []);
-  const up = new THREE.Vector3();
 
-  let placed = 0;
-  let guard = 0;
-  while (placed < 80 && guard++ < 4000) {
-    const x = (random() * 2 - 1) * (A.halfX + 30);
-    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 30);
-    const ad = terrain.arenaDistance(x, z);
-    if (ad > 20) continue; // já é parede de serra
-    // Não obstrui a linha de tiro.
-    if (Math.abs(x - pathCenterX(z)) < 7 && z > -112 && z < 30) continue;
-    terrain.normalAt(x, z, 1.0, up);
-    if (up.y < 0.68) continue; // encosta íngreme demais para uma pedra assentada
-
-    buckets[Math.floor(random() * VARIANTS)].push({
-      x,
-      z,
-      radius: 0.5 + random() * 2.1,
-      rx: (random() - 0.5) * 0.4,
-      ry: random() * Math.PI * 2,
-      rz: (random() - 0.5) * 0.4,
-      tint: tints[Math.floor(random() * tints.length)],
+  /* AS POSIÇÕES VÊM DE `shared/valleyProps.js`, não de um sorteio local.
+     É de lá que o SERVIDOR também as lê, para o adversário de CPU não atirar
+     através de uma pedra que ele não enxerga. Aqui só se desenha nelas. */
+  for (const b of valleyBoulders(terrain)) {
+    buckets[b.variant].push({
+      x: b.x,
+      z: b.z,
+      radius: b.radius,
+      rx: b.rx,
+      ry: b.ry,
+      rz: b.rz,
+      tint: tints[b.tint],
     });
-    placed++;
   }
 
   const group = new THREE.Group();
@@ -866,45 +857,9 @@ function scatterTrees(scene, physics, terrain, random, sway) {
     new THREE.Color("#3a6b3c"),
   ];
 
-  const up = new THREE.Vector3();
-  const ring = [];
-  const slope = [];
-
-  // --- anel: da borda do piso até a metade do sopé -----------------------
-  let guard = 0;
-  while (ring.length < 130 && guard++ < 6000) {
-    const x = (random() * 2 - 1) * (A.halfX + 22);
-    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 22);
-    const ad = terrain.arenaDistance(x, z);
-    if (ad < -11 || ad > 15) continue;
-    // A linha de tiro fica limpa da arqueira até bem além do último alvo.
-    if (Math.abs(x - pathCenterX(z)) < 9 && z > -114 && z < 26) continue;
-    terrain.normalAt(x, z, 1.2, up);
-    if (up.y < 0.84) continue;
-    const scale = 0.85 + random() * 0.75;
-    // Garante um corredor físico entre os troncos. A folga considera os raios
-    // visuais dos dois troncos mais a largura da cápsula do jogador.
-    const overlaps = ring.some((tree) => {
-      const required = 0.24 * (scale + tree.scale) + 0.9;
-      return Math.hypot(x - tree.x, z - tree.z) < required;
-    });
-    if (overlaps) continue;
-    ring.push({ x, z, scale });
-  }
-
-  // --- encosta: coníferas até a linha das árvores -------------------------
-  guard = 0;
-  while (slope.length < 300 && guard++ < 12000) {
-    const x = (random() * 2 - 1) * (A.halfX + 90);
-    const z = terrain.centerZ + (random() * 2 - 1) * (terrain.halfZ + 90);
-    const ad = terrain.arenaDistance(x, z);
-    if (ad < 6) continue;
-    const h = terrain.heightAt(x, z);
-    if (h > A.treeLine) continue;
-    terrain.normalAt(x, z, 1.4, up);
-    if (up.y < 0.62) continue; // não nasce pinheiro em falésia
-    slope.push({ x, z, scale: 0.9 + random() * 1.1 });
-  }
+  /* As posições vêm de `shared/valleyProps.js` — a mesma lista que o servidor
+     usa para a linha de visada do bot. Ver o cabeçalho de lá. */
+  const { ring, slope } = valleyTrees(terrain);
 
   /* Uma passada de instâncias POR VARIANTE de silhueta.
      São quatro chamadas de desenho a mais para as folhosas e uma para as

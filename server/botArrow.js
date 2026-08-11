@@ -21,12 +21,15 @@
       `entities/arrow.js`), então a área efetiva é ~a frontal durante quase todo o
       voo. O erro é de centímetros num tiro de sessenta metros.
 
-   2. **Sem vegetação.** O servidor não conhece árvore — ver o cabeçalho de
-      `botSim.js`. A flecha do bot atravessa tronco. É dívida conhecida.
+   2. **A vegetação entra pela lista compartilhada**, não pela malha: os troncos
+      e as rochas são cilindros verticais vindos de `shared/valleyProps.js`. Sem
+      isso a flecha do bot atravessaria árvore, e ele viraria um franco-atirador
+      que acerta através do cenário.
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
 import { levelPhysics } from "../src/shared/levels.js";
+import { bloqueado } from "../src/shared/valleyProps.js";
 
 /** Raio de acerto de um bicho. Generoso: alvo que corre não é um ponto. */
 const RAIO_BICHO = 0.8;
@@ -45,7 +48,7 @@ const RAIO_BICHO = 0.8;
  * @returns {{kind:string, alvo:object|null, ponto:object, velocidade:object, tempo:number}}
  */
 export function simularFlechaDoBot(tiro, ctx) {
-  const { terrain, levelId, personagens, donoId, bichos = [], agora = 0 } = ctx;
+  const { terrain, levelId, personagens, donoId, bichos = [], agora = 0, blockers = [] } = ctx;
   const fisica = levelPhysics(levelId);
 
   const h = CONFIG.physics.fixedStep;
@@ -112,6 +115,11 @@ export function simularFlechaDoBot(tiro, ctx) {
       if (d <= RAIO_BICHO) {
         return { kind: b.kind, alvo: b, ponto: { ...p }, velocidade: { ...v }, tempo: t };
       }
+    }
+
+    /* ------------------------------------------------ tronco e rocha ----- */
+    if (blockers.length && bloqueado(blockers, anterior, p)) {
+      return { kind: "scenery", alvo: null, ponto: { ...p }, velocidade: { ...v }, tempo: t };
     }
 
     /* ----------------------------------------------------------- terreno -- */

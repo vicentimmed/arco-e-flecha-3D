@@ -23,8 +23,19 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
-import { makeRandom } from "../utils/math.js";
 import { shared } from "../levels/resources.js";
+/* As MEDIDAS da base moram em `shared/moonProps.js`, não aqui: o servidor
+   precisa exatamente delas para que a flecha de um bot pare no cenário em vez
+   de atravessá-lo. Este arquivo continua dono da APARÊNCIA — anéis, aletas,
+   tintas, bandeira —, e importa dali só o que tem consequência física. */
+import {
+  ROCKET,
+  HABITATS,
+  SOLAR,
+  DISH,
+  LANDER,
+  cargoLayout,
+} from "../shared/moonProps.js";
 import { Rover } from "./rover.js";
 
 /* A paleta de um programa espacial: branco de pintura térmica, metal escuro,
@@ -207,8 +218,11 @@ export class MoonBase {
    * centro, e não na borda.
    */
   buildRocket(lote, physics, x, z, solo) {
-    const ALTURA = 28; // m até o piso da plataforma
-    const RAIO = 2.6;
+    /* As medidas vêm de `shared/moonProps.js` porque o SERVIDOR também precisa
+       delas: é com elas que a flecha de um bot para no piso da plataforma em
+       vez de atravessá-lo. Ver `moonBlockers`. */
+    const ALTURA = ROCKET.height; // m até o piso da plataforma
+    const RAIO = ROCKET.radius;
 
     // Corpo: três seções que afinam, com anéis de reforço entre elas.
     const secoes = [
@@ -261,14 +275,14 @@ export class MoonBase {
        quatro dos seis segundos de tanque; parar na metade custa dois, e daí dá
        para atirar, esperar encher e subir de novo. É a diferença entre um
        ponto alto e uma rota. */
-    const RP = 3.6; // m — raio do piso do topo
+    const RP = ROCKET.topRadius; // m — raio do piso do topo
     /* O do meio ERA 2,9 m — perto demais do casco nessa altura (o corpo do
        foguete já afina para ~2,53 m ali), sobrando uns 37 cm de aro para pisar.
        Em 3,4 m a folga vira ~0,9 m, de verdade utilizável, sem ultrapassar o
        piso de cima. */
-    const RM = 3.4; // m — o do meio, um pouco menor que o de cima
+    const RM = ROCKET.midRadius; // m — o do meio, um pouco menor que o de cima
     const yPiso = solo + ALTURA;
-    const yMeio = solo + 14;
+    const yMeio = solo + ROCKET.midHeight;
 
     lote.add("metal", new THREE.CylinderGeometry(RP, RP, 0.35, 22), trs(x, yPiso, z));
     lote.add("metal", new THREE.CylinderGeometry(RM, RM, 0.3, 20), trs(x, yMeio, z));
@@ -304,8 +318,8 @@ export class MoonBase {
     // Corpo: um cilindro só. A flecha não precisa distinguir aleta de anel.
     this.solid(physics, RAPIER.ColliderDesc.cylinder(ALTURA / 2, RAIO), x, solo + ALTURA / 2, z, "foguete");
     // As plataformas. São elas que o `computedGrounded()` encontra sob os pés.
-    this.solid(physics, RAPIER.ColliderDesc.cylinder(0.22, RP), x, yPiso + 0.05, z, "plataforma");
-    this.solid(physics, RAPIER.ColliderDesc.cylinder(0.2, RM), x, yMeio + 0.05, z, "plataforma-meio");
+    this.solid(physics, RAPIER.ColliderDesc.cylinder(ROCKET.topThickness / 2, RP), x, yPiso + 0.05, z, "plataforma");
+    this.solid(physics, RAPIER.ColliderDesc.cylinder(ROCKET.midThickness / 2, RM), x, yMeio + 0.05, z, "plataforma-meio");
 
     this.platformY = yPiso;
     this.midPlatformY = yMeio;
@@ -339,14 +353,8 @@ export class MoonBase {
      * com jetpack precisa de vãos para atravessar e de silhuetas separadas para
      * contornar. Espalhados, cada peça vira uma referência de navegação — "vou
      * pelo domo grande" passa a significar alguma coisa. */
-    const postos = [
-      { dx: -46, dz: 14, r: 5.6 },
-      { dx: -30, dz: 40, r: 4.6 },
-      { dx: -58, dz: 44, r: 4.0 },
-    ];
-
     let anterior = null;
-    for (const p of postos) {
+    for (const p of HABITATS) {
       const x = B.x + p.dx;
       const z = B.z + p.dz;
       const y = chao(x, z);
@@ -382,25 +390,39 @@ export class MoonBase {
        e uma placa atravessável desmentia o olho tanto quanto uma parede
        invisível desmentiria. Continua-se passando por baixo — o colisor é só a
        chapa, inclinada como ela, a 2,4 m; o mastro é fino e fica livre. */
-    for (let fila = 0; fila < 2; fila++) {
-      for (let i = 0; i < 6; i++) {
-        const x = B.x + 38 + fila * 14;
-        const z = B.z - 30 + i * 11;
+    const S = SOLAR;
+    for (let fila = 0; fila < S.filas; fila++) {
+      for (let i = 0; i < S.porFila; i++) {
+        const x = B.x + S.dx + fila * S.passoFila;
+        const z = B.z + S.dz + i * S.passoPlaca;
         const y = chao(x, z);
         // Inclinadas para o Sol rasante, como painel de verdade.
-        lote.add("painel", new THREE.BoxGeometry(6.4, 0.12, 3.6), trs(x, y + 2.4, z, 0, 0, -0.42));
+        lote.add(
+          "painel",
+          new THREE.BoxGeometry(S.meiaLargura * 2, S.meiaEspessura * 2, S.meiaProfundidade * 2),
+          trs(x, y + S.altura, z, 0, 0, S.inclinacao),
+        );
         lote.add("metal", new THREE.CylinderGeometry(0.12, 0.16, 2.4, 7), trs(x, y + 1.2, z));
-        this.solid(physics, RAPIER.ColliderDesc.cuboid(3.2, 0.06, 1.8), x, y + 2.4, z, "painel solar", 0, -0.42);
+        this.solid(
+          physics,
+          RAPIER.ColliderDesc.cuboid(S.meiaLargura, S.meiaEspessura, S.meiaProfundidade),
+          x,
+          y + S.altura,
+          z,
+          "painel solar",
+          0,
+          S.inclinacao,
+        );
       }
     }
   }
 
   buildDish(lote, physics, B, chao) {
-    const x = B.x + 22;
-    const z = B.z + 52;
+    const x = B.x + DISH.dx;
+    const z = B.z + DISH.dz;
     const y = chao(x, z);
 
-    lote.add("metal", new THREE.CylinderGeometry(0.22, 0.3, 4.2, 8), trs(x, y + 2.1, z));
+    lote.add("metal", new THREE.CylinderGeometry(0.22, 0.3, DISH.altura, 8), trs(x, y + DISH.altura / 2, z));
     // Parabólica: esfera cortada, virada para o céu e para a Terra.
     lote.add(
       "casco",
@@ -412,13 +434,20 @@ export class MoonBase {
       const a = (i / 3) * Math.PI * 2;
       lote.add("metal", new THREE.CylinderGeometry(0.09, 0.09, 2.6, 5), trs(x + Math.cos(a) * 1.1, y + 1.1, z + Math.sin(a) * 1.1, 0.36, -a, 0));
     }
-    this.solid(physics, RAPIER.ColliderDesc.cylinder(2.1, 0.4), x, y + 2.1, z, "antena");
+    this.solid(
+      physics,
+      RAPIER.ColliderDesc.cylinder(DISH.altura / 2, DISH.raio),
+      x,
+      y + DISH.altura / 2,
+      z,
+      "antena",
+    );
   }
 
   /** O módulo pousado. O rover mora em `entities/rover.js` — ele anda. */
   buildLander(lote, physics, B, chao) {
-    const lx = B.x + 44;
-    const lz = B.z + 34;
+    const lx = B.x + LANDER.dx;
+    const lz = B.z + LANDER.dz;
     const ly = chao(lx, lz);
     lote.add("ouro", new THREE.BoxGeometry(4.2, 2.4, 4.2), trs(lx, ly + 2.2, lz));
     lote.add("casco", new THREE.CylinderGeometry(1.6, 2.0, 1.8, 8), trs(lx, ly + 4.2, lz));
@@ -427,7 +456,14 @@ export class MoonBase {
       lote.add("metal", new THREE.CylinderGeometry(0.11, 0.11, 3.4, 6), trs(lx + Math.cos(a) * 2.2, ly + 1.3, lz + Math.sin(a) * 2.2, 0.5, -a, 0));
       lote.add("metal", new THREE.CylinderGeometry(0.55, 0.55, 0.16, 10), trs(lx + Math.cos(a) * 3.3, ly + 0.1, lz + Math.sin(a) * 3.3));
     }
-    this.solid(physics, RAPIER.ColliderDesc.cuboid(2.2, 1.8, 2.2), lx, ly + 2.2, lz, "módulo");
+    this.solid(
+      physics,
+      RAPIER.ColliderDesc.cuboid(LANDER.meiaLargura, LANDER.meiaAltura, LANDER.meiaLargura),
+      lx,
+      ly + 2.2,
+      lz,
+      "módulo",
+    );
   }
 
   /**
@@ -438,18 +474,16 @@ export class MoonBase {
    * base, dão o que contornar no chão e o que sobrevoar no ar.
    */
   buildCargo(lote, physics, B, chao) {
-    const rnd = makeRandom(31415);
-    for (let i = 0; i < 14; i++) {
-      const a = rnd() * Math.PI * 2;
-      const d = 18 + rnd() * 58;
-      const x = B.x + Math.cos(a) * d;
-      const z = B.z + Math.sin(a) * d;
+    /* O sorteio saiu daqui para `shared/moonProps.js`: o servidor precisa saber
+       onde cada caixa caiu, e reimplementar o mesmo sorteio dos dois lados é
+       exatamente o tipo de cópia que se desencontra na primeira mexida. */
+    const TINTAS_CARGA = ["ouro", "aviso", "casco"];
+    for (const c of cargoLayout()) {
+      const x = B.x + c.dx;
+      const z = B.z + c.dz;
       const y = chao(x, z);
-      const w = 1.6 + rnd() * 1.4;
-      const h = 1.2 + rnd() * 1.0;
-      const giro = rnd() * Math.PI;
-      const tinta = rnd() < 0.3 ? "ouro" : rnd() < 0.5 ? "aviso" : "casco";
-      lote.add(tinta, new THREE.BoxGeometry(w * 2, h * 2, w * 1.5), trs(x, y + h, z, 0, giro, 0));
+      const { w, h, giro } = c;
+      lote.add(TINTAS_CARGA[c.tinta], new THREE.BoxGeometry(w * 2, h * 2, w * 1.5), trs(x, y + h, z, 0, giro, 0));
       this.solid(physics, RAPIER.ColliderDesc.cuboid(w, h, w * 0.75), x, y + h, z, "carga", giro);
     }
   }

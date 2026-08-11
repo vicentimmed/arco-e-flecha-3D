@@ -1093,9 +1093,15 @@ export const CONFIG = {
       /* ------------------------------------------------------------- naves --
          O disco voador que cruza o céu: abatível, e o estouro mata. */
       ship: {
-        maxAlive: 2,
-        spawnMin: 14, // s
-        spawnMax: 36,
+        /* UMA de cada vez, e raramente.
+           Com duas vivas nascendo a cada 14–36 s havia quase sempre uma nave
+           riscando o céu, e o que era para ser um acontecimento virou trânsito:
+           quando algo passa o tempo todo, ninguém levanta a cabeça. Uma nave
+           sozinha, a cada dois ou três minutos, volta a ser a coisa rara que
+           faz o jogador parar de mirar para olhar. */
+        maxAlive: 1,
+        spawnMin: 105, // s
+        spawnMax: 210,
         alturaMin: 52, // m acima do chão
         alturaMax: 78,
         velMin: 22, // m/s

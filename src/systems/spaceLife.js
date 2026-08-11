@@ -880,7 +880,13 @@ export class SpaceLife {
       position: p, count: 60, color: 0x5a5a5a, speed: 9, spread: 1,
       size: 1.2, grow: 3.2, life: 2.6, gravity: -0.4, drag: 0.8, alpha: 0.6,
     });
-    gameEvents.emit(EventType.AUDIO_PLAY, { sound: "explosion", position: p, volume: 1.3 });
+    /* O estouro é GRANDE, não ALTO.
+       A 1,3 ele estourava a mixagem: a nave caindo do outro lado da arena
+       abafava o estalo da própria corda e o guincho do alien em cima do
+       jogador — os dois sons que dizem o que está acontecendo com ELE. O que
+       faz a explosão parecer enorme é a cauda longa do buffer e o alcance de
+       240 m, e nada disso mudou; ela só parou de mandar na mixagem. */
+    gameEvents.emit(EventType.AUDIO_PLAY, { sound: "explosion", position: p, volume: 0.55 });
 
     /* A rocha se partindo, POR CIMA da explosão.
      *
@@ -889,7 +895,10 @@ export class SpaceLife {
      * o que estourou era pedra e não uma nave. Quem estourou o meteorito sabe
      * disso pela tela; quem estava de costas, a cem metros, só tem o som. */
     if (msg.kind === "meteorBurst") {
-      gameEvents.emit(EventType.AUDIO_PLAY, { sound: "rockBurst", position: p, volume: 1.15 });
+      /* Abaixo da explosão, e de propósito: o cascalho é o que IDENTIFICA o
+         que estourou (pedra, não nave), e para isso ele precisa ser ouvido,
+         não gritar. Ver o volume da explosão logo acima. */
+      gameEvents.emit(EventType.AUDIO_PLAY, { sound: "rockBurst", position: p, volume: 0.5 });
 
       /* Os MESMOS estilhaços que o servidor está integrando para decidir quem
          morre — mesma semente, mesma conta, sem trafegar uma única posição.

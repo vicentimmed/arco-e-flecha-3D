@@ -164,32 +164,8 @@ export function valleyBlockers(terrain) {
   return saida;
 }
 
-/**
- * O segmento [a, b] atravessa algum obstáculo?
- *
- * Teste de segmento contra cilindro vertical, em duas partes: a distância
- * horizontal ao eixo e a faixa de altura. Separar as duas é o que deixa a conta
- * barata — e é correto, porque o cilindro é vertical por construção.
- */
-export function bloqueado(blockers, a, b) {
-  const dx = b.x - a.x;
-  const dz = b.z - a.z;
-  const len2 = dx * dx + dz * dz;
-  if (len2 < 1e-9) return false;
-
-  for (const o of blockers) {
-    // Parâmetro do ponto mais próximo, no plano.
-    let s = ((o.x - a.x) * dx + (o.z - a.z) * dz) / len2;
-    if (s < 0) s = 0;
-    else if (s > 1) s = 1;
-    const px = a.x + dx * s;
-    const pz = a.z + dz * s;
-    if (Math.hypot(px - o.x, pz - o.z) > o.r) continue;
-
-    // Passa perto no plano: a altura decide. Sem esta parte, uma flecha alta
-    // sobre a copa contaria como bloqueada por um tronco de três metros.
-    const y = a.y + (b.y - a.y) * s;
-    if (y >= o.base && y <= o.base + o.h) return true;
-  }
-  return false;
-}
+/* O teste de segmento contra sólido MUDOU DE CASA: ele deixou de ser do vale
+   quando a Lua passou a ter obstáculos também, e mora em `shared/blockers.js`.
+   Reexportado daqui porque troncos e rochas continuam sendo o caso de uso mais
+   antigo — e para nenhum importador precisar saber que a peça se mudou. */
+export { bloqueado } from "./blockers.js";

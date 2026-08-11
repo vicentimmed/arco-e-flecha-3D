@@ -243,6 +243,23 @@ export class Room {
     });
     this.broadcastScores();
 
+    this.agendarRenascimento(vitima);
+  }
+
+  /**
+   * O corpo cai, e só então quem morreu volta.
+   *
+   * UM lugar só, e é o que corrige o defeito que dava: metade dos caminhos de
+   * morte testava `this.players.has(vitima.conn)` para saber se ainda vale
+   * renascer alguém, e o bot não tem `conn`. O resultado era um CPU morto por
+   * um humano que ficava caído para sempre, enquanto o mesmo CPU morto por
+   * outro CPU renascia normalmente — quem matou decidia se a vítima voltava.
+   *
+   * O teste certo é "esta vítima ainda está na sala?", e ele é diferente para
+   * cada natureza: o humano some quando o socket cai, o bot quando é removido
+   * do esquadrão.
+   */
+  agendarRenascimento(vitima) {
     const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
     setTimeout(() => {
       if (vitima.isBot) {
@@ -406,14 +423,7 @@ export class Room {
     });
     this.broadcastScores();
 
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
-    setTimeout(() => {
-      if (vitima.isBot) {
-        if (this.bots.byId(vitima.id)) this.spawn(vitima);
-      } else if (this.players.has(vitima.conn)) {
-        this.spawn(vitima);
-      }
-    }, espera).unref?.();
+    this.agendarRenascimento(vitima);
   }
 
   /**
@@ -1219,10 +1229,7 @@ export class Room {
       return;
     }
 
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
-    setTimeout(() => {
-      if (this.players.has(vitima.conn)) this.spawn(vitima);
-    }, espera).unref?.();
+    this.agendarRenascimento(vitima);
   }
 
   /**
@@ -1264,10 +1271,7 @@ export class Room {
     });
     if (this.mode !== "boarHunt") this.broadcastScores();
 
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
-    setTimeout(() => {
-      if (this.players.has(vitima.conn)) this.spawn(vitima);
-    }, espera).unref?.();
+    this.agendarRenascimento(vitima);
   }
 
   /**
@@ -1758,10 +1762,7 @@ export class Room {
     });
     this.broadcastScores();
 
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
-    setTimeout(() => {
-      if (this.players.has(vitima.conn)) this.spawn(vitima);
-    }, espera).unref?.();
+    this.agendarRenascimento(vitima);
   }
 
   registerElkWolfHit(player, msg) {
@@ -2569,11 +2570,7 @@ export class Room {
     });
     this.broadcastScores();
 
-    // O corpo cai, e só então a pessoa volta.
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
-    setTimeout(() => {
-      if (this.players.has(vitima.conn)) this.spawn(vitima);
-    }, espera).unref?.();
+    this.agendarRenascimento(vitima);
   }
 
   /**

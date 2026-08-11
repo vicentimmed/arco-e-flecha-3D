@@ -29,7 +29,7 @@
 
 import { CONFIG } from "../src/config.js";
 import { levelPhysics } from "../src/shared/levels.js";
-import { bloqueado } from "../src/shared/valleyProps.js";
+import { bloqueado } from "../src/shared/blockers.js";
 
 /** Raio de acerto de um bicho. Generoso: alvo que corre não é um ponto. */
 const RAIO_BICHO = 0.8;
@@ -93,6 +93,16 @@ export function simularFlechaDoBot(tiro, ctx) {
     p.z += v.z * h;
     t += h;
 
+    /* ------------------------------------------- tronco, rocha e foguete --
+       ANTES dos personagens, de propósito. Num passo a flecha anda até um
+       metro, e nesse metro pode caber o piso da plataforma do foguete E os pés
+       de quem está em cima dele. Testando o corpo primeiro, o metal seria
+       ignorado e a flecha mataria através dele — que é exatamente o defeito
+       que se via na Lua. Quem vem primeiro no caminho é quem para a flecha. */
+    if (blockers.length && bloqueado(blockers, anterior, p)) {
+      return { kind: "scenery", alvo: null, ponto: { ...p }, velocidade: { ...v }, tempo: t };
+    }
+
     /* ------------------------------------------------------- personagens --
        Cápsula vertical: o segmento da flecha neste passo contra o eixo do
        corpo. Quem está piscando (invencível) é atravessado, como no cliente. */
@@ -115,11 +125,6 @@ export function simularFlechaDoBot(tiro, ctx) {
       if (d <= RAIO_BICHO) {
         return { kind: b.kind, alvo: b, ponto: { ...p }, velocidade: { ...v }, tempo: t };
       }
-    }
-
-    /* ------------------------------------------------ tronco e rocha ----- */
-    if (blockers.length && bloqueado(blockers, anterior, p)) {
-      return { kind: "scenery", alvo: null, ponto: { ...p }, velocidade: { ...v }, tempo: t };
     }
 
     /* ----------------------------------------------------------- terreno -- */

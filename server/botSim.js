@@ -35,7 +35,9 @@
 
 import { CONFIG, drawSpeed } from "../src/config.js";
 import { levelPhysics } from "../src/shared/levels.js";
-import { valleyBlockers, bloqueado } from "../src/shared/valleyProps.js";
+import { valleyBlockers } from "../src/shared/valleyProps.js";
+import { moonBlockers } from "../src/shared/moonProps.js";
+import { bloqueado } from "../src/shared/blockers.js";
 
 /* Os obstáculos do vale, calculados uma vez por campo de altura.
    `valleyBlockers` refaz o sorteio inteiro; num teste de visada por quadro com
@@ -43,12 +45,15 @@ import { valleyBlockers, bloqueado } from "../src/shared/valleyProps.js";
 const blockersPorTerreno = new WeakMap();
 
 export function obstaculosDe(terrain, levelId) {
-  // Só o vale tem vegetação. A Lua tem a base, que o servidor também não
-  // conhece — dívida menor, porque lá o cenário é esparso e aberto.
-  if (levelId !== "valley") return [];
+  /* O vale tem vegetação; a Lua tem o FOGUETE.
+     Ele não é "cenário esparso": é o ponto alto do mapa, o lugar que o jetpack
+     existe para alcançar, e enquanto o servidor não o conhecia a flecha do bot
+     atravessava o piso da plataforma e matava quem estava de pé em cima dela —
+     de dentro do casco, inclusive. Ver `shared/moonProps.js`. */
+  if (levelId !== "valley" && levelId !== "moon") return [];
   let lista = blockersPorTerreno.get(terrain);
   if (!lista) {
-    lista = valleyBlockers(terrain);
+    lista = levelId === "moon" ? moonBlockers(terrain) : valleyBlockers(terrain);
     blockersPorTerreno.set(terrain, lista);
   }
   return lista;

@@ -49,7 +49,33 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "torch") {
     return resolveTorchHit(ctx);
   }
+  if (other.kind === "ship" || other.kind === "alien") {
+    return resolveSpaceHit(ctx);
+  }
   return resolveSceneryHit(ctx);
+}
+
+/**
+ * Nave ou alien: a flecha ATRAVESSA e o alvo reage.
+ *
+ * A flecha não crava em nenhum dos dois, e por motivos opostos. A nave está
+ * caindo e girando — uma flecha presa nela viraria um enfeite rodopiando. O
+ * alien derrete ao morrer, e o que sobraria seria uma flecha parada no ar onde
+ * o corpo estava. Nos dois casos, atravessar é mais limpo que fingir.
+ */
+function resolveSpaceHit({ arrow, other, impact, deps }) {
+  const nave = other.kind === "ship";
+  const alvo = nave ? other.ship : other.alien;
+  if (!alvo || alvo.morta || alvo.dead) return null;
+
+  const abateu = nave ? alvo.abater() : alvo.atingir();
+  emitImpact(arrow, other.kind, alvo.entityId, impact, null, {
+    label: nave ? "nave" : "alien",
+    hit: true,
+  });
+  deps.spawnPuff?.(impact, null);
+  deps.removeArrow?.(arrow);
+  return { kind: other.kind, entityId: alvo.entityId, killed: !!abateu };
 }
 
 function resolveCharacterHit({ arrow, other, impact, normal, deps }) {

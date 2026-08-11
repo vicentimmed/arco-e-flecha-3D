@@ -153,6 +153,8 @@ class Game {
       scene: this.scene,
       physics,
       sync: this.sync,
+      // A poeira em suspensão da Lua acompanha a câmera — ver `spaceLife.js`.
+      camera: this.renderer.camera,
       nextFrame,
       beforeDispose: () => this.beforeLevelDispose(),
       onLevelReady: (fase) => this.onLevelReady(fase),
@@ -962,7 +964,7 @@ class Game {
     this.trails.update(dt);
     this.particles.update(dt);
     this.updateBossFlashes(dt);
-    this.environment.update(dt, this.wind.vector);
+    this.environment.update(dt, this.wind.vector, this.livePlayers());
     this.death.update(this.net.serverTime);
     this.respawn.update(this.net.serverTime);
     // Depois da câmera do frame: a distância dela decide o descarte e a escala
@@ -1243,6 +1245,23 @@ class Game {
         "miss",
       );
     }
+  }
+
+  /**
+   * Todo mundo vivo em campo — o seu boneco e os remotos.
+   *
+   * É o que os aliens perseguem. Reaproveita um array só entre os quadros:
+   * alocar uma lista de doze objetos sessenta vezes por segundo é lixo que o
+   * coletor vem cobrar no meio de um tiro.
+   */
+  livePlayers() {
+    const lista = (this._livePlayers ??= []);
+    lista.length = 0;
+    if (!this.death.dying) lista.push(this.player.position);
+    for (const r of this.remotes.byId.values()) {
+      if (!r.dyingSince) lista.push(r.player.position);
+    }
+    return lista;
   }
 
   /* ------------------------------------------------------ troca de fase --- */

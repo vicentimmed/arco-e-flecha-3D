@@ -39,6 +39,15 @@ export class PhysicsWorld {
 
     this.stepCount = 0;
     this.simulatedTime = 0;
+
+    /**
+     * Quantas vezes o mundo foi recriado.
+     *
+     * Cada corpo nasce carimbado com o valor atual, e `removeBody` recusa os
+     * carimbos velhos. É o que impede que uma referência sobrevivente a uma
+     * troca de fase derrube o jogo. Ver `removeBody`.
+     */
+    this.generation = 0;
   }
 
   get gravity() {
@@ -73,6 +82,10 @@ export class PhysicsWorld {
    * @param {number} [gravity] gravidade em Y da nova fase (m/s²).
    */
   recreate(gravity = this.world.gravity.y) {
+    // A geração sobe ANTES de qualquer coisa: a partir daqui todo corpo criado
+    // pertence ao mundo novo, e todo carimbo anterior está invalidado.
+    this.generation++;
+
     this.world.free?.();
     this.eventQueue.free?.();
 
@@ -111,14 +124,36 @@ export class PhysicsWorld {
   }
 
   createBody(desc) {
-    return this.world.createRigidBody(desc);
+    const body = this.world.createRigidBody(desc);
+    // Carimbo da GERAÇÃO. Ver `removeBody` — é ele que torna impossível mexer
+    // num corpo de um mundo que já não existe.
+    body.__gen = this.generation;
+    return body;
   }
 
   createCollider(desc, body) {
     return this.world.createCollider(desc, body);
   }
 
+  /**
+   * Remove um corpo — e IGNORA em silêncio o que é de um mundo antigo.
+   *
+   * A troca de fase joga fora o `RAPIER.World` inteiro. Quem guardou uma
+   * referência a um corpo criado antes disso tem um ponteiro para memória que
+   * o WASM já liberou, e tocá-lo derruba o jogo com "null pointer passed to
+   * rust" — uma mensagem que não diz de quem era o corpo nem de que mundo.
+   *
+   * Guardar-se em cada chamador é impossível na prática: os donos são muitos
+   * (bichos, flechas, tochas, alvos) e, pior, alguns são acionados pela REDE,
+   * que continua entregando pacotes enquanto o mundo é reconstruído — um
+   * "limpe os pássaros" que chega no meio da troca não tem como saber que o
+   * mundo mudou desde que aqueles pássaros nasceram.
+   *
+   * Com a geração, o descarte fica correto POR CONSTRUÇÃO: um corpo velho já
+   * foi liberado junto com o mundo dele, e não fazer nada é exatamente o certo.
+   */
   removeBody(body) {
+    if (!body || body.__gen !== this.generation) return;
     for (let i = 0; i < body.numColliders(); i++) {
       this.unregister(body.collider(i));
     }

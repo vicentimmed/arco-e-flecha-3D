@@ -13,6 +13,7 @@
 import * as THREE from "three";
 import { MoonTerrain } from "../entities/moonGround.js";
 import { MoonBase } from "../entities/moonBase.js";
+import { SpaceLife } from "../systems/spaceLife.js";
 import { disposeSubtree } from "./resources.js";
 
 export class MoonLevel {
@@ -33,6 +34,15 @@ export class MoonLevel {
     progresso(0.8, "montando a base…");
     this.base = new MoonBase().build(this.root, ctx.physics, this.terrain);
 
+    progresso(0.95, "acendendo o céu…");
+    this.space = new SpaceLife(
+      this.root,
+      ctx.scene,
+      ctx.physics,
+      this.terrain,
+      ctx.camera,
+    );
+
     progresso(1, "pronto");
     return this;
   }
@@ -52,17 +62,29 @@ export class MoonLevel {
     return [];
   }
 
-  update(dt) {
-    /* Quase nada se mexe sozinho aqui: sem ar não há balanço de grama nem
-       bandeira tremulando, e é essa quietude que o vácuo transmite. O que pisca
-       é a baliza do foguete — e ela pisca justamente porque é a única coisa
-       viva num horizonte parado. */
+  /**
+   * @param {number} dt
+   * @param {object} _wind ignorado: não há vento aqui
+   * @param {Array<{x:number,z:number}>} jogadores quem os aliens perseguem
+   */
+  update(dt, _wind, jogadores = []) {
+    /* Sem ar não há balanço de grama nem bandeira tremulando, e essa quietude é
+       o que o vácuo transmite — mas um cenário TOTALMENTE parado lê como tela
+       congelada. O que se mexe aqui foi escolhido para dar movimento a camadas
+       de profundidade diferentes: a baliza no foguete, a poeira ao redor do
+       jogador, as cadentes no infinito, as naves na média distância e os aliens
+       no chão. Ver `systems/spaceLife.js`. */
     this.base?.update(dt);
+    this.space?.update(dt, jogadores);
   }
 
   dispose() {
     this.terrain?.dispose();
     this.base?.dispose();
+    // Naves e aliens têm corpo no mundo de física: precisam sair ANTES do
+    // `recreate()`, e é aqui que ainda dá tempo. Ver `levels/index.js`.
+    this.space?.dispose();
+    this.space = null;
     const contagem = disposeSubtree(this.root);
     this.root = null;
     this.terrain = null;

@@ -205,7 +205,11 @@ export class Room {
     for (const ev of eventos) this.broadcastAll({ t: S2C.SPACE_EVENT, ...ev });
     for (const m of mortes) this.matarPeloEspaco(m.vitima, m.causa);
 
-    this.broadcastAll({ t: S2C.SPACE, time: this.now(), ...this.space.view() });
+    /* Meteorito e rover em UMA amostra a cada duas (5 Hz). Ver `SpaceField.view`
+       para por que eles não precisam de 10 Hz e por que alien e nave precisam. */
+    this.spaceTick = (this.spaceTick ?? 0) + 1;
+    const completo = this.spaceTick % 2 === 0;
+    this.broadcastAll({ t: S2C.SPACE, time: this.now(), ...this.space.view(completo) });
   }
 
   /**
@@ -699,6 +703,16 @@ export class Room {
       this.space.setTerrain(this.terrain);
     }
     this.setMode(pending.mode);
+
+    /* Chegando numa fase SEM FAUNA, a lista vazia é ANUNCIADA.
+     *
+     * `setMode` acabou de esvaziar o bando (ver `resetWorld`), mas quem já está
+     * na sala não tem como saber disso: na Lua o pacote de pássaros não é mais
+     * emitido, e "não receber notícia" não apaga nada do outro lado. Uma
+     * mensagem só, na troca, e o céu do vácuo fica vazio em todas as telas. */
+    if (trocouFase && !levelHasFauna(this.level)) {
+      this.broadcastAll({ t: S2C.BIRDS, time: this.now(), k: [] });
+    }
   }
 
   cancelModePreparation() {
@@ -807,7 +821,11 @@ export class Room {
     this.elkWolves.clear();
     this.birdHuntOver = false;
     this.pendingSpecialBirdWin = null;
-    this.birds.reset();
+    /* Fase sem fauna nasce SEM BANDO. `tickCreatures` já não atualizava os
+       pássaros na Lua, e isso não bastava: eles continuavam na lista e iam
+       embora no `snapshot` de quem entrasse: sete aves batendo asa no vácuo,
+       para sempre, porque nenhuma amostra nova vinha corrigi-las. */
+    this.birds.reset({ vazio: !levelHasFauna(this.level) });
     this.zombies.stop();
     // As tochas voltam acesas: a partida seguinte não herda o escuro que a
     // anterior produziu.
@@ -2141,7 +2159,8 @@ export class Room {
       arrows: this.stuckArrows,
       boars: this.hunt.boars.length ? this.hunt.view() : [],
       elks: this.elks.elks.length ? this.elks.view() : [],
-      birds: isZombieMode(this.mode) ? [] : this.birds.view(),
+      birds:
+        isZombieMode(this.mode) || !levelHasFauna(this.level) ? [] : this.birds.view(),
       zombies: this.zombies.zombies.length ? this.zombies.view() : [],
       torches: this.torches,
       zombieStatus: isZombieMode(this.mode) ? this.zombieStatus() : null,

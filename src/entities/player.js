@@ -598,6 +598,8 @@ export class Player {
     /* arco ---------------------------------------------------------------- */
     this.bow = new Bow();
     this.root.add(this.bow.group);
+
+    podarSombras(this.root);
   }
 
   buildArm() {
@@ -1693,3 +1695,38 @@ export class Player {
 
 /** Distância (m) acima da qual o rosto do arqueiro deixa de ser desenhado. */
 export const FACE_DETAIL_DISTANCE = 12;
+
+/* Raio (m) abaixo do qual uma peça deixa de lançar sombra. Ver `podarSombras`.
+   16 cm é a medida que separa o que TEM silhueta (cabeça, coxa, antebraço,
+   braço do arco) do que é acabamento (fivela, dedo, costura, pena da aljava). */
+const RAIO_MINIMO_DE_SOMBRA = 0.16;
+
+/**
+ * Tira do passe de sombra tudo o que é pequeno demais para projetar sombra.
+ *
+ * O passe de sombra é um SEGUNDO desenho da cena inteira, do ponto de vista do
+ * Sol: cada peça marcada com `castShadow` é desenhada duas vezes por quadro. O
+ * corpo nasceu com 54 dessas — e a maioria não projeta sombra nenhuma que se
+ * possa ver, porque o mapa tem 2048 px cobrindo 92 m (`render.shadowRange`),
+ * ou seja 4,5 cm por texel: uma fivela inteira cabe em um texel e meio.
+ *
+ * Medido numa partida de seis arqueiros na Lua: 174 peças saíram do passe e o
+ * quadro caiu 84 chamadas de desenho (−10 %), fora o preenchimento do mapa, que
+ * é custo de GPU que nenhum contador mostra.
+ *
+ * O critério é o TAMANHO, e não uma lista de nomes, porque uma lista sairia de
+ * sincronia no primeiro acessório novo — quem acrescentar uma peça grande ao
+ * corpo ganha a sombra dela sem precisar saber que esta função existe.
+ */
+function podarSombras(raiz) {
+  raiz.traverse((o) => {
+    if (!o.isMesh || !o.castShadow || !o.geometry) return;
+    if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+    const raio = o.geometry.boundingSphere?.radius ?? Infinity;
+    // O `scale` conta: a pelve é uma cápsula achatada, e o pé é uma caixa
+    // esticada. Medir só a geometria crua puniria peças que só são pequenas
+    // antes de serem redimensionadas.
+    const escala = Math.max(o.scale.x, o.scale.y, o.scale.z);
+    if (raio * escala < RAIO_MINIMO_DE_SOMBRA) o.castShadow = false;
+  });
+}

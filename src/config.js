@@ -433,6 +433,25 @@ export const CONFIG = {
     cull: {
       shadow: 25, // m — além disso o jogador remoto para de projetar sombra
       hide: 160, // m — além disso nem é desenhado
+      /* A LUA VÊ MAIS LONGE, e isto começou como o oposto.
+       *
+       * A ideia era CORTAR mais cedo na Lua: lá não há árvore, morro nem
+       * neblina para esconder ninguém, então os 160 m — que no vale já são
+       * generosos — alcançam a sala inteira o tempo todo, e cada corpo custa
+       * ~94 chamadas de desenho.
+       *
+       * A conta do duelo desmontou a ideia e revelou um defeito no caminho: o
+       * anel de duelo da Lua tem 95 m de RAIO (`levels.moon.duel`), e dois
+       * duelistas nascem em pontos opostos dele — a 190 m um do outro. Com o
+       * corte em 160 m, o duelo lunar COMEÇA com o adversário invisível, e ele
+       * só aparece depois que alguém anda trinta metros. Cortar em 110 m,
+       * como o plano dizia, tornaria isso muito pior.
+       *
+       * 210 m cobrem o anel inteiro com folga. O preço é desenhar corpos entre
+       * 160 e 210 m — ~36 chamadas cada, medido, e só nos instantes em que
+       * alguém está de fato tão longe. Um adversário que não se vê é um preço
+       * mais alto que esse. */
+      hideMoon: 210, // m
     },
   },
 

@@ -1,5 +1,10 @@
 # Plano — deixar a Lua tão leve quanto o Vale
 
+> **Estado:** as tarefas 2 a 7 estão FEITAS. A tarefa 1 (LOD de malha do
+> arqueiro), que é a maior sozinha, continua pendente por decisão de escopo.
+> A tarefa 5 foi executada AO CONTRÁRIO do que este plano dizia, e o motivo
+> está registrado nela — a conta do duelo desmontou a ideia original.
+
 O relato é preciso e vale como critério de aceite: **a Lua trava quando se joga
 online; o Vale Verde não.** Este documento mede a fase, aponta o culpado com
 número e ordena o conserto por impacto — o que devolve mais quadro primeiro, o
@@ -77,7 +82,7 @@ tempo**:
 
 ## 2. As tarefas, da que mais devolve para a que menos
 
-### Tarefa 1 — LOD de malha do arqueiro · **−480 chamadas (−57 %)**
+### Tarefa 1 — LOD de malha do arqueiro · **−480 chamadas (−57 %)** · PENDENTE
 
 **Medido, não estimado**: escondendo as peças pequenas dos seis corpos (414
 malhas), o quadro cai de 847 para 367 chamadas.
@@ -107,7 +112,7 @@ O arqueiro local fica sempre no nível cheio: a câmera está em cima dele.
 
 ---
 
-### Tarefa 2 — Sombra só nas peças grandes · **−84 chamadas (−10 %)**
+### Tarefa 2 — Sombra só nas peças grandes · **−84 chamadas (−10 %)** · FEITO
 
 **Medido**: desligar `castShadow` das 174 peças pequenas dos seis corpos tira 84
 chamadas por quadro, e junto tira o preenchimento correspondente do shadow map.
@@ -127,7 +132,7 @@ está perto**, que é justamente onde a Tarefa 1 não age.
 
 ---
 
-### Tarefa 3 — Alien e meteorito mais baratos · **−80 a −110 chamadas**
+### Tarefa 3 — Alien e meteorito mais baratos · **−93 desenhos** · FEITO
 
 Com os bichos em cena eles valem 156 chamadas (17 % do quadro) para SETE
 objetos. Três cortes:
@@ -144,7 +149,7 @@ Onde mexe: `systems/spaceLife.js` (classes `Alien` e `Meteor`).
 
 ---
 
-### Tarefa 4 — Tirar os pássaros da Lua · **−12 chamadas, e um absurdo**
+### Tarefa 4 — Tirar os pássaros da Lua · **−42 malhas** · FEITO
 
 Há **sete bandos de pássaros voando no vácuo**, a 20 m do chão, numa fase que se
 declara `fauna: false` em `shared/levels.js`. Custam 42 malhas e a animação de
@@ -156,18 +161,30 @@ que a sala manda — o cliente recria o bando a partir dele. Conferir
 
 ---
 
-### Tarefa 5 — Cull mais curto enquanto o LOD não existe · **−1 a −2 corpos**
+### Tarefa 5 — O cull da Lua, ao contrário: **160 → 210 m** · FEITO
 
-`net.cull.hide` é 160 m, herdado do Vale, onde a neblina já esconde antes disso.
-Na arena de 330 m sem oclusão, 160 m alcança quase todo mundo.
+A ideia era CORTAR mais cedo: `net.cull.hide` é 160 m, herdado do vale, onde a
+neblina já esconde antes disso; na arena de 330 m sem oclusão, 160 m alcança
+quase todo mundo.
 
-Baixar para ~110 m **na Lua** é uma linha e vale um ou dois corpos numa sala
-cheia. É paliativo: com a Tarefa 1 pronta, o corpo distante custa 10 chamadas e
-esconder deixa de ser urgente.
+**A conta do duelo desmontou a ideia, e revelou um defeito no caminho.** O anel
+de duelo da Lua tem 95 m de RAIO (`levels.moon.duel`), e `duelPositions` põe os
+duelistas em pontos opostos dele: **190 m um do outro**. Com o corte em 160 m, o
+duelo lunar já COMEÇA com o adversário invisível — ele só aparece depois que
+alguém anda trinta metros. Cortar em 110 m, como este plano dizia, tornaria isso
+muito pior.
+
+O que foi feito, então, é o inverso: `net.cull.hideMoon = 210` — o suficiente
+para cobrir o anel inteiro com folga. O preço são os corpos entre 160 e 210 m
+(~36 chamadas cada, medido), e só nos instantes em que alguém está tão longe. Um
+adversário que não se vê custa mais caro que isso.
+
+A fase é reconhecida pelo TERRENO do boneco (só o campo da Lua tem
+`spawnCenter`), sem inventar um estado novo para manter em dia.
 
 ---
 
-### Tarefa 6 — `space` parou de mandar quem não se mexe · **−3 kB/s por jogador**
+### Tarefa 6 — `space` parou de mandar quem não se mexe · **6,4 → 5,3 kB/s** · FEITO
 
 O pacote de 10 Hz custa 6,4 kB/s — 28 % do tráfego — e a maior parte dele é
 meteorito, que **anda de 1,2 a 2,6 m/s**: entre duas amostras ele se desloca
@@ -181,7 +198,7 @@ engasgo e vale menos que os cinco primeiros itens.
 
 ---
 
-### Tarefa 7 — Poeira e estilhaços · **~0,04 ms e 12 chamadas eventuais**
+### Tarefa 7 — Poeira e estilhaços · **metade dos envios, 12 → 1 chamada** · FEITO
 
 * a poeira do `Ambiente` são 220 pontos reescritos e reenviados à GPU **todo
   quadro** (0,037 ms). Cair para 120 pontos e atualizar a 30 Hz não muda nada na

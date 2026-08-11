@@ -21,6 +21,7 @@
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
@@ -60,7 +61,18 @@ class Ambiente {
     this.camera = camera;
     this.rnd = makeRandom(5150);
 
-    this.N = 220;
+    /* 120 grãos a 30 Hz, e não 220 a cada quadro.
+     *
+     * A poeira é um truque de PROFUNDIDADE: o que ela precisa entregar é
+     * "estou me movendo", e isso quem dá é o grão que passa perto da câmera,
+     * não a contagem. Cada quadro ela reescrevia 660 floats e reenviava o
+     * buffer inteiro à placa; a 30 Hz o envio cai pela metade e a integração
+     * usa o dt acumulado, então os grãos andam exatamente a mesma velocidade.
+     * Ninguém consegue ver a diferença de um grão de 5 cm atualizado a 30 Hz
+     * enquanto voa. */
+    this.N = 120;
+    this.passoPoeira = 1 / 30; // s entre atualizações da nuvem
+    this.acumulado = 0;
     this.raio = 34; // m — a bolha que acompanha a câmera
     const pos = new Float32Array(this.N * 3);
     this.vel = new Float32Array(this.N * 3);
@@ -125,24 +137,38 @@ class Ambiente {
    *   mesmo para quem joga sozinho.
    */
   update(dt, tempoSala = 0) {
-    const pos = this.poeira.geometry.attributes.position.array;
+    /* As duas coisas daqui olham para a câmera: a poeira porque a bolha a
+       acompanha, e a cadente porque o trajeto dela é montado em volta de quem
+       olha. */
     const c = this.camera.position;
-    const r2 = this.raio * this.raio;
 
-    for (let i = 0; i < this.N; i++) {
-      const k = i * 3;
-      pos[k] += this.vel[k] * dt;
-      pos[k + 1] += this.vel[k + 1] * dt;
-      pos[k + 2] += this.vel[k + 2] * dt;
-      /* A bolha ACOMPANHA a câmera: o grão que sai por trás reaparece na
-         frente. Sem isso, voar 200 m deixaria a poeira toda para trás e o
-         efeito sumiria justamente quando a velocidade é maior. */
-      const dx = pos[k] - c.x;
-      const dy = pos[k + 1] - c.y;
-      const dz = pos[k + 2] - c.z;
-      if (dx * dx + dy * dy + dz * dz > r2) this.semear(pos, i, false);
+    /* A POEIRA anda a 30 Hz; a CADENTE, todo quadro.
+     *
+     * São coisas diferentes: a poeira é uma nuvem de grãos lentos em volta da
+     * câmera, e a cadente é um risco atravessando o céu em um segundo e meio.
+     * Ralentar a segunda apareceria na hora — ela ficaria serrilhada. */
+    this.acumulado += dt;
+    if (this.acumulado >= this.passoPoeira) {
+      const h = this.acumulado; // o dt ACUMULADO: a velocidade não muda
+      this.acumulado = 0;
+      const pos = this.poeira.geometry.attributes.position.array;
+      const r2 = this.raio * this.raio;
+
+      for (let i = 0; i < this.N; i++) {
+        const k = i * 3;
+        pos[k] += this.vel[k] * h;
+        pos[k + 1] += this.vel[k + 1] * h;
+        pos[k + 2] += this.vel[k + 2] * h;
+        /* A bolha ACOMPANHA a câmera: o grão que sai por trás reaparece na
+           frente. Sem isso, voar 200 m deixaria a poeira toda para trás e o
+           efeito sumiria justamente quando a velocidade é maior. */
+        const dx = pos[k] - c.x;
+        const dy = pos[k + 1] - c.y;
+        const dz = pos[k + 2] - c.z;
+        if (dx * dx + dy * dy + dz * dz > r2) this.semear(pos, i, false);
+      }
+      this.poeira.geometry.attributes.position.needsUpdate = true;
     }
-    this.poeira.geometry.attributes.position.needsUpdate = true;
 
     const relogio = (tempoSala || performance.now()) / 1000;
     const janela = Math.floor(relogio / CADENTE_JANELA);
@@ -390,7 +416,17 @@ class Nave extends CorpoDeRede {
 
 /* --------------------------------------------------------------- aliens --- */
 
-/** O alien: pequeno, verde e teimoso. A IA é da sala; aqui é só o corpo. */
+/**
+ * O alien: pequeno, verde e teimoso. A IA é da sala; aqui é só o corpo.
+ *
+ * O corpo é montado em SEIS malhas e não em oito, e só UMA delas lança sombra.
+ * Não é economia de pobre: até seis aliens vivem em campo ao mesmo tempo
+ * (`alien.maxAlive`), cada peça é uma chamada de desenho, e o passe de sombra
+ * desenha tudo de novo — os oito lançadores de antes viravam 96 chamadas só de
+ * alien numa cena cheia. Tronco, cabeça e os dois olhos são RÍGIDOS entre si
+ * (nada neles se move em relação ao resto), então são geometria fundida na
+ * construção, uma vez. Braços e pernas continuam soltos porque animam.
+ */
 class Alien extends CorpoDeRede {
   constructor(scene, physics, id) {
     super();
@@ -405,20 +441,30 @@ class Alien extends CorpoDeRede {
     const olhoMat = new THREE.MeshBasicMaterial({ color: 0x0a0a0a, fog: false });
 
     this.group = new THREE.Group();
-    const corpo = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.5, 5, 12), pele);
-    corpo.position.y = 0.72;
-    // Cabeça grande e ovalada — a silhueta clássica, e a que se lê de longe.
-    const cabeca = new THREE.Mesh(new THREE.SphereGeometry(0.36, 14, 12), pele);
-    cabeca.position.y = 1.42;
-    cabeca.scale.set(1, 1.22, 0.92);
-    this.group.add(corpo, cabeca);
+
+    /* Tronco + cabeça, numa geometria só. A cabeça grande e ovalada é a
+       silhueta clássica, e é ela que se lê de longe. */
+    const gTronco = new THREE.CapsuleGeometry(0.34, 0.5, 5, 12);
+    gTronco.translate(0, 0.72, 0);
+    const gCabeca = new THREE.SphereGeometry(0.36, 14, 12);
+    gCabeca.scale(1, 1.22, 0.92);
+    gCabeca.translate(0, 1.42, 0);
+    const busto = new THREE.Mesh(mergeGeometries([gTronco, gCabeca]), pele);
+    /* O ÚNICO lançador de sombra do bicho. Braço, perna e olho projetam uma
+       mancha menor que um texel do mapa (4,5 cm — ver `render.shadowRange`). */
+    busto.castShadow = true;
+    this.group.add(busto);
+
+    // Os dois olhos, também numa malha só: eles nunca se mexem um sem o outro.
+    const olhos = [-1, 1].map((lado) => {
+      const g = new THREE.SphereGeometry(0.12, 10, 8);
+      g.scale(1, 1.5, 0.6);
+      g.translate(lado * 0.15, 1.46, 0.3);
+      return g;
+    });
+    this.group.add(new THREE.Mesh(mergeGeometries(olhos), olhoMat));
 
     for (const lado of [-1, 1]) {
-      const olho = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), olhoMat);
-      olho.position.set(lado * 0.15, 1.46, 0.3);
-      olho.scale.set(1, 1.5, 0.6);
-      this.group.add(olho);
-
       const braco = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.42, 4, 8), pele);
       braco.position.set(lado * 0.42, 0.86, 0);
       braco.rotation.z = lado * 0.32;
@@ -432,7 +478,6 @@ class Alien extends CorpoDeRede {
       if (lado === -1) this.pernaE = perna;
       else this.pernaD = perna;
     }
-    for (const o of this.group.children) o.castShadow = true;
     scene.add(this.group);
 
     this.entityId = `alien${entityRegistry.createId()}`;
@@ -611,22 +656,37 @@ class Meteor extends CorpoDeRede {
     this.giroGroup.add(rocha);
 
     /* A ESCOLTA: pedrinhas em órbita própria, concentradas um pouco atrás para
-       lerem como cauda. Sem colisor — são visuais. */
+       lerem como cauda. Sem colisor — são visuais.
+     *
+     * Elas são UMA malha instanciada, e não cinco a nove malhas soltas. Cada
+     * pedrinha era uma chamada de desenho e, com três meteoritos em campo, isso
+     * eram ~21 chamadas para desenhar cascalho de vinte centímetros a vinte
+     * metros de altura. Instanciada, a escolta inteira de uma rocha custa UMA.
+     *
+     * Elas também deixaram de lançar sombra, pelo mesmo motivo do alien: a
+     * mancha que projetariam é menor que um texel do mapa. */
     const rnd = makeRandom(id * 977 + 13);
     const nEsc = M.escoltaMin + Math.floor(rnd() * (M.escoltaMax - M.escoltaMin + 1));
     this.escolta = [];
+    /* Uma geometria de raio 1 para todas: o tamanho de cada pedra entra pela
+       ESCALA da instância, então não há uma geometria por pedrinha. */
+    this.escoltaGeo = new THREE.IcosahedronGeometry(1, 0);
+    this.escoltaMesh = new THREE.InstancedMesh(this.escoltaGeo, mat, nEsc);
+    this.escoltaMesh.castShadow = false;
+    // A caixa envolvente de um bando que orbita não diz nada útil, e o grupo
+    // pai já é testado contra o frustum.
+    this.escoltaMesh.frustumCulled = false;
+    this.giroGroup.add(this.escoltaMesh);
     for (let i = 0; i < nEsc; i++) {
-      const r = 0.15 + rnd() * 0.25;
-      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
-      this.giroGroup.add(m);
       this.escolta.push({
-        mesh: m,
+        escala: 0.15 + rnd() * 0.25,
         raio: raio * (1.4 + rnd() * 1.1),
         ang: rnd() * TAU,
         vel: (0.2 + rnd() * 0.5) * (rnd() < 0.5 ? 1 : -1),
         alt: (rnd() - 0.5) * raio * 1.2,
       });
     }
+    this._m4 = new THREE.Matrix4();
 
     scene.add(this.group);
 
@@ -663,10 +723,14 @@ class Meteor extends CorpoDeRede {
     this.giroGroup.rotation.x += g * dt;
     this.giroGroup.rotation.y += g * 0.7 * dt;
 
-    for (const e of this.escolta) {
+    for (let i = 0; i < this.escolta.length; i++) {
+      const e = this.escolta[i];
       e.ang += e.vel * dt;
-      e.mesh.position.set(Math.cos(e.ang) * e.raio, e.alt, Math.sin(e.ang) * e.raio);
+      this._m4.makeScale(e.escala, e.escala, e.escala);
+      this._m4.setPosition(Math.cos(e.ang) * e.raio, e.alt, Math.sin(e.ang) * e.raio);
+      this.escoltaMesh.setMatrixAt(i, this._m4);
     }
+    this.escoltaMesh.instanceMatrix.needsUpdate = true;
 
     this.body?.setNextKinematicTranslation(this.group.position);
   }
@@ -702,6 +766,9 @@ export class SpaceLife {
     this.estilhacos = [];
     this.fragGeo = null;
     this.fragMat = null;
+    /** O lote instanciado dos estilhaços, e as vagas livres nele. */
+    this.fragMesh = null;
+    this.vagasFrag = null;
   }
 
   /** Lista para quem precisa iterar (a carona, em `main.js`). */
@@ -760,25 +827,35 @@ export class SpaceLife {
       }
     }
 
-    /* ------------------------------------------------------ meteoritos -- */
-    const vistosM = new Set();
-    for (const it of msg.m ?? []) {
-      vistosM.add(it.i);
-      let m = this.meteorsById.get(it.i);
-      if (!m) {
-        m = new Meteor(this.scene, this.physics, it.i, it.r, it.f);
-        this.meteorsById.set(it.i, m);
+    /* ------------------------------------------------------ meteoritos --
+     *
+     * A LISTA AUSENTE NÃO É UMA LISTA VAZIA. Meteorito e rover vêm a 5 Hz —
+     * uma amostra sim, outra não (ver `SpaceField.view`) —, e nas amostras em
+     * que eles não vêm o campo simplesmente não existe. Tratar isso como "não
+     * há mais meteorito nenhum" apagaria e recriaria as rochas dez vezes por
+     * segundo, inclusive debaixo de quem estivesse pousado numa delas. */
+    if (msg.m) {
+      const vistosM = new Set();
+      for (const it of msg.m) {
+        vistosM.add(it.i);
+        let m = this.meteorsById.get(it.i);
+        if (!m) {
+          m = new Meteor(this.scene, this.physics, it.i, it.r, it.f);
+          this.meteorsById.set(it.i, m);
+        }
+        m.setNetworkTarget(it.x, it.y, it.z);
       }
-      m.setNetworkTarget(it.x, it.y, it.z);
-    }
-    for (const [id, m] of [...this.meteorsById]) {
-      if (vistosM.has(id)) continue;
-      this.meteorsById.delete(id);
-      m.dispose(this.scene);
+      for (const [id, m] of [...this.meteorsById]) {
+        if (vistosM.has(id)) continue;
+        this.meteorsById.delete(id);
+        m.dispose(this.scene);
+      }
     }
 
-    /* O rover é da base — quem o guarda é `MoonBase`, e a pose chega por lá. */
-    this.roverAlvo = msg.r ?? null;
+    /* O rover é da base — quem o guarda é `MoonBase`, e a pose chega por lá.
+       Sem notícia nesta amostra, vale a última: `undefined` aqui significa
+       "não mandei", e não "não existe". */
+    if (msg.r !== undefined) this.roverAlvo = msg.r;
   }
 
   /**
@@ -814,23 +891,68 @@ export class SpaceLife {
          Ver `shared/fragments.js`. */
       const cfg = CONFIG.levels.moon.meteors;
       const novos = criarEstilhacos(p, msg.seed, cfg);
-      if (!this.fragGeo) {
-        this.fragGeo = new THREE.IcosahedronGeometry(1, 0);
-        this.fragMat = new THREE.MeshStandardMaterial({
-          color: "#8a8880", roughness: 0.95, metalness: 0.05,
-          flatShading: true, transparent: true,
-        });
-      }
+      this.prepararEstilhacos(cfg);
       for (const f of novos) {
-        const mesh = new THREE.Mesh(this.fragGeo, this.fragMat);
-        mesh.scale.setScalar(f.raio);
-        mesh.position.set(f.x, f.y, f.z);
-        mesh.castShadow = true;
-        this.scene.add(mesh);
-        f.mesh = mesh;
+        // Sem vaga: o estouro anterior ainda está no ar. Perder um pedaço no
+        // meio de vinte e quatro voando não se nota — criar uma malha nova para
+        // ele, sim, e justamente no quadro de uma explosão.
+        const vaga = this.vagasFrag.pop();
+        if (vaga === undefined) break;
+        f.vaga = vaga;
         this.estilhacos.push(f);
       }
     }
+  }
+
+  /**
+   * O lote dos estilhaços, criado na PRIMEIRA explosão e reaproveitado depois.
+   *
+   * Cada pedaço era uma malha própria: doze objetos entrando na cena de uma
+   * vez, doze chamadas de desenho por quatro segundos, e doze saindo depois —
+   * tudo isso no quadro em que a rocha estoura, que é justamente o quadro em
+   * que já há noventa partículas de fogo, sessenta de fumaça e dois sons
+   * começando. Instanciado, o estouro inteiro custa UMA chamada.
+   *
+   * A capacidade são dois estouros (`fragCount × 2`), porque dois meteoritos
+   * abatidos com poucos segundos de diferença é raro mas acontece, e três é
+   * cenário de nunca. Quem não acha vaga simplesmente não nasce.
+   */
+  prepararEstilhacos(cfg) {
+    if (this.fragMesh) return;
+    this.fragGeo = new THREE.IcosahedronGeometry(1, 0);
+    this.fragMat = new THREE.MeshStandardMaterial({
+      color: "#8a8880", roughness: 0.95, metalness: 0.05,
+      flatShading: true, transparent: true,
+    });
+    const capacidade = (cfg.fragCount ?? 12) * 2;
+    this.fragMesh = new THREE.InstancedMesh(this.fragGeo, this.fragMat, capacidade);
+    this.fragMesh.castShadow = true;
+    // Os pedaços voam por trinta metros a partir do ponto do estouro; a caixa
+    // do lote não acompanha isso, e o teto de custo já é a capacidade.
+    this.fragMesh.frustumCulled = false;
+    this.scene.add(this.fragMesh);
+
+    this._fragM4 = new THREE.Matrix4();
+    this._fragPos = new THREE.Vector3();
+    this._fragQuat = new THREE.Quaternion();
+    this._fragEuler = new THREE.Euler();
+    this._fragEsc = new THREE.Vector3();
+    this._fragZero = new THREE.Matrix4().makeScale(0, 0, 0);
+
+    this.vagasFrag = [];
+    for (let i = capacidade - 1; i >= 0; i--) {
+      this.fragMesh.setMatrixAt(i, this._fragZero);
+      this.vagasFrag.push(i);
+    }
+    this.fragMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Devolve a vaga ao lote e encolhe a instância a zero (some da tela). */
+  esconderEstilhaco(f) {
+    if (f.vaga === undefined || !this.fragMesh) return;
+    this.fragMesh.setMatrixAt(f.vaga, this._fragZero);
+    this.vagasFrag.push(f.vaga);
+    f.vaga = undefined;
   }
 
   /**
@@ -859,13 +981,19 @@ export class SpaceLife {
       for (let i = this.estilhacos.length - 1; i >= 0; i--) {
         const f = this.estilhacos[i];
         const acabou = passoEstilhaco(f, dt, g, heightAt, cfg);
-        f.mesh.position.set(f.x, f.y, f.z);
-        f.mesh.rotation.set(f.rotX, 0, f.rotZ);
         if (acabou) {
-          this.scene.remove(f.mesh);
+          this.esconderEstilhaco(f);
           this.estilhacos.splice(i, 1);
+          continue;
         }
+        this._fragEuler.set(f.rotX, 0, f.rotZ);
+        this._fragQuat.setFromEuler(this._fragEuler);
+        this._fragPos.set(f.x, f.y, f.z);
+        this._fragEsc.setScalar(f.raio);
+        this._fragM4.compose(this._fragPos, this._fragQuat, this._fragEsc);
+        this.fragMesh.setMatrixAt(f.vaga, this._fragM4);
       }
+      this.fragMesh.instanceMatrix.needsUpdate = true;
       // O fade é do material compartilhado: todos somem juntos, e o pedaço mais
       // novo domina — é barato e ninguém percebe a diferença.
       const maisNovo = this.estilhacos[this.estilhacos.length - 1];
@@ -879,20 +1007,28 @@ export class SpaceLife {
     for (const n of this.naves.values()) n.dispose(this.scene);
     for (const a of this.aliensById.values()) a.dispose(this.scene);
     for (const m of this.meteorsById.values()) m.dispose(this.scene);
-    for (const f of this.estilhacos) this.scene.remove(f.mesh);
     this.naves.clear();
     this.aliensById.clear();
     this.meteorsById.clear();
     this.estilhacos = [];
+    if (this.fragMesh) {
+      this.scene.remove(this.fragMesh);
+      this.fragMesh.dispose();
+      this.fragMesh = null;
+    }
     this.fragGeo?.dispose();
     this.fragMat?.dispose();
     this.fragGeo = null;
     this.fragMat = null;
+    this.vagasFrag = null;
   }
 }
 
 function disposeGrupo(group) {
   group.traverse((o) => {
+    // A malha instanciada (a escolta do meteorito) tem buffers PRÓPRIOS além da
+    // geometria — as matrizes de instância. `dispose()` é o que os solta.
+    if (o.isInstancedMesh) o.dispose();
     o.geometry?.dispose();
     o.material?.dispose();
   });

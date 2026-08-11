@@ -607,14 +607,38 @@ export class SpaceField {
     return { mortes, eventos };
   }
 
-  view() {
+  /**
+   * A amostra que vai para a rede.
+   *
+   * @param {boolean} [completo] inclui meteorito e rover. Ver o comentário
+   *   abaixo: eles vão a 5 Hz, e a sala alterna.
+   */
+  view(completo = true) {
     if (!this.ativo) return { a: [], s: [], m: [], r: null };
-    return {
+    const saida = {
       a: this.aliens.map((x) => x.view()),
       s: this.naves.map((x) => x.view()),
-      m: this.meteors.map((x) => x.view()),
-      r: this.rover?.view() ?? null,
     };
+    /* Meteorito e rover só vão nas amostras PARES — 5 Hz em vez de 10.
+     *
+     * Não é para economizar banda por esporte: o pacote da Lua era 6,4 kB/s dos
+     * 22,5 kB/s de uma sala de seis, e a maior parte dele era meteorito, que
+     * anda de 1,2 a 2,6 m/s. Entre duas amostras a 10 Hz ele se desloca vinte
+     * centímetros — e o cliente ainda amortece a pose por cima disso, então
+     * metade dessas amostras não muda um pixel na tela. O rover é igualmente
+     * previsível: circuito fechado, 3,6 m/s.
+     *
+     * Alien e nave continuam a 10 Hz, e é uma distinção de JOGO, não de custo:
+     * alien mata de perto e nave é alvo em movimento. Nesses dois, atrasar cem
+     * milissegundos é atrasar a informação que decide o golpe e o tiro.
+     *
+     * O campo AUSENTE não significa "lista vazia" — significa "sem notícia".
+     * Quem lê (`SpaceLife.applyNetwork`) só reconcilia o que veio. */
+    if (completo) {
+      saida.m = this.meteors.map((x) => x.view());
+      saida.r = this.rover?.view() ?? null;
+    }
+    return saida;
   }
 }
 

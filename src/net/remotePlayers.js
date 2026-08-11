@@ -136,6 +136,17 @@ class RemotePlayer {
   }
 
   /**
+   * Até onde se enxerga um arqueiro nesta fase.
+   *
+   * A pergunta "que fase é esta?" é respondida pelo TERRENO que o boneco usa —
+   * é ele que a troca de fase substitui (`relevel`), e o campo da Lua é o único
+   * que tem `spawnCenter`. Sem inventar um estado novo para manter em dia.
+   */
+  alcanceVisivel(cull) {
+    return this.player.terrain?.spawnCenter ? (cull.hideMoon ?? cull.hide) : cull.hide;
+  }
+
+  /**
    * @param {number} renderTime instante a desenhar (relógio da sala, ms)
    * @param {THREE.Vector3} cameraPos
    */
@@ -146,7 +157,9 @@ class RemotePlayer {
 
     // Longe demais: nem interpola nem monta a pose. É a economia que faz a sala
     // cheia caber no frame — a IK de dois ossos é o que custa, não o desenho.
-    const deveAparecer = distancia <= cull.hide;
+    // O alcance é da FASE: ver `net.cull.hideMoon` para por que a Lua vê mais
+    // longe que o vale, e não menos.
+    const deveAparecer = distancia <= this.alcanceVisivel(cull);
     if (deveAparecer !== this.visible) {
       this.visible = deveAparecer;
       p.root.visible = deveAparecer;

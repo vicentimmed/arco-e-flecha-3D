@@ -281,12 +281,20 @@ export class BirdFlock {
 
   /**
    * Reinício de mundo.
-   * @param {{ hunt?: boolean }} [opts]
+   *
+   * `vazio` é a fase SEM FAUNA (a Lua). Ele não é o mesmo que "não atualizar":
+   * um bando que existe sem ser atualizado ainda vai embora no `snapshot` de
+   * quem entra — foi assim que sete pássaros foram parar voando no vácuo, a
+   * vinte metros do chão, numa fase que se declara `fauna: false`. Sem bicho na
+   * lista, não há de onde vazar.
+   *
+   * @param {{ hunt?: boolean, vazio?: boolean }} [opts]
    */
   reset(opts = {}) {
     this.hunt = !!opts.hunt;
     this._specialLanded = false;
     this.birds = [];
+    if (opts.vazio) return;
     const n = this.hunt ? CONFIG.modes.birdHunt.birdCount : CONFIG.birds.count;
     for (let i = 0; i < n; i++) {
       this.birds.push(new Bird(this.terrain));

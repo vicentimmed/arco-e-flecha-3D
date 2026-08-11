@@ -12,6 +12,7 @@
 
 import * as THREE from "three";
 import { MoonTerrain } from "../entities/moonGround.js";
+import { MoonBase } from "../entities/moonBase.js";
 import { disposeSubtree } from "./resources.js";
 
 export class MoonLevel {
@@ -29,8 +30,16 @@ export class MoonLevel {
     progresso(0.15, "assentando o regolito…");
     this.terrain = new MoonTerrain().build(this.root, ctx.physics);
 
+    progresso(0.8, "montando a base…");
+    this.base = new MoonBase().build(this.root, ctx.physics, this.terrain);
+
     progresso(1, "pronto");
     return this;
+  }
+
+  /** Altura do piso da plataforma do foguete — o ponto alto do mapa. */
+  get platformY() {
+    return this.base?.platformY ?? null;
   }
 
   /** Não há copa nenhuma na Lua: as aves ficam no ar em vez de pousar no vazio. */
@@ -50,9 +59,11 @@ export class MoonLevel {
 
   dispose() {
     this.terrain?.dispose();
+    this.base?.dispose();
     const contagem = disposeSubtree(this.root);
     this.root = null;
     this.terrain = null;
+    this.base = null;
     return contagem;
   }
 }

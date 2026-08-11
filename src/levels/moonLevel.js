@@ -67,15 +67,15 @@ export class MoonLevel {
    * @param {object} _wind ignorado: não há vento aqui
    * @param {Array<{x:number,z:number}>} jogadores quem os aliens perseguem
    */
-  update(dt, _wind, jogadores = []) {
+  update(dt, _wind, jogadores = [], tempoSala = 0) {
     /* Sem ar não há balanço de grama nem bandeira tremulando, e essa quietude é
        o que o vácuo transmite — mas um cenário TOTALMENTE parado lê como tela
        congelada. O que se mexe aqui foi escolhido para dar movimento a camadas
        de profundidade diferentes: a baliza no foguete, a poeira ao redor do
        jogador, as cadentes no infinito, as naves na média distância e os aliens
        no chão. Ver `systems/spaceLife.js`. */
-    this.base?.update(dt);
-    this.space?.update(dt, jogadores);
+    this.base?.update(dt, tempoSala);
+    this.space?.update(dt, jogadores, tempoSala);
 
     // O rover atropela: quem cruza o caminho dele não sobrevive.
     const rover = this.base?.rover;

@@ -25,6 +25,13 @@ import { entityRegistry } from "../core/entityRegistry.js";
 
 const TAU = Math.PI * 2;
 
+/* A cadente é sorteada por JANELA de tempo — ver `Ambiente.resolverJanela`.
+   26 s de janela com 70 % de chance dá uma cadente a cada ~37 s em média: rara
+   o bastante para ser um acontecimento, frequente o bastante para quem olhar o
+   céu por um minuto ver pelo menos uma. */
+const CADENTE_JANELA = 26; // s
+const CADENTE_CHANCE = 0.7;
+
 /* ------------------------------------------------------------- ambiente --- */
 
 /**
@@ -85,13 +92,18 @@ class Ambiente {
     this.cadente.frustumCulled = false;
     parent.add(this.cadente);
 
-    /* Estado da cadente: ESPERANDO (contagem até a próxima) ou VOANDO
-       (progresso 0..1 ao longo do trajeto sorteado). Raras de propósito — no
-       céu de verdade elas não são um espetáculo contínuo, e aparecer a cada
-       poucos segundos vira ruído visual em vez de evento. */
-    this.cadenteVoando = false;
-    this.cadenteT = 20 + this.rnd() * 30;
-    this.cadenteProgresso = 0;
+    /* A cadente é uma FUNÇÃO DO RELÓGIO, não um cronômetro.
+     *
+     * O tempo é fatiado em janelas de `CADENTE_JANELA` segundos, e o índice da
+     * janela alimenta um sorteio determinístico que decide se há cadente nela,
+     * por onde ela entra e para onde vai. Duas telas com o mesmo relógio da
+     * sala calculam a mesma cadente sem trocar um único byte — é o mesmo
+     * contrato que o vento já usa (`systems/wind.js`), e pela mesma razão.
+     *
+     * Sozinho, sem sala, o relógio local serve igual: a conta não depende de
+     * haver servidor, só de haver um tempo. */
+    this.cadenteJanela = -1; // índice da janela cujo trajeto já foi resolvido
+    this.cadenteTem = false; // esta janela tem cadente?
     this.cadenteDuracao = 1.6;
     this._de = new THREE.Vector3();
     this._para = new THREE.Vector3();
@@ -113,7 +125,13 @@ class Ambiente {
     this.vel[i * 3 + 2] = (this.rnd() - 0.5) * 0.5;
   }
 
-  update(dt) {
+  /**
+   * @param {number} dt
+   * @param {number} tempoSala relógio da SALA em ms — é ele que sincroniza a
+   *   cadente entre as telas. Sem sala vale o relógio local, e o efeito é o
+   *   mesmo para quem joga sozinho.
+   */
+  update(dt, tempoSala = 0) {
     const pos = this.poeira.geometry.attributes.position.array;
     const c = this.camera.position;
     const r2 = this.raio * this.raio;
@@ -135,42 +153,54 @@ class Ambiente {
     this.poeira.geometry.attributes.position.needsUpdate = true;
 
     /* -------------------------------------------------------- cadentes --- */
-    if (!this.cadenteVoando) {
-      this.cadenteT -= dt;
-      if (this.cadenteT <= 0) this.lancarCadente(c);
-    } else {
-      this.cadenteProgresso += dt / this.cadenteDuracao;
-      if (this.cadenteProgresso >= 1) {
-        this.cadente.material.opacity = 0;
-        this.cadenteVoando = false;
-        // Rara: a próxima demora entre vinte e cinquenta segundos.
-        this.cadenteT = 20 + this.rnd() * 30;
-      } else {
-        this.atualizarCadente(this.cadenteProgresso);
-      }
+    const relogio = (tempoSala || performance.now()) / 1000;
+    const janela = Math.floor(relogio / CADENTE_JANELA);
+    if (janela !== this.cadenteJanela) this.resolverJanela(janela, c);
+
+    if (!this.cadenteTem) {
+      if (this.cadente.material.opacity !== 0) this.cadente.material.opacity = 0;
+      return;
     }
+    const t = (relogio % CADENTE_JANELA) / this.cadenteDuracao;
+    if (t >= 1) {
+      if (this.cadente.material.opacity !== 0) this.cadente.material.opacity = 0;
+      return;
+    }
+    this.atualizarCadente(t);
   }
 
-  /** Sorteia o trajeto da próxima cadente, alta e longe, e a põe em voo. */
-  lancarCadente(c) {
-    const a = this.rnd() * TAU;
-    const alt = 220 + this.rnd() * 180;
-    const dist = 420;
-    this._de.set(
-      c.x + Math.cos(a) * dist,
-      c.y + alt,
-      c.z + Math.sin(a) * dist,
-    );
-    const dir = new THREE.Vector3(
-      (this.rnd() - 0.5) * 2,
-      -0.35 - this.rnd() * 0.4,
-      (this.rnd() - 0.5) * 2,
-    ).normalize();
-    this._para.copy(this._de).addScaledVector(dir, 70 + this.rnd() * 60);
+  /**
+   * Resolve o trajeto da cadente desta janela de tempo.
+   *
+   * Determinístico a partir do ÍNDICE da janela: mesma janela, mesmo trajeto,
+   * em qualquer máquina. É isso que dispensa qualquer mensagem de rede.
+   *
+   * O trajeto é montado em torno da câmera de quem olha — mas alto (220–400 m)
+   * e longe (420 m), então a diferença de posição entre dois jogadores da mesma
+   * arena é irrelevante contra a distância: os dois veem a risca no mesmo canto
+   * do céu, no mesmo instante.
+   */
+  resolverJanela(janela, c) {
+    this.cadenteJanela = janela;
+    const rnd = makeRandom(4242 + janela);
 
-    this.cadenteVoando = true;
-    this.cadenteProgresso = 0;
-    this.cadenteDuracao = 1.3 + this.rnd() * 0.9;
+    // Nem toda janela tem cadente: sem isso elas viriam com regularidade de
+    // metrônomo, e o que faz uma estrela cadente ser um acontecimento é
+    // justamente não dar para prever quando vem a próxima.
+    this.cadenteTem = rnd() < CADENTE_CHANCE;
+    if (!this.cadenteTem) return;
+
+    const a = rnd() * TAU;
+    const alt = 220 + rnd() * 180;
+    const dist = 420;
+    this._de.set(c.x + Math.cos(a) * dist, c.y + alt, c.z + Math.sin(a) * dist);
+    const dir = new THREE.Vector3(
+      (rnd() - 0.5) * 2,
+      -0.35 - rnd() * 0.4,
+      (rnd() - 0.5) * 2,
+    ).normalize();
+    this._para.copy(this._de).addScaledVector(dir, 70 + rnd() * 60);
+    this.cadenteDuracao = 1.3 + rnd() * 0.9;
     this.cadente.material.opacity = 0;
   }
 
@@ -661,9 +691,10 @@ export class SpaceLife {
 
   /**
    * @param {Array<{x:number,z:number}>} jogadores quem os aliens perseguem
+   * @param {number} tempoSala relógio da sala (ms) — sincroniza as cadentes
    */
-  update(dt, jogadores) {
-    this.ambiente.update(dt);
+  update(dt, jogadores, tempoSala = 0) {
+    this.ambiente.update(dt, tempoSala);
 
     /* ----------------------------------------------------------- naves --- */
     this.tNave -= dt;

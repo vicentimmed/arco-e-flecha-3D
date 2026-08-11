@@ -15,18 +15,20 @@ Regras que valem para o documento inteiro:
    para a linha errada.
 4. Depois de cada tarefa: `npm run build` limpo.
 
-O documento tem dois blocos independentes:
+O documento tem quatro blocos, nesta ordem de dependência:
 
-- **Bloco A — Lua e rover** (tarefas 1 a 7): correções e conteúdo novo, tudo
-  no cliente. Não depende do Bloco B.
-- **Bloco B — o bot vai para o servidor** (tarefas 8 a 14): a mudança
-  estrutural. Faça o Bloco A primeiro; ele dá resultado visível cedo e não
-  conflita com os arquivos do Bloco B.
+- **Bloco A — correções locais** (tarefas 1 a 5): coisas que não tocam em rede.
+  Dão resultado visível cedo e não conflitam com o resto.
+- **Bloco B — o bot vai para o servidor** (tarefas 6 a 11): a primeira mudança
+  estrutural.
+- **Bloco C — a fase do espaço vai para o servidor** (tarefas 12 a 17): alien,
+  nave, rover, nave de transporte e meteoritos passam a ser da sala.
+- **Bloco D — duelo de times** (tarefa 18): só faz sentido depois de B e C.
 
-> **O modo "duelo de times" foi retirado deste plano de propósito.** Ele
-> dependia de bots locais e de um placar remendado por cima. Com o Bloco B, os
-> bots passam a ser jogadores de verdade na sala — e o duelo de times vira um
-> modo comum, escrito depois, sem gambiarra. Não implemente nada dele agora.
+> **A nave de transporte e os meteoritos NÃO são construídos no cliente.**
+> Eles nascem direto no Bloco C, já como entidade de servidor. Construí-los
+> primeiro no cliente e migrar depois seria escrever duas vezes a mesma coisa —
+> e a segunda escrita jogaria a primeira fora.
 
 ---
 
@@ -53,7 +55,32 @@ usa para esse problema: o servidor manda "pouse por aqui (x, z)" e cada cliente
 resolve para a copa mais próxima — como o cenário é determinístico (mesma
 semente), todos resolvem para a mesma árvore.
 
-**Isto tem consequência direta para o Bloco B** e está tratado na tarefa 13.
+**Isto tem consequência direta para o Bloco B** e está tratado na tarefa 11.
+
+### O que vai para o servidor, e o que NÃO vai
+
+A regra é **uma só: vai para o servidor o que muda a partida para outra
+pessoa.** O que só existe dentro dos olhos de quem está olhando fica onde
+está — sincronizar isso não deixaria a partida mais justa, só mais cara.
+
+| Elemento da Lua | Vai? | Por quê |
+|---|---|---|
+| **Alien** | **sim** | persegue e mata; se cada um vir o seu, dois jogadores morrem de coisas diferentes |
+| **Nave (disco voador)** | **sim** | é abatível, explode e o estouro mata |
+| **Rover** | **sim** | carrega jogador e atropela alien; visto em lugares diferentes, o passageiro fica flutuando na tela dos outros |
+| **Nave de transporte** | **sim** | idem, e ainda é destrutível com passageiro dentro |
+| **Meteorito** | **sim** | dá para ficar em cima, é destrutível e os estilhaços matam |
+| **Estilhaço de meteorito** | **sim, mas sem tráfego** | ver a tarefa 17: o servidor manda o *evento* e a semente; os dois lados integram a mesma conta |
+| **Estrela cadente** | **não — relógio** | não tem efeito de jogo nenhum. Sincronizar pelo relógio da sala custa **zero byte** e dá o mesmo resultado (tarefa 4) |
+| **Baliza do foguete** | **não — relógio** | idem: piscar em fase sai de graça de uma função do tempo |
+| **Poeira em suspensão** | **não, nunca** | ela é definida *em torno da câmera de quem olha*. Não existe "a mesma poeira" para duas pessoas — a ideia não tem sentido |
+| **Foguete, domos, painéis, carga, bandeira** | **não** | geometria estática, sorteada por semente fixa: já é idêntica em todas as telas desde sempre |
+| **Terreno e crateras** | **não** | `MoonField` já é compartilhado (`src/shared/`) |
+
+O padrão do "relógio da sala" não é invenção deste plano: é o mesmo que o
+**vento** já usa (`Game.frame` faz `this.wind.setTime(this.net.serverTime / 1000)`),
+e pelo mesmo motivo — uma função pura do tempo compartilhado dá sincronia
+perfeita sem trafegar nada.
 
 ### O canal de retransmissão de tiro
 
@@ -80,13 +107,22 @@ Jogadores recebem `nextPlayerId++`, um contador de módulo em `server/room.js`.
 **Os bots usam o MESMO contador** — é isso que faz `S2C.KILL { victim }`,
 `S2C.STATES { id }` e o placar funcionarem sem nenhum caso especial.
 
-### Morte por coisa local
+### Morte por coisa local — e o fim dela
 
 `Game.killedByLocalNPC(msg)` / `Game.reviveFromLocalDeath()` em `src/main.js`
-existem porque alien, nave e explosão são locais e o servidor recusaria um
-`C2S.KILL` autoinfligido. **Depois do Bloco B os bots deixam de usar esse
-caminho** (passam a matar pelo `S2C.KILL` de verdade), mas alien, nave, meteoro
-e estilhaço continuam usando. Não apague esses dois métodos.
+existem porque bot, alien e explosão eram locais e o servidor recusaria um
+`C2S.KILL` autoinfligido (`registerKill` rejeita quando vítima e remetente são a
+mesma pessoa).
+
+Os dois vão **desaparecer** ao longo deste plano, e isso é intencional:
+
+- depois do **Bloco B** o bot mata pelo `S2C.KILL` de verdade;
+- depois do **Bloco C** o alien, a explosão de nave, a de meteorito e os
+  estilhaços também.
+
+Não apague antes da hora — o Bloco A e o começo do B ainda dependem deles. Mas
+ao terminar o Bloco C, apague: manter um segundo caminho de morte que ninguém
+percorre é convite a percorrê-lo por engano.
 
 ---
 
@@ -97,22 +133,27 @@ e estilhaço continuam usando. Não apague esses dois métodos.
 | 1 | Rodas do rover giram como pneu | A | — |
 | 2 | Rover preso em cratera | A | — |
 | 3 | Sons novos (nave, alien, explosão) | A | — |
-| 4 | Nave faz barulho, alien fala, explosão mata | A | 3 |
+| 4 | Céu e baliza no relógio da sala | A | — |
 | 5 | Infraestrutura de plataforma (andar em cima) | A | 1, 2 |
-| 6 | Nave de transporte | A | 3, 4, 5 |
-| 7 | Meteoritos + estilhaços letais | A | 3, 4, 5 |
-| 8 | O bot migra para o servidor | B | — |
-| 9 | Comportamento do bot fácil | B | 8 |
-| 10 | Coleira do bot no vale | B | 8 |
-| 11 | Bot atira nos bichos | B | 8 |
-| 12 | Atalhos (adicionar/remover bot, dificuldade) | B | 8 |
-| 13 | Obstáculos compartilhados (linha de visada) | B | 8 |
-| 14 | Verificações finais | — | todas |
+| 6 | O bot migra para o servidor | B | — |
+| 7 | Comportamento do bot fácil | B | 6 |
+| 8 | Coleira do bot no vale | B | 6 |
+| 9 | Bot atira nos bichos | B | 6 |
+| 10 | Atalhos (bot, dificuldade em tempo real) | B | 6 |
+| 11 | Obstáculos compartilhados (linha de visada) | B | 6 |
+| 12 | O canal do espaço (`S2C.SPACE`) | C | 6 |
+| 13 | Aliens no servidor | C | 12 |
+| 14 | Naves no servidor + explosão que mata | C | 12, 3 |
+| 15 | Rover no servidor | C | 12, 1, 2, 5 |
+| 16 | Nave de transporte (nasce no servidor) | C | 12, 5 |
+| 17 | Meteoritos + estilhaços (nascem no servidor) | C | 12, 5 |
+| 18 | Duelo de times | D | 6, 13 |
+| 19 | Verificações finais | — | todas |
 
 ---
 ---
 
-# BLOCO A — Lua e rover
+# BLOCO A — Correções locais
 
 ## 1. As rodas do rover giram como pneu, não como moeda
 
@@ -433,127 +474,59 @@ estouro audível. Idem para `ufoHum` e `alienChirp`.
 
 ---
 
-## 4. A nave faz barulho, o alien fala, e a explosão mata
+## 4. O céu e a baliza no relógio da sala
 
-**Depende de:** 3.
+**Objetivo.** Estrela cadente e baliza do foguete passam a acontecer no mesmo
+instante em todas as telas — **sem trafegar um único byte**.
 
-**Arquivos.** `src/config.js`, `src/core/events.js`, `src/systems/spaceLife.js`, `src/main.js`
+**Por que assim e não pelo servidor.** Nenhuma das duas tem efeito de jogo: são
+luz. Mandar mensagem para elas seria pagar tráfego por enfeite. Mas as duas são
+função do tempo, e a sala já distribui um relógio comum — o mesmo que o vento
+usa (`this.wind.setTime(this.net.serverTime / 1000)` em `Game.frame`). Trocando
+o cronômetro local pelo relógio compartilhado, a sincronia sai de graça.
 
-### 4.1 Config
+**Arquivos.** `src/systems/spaceLife.js`, `src/entities/moonBase.js`,
+`src/levels/moonLevel.js`, `src/main.js`
 
-Em `CONFIG.levels.moon`:
+**Passos.**
 
-```js
-/* ------------------------------------------------------------- naves ----
-   O disco voador que cruza o céu. Ver `systems/spaceLife.js`. */
-ship: {
-  humInterval: 1.9,     // s entre repetições do zumbido enquanto ela passa
-  humVolume: 0.75,
-  explosionRadius: 13,  // m — quem estiver dentro disto quando ela cai, morre
-},
-/* ------------------------------------------------------------ aliens ---- */
-alien: {
-  chirpMinInterval: 5,  // s
-  chirpMaxInterval: 15, // s
-  chirpVolume: 0.7,
-},
-```
-
-### 4.2 Evento de explosão
-
-Em `src/core/events.js`, dentro de `EventType`:
-
-```js
-/* Uma explosão com raio de dano, no mundo. Quem escuta decide se foi
-   atingido — hoje só o jogador local, porque naves, meteoros e estilhaços são
-   inteiramente locais (como o alien). */
-EXPLOSION: "EXPLOSION",
-```
-
-### 4.3 O zumbido da nave
-
-Na classe `Nave` (`src/systems/spaceLife.js`):
-
-1. No construtor, junto de `this.piscar = 0;`: `this.somT = 0;`
-2. Em `update(dt, chaoY)`, no ramo de voo normal (depois do
-   `this.group.position.lerpVectors(...)`):
+1. `Game.frame` já calcula `this.net.serverTime`. Passe-o para a fase:
+   `this.environment.update(dt, this.wind.vector, this.livePlayers(), this.net.serverTime);`
+2. `MoonLevel.update(dt, _wind, jogadores, tempoSala)` repassa `tempoSala` para
+   `this.base.update(dt, tempoSala)` e `this.space.update(dt, jogadores, tempoSala)`.
+3. **Baliza** (`MoonBase.update`): troque o acumulador
+   `this.beaconPhase = (this.beaconPhase + dt) % 2.6;` por uma leitura direta do
+   relógio:
    ```js
-   /* O ZUMBIDO ACOMPANHA A NAVE. Ele é reemitido na posição ATUAL dela a cada
-      poucos segundos em vez de tocado uma vez na entrada: o som do Three é
-      posicionado onde nasce e não segue nada, e uma nave que atravessa 500 m
-      soaria parada no ponto de onde veio. */
-   this.somT -= dt;
-   if (this.somT <= 0) {
-     const S = CONFIG.levels.moon.ship;
-     this.somT = S.humInterval;
-     gameEvents.emit(EventType.AUDIO_PLAY, {
-       sound: "ufoHum",
-       position: vec3Payload(this.group.position),
-       volume: S.humVolume,
-     });
-   }
+   /* A fase sai do RELÓGIO DA SALA, não de um acumulador local.
+      É a mesma ideia do vento: uma função pura do tempo compartilhado pisca em
+      fase em todas as telas sem trafegar nada. Sem servidor (jogo local), o
+      relógio vale 0 e ela pisca pelo tempo da própria máquina — igualmente
+      correto, só não compartilhado. */
+   const t = ((tempoSala ?? performance.now()) / 1000) % 2.6;
    ```
-
-### 4.4 A voz do alien
-
-Na classe `Alien`:
-
-1. No construtor, junto de `this.fase = ...`:
+4. **Estrelas cadentes** (`Ambiente`): substitua o par
+   `cadenteVoando` / `cadenteT` por uma função do tempo. O truque é fatiar o
+   relógio em **janelas fixas** e sortear a cadente a partir do índice da janela:
    ```js
-   const A = CONFIG.levels.moon.alien;
-   this.chirpT = A.chirpMinInterval + Math.random() * (A.chirpMaxInterval - A.chirpMinInterval);
+   /* A cadente é uma FUNÇÃO DO RELÓGIO, não um cronômetro.
+    *
+    * O tempo é fatiado em janelas de `JANELA` segundos; o índice da janela
+    * alimenta um sorteio determinístico que decide se há cadente nela, por onde
+    * ela entra e para onde vai. Duas telas com o mesmo relógio calculam a mesma
+    * cadente sem trocar uma palavra — e uma tela sozinha continua vendo
+    * cadentes, porque a conta não depende de haver sala. */
+   const JANELA = 26; // s — uma cadente a cada ~26 s, quando ela cai
    ```
-2. No começo de `update(dt, alvos)`, **depois** do `if (this.dead)`:
-   ```js
-   /* A VOZ, espaçada. Um alien que guincha a cada quadro vira alarme de carro;
-      o que assusta é ouvir um deles atrás de você de vez em quando. */
-   this.chirpT -= dt;
-   if (this.chirpT <= 0) {
-     const A = CONFIG.levels.moon.alien;
-     this.chirpT = A.chirpMinInterval + Math.random() * (A.chirpMaxInterval - A.chirpMinInterval);
-     gameEvents.emit(EventType.AUDIO_PLAY, {
-       sound: "alienChirp",
-       position: vec3Payload(this.group.position),
-       volume: A.chirpVolume,
-     });
-   }
-   ```
+   Dentro da janela, `progresso = (t % JANELA) / duracao` governa o rastro
+   exatamente como hoje (`atualizarCadente`), e o sorteio por índice
+   (`makeRandom(1000 + indiceDaJanela)`) decide origem, direção e se a janela
+   tem cadente (por exemplo, 70 % das janelas têm).
 
-### 4.5 A explosão que mata
-
-Em `SpaceLife.explodir(pos, chaoY)`:
-
-1. Troque `sound: "hitScenery"` por `sound: "explosion"`, volume `1.2`.
-2. No fim do método:
-   ```js
-   /* O ESTOURO TEM RAIO. Quem estava embaixo da nave quando ela caiu não
-      escapa — e isso transforma "derrubei a nave" numa decisão (mirar nela
-      quando vem na sua direção tem preço) em vez de um alvo grátis. */
-   gameEvents.emit(EventType.EXPLOSION, {
-     position: { x: pos.x, y: chaoY + 1, z: pos.z },
-     radius: CONFIG.levels.moon.ship.explosionRadius,
-   });
-   ```
-
-### 4.6 Quem morre
-
-Em `src/main.js`, junto dos outros `gameEvents.on(...)` do construtor:
-
-```js
-/* Explosão perto demais. Mesma razão do alien: naves, meteoros e estilhaços
-   são locais, o servidor não os conhece, então quem decide se você morreu é
-   esta tela. */
-gameEvents.on(EventType.EXPLOSION, (e) => {
-  const p = this.player.position;
-  const d = Math.hypot(p.x - e.position.x, p.y - e.position.y, p.z - e.position.z);
-  if (d <= e.radius) this.killedByLocalNPC(null);
-});
-```
-
-`killedByLocalNPC` já checa `death.dying` e invulnerabilidade — não repita.
-
-**Critério de aceite.** Zumbido acompanha a nave e vira com a câmera; aliens
-guincham ocasionalmente; derrubar a nave em cima de si mata, longe não mata.
+**Critério de aceite.** Duas abas na mesma sala, câmeras apontadas para a mesma
+região do céu: a cadente cruza no **mesmo instante e no mesmo lugar** nas duas,
+e a baliza do foguete pisca em fase. Nenhuma mensagem nova no tráfego (confira
+na aba Network).
 
 ---
 
@@ -676,387 +649,9 @@ inclusive nas curvas, e o pulo continua permitindo descer.
 
 ---
 
-## 6. A nave de transporte: pousa, leva o jogador, e explode
-
-**Objetivo.** Uma nave **maior** que as que cruzam o céu: circunda a base; de
-tempos em tempos **pousa** perto do centro; fica um tempo no chão; **decola** com
-quem tiver subido; **não some** (a órbita é fechada); levar flecha ⇒ explode no
-ar e quem estava em cima morre; destruída, some por um tempo e volta.
-
-**Depende de:** 3, 4, 5.
-
-**Arquivos.** `src/config.js`, novo `src/entities/dropship.js`,
-`src/systems/spaceLife.js`, `src/core/hitResolver.js`
-
-### 6.1 Config
-
-Em `CONFIG.levels.moon`:
-
-```js
-/* -------------------------------------------------- nave de transporte --
-   Grande o bastante para se ficar em cima, e é isso que ela é: um posto de
-   tiro que anda. Ver `entities/dropship.js`. */
-dropship: {
-  raio: 6.0,           // m — raio do disco (o convés)
-  alturaVoo: 26,       // m acima do chão em cruzeiro
-  raioOrbita: 70,      // m — a órbita em volta da base
-  velOrbita: 0.16,     // rad/s
-  velVertical: 4.0,    // m/s na subida e na descida
-  tempoPousada: 14,    // s parada no chão, esperando passageiro
-  tempoVoando: 26,     // s de cruzeiro antes de procurar onde pousar
-  raioPouso: 55,       // m — distância máxima do centro da base para pousar
-  hp: 3,               // flechas até explodir
-  explosionRadius: 14, // m
-  reaparecerEm: 20,    // s fora de cena depois de destruída
-},
-```
-
-### 6.2 A classe
-
-Crie `src/entities/dropship.js`. Estados:
-`"cruzeiro" → "descendo" → "pousada" → "subindo" → "cruzeiro"`, mais
-`"destruida"`.
-
-- **Visual.** Disco de ~6 m, convés plano por cima, três pés de pouso visíveis
-  só em `descendo`/`pousada`, luzes piscando na borda, cúpula emissiva como a da
-  `Nave`.
-- **Física.** `kinematicPositionBased` + `ColliderDesc.cylinder(0.4, raio)` na
-  altura do convés, com `setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)`.
-  `physics.register(collider, { kind: "dropship", entityId, dropship: this })`.
-- **Órbita.** Em `cruzeiro`, o ângulo avança `velOrbita * dt` em torno de
-  `(base.x, base.z)` com raio `raioOrbita`; `y = chao + alturaVoo`; `yaw` na
-  tangente.
-- **Pouso.** Ao fim de `tempoVoando`, sorteia até 30 pontos com
-  `terrain.isFlatGround?.(x, z)` dentro de `raioPouso` do centro. Nenhum servir
-  ⇒ mais um ciclo de cruzeiro.
-- **Plataforma.** `Plataforma` + `pisandoEmDisco(pos, x, z, deckY, raio * 0.85)`.
-  `deckY` = topo do disco.
-- **Decolagem com passageiro.** Nada especial: `carry()` escreve
-  `pos.y = deckY`, então o passageiro sobe junto. A tarefa 5 já zera a
-  velocidade vertical do jogador enquanto ele é carregado, que é o que impede o
-  tremor na subida.
-- **Destruição.** `abater()`: `hp--`; com `hp > 0`, partículas + `hitScenery`;
-  a zero:
-  1. `EventType.PARTICLES` — bola de fogo grande;
-  2. `AUDIO_PLAY` `explosion`, volume 1.4;
-  3. `EventType.EXPLOSION` com `explosionRadius` — mata quem estava em cima
-     **e** quem estava perto embaixo, pelo mesmo caminho da tarefa 4.6;
-  4. remove o corpo, esconde o grupo;
-  5. estado `"destruida"`, `this.voltaEm = cfg.reaparecerEm`.
-- **Retorno.** Zerado o cronômetro, recria o corpo, mostra o grupo, zera `hp`,
-  volta a `cruzeiro` num ângulo sorteado.
-
-### 6.3 Ligações
-
-1. `SpaceLife`: `this.dropship = new Dropship(parent, physics, terrain, this.centro);`
-   no construtor; `this.dropship.update(dt);` no `update`;
-   `this.dropship.dispose(this.parent); this.dropship = null;` no `dispose`.
-2. `src/core/hitResolver.js`, em `resolveArrowHit`, antes do
-   `return resolveSceneryHit(ctx)` final:
-   ```js
-   if (other.kind === "dropship") return resolveDropshipHit(ctx);
-   ```
-   ```js
-   /**
-    * Nave de transporte: a flecha ATRAVESSA e a nave conta o dano.
-    *
-    * Não crava pelo mesmo motivo do disco voador — ela está no ar e vai
-    * explodir; uma flecha presa numa coisa que deixa de existir é uma flecha
-    * pendurada no vazio.
-    */
-   function resolveDropshipHit({ arrow, other, impact, deps }) {
-     const nave = other.dropship;
-     if (!nave || nave.destruida) return null;
-     const explodiu = nave.abater();
-     emitImpact(arrow, "dropship", nave.entityId, impact, null, {
-       label: "nave de transporte",
-       hit: true,
-     });
-     deps.spawnPuff?.(impact, null);
-     deps.removeArrow?.(arrow);
-     return { kind: "dropship", entityId: nave.entityId, killed: !!explodiu };
-   }
-   ```
-3. `updateRideables()` já a inclui via `espaco?.dropship`.
-
-**Critério de aceite.** A nave circunda, pousa, espera, decola. Subindo nela no
-chão, o jogador viaja em cima e consegue atirar de lá. Três flechas ⇒ explosão,
-som, passageiro morre. ~20 s depois ela volta.
-
----
-
-## 7. Meteoritos lunares, e os estilhaços que matam
-
-**Objetivo.** Rochas grandes vagando lentamente pelo céu da Lua:
-
-- movimento **lento**; dá para pular em cima com o jetpack e ficar lá;
-- destrutíveis, **mínimo 3 flechas**, explodindo em vários pedaços;
-- grandes o bastante para caber um jogador em cima;
-- pelo menos **3 formatos** diferentes, com pequenas crateras;
-- **meteoritos bem menores** voando junto, como cauda;
-- **os estilhaços da explosão são letais enquanto caem**: acertar um jogador ou
-  um alien em pleno voo mata. Depois de assentarem no chão ficam inofensivos e
-  **somem em alguns segundos**.
-
-**Depende de:** 3, 4, 5.
-
-**Arquivos.** `src/config.js`, novo `src/entities/meteor.js`,
-`src/systems/spaceLife.js`, `src/core/hitResolver.js`
-
-### 7.1 Config
-
-Em `CONFIG.levels.moon`:
-
-```js
-/* -------------------------------------------------------- meteoritos ----
-   Rocha grande em deriva lenta. Ver `entities/meteor.js`. */
-meteors: {
-  max: 3,               // quantos existem ao mesmo tempo
-  spawnMin: 16,         // s entre nascimentos
-  spawnMax: 34,
-  raioMin: 2.4,         // m — grande o bastante para se ficar em cima
-  raioMax: 3.6,
-  velMin: 1.2,          // m/s — deriva, não meteoro em queda
-  velMax: 2.6,
-  alturaMin: 11,        // m acima do chão
-  alturaMax: 26,
-  giro: 0.12,           // rad/s de tombo lento
-  hp: 3,                // flechas para estourar
-  escoltaMin: 5,        // pedrinhas acompanhando
-  escoltaMax: 9,
-  explosionRadius: 7,   // m — o estouro em si
-  formatos: 3,          // variantes de silhueta
-
-  /* -------------------------------------------------------- estilhaços --
-     Os pedaços que saem voando quando ele estoura.
-
-     Eles MATAM ENQUANTO VOAM e param de matar assim que assentam. Não é
-     detalhe de física: é o que dá consequência a estourar um meteorito em
-     cima da cabeça de alguém — inclusive da sua. Um pedaço parado no chão que
-     continuasse matando viraria uma mina invisível, que é o oposto de
-     legível. */
-  fragCount: 12,        // quantos pedaços
-  fragRaioMin: 0.25,    // m
-  fragRaioMax: 0.7,
-  fragSpeedMin: 5,      // m/s — velocidade inicial radial
-  fragSpeedMax: 13,
-  fragKillSpeed: 3.5,   // m/s — abaixo disto ele já não machuca ninguém
-  fragKillRadius: 1.1,  // m — raio de acerto do pedaço em voo
-  fragRestitution: 0.25,// quique ao bater no chão
-  fragSettleTime: 4.0,  // s no chão até sumir
-  fragFadeTime: 1.0,    // s de desaparecimento
-},
-```
-
-### 7.2 A classe do meteorito
-
-Crie `src/entities/meteor.js`.
-
-**Geometria — os três formatos.** Parta de `IcosahedronGeometry(raio, 2)` e
-deforme os vértices com `makeRandom(semente)` de `src/utils/math.js`, com
-semente derivada do índice do formato — assim os três são **estáveis** entre
-sessões e claramente distintos:
-
-```js
-/**
- * Uma rocha, esculpida a partir de um icosaedro.
- *
- * Três coisas, na ordem: um alongamento por eixo (é ele que separa "batata" de
- * "seixo" de "lasca" — a silhueta é o que se lê de longe), um ruído para a
- * superfície não ser lisa, e algumas CRATERAS, que são vértices puxados para
- * dentro num raio pequeno em torno de pontos sorteados.
- *
- * Tudo assado na geometria, uma vez: não custa nada por quadro.
- */
-function esculpir(raio, formato) {
-  const rnd = makeRandom(7000 + formato * 131);
-  const geo = new THREE.IcosahedronGeometry(raio, 2);
-  const pos = geo.attributes.position;
-
-  const eixos = [
-    [1.0, 0.78, 1.15],
-    [1.25, 0.62, 0.9],
-    [0.9, 1.0, 0.85],
-  ][formato % 3];
-
-  const crateras = [];
-  const n = 3 + Math.floor(rnd() * 4);
-  for (let i = 0; i < n; i++) {
-    const a = rnd() * Math.PI * 2;
-    const b = Math.acos(2 * rnd() - 1);
-    crateras.push({
-      x: Math.sin(b) * Math.cos(a),
-      y: Math.cos(b),
-      z: Math.sin(b) * Math.sin(a),
-      r: 0.22 + rnd() * 0.24, // raio angular
-      d: 0.10 + rnd() * 0.12, // profundidade, fração do raio
-    });
-  }
-
-  const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    v.fromBufferAttribute(pos, i);
-    const nrm = v.clone().normalize();
-    let escala = 1 + (rnd() - 0.5) * 0.16;
-    for (const c of crateras) {
-      const d = Math.hypot(nrm.x - c.x, nrm.y - c.y, nrm.z - c.z);
-      if (d < c.r) escala -= c.d * (1 - d / c.r) ** 2;
-    }
-    v.copy(nrm).multiplyScalar(raio * escala);
-    v.x *= eixos[0];
-    v.y *= eixos[1];
-    v.z *= eixos[2];
-    pos.setXYZ(i, v.x, v.y, v.z);
-  }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  return geo;
-}
-```
-
-**Material.** `MeshStandardMaterial({ color: "#8a8880", roughness: 0.95, metalness: 0.05, flatShading: true })`.
-O `flatShading` é o que faz a rocha ler como rocha e não como bolha.
-
-**Escolta.** `escoltaMin..escoltaMax` malhas pequenas
-(`IcosahedronGeometry(0.15 + rnd*0.25, 0)`), filhas do grupo, cada uma com
-`{raio, angulo, velAngular, altura}` próprio, atualizadas por quadro.
-**Sem colisor** — são visuais. Concentre-as um pouco atrás para lerem como cauda.
-
-**Movimento.** Uma reta atravessando a arena, como a `Nave`: entra pela borda
-(`raio da barreira + 40 m`), atravessa até o outro lado, `velMin..velMax`,
-altura constante.
-
-> **Cuidado com o tombo.** Girar o grupo inteiro faria o passageiro girar junto.
-> Gire só um **grupo interno** com a malha e a escolta; o grupo externo — o que
-> define a pose de plataforma — fica sem rotação. É esse externo que
-> `Plataforma`/`carry` usam.
-
-**Física.** `kinematicPositionBased` + `ColliderDesc.ball(raio)`, registrado como
-`{ kind: "meteor", entityId, meteor: this }` com `COLLISION_EVENTS`.
-
-**Convés.** `deckY = this.y + raio * 0.9`;
-`isOnDeck(pos)` → `plat.pisandoEmDisco(pos, this.x, this.z, this.deckY, raio * 0.7, 0.6)`.
-
-**Dano.** `atingir()`: `hp--`, partículas cinzentas + `hitScenery`. A zero:
-
-1. `EventType.PARTICLES` — poeira grande;
-2. `AUDIO_PLAY` `explosion`, volume 1.1;
-3. `EventType.EXPLOSION` com `explosionRadius` — o estouro em si;
-4. **cria os estilhaços** (abaixo);
-5. remove o corpo, `this.dead = true`.
-
-### 7.3 Os estilhaços
-
-Escreva uma classe `Estilhaco` no mesmo arquivo (ou um `FragmentField` que
-gerencia todos — prefira o segundo: um pool só é mais barato e mais fácil de
-limpar no `dispose`).
-
-Cada estilhaço tem:
-
-- malha pequena (reaproveite `esculpir` com raio pequeno e subdivisão 0, ou um
-  `IcosahedronGeometry(r, 0)` simples — o que estiver mais barato);
-- `vel` (`THREE.Vector3`) inicial radial a partir do centro da explosão, módulo
-  em `fragSpeedMin..fragSpeedMax`, com componente vertical positiva;
-- giro próprio;
-- `assentado = false`, `tempoNoChao = 0`.
-
-`update(dt)`:
-
-```js
-/* ------------------------------------------------------- estilhaço em voo
-   Enquanto ele VOA, ele mata. Isto é o que dá consequência a estourar um
-   meteorito em cima de alguém — e a estourar um em cima de si mesmo.
-
-   O critério é a VELOCIDADE, não o tempo: um pedaço que já parou no chão não
-   machuca ninguém, e um que ainda está quicando machuca. Sem isso teríamos
-   uma mina invisível no chão da Lua, que é o oposto de legível. */
-if (!this.assentado) {
-  this.vel.y += CONFIG.levels.moon.gravity * dt;
-  this.mesh.position.addScaledVector(this.vel, dt);
-  this.mesh.rotation.x += this.giroX * dt;
-  this.mesh.rotation.z += this.giroZ * dt;
-
-  const chao = terrain.heightAt(this.mesh.position.x, this.mesh.position.z) + this.raio;
-  if (this.mesh.position.y <= chao) {
-    this.mesh.position.y = chao;
-    // Quica com perda; abaixo do limiar de morte ele simplesmente assenta.
-    this.vel.y = -this.vel.y * M.fragRestitution;
-    this.vel.x *= 0.5;
-    this.vel.z *= 0.5;
-    if (this.vel.length() < M.fragKillSpeed) {
-      this.assentado = true;
-      this.vel.set(0, 0, 0);
-    }
-  }
-} else {
-  /* No chão: некого matar, só esperar sumir. O fade evita o pedaço
-     desaparecendo num quadro na frente de quem está olhando. */
-  this.tempoNoChao += dt;
-  const sobra = this.tempoNoChao - M.fragSettleTime;
-  if (sobra > 0) {
-    this.mesh.material.opacity = Math.max(0, 1 - sobra / M.fragFadeTime);
-    this.mesh.material.transparent = true;
-  }
-  return this.tempoNoChao > M.fragSettleTime + M.fragFadeTime; // true = descarta
-}
-```
-
-> Corrija o comentário acima ao escrever — trocar "некого" por "não há quem".
-> (Deixado de propósito para você reparar que comentário é para ser lido.)
-
-**A parte letal.** Não use colisor de física — são doze pedaços por explosão e
-eles vivem poucos segundos. Faça o teste por distância, no `update` do gerente,
-e emita o mesmo evento de explosão com raio pequeno:
-
-```js
-/* Um pedaço em voo acertou algo. Reaproveita `EXPLOSION` porque o efeito é
-   idêntico do ponto de vista de quem escuta — "morreu quem estava a menos de
-   X metros deste ponto" —, e assim o jogador local, o alien e qualquer coisa
-   futura respondem pelo mesmo caminho. */
-if (!frag.assentado && frag.vel.length() >= M.fragKillSpeed) {
-  gameEvents.emit(EventType.EXPLOSION, {
-    position: vec3Payload(frag.mesh.position),
-    radius: M.fragKillRadius,
-    silencioso: true, // sem som: o estouro já tocou
-  });
-}
-```
-
-> **Não emita isso a cada quadro para cada pedaço** — seriam ~700 eventos por
-> segundo por explosão. Emita só quando o pedaço estiver **perto de alguém**:
-> percorra a lista de alvos (jogador local + aliens) e teste a distância
-> diretamente; emita o evento apenas no quadro em que houver acerto, e marque o
-> pedaço como `jaAcertou = true` para não repetir.
-
-**Aliens também morrem.** No gerente dos estilhaços, além do jogador local,
-teste contra `space.aliens` e chame `alien.atingir()` no acerto — o alien já
-morre com um golpe (`hp = 1`).
-
-### 7.4 Ligações
-
-1. `SpaceLife`: `this.meteors = []; this.tMeteor = 8;` no construtor; o mesmo
-   padrão das naves no `update` (cronômetro, teto `meteors.max`, criar,
-   atualizar, remover); `dispose` limpa meteoros **e** estilhaços.
-2. `src/core/hitResolver.js`: ramo `other.kind === "meteor"` →
-   `resolveMeteorHit`, análogo ao `resolveDropshipHit` (a flecha **atravessa**,
-   `deps.removeArrow`).
-3. `updateRideables()` já os inclui via `espaco?.meteors`.
-
-**Critério de aceite.**
-- Até 3 meteoritos derivando lentamente, com pedrinhas em volta; três formatos
-  visivelmente diferentes, com crateras.
-- Voar de jetpack e pousar em cima: o jogador é carregado.
-- Duas flechas não destroem; a terceira sim, com explosão, som e estilhaços.
-- Ficar embaixo de um meteorito estourando: os estilhaços em queda matam.
-- Depois de assentarem, andar por cima dos pedaços **não** mata.
-- Os pedaços somem ~5 s depois de tocar o chão, com fade.
-
----
----
-
 # BLOCO B — O bot vai para o servidor
 
-## 8. Migração: o bot vira um jogador da sala
+## 6. Migração: o bot vira um jogador da sala
 
 **Objetivo.** Tirar o bot do cliente e colocá-lo no servidor, como os porcos e
 os zumbis. Depois disso, um bot adicionado durante uma partida online **é visto
@@ -1076,7 +671,7 @@ morre para todo mundo ao mesmo tempo.
 
 **O que o servidor NÃO tem** e precisa ser resolvido: física de flecha (ele não
 roda Rapier) e conhecimento de árvores/rochas. O primeiro é resolvido aqui
-(§8.4, integração numérica pura); o segundo é a tarefa 13.
+(§8.4, integração numérica pura); o segundo é a tarefa 11.
 
 **Arquivos.** novo `server/botSim.js`; `server/room.js`; `src/shared/protocol.js`;
 `src/main.js`; `src/systems/input.js`; remoção de `src/systems/bot.js`
@@ -1134,9 +729,9 @@ puro) e a máquina de tensionar/atirar.
      velocidade em poucos décimos de segundo (é o que o centro de pressão faz),
      então `A_ef ≈ A` durante quase todo o voo. O erro é de centímetros.
    • **Sem colisão com vegetação.** O servidor não conhece árvore (ver
-     `birdSim.js`). Enquanto a tarefa 13 não estiver feita, a flecha do bot
+     `birdSim.js`). Enquanto a tarefa 11 não estiver feita, a flecha do bot
      atravessa tronco — e isso o torna um franco-atirador injusto no vale. Não
-     considere a migração terminada sem a tarefa 13.
+     considere a migração terminada sem a tarefa 11.
    --------------------------------------------------------------------------- */
 
 import { CONFIG, drawSpeed } from "../src/config.js";
@@ -1278,7 +873,7 @@ Quando um bot decide atirar, a sala:
        distância do segmento à cápsula vertical
        `[pos, pos + CONFIG.player.height]` menor que
        `CONFIG.player.colliderRadius + CONFIG.arrow.shaftRadius * 1.5`;
-     - **bichos** (tarefa 11);
+     - **bichos** (tarefa 9);
      - **terreno**: `terrain.heightAt(x, z) >= y`;
    - encerre por `CONFIG.arrow.maxLifetime` da fase, por altitude ou por sair da
      área jogável (`isWalkable`).
@@ -1340,9 +935,9 @@ Quando um bot decide atirar, a sala:
 
 ---
 
-## 9. O bot fácil: para para mirar, erra mais, e às vezes avança
+## 7. O bot fácil: para para mirar, erra mais, e às vezes avança
 
-**Depende de:** 8. **Todas as mudanças agora são em `server/botSim.js`.**
+**Depende de:** 6. **Todas as mudanças agora são em `server/botSim.js`.**
 
 **Objetivo.** Três mudanças, **só na dificuldade fácil**: às vezes ele **para de
 andar** para atirar (não sempre); **erra mais**; às vezes **chega mais perto**.
@@ -1449,9 +1044,9 @@ momento ele encurta a distância e depois volta a orbitar.
 
 ---
 
-## 10. O bot não sobe a serra para sempre
+## 8. O bot não sobe a serra para sempre
 
-**Depende de:** 8. **Mudança em `server/botSim.js`.**
+**Depende de:** 6. **Mudança em `server/botSim.js`.**
 
 **Objetivo.** No vale os bots sobem a montanha e duelam lá em cima, fora do campo
 de visão de quem está na bacia. Podem **subir até o alto do sopé**, não além.
@@ -1520,15 +1115,15 @@ gramada do sopé; todos permanecem visíveis de dentro da bacia. Na Lua nada mud
 
 ---
 
-## 11. O bot atira nos bichos
+## 9. O bot atira nos bichos
 
-**Depende de:** 8.
+**Depende de:** 6.
 
 **Objetivo.** O bot passa a mirar também na fauna: porcos, alces, zumbis e
 lobos. **Pássaros ficam de fora** — alvo pequeno, alto e rápido; um bot atirando
 neles vira um bot olhando para o céu.
 
-**Por que ficou fácil.** Com a tarefa 8 feita, bot e bichos vivem **no mesmo
+**Por que ficou fácil.** Com a tarefa 6 feita, bot e bichos vivem **no mesmo
 processo**. A sala já tem `this.hunt.boars`, `this.elks.elks` e
 `this.zombies.zombies` em mãos; o abate é autoritativo e todos os clientes o
 veem pelo `S2C.BOAR_DEATH` / `ELK_DEATH` / `ZOMBIE_DEATH` que já existem. A
@@ -1607,9 +1202,9 @@ persegue porcos. Pássaros nunca são alvo.
 
 ---
 
-## 12. Atalhos: adicionar/remover bot e trocar a dificuldade
+## 10. Atalhos: adicionar/remover bot e trocar a dificuldade
 
-**Depende de:** 8.
+**Depende de:** 6.
 
 **Objetivo.** O `B` continua adicionando/removendo (agora pela rede), e uma tecla
 nova cicla a dificuldade. As duas na lista do `F1`.
@@ -1656,9 +1251,9 @@ campo muda de comportamento na hora.
 
 ---
 
-## 13. Obstáculos compartilhados: a linha de visada do bot
+## 11. Obstáculos compartilhados: a linha de visada do bot
 
-**Depende de:** 8. **Sem esta tarefa, a migração não está terminada.**
+**Depende de:** 6. **Sem esta tarefa, a migração não está terminada.**
 
 **O problema.** O comentário original em `src/systems/bot.js` documenta o bug que
 a linha de visada resolveu no cliente:
@@ -1726,7 +1321,513 @@ de um tronco crava no tronco, e as duas abas veem a flecha no mesmo lugar.
 
 ---
 
-## 14. Verificações finais
+---
+---
+
+# BLOCO C — A fase do espaço vai para o servidor
+
+Leia a tabela **"O que vai para o servidor, e o que NÃO vai"** no contexto de
+arquitetura antes de começar. Ela é a justificativa de tudo neste bloco, e
+também do que fica de fora.
+
+O resultado esperado: **a partida na Lua é a mesma para todo mundo.** O alien
+que te persegue é o mesmo que persegue o outro; a nave que você derrubou some
+para os dois; o rover está no mesmo lugar nas duas telas, com o mesmo passageiro
+em cima.
+
+---
+
+## 12. O canal do espaço (`S2C.SPACE`)
+
+**Objetivo.** Criar o encanamento que as tarefas 13 a 17 vão usar: um simulador
+de espaço no servidor e um `SpaceLife` de cliente que deixa de simular e passa a
+**renderizar** o que a sala manda.
+
+**Depende de:** 6 (o padrão de entidade de sala já estar entendido).
+
+**Arquivos.** novo `server/spaceSim.js`; `server/room.js`;
+`src/shared/protocol.js`; `src/systems/spaceLife.js`
+
+**O padrão a seguir é o dos porcos.** Não invente outro:
+`server/boarSim.js` simula → `Room` transmite a lista a 10 Hz →
+`BoarManager.applyNetwork(lista)` reconcilia por id (cria o que é novo,
+atualiza o que existe, descarta o que sumiu da lista). Releia
+`src/systems/boarManager.js:51` antes de escrever.
+
+**Passos.**
+
+1. **Protocolo** (`src/shared/protocol.js`):
+   ```js
+   // S2C
+   /** Tudo o que se mexe na Lua, 10 Hz: `{ a, s, r, d, m }` — aliens, naves,
+    *  rover, nave de transporte e meteoritos. Só sai na fase lunar. */
+   SPACE: "space",
+   /** Acontecimento pontual do espaço que não cabe numa amostra de 10 Hz:
+    *  `{ kind, ... }`. Hoje: `"explosion"` e `"meteorBurst"`. */
+   SPACE_EVENT: "spaceEvent",
+
+   // C2S
+   /** "Acertei esta coisa do espaço": `{ kind: "alien"|"ship"|"dropship"|"meteor", id }`.
+    *  Quem atira continua sendo a autoridade sobre o próprio acerto. */
+   SPACE_HIT: "spaceHit",
+   ```
+   Suba `PROTOCOL_VERSION` (o Bloco B já o levou a 12; este vai a **13**) e
+   escreva o parágrafo: *"13 — a fase da Lua deixou de ser cenário local. Alien,
+   nave, rover e meteorito passaram a viver na sala; uma aba antiga veria um
+   mundo diferente do de todo mundo."*
+
+2. **`server/spaceSim.js`** — uma classe `SpaceField` que possui as cinco
+   coleções e um `update(dt, jogadores, agora)`. Cabeçalho:
+   ```js
+   /* ---------------------------------------------------------------------------
+      O que se mexe na Lua, no servidor.
+
+      Antes isto vivia no cliente, um mundo por aba: o alien que te perseguia não
+      era o alien que perseguia o seu amigo, e a nave que você derrubou continuava
+      voando na tela dele. Numa fase que é só cenário isso passaria; nesta não,
+      porque tudo aqui MATA ou CARREGA alguém.
+
+      O que ficou de fora, e por quê, está na tabela do plano: poeira é definida
+      em torno da câmera de quem olha (não existe "a mesma poeira" para duas
+      pessoas), e cadente e baliza são função pura do relógio — sincronizam de
+      graça, sem trafegar nada.
+      --------------------------------------------------------------------------- */
+   ```
+   `SpaceField` só é atualizado quando `room.level === "moon"`; fora da Lua ela
+   fica vazia e nada é transmitido.
+
+3. **`Room`**: `this.space = new SpaceField(this.terrain);` no construtor;
+   `this.space.setTerrain(...)` na troca de fase; `this.space.clear()` ao sair da
+   Lua. No timer de 10 Hz (`tickCreatures`), quando `this.level === "moon"`:
+   ```js
+   this.space.update(this.boarStep, this.playerPositions(), this.now());
+   this.broadcastAll({ t: S2C.SPACE, time: this.now(), ...this.space.view() });
+   ```
+   `view()` devolve arrays enxutos, no estilo de `hunt.view()` — posições
+   arredondadas com `round`, e **só o que muda**: id, posição, rumo, estado.
+
+4. **`src/systems/spaceLife.js`** vira renderizador:
+   - `SpaceLife.update(dt, jogadores, tempoSala)` continua cuidando de
+     **poeira** e **cadentes** (tarefa 4) — essas continuam locais.
+   - Some toda a lógica de decisão: `tNave`, `tAlien`, criação, IA de alien,
+     rota de nave. Fica `applyNetwork(msg)` no padrão do `BoarManager`, e um
+     `update` que só interpola/anima o que já existe.
+   - As classes visuais (`Nave`, `Alien`) **perdem o corpo de física de
+     decisão** mas **mantêm o colisor** — é ele que faz a flecha do jogador
+     acertar. O `hitResolver` continua igual; o que muda é o que acontece
+     depois do acerto (passo 5).
+   - Ganha `setNetworkTarget(...)` por entidade, como `Boar`, para a pose não
+     saltar entre amostras.
+
+5. **O acerto passa a ser um pedido, não uma decisão.** Em
+   `src/core/hitResolver.js`, `resolveSpaceHit` deixa de chamar
+   `alvo.abater()` / `alvo.atingir()` e passa a só emitir o evento de impacto.
+   Em `src/main.js`, um listener manda ao servidor:
+   ```js
+   /* Quem atira é a autoridade sobre o PRÓPRIO acerto — é o mesmo contrato do
+      porco e do zumbi. Mas quem decide se a nave caiu é a sala: ela é uma só
+      para todo mundo, e duas telas não podem discordar sobre uma nave que
+      explodiu. */
+   gameEvents.on(EventType.SPACE_HIT, (e) => {
+     if (e.ownerId !== this.player.entityId) return;
+     this.net.send(C2S.SPACE_HIT, { kind: e.kind, id: e.id });
+   });
+   ```
+   O servidor aplica o dano e o resultado volta na próxima amostra de
+   `S2C.SPACE` (ou num `SPACE_EVENT`, quando é explosão).
+
+**Critério de aceite.** Duas abas na Lua: a lista de aliens e naves é idêntica
+nas duas (confira por `window.game.environment.space` no console). Nada ainda
+precisa estar *jogável* — este passo é o encanamento.
+
+---
+
+## 13. Aliens no servidor
+
+**Depende de:** 12.
+
+**Objetivo.** O alien vira NPC de sala: todos veem os mesmos, na mesma posição,
+e quando ele mata alguém a morte vale para a partida inteira.
+
+**Passos.**
+
+1. Porte a IA do `Alien` de `src/systems/spaceLife.js` para `server/spaceSim.js`.
+   Ela é simples e já é quase pura: escolher o alvo mais próximo, andar até
+   `ALIEN_ATTACK_RANGE`, erguer os braços por `ALIEN_ATTACK_WINDUP`, golpear,
+   recuar. Só tire o Three.js.
+2. Os números vão para `CONFIG.levels.moon.alien` (o bloco já criado na tarefa 3
+   ganha `attackRange`, `attackWindup`, `attackCooldown`, `speed`, `hp`,
+   `maxAlive`, `spawnMin`, `spawnMax`).
+3. **A morte pelo golpe deixa de ser local.** O servidor, ao concluir o golpe,
+   chama o mesmo caminho de morte dos outros NPCs e emite
+   `S2C.KILL { victim, cause: "alien" }`. No cliente, **remova** o listener de
+   `ALIEN_MELEE_HIT` que chamava `killedByLocalNPC`.
+4. **O som continua local.** O guincho (`alienChirp`) é tocado pelo cliente na
+   posição que veio da rede — som não precisa trafegar, só a posição, que já
+   está na amostra.
+5. A pose visual do braço erguido vem no estado do alien (`st: "golpeando"`), e
+   o cliente anima a partir disso.
+
+**Critério de aceite.** Duas abas: os mesmos aliens, nos mesmos lugares. Um
+alien mata o jogador A; a aba do jogador B vê o corpo dele cair. Uma flechada
+mata o alien nas duas telas.
+
+---
+
+## 14. Naves no servidor, e a explosão que mata
+
+**Depende de:** 12, 3.
+
+**Passos.**
+
+1. Porte a rota da `Nave` (uma reta atravessando a arena, `de` → `para`,
+   duração) e o estado `morta`/queda para `server/spaceSim.js`. Números em
+   `CONFIG.levels.moon.ship` (a tarefa 3 já criou o bloco).
+2. `C2S.SPACE_HIT { kind: "ship" }` derruba a nave **no servidor**.
+3. Ao bater no chão, o servidor emite:
+   ```js
+   this.broadcastAll({
+     t: S2C.SPACE_EVENT,
+     kind: "explosion",
+     p: [x, y, z],
+     r: CONFIG.levels.moon.ship.explosionRadius,
+   });
+   ```
+   e **mata quem estiver dentro do raio** pelo caminho normal de `S2C.KILL`
+   (`cause: "explosion"`).
+4. No cliente, `SPACE_EVENT/explosion` dispara **só o efeito**: partículas, o
+   som `explosion` e o clarão. **Nenhuma decisão de morte.** Remova o listener de
+   `EventType.EXPLOSION` que chamava `killedByLocalNPC`.
+
+> **Depois desta tarefa, `killedByLocalNPC` e `reviveFromLocalDeath` ficam sem
+> nenhum chamador.** Confirme com `grep -rn "killedByLocalNPC" src/` e
+> **apague os dois**. Eles existiam para contornar a ausência de servidor nessas
+> entidades; com o servidor presente, mantê-los seria manter um segundo caminho
+> de morte que ninguém percorre — e que um dia alguém percorreria por engano.
+
+**Critério de aceite.** Duas abas: a nave é a mesma e cruza igual. A aba A a
+derruba; a aba B vê a queda e a explosão. Quem estava perto morre **nas duas
+telas**, com o mesmo corpo caindo no mesmo lugar.
+
+---
+
+## 15. O rover no servidor
+
+**Depende de:** 12, 1, 2, 5.
+
+**Objetivo.** A ronda, a esquiva e o atropelamento passam a ser da sala; o
+cliente desenha e permite a carona.
+
+**O ponto delicado.** O rover **carrega gente**. Se cada tela o puser num lugar
+diferente, o passageiro flutua no ar para os outros. Por isso a posição vem da
+rede e a carona é calculada **sobre a posição recebida** — nunca sobre uma
+simulação local paralela.
+
+**Passos.**
+
+1. Porte para `server/spaceSim.js`: waypoints, `subidaAdiante` (que é só
+   `terrain.heightAt`, puro — ver tarefa 2) e o vigia de travamento.
+   **A sonda de raio não vai**: ela depende do Rapier e das caixas de carga, que
+   o servidor não conhece. Troque-a pela lista de obstáculos compartilhada da
+   tarefa 11, se ela já existir para a Lua; senão, o teste de altura sozinho já
+   evita o problema que motivou a tarefa 2, e as caixas de carga passam a ser
+   atravessadas — **anote isso como dívida no comentário**.
+2. Atropelamento: o servidor testa a distância do rover a cada alien e chama o
+   abate. Vale para todos ao mesmo tempo.
+3. Cliente: `Rover` mantém o visual, o colisor (para o jogador se apoiar) e o
+   `Plataforma`/`carry` da tarefa 5, mas `update` deixa de decidir rumo — ele
+   interpola em direção à pose da rede, como um `Boar`.
+4. `deckY`, `isOnDeck` e `carry` continuam iguais; eles só leem a pose.
+
+**Critério de aceite.** Duas abas: o rover está no mesmo lugar nas duas. O
+jogador A sobe nele; a aba B vê o A em cima, andando junto. O rover atropela um
+alien e ele morre nas duas.
+
+---
+
+## 16. A nave de transporte (nasce no servidor)
+
+**Depende de:** 12, 5. **Não construa uma versão local antes.**
+
+**Objetivo.** Uma nave **maior** que as que cruzam o céu: circunda a base;
+de tempos em tempos **pousa** perto do centro; fica um tempo no chão; **decola**
+com quem tiver subido; **não some** (a órbita é fechada); levar flecha ⇒ explode
+no ar e quem estava em cima morre; destruída, some por um tempo e volta.
+
+### 16.1 Config
+
+Em `CONFIG.levels.moon`:
+
+```js
+/* -------------------------------------------------- nave de transporte --
+   Grande o bastante para se ficar em cima, e é isso que ela é: um posto de
+   tiro que anda. */
+dropship: {
+  raio: 6.0,           // m — raio do disco (o convés)
+  alturaVoo: 26,       // m acima do chão em cruzeiro
+  raioOrbita: 70,      // m — a órbita em volta da base
+  velOrbita: 0.16,     // rad/s
+  velVertical: 4.0,    // m/s na subida e na descida
+  tempoPousada: 14,    // s parada no chão, esperando passageiro
+  tempoVoando: 26,     // s de cruzeiro antes de procurar onde pousar
+  raioPouso: 55,       // m — distância máxima do centro da base para pousar
+  hp: 3,               // flechas até explodir
+  explosionRadius: 14, // m
+  reaparecerEm: 20,    // s fora de cena depois de destruída
+},
+```
+
+### 16.2 Servidor (`server/spaceSim.js`)
+
+Máquina de estados: `"cruzeiro" → "descendo" → "pousada" → "subindo" →
+"cruzeiro"`, mais `"destruida"`.
+
+- **Órbita**: ângulo avança `velOrbita * dt` em torno de `(base.x, base.z)` com
+  raio `raioOrbita`; `y = heightAt + alturaVoo`; `yaw` na tangente.
+- **Pouso**: ao fim de `tempoVoando`, sorteia até 30 pontos com
+  `terrain.isFlatGround(x, z)` (existe no `MoonField`) dentro de `raioPouso`.
+- **Destruição**: `SPACE_HIT { kind: "dropship" }` decrementa `hp`. A zero:
+  `SPACE_EVENT/explosion` + `S2C.KILL` para todos dentro de `explosionRadius`
+  — **inclusive o passageiro**, que por definição está a distância zero.
+- **Retorno**: `reaparecerEm` segundos depois, volta ao cruzeiro num ângulo
+  sorteado.
+
+### 16.3 Cliente (`src/entities/dropship.js`)
+
+Só visual + colisor + plataforma:
+
+- disco de ~6 m, convés plano, três pés de pouso visíveis só em
+  `descendo`/`pousada`, luzes na borda, cúpula emissiva como a da `Nave`;
+- colisor `ColliderDesc.cylinder(0.4, raio)` na altura do convés, registrado
+  `{ kind: "dropship", entityId, dropship: this }` com `COLLISION_EVENTS`;
+- `Plataforma` da tarefa 5 com `pisandoEmDisco(pos, x, z, deckY, raio * 0.85)`;
+- `setNetworkTarget` + interpolação, como o `Boar`.
+
+**Decolagem com passageiro** não precisa de nada especial: `carry()` escreve
+`pos.y = deckY`, e a tarefa 5 já zera a velocidade vertical do jogador enquanto
+ele é carregado — que é o que impede o tremor na subida.
+
+**Critério de aceite.** Duas abas: a nave pousa no mesmo ponto nas duas. O
+jogador A sobe e decola; B vê o A subindo em cima dela e pode acertá-lo de
+baixo. Três flechas ⇒ explosão nas duas telas, e o passageiro morre.
+
+---
+
+## 17. Meteoritos e os estilhaços que matam
+
+**Depende de:** 12, 5. **Não construa uma versão local antes.**
+
+**Objetivo.** Rochas grandes vagando lentamente:
+
+- movimento **lento**; dá para pular em cima com o jetpack e ficar lá;
+- destrutíveis, **mínimo 3 flechas**, explodindo em vários pedaços;
+- grandes o bastante para caber um jogador em cima;
+- pelo menos **3 formatos**, com pequenas crateras;
+- **meteoritos bem menores** voando junto, como cauda;
+- **os estilhaços são letais enquanto caem**: acertar jogador ou alien em pleno
+  voo mata. Depois de assentarem ficam inofensivos e **somem em alguns
+  segundos**.
+
+### 17.1 Config
+
+Em `CONFIG.levels.moon`:
+
+```js
+/* -------------------------------------------------------- meteoritos ---- */
+meteors: {
+  max: 3, spawnMin: 16, spawnMax: 34,
+  raioMin: 2.4, raioMax: 3.6,          // m — cabe um jogador em cima
+  velMin: 1.2, velMax: 2.6,            // m/s — deriva, não queda
+  alturaMin: 11, alturaMax: 26,        // m acima do chão
+  giro: 0.12,                          // rad/s de tombo lento
+  hp: 3,
+  escoltaMin: 5, escoltaMax: 9,        // pedrinhas acompanhando
+  explosionRadius: 7,
+  formatos: 3,
+
+  /* -------------------------------------------------------- estilhaços --
+     Eles MATAM ENQUANTO VOAM e param de matar assim que assentam. Não é
+     detalhe de física: é o que dá consequência a estourar um meteorito em cima
+     da cabeça de alguém — inclusive da sua. Um pedaço parado no chão que
+     continuasse matando viraria uma mina invisível, que é o oposto de
+     legível. */
+  fragCount: 12,
+  fragRaioMin: 0.25, fragRaioMax: 0.7,
+  fragSpeedMin: 5, fragSpeedMax: 13,   // m/s radiais
+  fragKillSpeed: 3.5,                  // m/s — abaixo disto já não machuca
+  fragKillRadius: 1.1,                 // m — raio de acerto em voo
+  fragRestitution: 0.25,               // quique
+  fragSettleTime: 4.0,                 // s no chão até sumir
+  fragFadeTime: 1.0,                   // s de desaparecimento
+},
+```
+
+### 17.2 Os estilhaços: uma conta, dois consumidores
+
+**Este é o ponto de projeto da tarefa.** Doze pedaços por explosão, a 10 Hz,
+seriam ~120 posições por segundo por explosão no fio — caro para algo que dura
+cinco segundos. E simular só no servidor deixaria o visual travado; só no
+cliente deixaria a morte discordando entre telas.
+
+A saída é a que o projeto já usa para o vento: **uma função pura do tempo, com
+a mesma entrada nos dois lados.**
+
+1. Crie `src/shared/fragments.js`, puro:
+   ```js
+   /* ---------------------------------------------------------------------------
+      Os estilhaços de um meteorito — a mesma conta nos dois lados do fio.
+
+      O servidor precisa deles para decidir quem morre; o cliente precisa deles
+      para desenhar. Trafegar doze posições a 10 Hz por explosão seria caro para
+      uma coisa que dura cinco segundos — então não se trafega nada além do
+      EVENTO: origem, semente e instante. Com as três, os dois lados integram a
+      mesma parábola e chegam ao mesmo lugar.
+
+      É o mesmo contrato do vento (`systems/wind.js`), e pela mesma razão.
+      --------------------------------------------------------------------------- */
+
+   /** As velocidades iniciais, sorteadas de forma determinística pela semente. */
+   export function fragmentSeeds(seed, count) { /* makeRandom(seed) */ }
+
+   /** Posição e velocidade de um estilhaço `t` segundos depois do estouro. */
+   export function fragmentAt(origem, vel0, t, gravity, heightAt) { /* ... */ }
+   ```
+2. O servidor emite **uma vez**:
+   ```js
+   this.broadcastAll({
+     t: S2C.SPACE_EVENT, kind: "meteorBurst",
+     p: [x, y, z], seed, w: this.now(),
+   });
+   ```
+3. O cliente desenha a partir disso; o servidor integra a mesma conta para
+   decidir os acertos (jogador e alien) enquanto `|v| >= fragKillSpeed`, e emite
+   `S2C.KILL` no acerto.
+
+### 17.3 O meteorito
+
+**Geometria — três formatos.** Parta de `IcosahedronGeometry(raio, 2)` e deforme
+com `makeRandom(7000 + formato * 131)` — semente derivada do índice, para os três
+serem **estáveis** entre sessões e claramente distintos. Três coisas, nesta
+ordem: **alongamento por eixo** (a silhueta, que é o que se lê de longe),
+**ruído** para a superfície não ser lisa, e **crateras** (vértices puxados para
+dentro num raio angular em torno de pontos sorteados). Material com
+`flatShading: true` — é ele que faz a rocha ler como rocha e não como bolha.
+
+**Escolta.** 5 a 9 malhas pequenas, filhas do grupo, com órbita própria, **sem
+colisor** — são visuais. Concentre-as um pouco atrás para lerem como cauda.
+
+> **Cuidado com o tombo.** Girar o grupo inteiro faria o passageiro girar junto.
+> Gire só um **grupo interno** com a malha e a escolta; o grupo externo — o que
+> define a pose de plataforma — fica sem rotação.
+
+**Convés.** `deckY = y + raio * 0.9`;
+`isOnDeck` → `pisandoEmDisco(pos, x, z, deckY, raio * 0.7, 0.6)`.
+
+**Servidor.** Rota reta atravessando a arena, `hp`, e o estouro que emite
+`meteorBurst` + `explosion`.
+
+**Critério de aceite.** Duas abas: os mesmos três meteoritos, nos mesmos
+lugares, com os mesmos formatos. Pousar em cima de um funciona e o outro jogador
+vê você lá. Duas flechas não destroem; a terceira sim, e os dois veem o mesmo
+estouro. Ficar embaixo quando estoura mata **nas duas telas**. Pedaços parados
+não matam e somem em ~5 s.
+
+---
+---
+
+# BLOCO D — Duelo de times
+
+## 18. Humanos × CPU
+
+**Depende de:** 6 (bots na sala) e 13 (para valer também na Lua).
+
+**Objetivo.** Um modo em que os jogadores humanos formam um time e os bots o
+outro. Começa **equilibrado** — tantos bots quantos humanos —, e durante a
+partida dá para **acrescentar mais CPUs manualmente**, engrossando o time da
+máquina. Placar dizendo qual time está ganhando. Vale no vale e na Lua.
+
+**Por que agora ficou simples.** Com o Bloco B, o servidor é dono dos dois
+times. Ele sabe quem matou quem sem perguntar a ninguém — não há placar
+declarado pelo cliente, não há esquadra por aba, não há limitação a documentar.
+O modo vira o que ele deveria ser: uma variação de regra em cima de coisas que
+já existem.
+
+### 18.1 Fases e modo
+
+1. `src/shared/levels.js`: acrescente `"teamDuel"` aos `modos` de **valley** e
+   de **moon**.
+2. `src/main.js`, `MODE_LABELS`: `teamDuel: "duelo de times",`.
+3. `src/ui/hud.js`, no mapa de rótulos de `setMode`:
+   `teamDuel: "DUELO DE TIMES",`.
+
+### 18.2 Servidor
+
+1. `Room`: `this.teamScores = { humans: 0, bots: 0 };` no construtor, zerado em
+   `resetWorld()`.
+2. `requestMode`: trate `"teamDuel"` como os modos cooperativos — quem aperta
+   liga para a sala inteira, sem convite.
+3. Em `setMode("teamDuel")`, **equilibre os times**:
+   ```js
+   /* Começa parelho: um bot por humano.
+    *
+    * Depois disso o número é livre — quem quiser aperta B e engrossa o time da
+    * máquina no meio da partida. O equilíbrio inicial existe para a partida
+    * COMEÇAR justa; mantê-lo à força tiraria a única alavanca de dificuldade
+    * que o modo tem. */
+   const humanos = this.players.size;
+   while (this.bots.count > humanos) this.removeBot();
+   while (this.bots.count < humanos) this.addBot();
+   ```
+4. **O placar sai de graça.** Em `registerKill(killer, msg)` e no caminho de
+   morte causada por bot (a simulação de flecha da §6.4), acrescente:
+   ```js
+   if (this.mode === "teamDuel") {
+     this.teamScores[vitima.isBot ? "humans" : "bots"]++;
+     this.broadcastAll({ t: S2C.TEAM_SCORES, ...this.teamScores });
+   }
+   ```
+   Repare que **não há nada a conferir**: o servidor é dono das duas pontas.
+5. `snapshot(exceto)`: acrescente `teamScores: this.teamScores`.
+6. Protocolo: `S2C.TEAM_SCORES: "teamScores"` (`{ humans, bots }`).
+
+### 18.3 Cliente
+
+1. `net.on(S2C.TEAM_SCORES, ...)` guarda e chama `this.hud.setTeamScores(...)`.
+2. `applyMode`: mostra o painel quando `msg.mode === "teamDuel"`, esconde fora.
+3. `src/ui/hud.js` — `setTeamScores(placar)`:
+   ```js
+   /**
+    * Placar dos dois times, no alto da tela.
+    *
+    * O time à frente fica destacado — é a única informação que importa num
+    * relance, e ler dois números para descobrir quem ganha é trabalho demais no
+    * meio de um tiroteio.
+    * @param {{humans:number, bots:number}|null} placar null esconde o painel
+    */
+   ```
+   Construa `this.el.teamChip` em `build()` no padrão do `zombieChip`, com dois
+   blocos (`HUMANOS n` / `CPU n`) e a classe `liderando` no que estiver à frente.
+   Estilos em `src/style.css`, no padrão dos outros chips.
+4. `src/systems/input.js`: `case "KeyG": this.actions.setMode = "teamDuel"; break;`
+   — G de *grupo*; não cabe em dígito, 1–8 já são dos outros modos e 9 é da fase.
+5. `src/ui/hud.js`, `ATALHOS`, grupo "Modos de jogo":
+   `[["G"], "duelo de times (humanos × CPU)"],`.
+
+**Critério de aceite.**
+- Duas abas na sala, `G` numa delas: nascem **2 bots** (um por humano), o painel
+  aparece zerado nas duas.
+- `B` no meio da partida: o time da CPU vai a 3, e as duas abas veem o novo bot.
+- Matar um bot ⇒ `HUMANOS` sobe nas duas telas. Morrer para um ⇒ `CPU` sobe.
+- `N` troca a dificuldade **em tempo real, para todos** — o aviso aparece nas
+  duas abas e os bots mudam de comportamento na hora (isto vem da tarefa 10; os
+  bots são um só conjunto, no servidor).
+- `9` no meio do duelo de times: a viagem completa e o modo continua na Lua.
+- `1` (livre) tira os bots e esconde o painel.
+
+---
+---
+
+## 19. Verificações finais
 
 1. `npm run build` — sem erro e sem aviso novo.
 2. `grep -rn "systems/bot" src/` — nenhum resultado (o módulo local morreu).
@@ -1739,13 +1840,27 @@ de um tronco crava no tronco, e as duas abas veem a flecha no mesmo lugar.
    - Bot atrás de árvore não atira através dela.
    - 2 min de observação no vale → nenhum bot na serra.
    - `9` com bots em campo → viagem completa, bots removidos.
-4. Roteiro de Lua (aba única basta):
-   - nave passa com zumbido que a acompanha;
-   - alien guincha de vez em quando;
-   - derrubar nave em cima de si ⇒ morre; longe ⇒ não morre;
-   - rover roda os pneus certo e sai de cratera;
-   - nave de transporte pousa, decola com o jogador, e explode com 3 flechas;
-   - meteoritos: pousar em cima, 3 flechas para estourar, estilhaços em queda
-     matam, estilhaços parados não matam e somem em ~5 s.
-5. Console do navegador: **zero** erros durante os dois roteiros.
-6. Nenhum número novo fora de `src/config.js`.
+4. Roteiro de Lua, **também com duas abas** — é o ponto do Bloco C:
+   - a lista de aliens, naves e meteoritos é a mesma nas duas
+     (`window.game.environment.space` no console);
+   - nave passa com zumbido que a acompanha, e é a mesma nave nas duas;
+   - alien guincha de vez em quando; matar um mata nas duas;
+   - derrubar nave em cima de si ⇒ morre **nas duas telas**; longe ⇒ não morre;
+   - rover: pneus giram certo, sai de cratera, está no mesmo lugar nas duas, e
+     o passageiro é visto em cima por quem está de fora;
+   - nave de transporte pousa no mesmo ponto nas duas, decola com o jogador
+     (visível para o outro), e explode com 3 flechas matando o passageiro;
+   - meteoritos: mesmos formatos e lugares nas duas; pousar em cima; 3 flechas
+     para estourar; estilhaços em queda matam; parados não matam e somem em ~5 s;
+   - cadente e baliza acontecem no **mesmo instante** nas duas abas.
+5. Roteiro do duelo de times (duas abas):
+   - `G` → 2 bots, painel zerado nas duas;
+   - `B` → time da CPU vai a 3 nas duas;
+   - abates movem o painel nas duas;
+   - `N` muda a dificuldade para todos, em tempo real.
+6. `grep -rn "killedByLocalNPC\|reviveFromLocalDeath" src/` — nenhum resultado.
+   Depois do Bloco C não sobrou entidade local que mate ninguém, e manter um
+   segundo caminho de morte que ninguém percorre é convite a percorrê-lo por
+   engano.
+7. Console do navegador: **zero** erros durante os roteiros.
+8. Nenhum número novo fora de `src/config.js`.

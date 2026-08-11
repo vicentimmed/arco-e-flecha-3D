@@ -952,6 +952,26 @@ export const CONFIG = {
       /* -------------------------------------------------------------- base -- */
       base: { x: 0, z: -97 },
 
+      /* ------------------------------------------------------------- rover --
+         O veículo que ronda a base. Ver `entities/rover.js`. */
+      rover: {
+        speed: 3.6, // m/s — entre o passo e a corrida na Lua
+        turnRate: 1.0, // rad/s
+        probeDist: 7, // m — a que distância ele "olha" o relevo à frente
+        maxClimb: 0.8, // m — degrau que ele aceita subir no `probeDist`
+        propRayDist: 6, // m — alcance da sonda de obstáculo sólido
+        stuckWindow: 3.0, // s de observação do vigia de travamento
+        // m — APROXIMOU-SE do destino menos que isto na janela ⇒ travado.
+        // É progresso, não distância andada: circular o fundo de uma cratera é
+        // andar muito e não chegar a lugar nenhum.
+        stuckDistance: 2.0,
+        /* s dirigindo reto ao destino, ignorando as sondas.
+           Cinco segundos são ~18 m na velocidade de ronda — o bastante para
+           atravessar a parede de uma cratera grande de uma vez só. Com menos, a
+           fuga terminava no meio da subida e ele escorregava de volta. */
+        unstuckTime: 5.0,
+      },
+
       /* ------------------------------------------------------------- duelo --
          Sem arrasto e com 1/6 de g, um tiro tenso de 120 m/s cai 12 cm em 46 m:
          o anel do vale transformaria o arco no revólver que o duelo existe para

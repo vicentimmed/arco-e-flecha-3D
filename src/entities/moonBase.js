@@ -299,7 +299,6 @@ export class MoonBase {
     this.beaconLight = new THREE.PointLight(0xff2a18, 0, 26, 1.6);
     this.beaconLight.position.set(x, yBaliza, z);
     this.group.add(this.beaconLight);
-    this.beaconPhase = 0;
 
     /* ------------------------------------------------------ colisores --- */
     // Corpo: um cilindro só. A flecha não precisa distinguir aleta de anel.
@@ -312,13 +311,19 @@ export class MoonBase {
     this.midPlatformY = yMeio;
   }
 
-  /** A baliza pisca: dois lampejos curtos e uma pausa longa, como as de verdade. */
-  update(dt) {
+  /**
+   * A baliza pisca: dois lampejos curtos e uma pausa longa, como as de verdade.
+   *
+   * @param {number} tempoSala relógio da sala (ms). A fase sai DELE, não de um
+   *   acumulador local: é a mesma ideia do vento — uma função pura do tempo
+   *   compartilhado pisca em fase em todas as telas sem trafegar nada. Sem
+   *   sala, o relógio local serve e a baliza pisca igual, só não compartilhada.
+   */
+  update(dt, tempoSala = 0) {
     this.rover?.update(dt);
 
     if (!this.beaconLight) return;
-    this.beaconPhase = (this.beaconPhase + dt) % 2.6;
-    const t = this.beaconPhase;
+    const t = ((tempoSala || performance.now()) / 1000) % 2.6;
     const aceso = t < 0.12 || (t > 0.34 && t < 0.46);
     this.beaconLight.intensity = aceso ? 42 : 0;
     this.beacon.material.opacity = aceso ? 1 : 0.25;

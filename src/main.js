@@ -299,6 +299,8 @@ class Game {
     /** Segundos restantes do golpe de faca (0 = sem golpe). */
     this.knifeTimer = 0;
     this.knifeHitIds = new Set();
+    /** Em que plataforma o jogador está de pé agora, ou null. Ver `updateRideables`. */
+    this.rideando = null;
     this.accumulator = 0;
     this.lastTime = performance.now();
     this.fps = 60;
@@ -971,24 +973,42 @@ class Game {
   }
 
   /**
-   * Carona no rover: se você está de pé no convés dele, anda junto.
+   * Carona: rover, e depois tudo o mais em que se possa ficar em cima.
    *
-   * Roda DEPOIS de `environment.update` — o rover já se moveu este quadro —
-   * então `rover.carry` reprojeta a posição do referencial de ONTEM (que ele
-   * guardou) para o de agora. O corpo cinemático do jogador é realinhado na
-   * mão (`syncFromPlayer`) porque `player.position` acabou de ser escrito
-   * direto, por fora do character controller.
+   * Roda DEPOIS de `environment.update` — as plataformas já se moveram neste
+   * quadro —, então `carry` reprojeta a posição do referencial de ONTEM (que a
+   * plataforma guardou) para o de agora. O corpo cinemático do jogador é
+   * realinhado na mão (`syncFromPlayer`) porque `player.position` acabou de ser
+   * escrito direto, por fora do character controller.
    */
-  updateRoverRide() {
-    const rover = this.environment?.base?.rover;
-    if (!rover || this.death.dying) return;
-    // Acabou de pular (ou ligar o jato): deixa sair. Sem isto, `carry` grudava
-    // o pé de volta na altura do convés no mesmo quadro do impulso, e o pulo
-    // nunca decolava — a única forma de descer era andar para fora da borda.
-    if (this.playerPhysics.verticalVelocity > 0.5) return;
-    if (!rover.isOnDeck(this.player.position)) return;
-    rover.carry(this.player.position);
-    this.playerPhysics.syncFromPlayer();
+  updateRideables() {
+    if (this.death.dying) return;
+    /* Acabou de pular (ou ligar o jato): deixa sair. Sem isto, `carry` grudava
+       o pé de volta na altura do convés no mesmo quadro do impulso, e o pulo
+       nunca decolava — a única forma de descer era andar para fora da borda. */
+    if (this.playerPhysics.verticalVelocity > 0.5) {
+      this.rideando = null;
+      return;
+    }
+
+    const base = this.environment?.base;
+    const espaco = this.environment?.space;
+    const candidatos = [base?.rover, espaco?.dropship, ...(espaco?.meteors ?? [])];
+
+    for (const plataforma of candidatos) {
+      if (!plataforma?.isOnDeck?.(this.player.position)) continue;
+      plataforma.carry(this.player.position);
+      /* Enquanto é carregado, ele não está caindo. Sem zerar a velocidade
+         vertical, uma plataforma que SOBE (a nave decolando) briga com a queda
+         acumulada e o passageiro treme. */
+      this.playerPhysics.verticalVelocity = 0;
+      this.playerPhysics.grounded = true;
+      this.player.airborne = false;
+      this.playerPhysics.syncFromPlayer();
+      this.rideando = plataforma;
+      return;
+    }
+    this.rideando = null;
   }
 
   async connect(name) {
@@ -1089,8 +1109,16 @@ class Game {
     this.trails.update(dt);
     this.particles.update(dt);
     this.updateBossFlashes(dt);
-    this.environment.update(dt, this.wind.vector, this.livePlayers());
-    this.updateRoverRide();
+    /* O relógio da SALA vai junto: é ele que sincroniza a estrela cadente e a
+       baliza do foguete entre as telas, sem trafegar nada — o mesmo contrato
+       que o vento já usa duas dezenas de linhas acima. */
+    this.environment.update(
+      dt,
+      this.wind.vector,
+      this.livePlayers(),
+      this.net.serverTime,
+    );
+    this.updateRideables();
     this.death.update(this.net.serverTime);
     this.respawn.update(this.net.serverTime);
     // Depois da câmera do frame: a distância dela decide o descarte e a escala

@@ -233,6 +233,96 @@ function makeCryBuffer(ctx, { duration, from, to, vibrato, rasp, growl = 0 }) {
  * em 40 ms, e um baque grave de corpo que se arrasta. Juntas dão o "toc-BUM"
  * que o ouvido lê como algo pesado acertando algo mole.
  */
+/**
+ * O zumbido de um disco voador.
+ *
+ * A assinatura sonora de "nave alienígena" não é motor: é um tom PURO batendo
+ * contra outro quase igual. As duas senoides desafinadas produzem um batimento
+ * lento, e a modulação em anel por cima acrescenta a bordinha metálica que um
+ * motor de avião — ruído de banda larga — nunca tem. É a diferença entre "algo
+ * voando" e "algo voando que não é daqui".
+ */
+function makeUfoBuffer(ctx) {
+  const duration = 2.4;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const wob = Math.sin(TAU * 1.6 * t) * 22; // vibrato lento na altura
+    const voz =
+      Math.sin(TAU * (196 + wob) * t) * 0.5 +
+      Math.sin(TAU * (203 + wob) * t) * 0.5; // 7 Hz de batimento entre as duas
+    const anel = 0.72 + 0.28 * Math.sin(TAU * 42 * t);
+    // Entra e sai suave: a nave se aproxima e passa, não liga e desliga.
+    const env = Math.sin(Math.PI * p) ** 0.9;
+    data[i] = voz * anel * env * 0.7;
+  }
+  return buffer;
+}
+
+/**
+ * A voz do alien: curta, aguda e quebrada.
+ *
+ * Um trinado descendente com salto de oitava no meio — o salto é o que a faz
+ * soar como fala de bicho e não como apito. O chiado somado dá a garganta.
+ */
+function makeAlienChirpBuffer(ctx) {
+  const duration = 0.55;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+  let phase = 0;
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const salto = p > 0.45 && p < 0.7 ? 1.55 : 1;
+    const freq = (880 - 380 * p) * salto + Math.sin(t * 70) * 60;
+    phase += (TAU * freq) / sampleRate;
+    const voz = Math.sin(phase) * 0.62 + Math.sin(phase * 2.7) * 0.2;
+    const chiado = (Math.random() * 2 - 1) * 0.12;
+    const env = Math.min(1, t / 0.015) * Math.pow(1 - p, 1.4);
+    data[i] = (voz + chiado) * env;
+  }
+  return buffer;
+}
+
+/**
+ * Explosão: estalo seco na frente, estrondo grave arrastando atrás.
+ *
+ * Sem altura definida — explosão não tem nota. O que a torna GRANDE é a cauda:
+ * o estalo sozinho lê como tiro, e é o ronco de meio segundo depois dele que
+ * diz "aquilo era do tamanho de uma nave".
+ */
+function makeExplosionBuffer(ctx) {
+  const duration = 1.8;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  let low = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const branco = Math.random() * 2 - 1;
+    low += (branco - low) * 0.05;
+    const estalo = branco * Math.exp(-t * 34) * 0.9;
+    const corpo =
+      low * (Math.exp(-t * 2.6) * 0.9 + Math.exp(-Math.max(0, t - 0.3) * 1.7) * 0.5);
+    const ronco =
+      Math.sin(TAU * (52 - 26 * Math.min(1, t / duration)) * t) *
+      Math.exp(-t * 2.2) *
+      0.3;
+    data[i] = Math.tanh((estalo + corpo + ronco) * 1.4);
+  }
+  return buffer;
+}
+
 function makeThumpBuffer(ctx) {
   const duration = 0.55;
   const sampleRate = ctx.sampleRate;
@@ -462,6 +552,10 @@ export class AudioSystem {
       bossLaugh: 1,
       elkVoice: 4,
       wolfHowl: 6,
+      // Seis aliens falando ao mesmo tempo comeriam o pool geral; a nave
+      // reemite o zumbido a cada dois segundos enquanto atravessa o céu.
+      alienChirp: 4,
+      ufoHum: 2,
     };
 
     this._initBuffers();
@@ -540,6 +634,11 @@ export class AudioSystem {
     this.buffers.hitScenery = makeNoiseBuffer(this.ctx, 0.14, "impact");
     this.buffers.knifeSwing = makeKnifeSwingBuffer(this.ctx);
     this.buffers.jet = makeJetBuffer(this.ctx);
+
+    // A Lua: a nave que passa, o alien que fala e o que estoura.
+    this.buffers.ufoHum = makeUfoBuffer(this.ctx);
+    this.buffers.alienChirp = makeAlienChirpBuffer(this.ctx);
+    this.buffers.explosion = makeExplosionBuffer(this.ctx);
 
     // Alce: berro de peito, grave e com rosnado. O de dor é curto e sobe de
     // volta; o de morte é longo e só desce.
@@ -1031,6 +1130,13 @@ export class AudioSystem {
       audio.setRefDistance(28);
       audio.setRolloffFactor(0.7);
       audio.setMaxDistance(260);
+    } else if (id === "ufoHum" || id === "explosion") {
+      /* A nave cruza o céu a 50–80 m de altura e a explosão precisa ser ouvida
+         do outro lado da arena. Com o alcance padrão (80 m) as duas sumiam
+         justamente quando são o acontecimento da cena. */
+      audio.setRefDistance(22);
+      audio.setRolloffFactor(0.8);
+      audio.setMaxDistance(240);
     } else {
       audio.setRefDistance(3);
       audio.setRolloffFactor(1.2);

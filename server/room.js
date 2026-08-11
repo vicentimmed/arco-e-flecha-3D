@@ -35,6 +35,7 @@ import {
   levelForMode,
   levelUsesDuelInvites,
   levelHasFauna,
+  levelSpawnDrop,
   fallbackMode,
 } from "../src/shared/levels.js";
 
@@ -62,7 +63,15 @@ import { TargetSeries } from "./targetSeries.js";
 let nextPlayerId = 1;
 
 export class Room {
-  constructor({ log = () => {} } = {}) {
+  /**
+   * @param {object} opcoes
+   * @param {string} [opcoes.level] a fase em que a sala NASCE. Vem da tela de
+   *   entrada: quem escolheu a Lua não passa pelo vale primeiro, e quem
+   *   escolheu o vale nunca vai parar numa sala que já viajou.
+   * @param {string} [opcoes.mode] o modo em que ela nasce — a noite dos zumbis
+   *   é uma sala inteira, não um botão apertado depois de entrar.
+   */
+  constructor({ log = () => {}, level = DEFAULT_LEVEL, mode = "free" } = {}) {
     this.log = log;
     this.epoch = Date.now();
 
@@ -74,13 +83,21 @@ export class Room {
      * prontos para sempre — trocar de fase no servidor passa a ser trocar um
      * ponteiro. */
     this.fields = Object.fromEntries(LEVEL_IDS.map((id) => [id, createField(id)]));
-    this.level = DEFAULT_LEVEL;
+    this.level = LEVEL_IDS.includes(level) ? level : DEFAULT_LEVEL;
 
     this.colors = new ColorPool();
 
     /** @type {Map<object, object>} conexão → jogador */
     this.players = new Map();
     this.mode = "free";
+    /* O modo da ENTRADA — o que a tela inicial prometeu.
+     *
+     * Ele não é aplicado aqui, e sim quando o PRIMEIRO jogador entra: metade do
+     * que `setMode` faz (sortear nascimentos, montar a horda, medir a horda pelo
+     * número de pessoas) não tem resposta numa sala vazia. Nascer no modo livre
+     * e virar zumbi no instante em que alguém chega passa pelo mesmo handshake
+     * de preparo que a tecla 6 usa — um caminho, não dois. */
+    this.entryMode = fallbackMode(this.level, mode);
     /** Troca de noite aguardando o aquecimento de todos os clientes. */
     this.pendingMode = null;
     this.nextModeToken = 1;
@@ -833,7 +850,7 @@ export class Room {
         x: round(x),
         z: round(z),
         y: round(this.terrain.heightAt(x, z)),
-        drop: CONFIG.spawn.dropHeight,
+        drop: this.spawnDrop(),
         invulnUntil: p.invulnUntil,
       });
     });
@@ -896,7 +913,7 @@ export class Room {
         z: round(posto.z),
         y: round(posto.y),
         yaw: round(yaw),
-        drop: CONFIG.spawn.dropHeight,
+        drop: this.spawnDrop(),
         invulnUntil: p.invulnUntil,
       });
     }
@@ -973,7 +990,7 @@ export class Room {
         x: round(ponto.x),
         z: round(ponto.z),
         y: round(ponto.y),
-        drop: CONFIG.spawn.dropHeight,
+        drop: this.spawnDrop(),
         invulnUntil: p.invulnUntil,
       });
     });
@@ -2090,6 +2107,19 @@ export class Room {
     }
     this.broadcastScores();
 
+    /* A PROMESSA DA TELA DE ENTRADA, cumprida agora.
+     *
+     * Quem clicou "modo zumbi" espera cair na noite, não no campo de tiro com
+     * um aviso para apertar 6. A sala esperou até existir alguém porque a horda
+     * é dimensionada pelo número de pessoas — montá-la para ninguém daria uma
+     * horda de tamanho zero que a primeira chegada teria de refazer.
+     *
+     * Só na PRIMEIRA entrada: quem chega depois entra na partida como ela está,
+     * e reiniciar o modo a cada pessoa que aparece seria reiniciar a noite. */
+    if (this.players.size === 1 && this.entryMode !== this.mode) {
+      this.requestMode(player, this.entryMode);
+    }
+
     this.log(`entrou: ${player.name} (#${player.id}) — ${this.size} na sala`);
   }
 
@@ -2164,6 +2194,12 @@ export class Room {
       // modo livre, e ele é justamente o que não pode estar lá quando o
       // próximo jogador entrar.
       this.mode = "free";
+      /* O modo da ENTRADA cai junto, e é isso que impede o pior tipo de
+         surpresa: sem esta linha, uma sala de zumbi esvaziada continuaria
+         "prometendo" a noite, e a próxima pessoa que caísse aqui pela porta do
+         vale seria jogada numa horda que não pediu. Quem quiser zumbi de novo
+         clica no botão, e a busca de `RoomHost` abre uma sala nova. */
+      this.entryMode = "free";
       this.resetWorld();
       this.log("sala vazia: mundo zerado");
     }
@@ -2572,9 +2608,27 @@ export class Room {
       z: round(ponto.z),
       y: round(ponto.y),
       ...(yaw != null ? { yaw: round(yaw) } : {}),
-      drop: isZombieMode(this.mode) ? 0 : CONFIG.spawn.dropHeight,
+      drop: this.spawnDrop(),
       invulnUntil,
     });
+  }
+
+  /**
+   * De que altura se nasce, aqui e agora.
+   *
+   * Duas regras, e as duas existem pelo mesmo motivo — o tempo pendurado no ar
+   * é tempo de ser alvo:
+   *
+   * • a NOITE DOS ZUMBIS entra no chão, sem queda: a horda já está lá;
+   * • a LUA cai de um metro, porque em 1/6 de g os 10 m do vale viram 3,5 s de
+   *   queda sem controle, à vista de todo mundo (ver `moon.spawnDrop`).
+   *
+   * Estava escrito em quatro lugares, e por isso a Lua herdava os 10 m do vale
+   * nos quatro.
+   */
+  spawnDrop() {
+    if (isZombieMode(this.mode)) return 0;
+    return levelSpawnDrop(this.level);
   }
 
   /* --------------------------------------------------------------- placar -- */
@@ -2678,6 +2732,19 @@ export class Room {
     return {
       mode: this.mode,
       level: this.level,
+      /* QUEM ESTÁ EM CAMPO, por extenso.
+       *
+       * O cliente monta a lista de bonecos a partir de `JOIN`/`LEAVE`, que são
+       * avulsos e dependem de chegar tudo, na ordem, e nada se perder. Na troca
+       * de fase isso é justamente o que não se pode assumir: o mundo do cliente
+       * é demolido e reconstruído no meio da conversa, e um `LEAVE` de bot que
+       * caia nessa janela deixava um adversário de CPU **parado para sempre** na
+       * fase nova — um boneco sem dono, que ninguém mais atualiza.
+       *
+       * Esta lista fecha a questão de uma vez: ela vem junto com a fase e com o
+       * modo, e o cliente RECONCILIA (`applyMode`) em vez de acreditar num
+       * histórico de mensagens. São poucas dezenas de bytes num evento raro. */
+      roster: this.allCharacters().map(publicView),
       // Quem quer duelar, com nome: é o que a sala vê como convite na tela.
       invites: [...this.players.values()]
         .filter((p) => p.duelReady)
@@ -2752,60 +2819,124 @@ export class Room {
 /* ------------------------------------------------------------- ciclo de vida */
 
 /**
- * Cria a sala quando o primeiro jogador entra e a destrói quando o último sai.
+ * As salas: cria quando alguém entra, destrói quando o último sai.
  *
  * Enquanto ninguém joga, o processo não tem timer rodando, nem porco andando,
  * nem estado ocupando memória — o servidor fica em zero de verdade. A carência
  * existe para que uma queda de rede de cinco segundos não apague a sessão de
  * quem estava jogando sozinho.
+ *
+ * ------------------------------------------------------------- por que várias
+ *
+ * Havia UMA sala, e a fase era dela: quem apertasse 9 levava todo mundo junto.
+ * Isso funciona enquanto a tela de entrada é uma só — e ela deixou de ser. Com
+ * "Vale Verde", "Lua", "Zumbi" e "Zumbi com chefão" na porta, uma sala só faria
+ * a última escolha ganhar de todas as outras: quem clicasse na Lua arrastaria
+ * para lá quem estava caçando porco, e quem entrasse no zumbi transformaria a
+ * tarde de tiro ao alvo dos outros em noite de horda.
+ *
+ * Cada botão vira, então, um LUGAR: quem escolhe a Lua encontra quem está na
+ * Lua. As salas são procuradas pelo que elas são AGORA (`level` + `mode`), e
+ * não pelo que foram ao nascer — assim a tecla 9 continua funcionando por
+ * dentro, e a sala que viajou para a Lua passa a receber quem clica em "Lua".
  */
 export class RoomHost {
   constructor({ log = () => {} } = {}) {
     this.log = log;
-    this.room = null;
-    this.graceTimer = null;
+    /** @type {Set<Room>} */
+    this.rooms = new Set();
+    /** @type {Map<object, Room>} conexão → a sala dela */
+    this.byConn = new Map();
+    /** @type {Map<Room, NodeJS.Timeout>} carências de sala vazia */
+    this.grace = new Map();
   }
 
-  /** A sala, criando-a se for preciso. */
-  ensure() {
-    if (this.graceTimer) {
-      clearTimeout(this.graceTimer);
-      this.graceTimer = null;
+  /**
+   * A sala para esta entrada, criando-a se ainda não existir.
+   *
+   * A busca casa fase E modo, e ignora sala cheia: entrar numa sala lotada é
+   * recusado lá dentro (`join`), e o que se quer aqui é achar o LUGAR certo.
+   */
+  ensure({ level = DEFAULT_LEVEL, mode = "free" } = {}) {
+    const fase = LEVEL_IDS.includes(level) ? level : DEFAULT_LEVEL;
+    const modo = fallbackMode(fase, mode);
+
+    for (const room of this.rooms) {
+      if (room.level !== fase || room.mode !== modo) continue;
+      if (room.players.size >= CONFIG.net.maxPlayers) continue;
+      this.cancelTeardown(room);
+      return room;
     }
-    if (!this.room) {
-      this.room = new Room({ log: this.log });
-      this.room.onEmpty = (room) => this.scheduleTeardown(room);
-      this.log("sala criada");
-    }
-    return this.room;
+
+    const room = new Room({ log: this.log, level: fase, mode: modo });
+    room.onEmpty = (r) => this.scheduleTeardown(r);
+    this.rooms.add(room);
+    this.log(`sala criada — ${fase} / ${modo} (${this.rooms.size} no ar)`);
+    return room;
   }
 
-  /** A sala atual, ou null se ninguém está jogando. */
-  get current() {
-    return this.room;
+  /** Quantas salas existem agora. Útil no log e em teste. */
+  get size() {
+    return this.rooms.size;
+  }
+
+  cancelTeardown(room) {
+    const timer = this.grace.get(room);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.grace.delete(room);
   }
 
   scheduleTeardown(room) {
-    if (room.size > 0 || this.graceTimer) return;
-    this.graceTimer = setTimeout(() => {
-      this.graceTimer = null;
-      if (!this.room || this.room.size > 0) return;
-      this.room.destroy();
-      this.room = null;
-      this.log("sala destruída — ninguém jogando");
+    if (room.players.size > 0 || this.grace.has(room)) return;
+    const timer = setTimeout(() => {
+      this.grace.delete(room);
+      if (room.players.size > 0) return;
+      room.destroy();
+      this.rooms.delete(room);
+      this.log(`sala destruída (${room.level}) — ${this.rooms.size} restantes`);
     }, CONFIG.net.emptyRoomGrace * 1000);
+    this.grace.set(room, timer);
   }
 
   /* --- ponte para o adaptador de transporte --------------------------------- */
 
   handleMessage(conn, data) {
-    // Uma mensagem que não seja `hello` numa conexão sem sala é de alguém que
-    // ficou para trás numa sala já destruída: `ensure()` recria e a vida segue.
-    this.ensure().handleMessage(conn, data);
+    const sala = this.byConn.get(conn);
+    /* Sala JÁ DESTRUÍDA com a conexão ainda de pé é o caso raro que não pode
+       terminar mal: os timers dela foram parados, e falar com ela seria falar
+       com um mundo que não anda mais. A conexão volta a ser nova e escolhe uma
+       sala viva no `hello` seguinte. */
+    if (sala && this.rooms.has(sala)) {
+      sala.handleMessage(conn, data);
+      return;
+    }
+    this.byConn.delete(conn);
+
+    /* Conexão ainda sem sala. É o `hello` que decide em qual ela entra — e é
+       só dele que se lê a entrada escolhida. Qualquer outra mensagem aqui é de
+       alguém que ficou para trás numa sala destruída; ela cai na entrada padrão
+       e a vida segue, que é o que acontecia quando a sala era uma só. */
+    let msg = null;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return; // lixo na linha: ignora em silêncio
+    }
+
+    const nova = this.ensure({ level: msg?.level, mode: msg?.mode });
+    this.byConn.set(conn, nova);
+    nova.handleMessage(conn, data);
+
+    // Recusado (versão velha, sala cheia): a conexão não virou jogador, e
+    // guardá-la vazaria uma entrada do mapa a cada tentativa.
+    if (!nova.players.has(conn)) this.byConn.delete(conn);
   }
 
   handleClose(conn) {
-    this.room?.handleClose(conn);
+    const sala = this.byConn.get(conn);
+    this.byConn.delete(conn);
+    sala?.handleClose(conn);
   }
 }
 

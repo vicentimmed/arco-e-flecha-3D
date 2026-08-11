@@ -12,7 +12,6 @@
      alien ............. persegue e mata
      nave .............. é abatível e o estouro mata
      rover ............. carrega jogador e atropela alien
-     nave de transporte  idem, e é destrutível com passageiro dentro
      meteorito ......... dá para ficar em cima, e os estilhaços matam
 
    O que NÃO veio, e por quê:
@@ -345,148 +344,6 @@ class Rover {
   }
 }
 
-/* ------------------------------------------------------ nave de transporte -- */
-
-/**
- * A nave grande: circunda a base, pousa, espera e decola — com quem tiver
- * subido em cima.
- *
- * Ela NÃO sai de cena como as outras: a órbita é fechada, e a única forma de
- * ela sumir é sendo destruída. É o que permite alguém viajar nela sem o chão
- * desaparecer no meio do caminho.
- */
-class Dropship {
-  constructor(terrain, base) {
-    const D = CONFIG.levels.moon.dropship;
-    this.terrain = terrain;
-    this.base = base;
-    this.D = D;
-    this.hp = D.hp;
-    this.estado = "cruzeiro"; // | descendo | pousada | subindo | destruida
-    this.t = 0;
-    this.ang = Math.random() * TAU;
-    this.destino = null;
-    this.voltaEm = 0;
-    this.atualizarPoseOrbital();
-  }
-
-  atualizarPoseOrbital() {
-    const D = this.D;
-    this.x = this.base.x + Math.cos(this.ang) * D.raioOrbita;
-    this.z = this.base.z + Math.sin(this.ang) * D.raioOrbita;
-    this.y = this.terrain.heightAt(this.x, this.z) + D.alturaVoo;
-    // Aponta na tangente do movimento.
-    this.yaw = Math.atan2(-Math.sin(this.ang), Math.cos(this.ang)) + Math.PI / 2;
-  }
-
-  /** Sorteia um ponto plano perto do centro da base. */
-  procurarPouso() {
-    const D = this.D;
-    for (let i = 0; i < 30; i++) {
-      const a = Math.random() * TAU;
-      const d = Math.random() * D.raioPouso;
-      const x = this.base.x + Math.cos(a) * d;
-      const z = this.base.z + Math.sin(a) * d;
-      if (this.terrain.isFlatGround?.(x, z) ?? this.terrain.isWalkable(x, z)) {
-        return { x, z };
-      }
-    }
-    return null;
-  }
-
-  update(dt) {
-    const D = this.D;
-    this.t += dt;
-
-    if (this.estado === "destruida") {
-      this.voltaEm -= dt;
-      if (this.voltaEm <= 0) {
-        this.hp = D.hp;
-        this.estado = "cruzeiro";
-        this.t = 0;
-        this.ang = Math.random() * TAU;
-        this.atualizarPoseOrbital();
-      }
-      return;
-    }
-
-    if (this.estado === "cruzeiro") {
-      this.ang += D.velOrbita * dt;
-      this.atualizarPoseOrbital();
-      if (this.t >= D.tempoVoando) {
-        const ponto = this.procurarPouso();
-        if (ponto) {
-          this.destino = ponto;
-          this.estado = "descendo";
-        }
-        this.t = 0;
-      }
-      return;
-    }
-
-    if (this.estado === "descendo") {
-      // Desloca-se horizontalmente até o ponto E desce ao mesmo tempo.
-      const dx = this.destino.x - this.x;
-      const dz = this.destino.z - this.z;
-      const dh = Math.hypot(dx, dz);
-      const passo = Math.min(dh, D.velVertical * 2 * dt);
-      if (dh > 1e-3) {
-        this.x += (dx / dh) * passo;
-        this.z += (dz / dh) * passo;
-      }
-      const alvoY = this.terrain.heightAt(this.x, this.z) + D.raio * 0.35;
-      this.y = Math.max(alvoY, this.y - D.velVertical * dt);
-      if (this.y <= alvoY + 0.05 && dh < 1.5) {
-        this.y = alvoY;
-        this.estado = "pousada";
-        this.t = 0;
-      }
-      return;
-    }
-
-    if (this.estado === "pousada") {
-      if (this.t >= D.tempoPousada) {
-        this.estado = "subindo";
-        this.t = 0;
-      }
-      return;
-    }
-
-    if (this.estado === "subindo") {
-      const alvoY = this.terrain.heightAt(this.x, this.z) + D.alturaVoo;
-      this.y = Math.min(alvoY, this.y + D.velVertical * dt);
-      if (this.y >= alvoY - 0.05) {
-        // Volta à órbita pelo ângulo correspondente a onde ela está agora.
-        this.ang = Math.atan2(this.z - this.base.z, this.x - this.base.x);
-        this.estado = "cruzeiro";
-        this.t = 0;
-      }
-      return;
-    }
-  }
-
-  /** @returns {boolean} explodiu com este acerto? */
-  abater() {
-    if (this.estado === "destruida") return false;
-    this.hp--;
-    if (this.hp > 0) return false;
-    this.estado = "destruida";
-    this.voltaEm = this.D.reaparecerEm;
-    return true;
-  }
-
-  view() {
-    return {
-      x: r(this.x),
-      y: r(this.y),
-      z: r(this.z),
-      w: r(this.yaw),
-      st: this.estado,
-      hp: this.hp,
-    };
-  }
-}
-
 /* ------------------------------------------------------------ meteoritos --- */
 
 /** Rocha grande em deriva lenta, em que dá para pousar de jetpack. */
@@ -561,7 +418,6 @@ export class SpaceField {
     this.naves = [];
     this.meteors = [];
     this.rover = null;
-    this.dropship = null;
     this.estilhacos = [];
     this.tAlien = 12;
     this.tNave = 6;
@@ -577,7 +433,6 @@ export class SpaceField {
     this.centro = { x: this.terrain.centerX ?? 0, z: this.terrain.centerZ ?? 0 };
     this.base = { x: M.base.x, z: M.base.z };
     this.rover = new Rover(this.terrain, this.base);
-    this.dropship = new Dropship(this.terrain, this.base);
   }
 
   clear() {
@@ -586,7 +441,6 @@ export class SpaceField {
     this.meteors = [];
     this.estilhacos = [];
     this.rover = null;
-    this.dropship = null;
     this.ativo = false;
   }
 
@@ -655,9 +509,6 @@ export class SpaceField {
         }
       }
     }
-
-    /* --------------------------------------------------- nave de transporte */
-    this.dropship?.update(dt);
 
     /* -------------------------------------------------------- meteoritos -- */
     this.tMeteor -= dt;
@@ -736,13 +587,6 @@ export class SpaceField {
       this.aliens.find((a) => a.id === id)?.atingir();
     } else if (kind === "ship") {
       this.naves.find((n) => n.id === id)?.abater();
-    } else if (kind === "dropship") {
-      if (this.dropship?.abater()) {
-        const d = this.dropship;
-        eventos.push({ kind: "explosion", p: [r(d.x), r(d.y), r(d.z)], r: M.dropship.explosionRadius });
-        // O passageiro está a distância zero por definição — ele morre com ela.
-        this.matarNoRaio(jogadores, d, M.dropship.explosionRadius, mortes, "explosion");
-      }
     } else if (kind === "meteor") {
       const m = this.meteors.find((x) => x.id === id);
       if (m?.atingir()) {
@@ -764,13 +608,12 @@ export class SpaceField {
   }
 
   view() {
-    if (!this.ativo) return { a: [], s: [], m: [], r: null, d: null };
+    if (!this.ativo) return { a: [], s: [], m: [], r: null };
     return {
       a: this.aliens.map((x) => x.view()),
       s: this.naves.map((x) => x.view()),
       m: this.meteors.map((x) => x.view()),
       r: this.rover?.view() ?? null,
-      d: this.dropship?.view() ?? null,
     };
   }
 }

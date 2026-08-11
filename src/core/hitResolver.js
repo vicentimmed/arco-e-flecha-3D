@@ -49,12 +49,7 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "torch") {
     return resolveTorchHit(ctx);
   }
-  if (
-    other.kind === "ship" ||
-    other.kind === "alien" ||
-    other.kind === "dropship" ||
-    other.kind === "meteor"
-  ) {
+  if (other.kind === "ship" || other.kind === "alien" || other.kind === "meteor") {
     return resolveSpaceHit(ctx);
   }
   return resolveSceneryHit(ctx);
@@ -66,8 +61,8 @@ export function resolveArrowHit(ctx) {
  * A flecha não crava em nenhuma delas, e por motivos que se somam. A nave está
  * caindo e girando — uma flecha presa nela viraria um enfeite rodopiando. O
  * alien derrete ao morrer, e o que sobraria seria uma flecha parada no ar onde
- * o corpo estava. O meteorito e a nave de transporte explodem. Nos quatro
- * casos, atravessar é mais limpo que fingir.
+ * o corpo estava. O meteorito explode. Nos três casos, atravessar é mais limpo
+ * que fingir.
  *
  * O que mudou quando a Lua virou do servidor: aqui NÃO se abate mais nada. Quem
  * atira continua sendo a autoridade sobre o próprio acerto — é o contrato do
@@ -77,7 +72,6 @@ export function resolveArrowHit(ctx) {
 const ROTULO_ESPACO = {
   ship: "nave",
   alien: "alien",
-  dropship: "nave de transporte",
   meteor: "meteorito",
 };
 

@@ -1491,34 +1491,98 @@ body {
   font-weight: 500;
 }
 
-#lobby-enter {
+/* ----------------------------------------------------------- as portas -----
+   Quatro botões, e cada um é um LUGAR (ver `ui/lobby.js`). O primeiro é o
+   dourado de sempre — o caminho conhecido, o que a pessoa aperta sem ler. Os
+   outros três são contornados e ganham só uma FAIXA DE COR na borda esquerda:
+   o suficiente para se distinguirem de relance (cinza-azulado da Lua, verde
+   dos zumbis, vermelho do chefão) sem que a tela vire um painel de botões
+   coloridos disputando a atenção uns com os outros. */
+
+.lobby-portas {
+  display: grid;
+  gap: 8px;
+}
+
+.lobby-porta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
-  padding: 13px 16px;
-  border: 0;
+  padding: 11px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 3px solid rgba(255, 255, 255, 0.22);
   border-radius: 11px;
-  background: linear-gradient(180deg, var(--gold), var(--gold-deep));
-  color: #211703;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
   font: inherit;
-  font-size: 16px;
-  font-weight: 900;
+  text-align: left;
   cursor: pointer;
   transition:
     filter 140ms ease,
+    background 140ms ease,
     transform 90ms ease;
 }
 
-#lobby-enter:hover:not(:disabled) {
+.lobby-porta-rotulo {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.lobby-porta-detalhe {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+/* A porta principal: preenchida, como o botão único de antes. */
+.lobby-porta.porta-vale {
+  border: 0;
+  background: linear-gradient(180deg, var(--gold), var(--gold-deep));
+  color: #211703;
+  font-size: 16px;
+}
+
+.lobby-porta.porta-vale .lobby-porta-detalhe {
+  color: rgba(33, 23, 3, 0.66);
+}
+
+.lobby-porta.porta-lua {
+  border-left-color: #8fb6d8;
+}
+
+.lobby-porta.porta-zumbi {
+  border-left-color: #6fbf5a;
+}
+
+.lobby-porta.porta-chefao {
+  border-left-color: var(--red);
+}
+
+.lobby-porta:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
   filter: brightness(1.08);
 }
 
-#lobby-enter:active:not(:disabled) {
+.lobby-porta.porta-vale:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--gold), var(--gold-deep));
+}
+
+.lobby-porta:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-#lobby-enter:disabled {
-  background: rgba(255, 255, 255, 0.1);
+.lobby-porta:disabled {
+  border-color: rgba(255, 255, 255, 0.08);
+  border-left-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-dim);
   cursor: default;
+}
+
+.lobby-porta:disabled .lobby-porta-detalhe {
+  color: rgba(244, 241, 234, 0.28);
 }
 
 .lobby-status {

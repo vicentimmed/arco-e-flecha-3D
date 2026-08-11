@@ -955,7 +955,7 @@ class Game {
 
     const base = this.environment?.base;
     const espaco = this.environment?.space;
-    const candidatos = [base?.rover, espaco?.dropship, ...(espaco?.meteors ?? [])];
+    const candidatos = [base?.rover, ...(espaco?.meteors ?? [])];
 
     for (const plataforma of candidatos) {
       if (!plataforma?.isOnDeck?.(this.player.position)) continue;
@@ -973,8 +973,25 @@ class Game {
     this.rideando = null;
   }
 
-  async connect(name) {
-    await this.net.connect(name);
+  /**
+   * Entra na sala da PORTA escolhida na tela inicial.
+   *
+   * A fase é montada ANTES de conectar quando a porta pede outra que não a do
+   * arranque. Poderia ser depois — a rede de segurança de `applyMode` troca a
+   * fase sozinha ao ver que a sala está noutra —, e seria pior: a pessoa entra
+   * no vale, aparece para os outros lá, e é arrastada para a Lua um segundo
+   * depois, com direito a uma tela de carregamento que ela não pediu. Trocar
+   * antes é o que faz "Jogar na Lua" significar chegar na Lua.
+   *
+   * @param {{level?: string, mode?: string}} [entrada]
+   */
+  async connect(name, entrada = null) {
+    if (entrada?.level && entrada.level !== this.levels.id) {
+      await this.changeLevel(entrada.level, {
+        titulo: `preparando ${levelInfo(entrada.level).nome.toLowerCase()}…`,
+      });
+    }
+    await this.net.connect(name, entrada);
   }
 
   /**
@@ -1280,6 +1297,38 @@ class Game {
   }
 
   /**
+   * A lista de quem está em campo, vinda da SALA — e a nossa, ajustada a ela.
+   *
+   * Os bonecos alheios são montados por `S2C.JOIN` e desmontados por
+   * `S2C.LEAVE`, mensagens avulsas que dependem de chegar todas, na ordem, e
+   * nada se perder. Isso vale na vida normal da sala e NÃO vale na troca de
+   * fase: o mundo local é demolido e reconstruído no meio da conversa, e a
+   * sala, na mesma hora, dispensa os adversários de CPU (eles não atravessam —
+   * ver `Room.commitPreparedMode`). Um `LEAVE` de bot que caísse nessa janela
+   * deixava um arqueiro de CPU **parado para sempre** na fase nova: um boneco
+   * sem dono, que nenhuma pose vinha mais atualizar, ocupando memória e
+   * colisor. É o "bot paralisado na Lua".
+   *
+   * Reconciliar contra a lista completa fecha a categoria inteira de problema,
+   * em vez de tapar este caso: quem não está nela sai (com colisor, sprite de
+   * nome e ragdoll juntos, por `remove`), quem falta entra.
+   */
+  reconcileRoster(roster) {
+    const vivos = new Set(roster.map((p) => p.id));
+    const eu = this.net.me?.id;
+
+    for (const id of [...this.remotes.byId.keys()]) {
+      if (vivos.has(id)) continue;
+      this.remoteArrows.forget(id);
+      this.remotes.remove(id);
+    }
+    for (const p of roster) {
+      if (p.id === eu) continue;
+      this.remotes.add(p);
+    }
+  }
+
+  /**
    * O modo mudou (ou um convite de duelo apareceu).
    *
    * O duelo é convite e não decreto: apertar `2` marca você como pronto e
@@ -1303,6 +1352,8 @@ class Game {
         titulo: `viajando para ${levelInfo(msg.level).nome.toLowerCase()}…`,
       });
     }
+
+    if (msg.roster) this.reconcileRoster(msg.roster);
 
     const mudouModo = this.mode !== msg.mode;
     if (mudouModo) this.cancelKnifeAttack();
@@ -2481,10 +2532,10 @@ async function main() {
   window.game = game;
   lobby.setReady();
 
-  lobby.onEnter = async (nome) => {
+  lobby.onEnter = async (nome, entrada) => {
     // Um erro aqui (sala cheia, servidor fora) volta para o lobby com a
     // mensagem: quem tentou entrar precisa saber por que não entrou.
-    await game.connect(nome);
+    await game.connect(nome, entrada);
     lobby.hide();
     game.start();
   };

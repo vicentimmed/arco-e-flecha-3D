@@ -33,6 +33,8 @@ export class NetClient {
     /** Dados do WELCOME: quem eu sou nesta sala. */
     this.me = null;
     this.connected = false;
+    /** A entrada escolhida na tela inicial: `{ level, mode }`. Ver `connect`. */
+    this.entry = null;
 
     this.listeners = new Map();
     this.clockOffset = 0;
@@ -80,9 +82,16 @@ export class NetClient {
   /**
    * Entra na sala. Resolve quando o `welcome` chega; rejeita se for recusado.
    * A partir daí a conexão se mantém sozinha.
+   *
+   * @param {string} name
+   * @param {{level?: string, mode?: string}} [entrada] a PORTA escolhida na tela
+   *   inicial. Ela decide em qual sala esta conexão entra (ver `RoomHost`), e é
+   *   guardada aqui porque a RECONEXÃO precisa da mesma porta: cair da rede e
+   *   voltar no vale, tendo entrado pela Lua, seria trocar de jogo sozinho.
    */
-  connect(name) {
+  connect(name, entrada = null) {
     this.name = name;
+    this.entry = entrada ?? this.entry ?? null;
     this.wantConnection = true;
     this.attempt = 0;
     return new Promise((resolve, reject) => {
@@ -101,7 +110,13 @@ export class NetClient {
     this.socket = socket;
 
     socket.addEventListener("open", () => {
-      this.raw({ t: C2S.HELLO, name: this.name, version: PROTOCOL_VERSION });
+      this.raw({
+        t: C2S.HELLO,
+        name: this.name,
+        version: PROTOCOL_VERSION,
+        ...(this.entry?.level ? { level: this.entry.level } : {}),
+        ...(this.entry?.mode ? { mode: this.entry.mode } : {}),
+      });
     });
 
     socket.addEventListener("message", (event) => {

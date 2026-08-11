@@ -71,13 +71,22 @@
  * transporte e meteorito passaram a viver na sala, porque todos eles MATAM ou
  * CARREGAM alguém: com um mundo por aba, duas pessoas morriam de coisas
  * diferentes e o passageiro de um rover flutuava no ar para o outro.
+ *
+ * 14 — a sala deixou de ser uma só. O `hello` passou a carregar a ENTRADA
+ * escolhida na tela inicial (`level` e `mode`), e cada uma delas é um lugar:
+ * quem clica na Lua encontra quem está na Lua. Uma aba antiga não manda campo
+ * nenhum e cairia sempre no vale — inclusive a de quem esperava a horda. Junto,
+ * a nave de transporte saiu de cena e o `mode` passou a carregar o `roster` da
+ * sala, que é o que conserta o bot que ficava parado após uma troca de fase.
  */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 /* --------------------------------------------------------- cliente → servidor */
 
 export const C2S = {
-  /** Entrada na sala: `{ name, version }`. */
+  /** Entrada na sala: `{ name, version, level, mode }`.
+   *  `level` e `mode` são a ESCOLHA DA PORTA (ver `ui/lobby.js`): eles decidem
+   *  em que sala esta conexão entra, e não mudam nada dentro dela. */
   HELLO: "hello",
   /** Pose própria, 20 Hz: `{ s: packState(), w: quandoFoiCapturada }`. */
   STATE: "state",
@@ -127,7 +136,7 @@ export const C2S = {
   BOT: "bot",
   /** Muda a perícia dos bots: `{ step: 1 | -1 }` ou `{ level: "easy" }`. */
   BOT_DIFFICULTY: "botDifficulty",
-  /** "Acertei esta coisa do espaço": `{ kind: "alien"|"ship"|"dropship"|"meteor", id }`.
+  /** "Acertei esta coisa do espaço": `{ kind: "alien"|"ship"|"meteor", id }`.
    *  Quem atira continua sendo a autoridade sobre o próprio acerto; quem decide
    *  se o alvo caiu é a sala, que é uma só para todo mundo. */
   SPACE_HIT: "spaceHit",
@@ -155,7 +164,10 @@ export const S2C = {
   /** Onde nascer: `{ id, x, z, y, drop, invulnUntil, yaw? }`. `yaw` só vem
    *  quando a sala quer decidir para onde a pessoa olha (caçada ao alce). */
   SPAWN: "spawn",
-  /** Estado dos modos: `{ mode, members, invites, until }`. */
+  /** Estado dos modos: `{ mode, level, invites, roster, … }`.
+   *  `roster` é a lista COMPLETA de quem tem corpo em campo — humanos e CPU.
+   *  O cliente reconcilia a coleção de bonecos com ela em vez de confiar no
+   *  histórico de `join`/`leave`. Ver `Room.modeView`. */
   MODE: "mode",
   /** Preparação de modo: `{ mode, token, ready, total }`. */
   MODE_PREPARE: "modePrepare",

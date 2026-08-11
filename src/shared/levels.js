@@ -72,6 +72,14 @@ export const LEVEL_INFO = {
        ficam absurdos duas vezes: pela biologia e pelo som, já que o ambiente
        de "dia" toca um loop de passarinhos. */
     fauna: false,
+    /* NASCE QUASE NO CHÃO.
+     *
+     * Os 10 m do vale são uma entrada: a queda mostra o cenário e termina numa
+     * nuvem de poeira. Na Lua a mesma queda dura 3,5 s (1/6 de g), e são 3,5 s
+     * pendurado no ar, sem controle, à vista de todo mundo — de graça para quem
+     * já está em campo com o arco tensionado. Um metro basta para o corpo
+     * assentar sem que ninguém vire alvo de tiro ao prato ao entrar. */
+    spawnDrop: 1.0, // m
     fisica: {
       gravity: CONFIG.levels.moon.gravity,
       airDensity: CONFIG.levels.moon.airDensity,
@@ -106,6 +114,16 @@ export function levelAllowsMode(id, mode) {
 /** O duelo desta fase passa por convite, ou entra direto com todo mundo? */
 export function levelUsesDuelInvites(id) {
   return levelInfo(id).duelInvites !== false;
+}
+
+/**
+ * De que altura se nasce nesta fase.
+ *
+ * A queda de nascimento é a mesma mecânica em toda parte; o que muda é quanto
+ * tempo ela dura, e isso é gravidade. Ver o comentário em `moon.spawnDrop`.
+ */
+export function levelSpawnDrop(id) {
+  return levelInfo(id).spawnDrop ?? CONFIG.spawn.dropHeight;
 }
 
 /**

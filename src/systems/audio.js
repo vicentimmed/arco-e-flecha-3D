@@ -345,45 +345,6 @@ function makeAlienDeathBuffer(ctx) {
 }
 
 /**
- * O ronco da nave de transporte — a grande, a que pousa.
- *
- * Ela NÃO pode soar como o disco voador: os dois estão no céu ao mesmo tempo e
- * fazem coisas opostas (um passa e some, a outra pousa e espera). A diferença é
- * de FAIXA e de textura — onde o disco é um tom puro agudo com batimento, esta é
- * um acorde grave (55/82/110 Hz) sobre um jato de ruído, com um throb lento de
- * 5 Hz por cima. Grave = pesada; ruído = motor de verdade; throb = turbina.
- */
-function makeDropshipBuffer(ctx) {
-  const duration = 2.8;
-  const sampleRate = ctx.sampleRate;
-  const length = Math.floor(sampleRate * duration);
-  const buffer = ctx.createBuffer(1, length, sampleRate);
-  const data = buffer.getChannelData(0);
-  let lp = 0;
-
-  for (let i = 0; i < length; i++) {
-    const t = i / sampleRate;
-    const p = t / duration;
-    const deriva = Math.sin(TAU * 0.4 * t) * 3; // o motor não é um metrônomo
-    const motor =
-      Math.sin(TAU * (55 + deriva) * t) * 0.42 +
-      Math.sin(TAU * (82.5 + deriva) * t) * 0.26 +
-      Math.sin(TAU * (110 + deriva * 2) * t) * 0.16;
-
-    // O jato: ruído bem filtrado, o ar (ou o propelente) saindo sob pressão.
-    const branco = Math.random() * 2 - 1;
-    lp += (branco - lp) * 0.045;
-    const jato = lp * 0.75;
-
-    const throb = 0.78 + 0.22 * Math.sin(TAU * 5 * t);
-    // Entra e sai suave, para as repetições emendarem sem estalo.
-    const env = Math.sin(Math.PI * p) ** 0.7;
-    data[i] = Math.tanh((motor + jato) * throb * env * 1.15);
-  }
-  return buffer;
-}
-
-/**
  * O meteorito estourando: PEDRA, não metal.
  *
  * A explosão da nave (`makeExplosionBuffer`) é fogo — estalo e ronco. Uma rocha
@@ -690,9 +651,6 @@ export class AudioSystem {
       // reemite o zumbido a cada dois segundos enquanto atravessa o céu.
       alienChirp: 4,
       ufoHum: 2,
-      // A nave de transporte é UMA só, e o ronco dela se repete enquanto ela
-      // estiver em cena: duas vozes bastam para uma repetição emendar na outra.
-      dropshipHum: 2,
     };
 
     this._initBuffers();
@@ -777,8 +735,7 @@ export class AudioSystem {
     this.buffers.alienChirp = makeAlienChirpBuffer(this.ctx);
     this.buffers.alienDeath = makeAlienDeathBuffer(this.ctx);
     this.buffers.explosion = makeExplosionBuffer(this.ctx);
-    // A nave grande tem motor próprio, e a rocha se parte com som de rocha.
-    this.buffers.dropshipHum = makeDropshipBuffer(this.ctx);
+    // A rocha se parte com som de rocha, e não com o de uma nave pegando fogo.
     this.buffers.rockBurst = makeRockBurstBuffer(this.ctx);
 
     // Alce: berro de peito, grave e com rosnado. O de dor é curto e sobe de
@@ -1271,17 +1228,15 @@ export class AudioSystem {
       audio.setRefDistance(28);
       audio.setRolloffFactor(0.7);
       audio.setMaxDistance(260);
-    } else if (
-      id === "ufoHum" ||
-      id === "explosion" ||
-      id === "dropshipHum" ||
-      id === "rockBurst"
-    ) {
+    } else if (id === "ufoHum" || id === "explosion" || id === "rockBurst") {
       /* A nave cruza o céu a 50–80 m de altura e a explosão precisa ser ouvida
          do outro lado da arena. Com o alcance padrão (80 m) as duas sumiam
-         justamente quando são o acontecimento da cena. Vale igual para o motor
-         da nave de transporte (26 m de altitude em órbita, a 70 m da base) e
-         para o meteorito se partindo lá em cima. */
+         justamente quando são o acontecimento da cena. Vale igual para o
+         meteorito se partindo lá em cima.
+
+         O ALCANCE não é o volume: a nave continua chegando de longe, e o que
+         desceu foi a altura dela na mixagem (`ship.humVolume`), que estava
+         cobrindo o estalo da corda. */
       audio.setRefDistance(22);
       audio.setRolloffFactor(0.8);
       audio.setMaxDistance(240);

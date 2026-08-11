@@ -3,7 +3,7 @@
 
    Este arquivo já foi o CÉREBRO da fase — ele decidia onde o alien andava, que
    rota a nave fazia e quando cada um nascia. Não decide mais nada disso: alien,
-   nave, rover, nave de transporte e meteorito viraram entidades da SALA
+   nave, rover e meteorito viraram entidades da SALA
    (`server/spaceSim.js`), porque todos eles matam ou carregam alguém, e um
    mundo por aba fazia duas pessoas morrerem de coisas diferentes.
 
@@ -278,10 +278,25 @@ class Nave extends CorpoDeRede {
     this.netId = id;
     this.group = new THREE.Group();
 
-    const casco = new THREE.MeshStandardMaterial({ color: "#c9ccd2", roughness: 0.35, metalness: 0.8 });
+    /* A COR TEM DE SOBREVIVER À SOMBRA.
+     *
+     * A nave cruza o céu ACIMA de quem olha, e o que se vê dela é a barriga —
+     * a face que o Sol não pega. Com um casco cinza e muito metálico (0,8), o
+     * lado escuro ficava quase preto contra um céu preto: a silhueta sumia, e
+     * a única pista de que havia uma nave eram as luzinhas piscando.
+     *
+     * Três mudanças, e as três atacam isso: um casco quase branco puxado para
+     * o lilás (o Sol da Lua é branco, e um branco puro leria como papel), MENOS
+     * metal — metal só reflete o que existe em volta, e em volta é o vazio — e
+     * uma EMISSIVA fria de sustentação, que é o que impede a barriga de cair
+     * para o preto. Ela não é um brilho: é o piso de luminosidade. */
+    const casco = new THREE.MeshStandardMaterial({
+      color: "#e6e3f2", roughness: 0.42, metalness: 0.35,
+      emissive: new THREE.Color("#6a6f96"), emissiveIntensity: 0.55,
+    });
     const vidro = new THREE.MeshStandardMaterial({
-      color: "#39d6ff", roughness: 0.1, metalness: 0.2,
-      emissive: new THREE.Color("#1e7fa8"), emissiveIntensity: 0.9,
+      color: "#7ce8ff", roughness: 0.1, metalness: 0.2,
+      emissive: new THREE.Color("#3fb8e0"), emissiveIntensity: 1.15,
     });
 
     // Disco voador: dois pratos e uma cúpula. É a silhueta que se lê contra o
@@ -513,148 +528,6 @@ class Alien extends CorpoDeRede {
   }
 }
 
-/* ------------------------------------------------------ nave de transporte -- */
-
-/**
- * A nave grande: circunda a base, pousa e decola — com quem tiver subido.
- *
- * Ela não some sozinha: a órbita é fechada e a única saída é ser destruída. É o
- * que permite viajar nela sem o chão desaparecer no meio do caminho.
- */
-class Dropship extends CorpoDeRede {
-  constructor(scene, physics) {
-    super();
-    this.physics = physics;
-    const D = CONFIG.levels.moon.dropship;
-    this.raio = D.raio;
-    this.group = new THREE.Group();
-
-    const casco = new THREE.MeshStandardMaterial({ color: "#d0d3d8", roughness: 0.4, metalness: 0.7 });
-    const escuro = new THREE.MeshStandardMaterial({ color: "#242a31", roughness: 0.6, metalness: 0.5 });
-    const vidro = new THREE.MeshStandardMaterial({
-      color: "#4ae0c2", roughness: 0.1, metalness: 0.2,
-      emissive: new THREE.Color("#1c7f6d"), emissiveIntensity: 0.9,
-    });
-
-    // Disco com CONVÉS PLANO por cima: é ele que se pisa, e a silhueta precisa
-    // dizer isso de longe — daí o topo ser uma chapa e não uma cúpula inteira.
-    const disco = new THREE.Mesh(new THREE.CylinderGeometry(D.raio, D.raio * 0.72, 1.1, 24), casco);
-    const conves = new THREE.Mesh(new THREE.CylinderGeometry(D.raio * 0.92, D.raio * 0.92, 0.18, 24), escuro);
-    conves.position.y = 0.62;
-    const cupula = new THREE.Mesh(
-      new THREE.SphereGeometry(D.raio * 0.3, 14, 10, 0, TAU, 0, Math.PI / 2), vidro,
-    );
-    cupula.position.y = 0.7;
-    this.group.add(disco, conves, cupula);
-
-    this.luzes = [];
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * TAU;
-      const luz = new THREE.Mesh(
-        new THREE.SphereGeometry(0.16, 8, 6),
-        new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff8a30 : 0x4ae0c2, fog: false }),
-      );
-      luz.position.set(Math.cos(a) * D.raio * 0.95, -0.2, Math.sin(a) * D.raio * 0.95);
-      this.group.add(luz);
-      this.luzes.push(luz);
-    }
-
-    // Pés de pouso: só aparecem quando ela vai encostar.
-    this.pes = [];
-    for (let i = 0; i < 3; i++) {
-      const a = (i / 3) * TAU;
-      const pe = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.6, 6), escuro);
-      pe.position.set(Math.cos(a) * D.raio * 0.6, -1.0, Math.sin(a) * D.raio * 0.6);
-      this.group.add(pe);
-      this.pes.push(pe);
-    }
-    for (const o of this.group.children) o.castShadow = true;
-    scene.add(this.group);
-
-    this.entityId = `dropship${entityRegistry.createId()}`;
-    this.body = physics.createBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
-    this.collider = physics.createCollider(
-      RAPIER.ColliderDesc.cylinder(0.55, D.raio * 0.92).setActiveEvents(
-        RAPIER.ActiveEvents.COLLISION_EVENTS,
-      ),
-      this.body,
-    );
-    physics.register(this.collider, { kind: "dropship", entityId: this.entityId });
-
-    this.plat = new Plataforma();
-    this.estado = "cruzeiro";
-    this.piscar = 0;
-    /* O ronco começa quase de imediato (0,4 s) e não em `humInterval`: quem
-       entra na fase com ela já em cena precisa ouvi-la antes de vê-la. */
-    this.somT = 0.4;
-  }
-
-  get deckY() {
-    return this.group.position.y + 0.71;
-  }
-
-  isOnDeck(pos) {
-    if (this.estado === "destruida") return false;
-    return this.plat.pisandoEmDisco(
-      pos, this.group.position.x, this.group.position.z, this.deckY, this.raio * 0.85, 0.6,
-    );
-  }
-
-  carry(pos) {
-    this.plat.carregar(pos, this.group.position.x, this.group.position.z, this.group.rotation.y, this.deckY);
-  }
-
-  update(dt) {
-    this.plat.marcarPose(this.group.position.x, this.group.position.z, this.group.rotation.y);
-    this.aproximar(dt);
-
-    this.piscar += dt;
-    const on = Math.sin(this.piscar * 4) > 0;
-    for (let i = 0; i < this.luzes.length; i++) {
-      this.luzes[i].visible = i % 2 === 0 ? on : !on;
-    }
-    const pousando = this.estado === "descendo" || this.estado === "pousada";
-    for (const pe of this.pes) pe.visible = pousando;
-
-    this.group.visible = this.estado !== "destruida";
-
-    /* O MOTOR. Reemitido na posição atual, pelo mesmo motivo do disco voador: o
-       som do Three nasce parado onde foi tocado, e uma nave que orbita 70 m
-       soaria pregada no ponto de onde saiu.
-
-       Destruída, ela cala: o que se ouve no lugar é a explosão que a sala
-       mandou (`SPACE_EVENT`), e um motor roncando num destroço invisível seria
-       a pior pista possível sobre onde ela está. */
-    this.somT -= dt;
-    if (this.somT <= 0 && this.estado !== "destruida") {
-      const D = CONFIG.levels.moon.dropship;
-      this.somT = D.humInterval ?? 2.4;
-      // Manobrando ela acende os retrofoguetes: mais alto, e é o aviso de que
-      // dá para correr até ela e subir.
-      const manobra = this.estado === "descendo" || this.estado === "subindo";
-      gameEvents.emit(EventType.AUDIO_PLAY, {
-        sound: "dropshipHum",
-        position: vec3Payload(this.group.position),
-        volume: manobra ? (D.humVolumeManobra ?? 1.05) : (D.humVolume ?? 0.8),
-      });
-    }
-    if (this.body) {
-      this.body.setNextKinematicTranslation({
-        x: this.group.position.x,
-        y: this.group.position.y + 0.3,
-        z: this.group.position.z,
-      });
-    }
-  }
-
-  dispose(scene) {
-    if (this.body) this.physics.removeBody(this.body);
-    this.body = null;
-    scene.remove(this.group);
-    disposeGrupo(this.group);
-  }
-}
-
 /* ------------------------------------------------------------ meteoritos --- */
 
 /**
@@ -825,7 +698,6 @@ export class SpaceLife {
     this.aliensById = new Map();
     /** @type {Map<number, Meteor>} */
     this.meteorsById = new Map();
-    this.dropship = null;
     /** Estilhaços em voo — integrados aqui pela MESMA conta do servidor. */
     this.estilhacos = [];
     this.fragGeo = null;
@@ -905,13 +777,6 @@ export class SpaceLife {
       m.dispose(this.scene);
     }
 
-    /* ------------------------------------------- nave de transporte ----- */
-    if (msg.d) {
-      if (!this.dropship) this.dropship = new Dropship(this.scene, this.physics);
-      this.dropship.estado = msg.d.st;
-      this.dropship.setNetworkTarget(msg.d.x, msg.d.y, msg.d.z, msg.d.w);
-    }
-
     /* O rover é da base — quem o guarda é `MoonBase`, e a pose chega por lá. */
     this.roverAlvo = msg.r ?? null;
   }
@@ -984,7 +849,6 @@ export class SpaceLife {
       }
     }
     for (const m of this.meteorsById.values()) m.update(dt);
-    this.dropship?.update(dt);
 
     /* Os estilhaços: a mesma integração do servidor, só que aqui para
        DESENHAR. Quem decide quem morreu é lá; este lado nunca mata ninguém. */
@@ -1015,13 +879,11 @@ export class SpaceLife {
     for (const n of this.naves.values()) n.dispose(this.scene);
     for (const a of this.aliensById.values()) a.dispose(this.scene);
     for (const m of this.meteorsById.values()) m.dispose(this.scene);
-    this.dropship?.dispose(this.scene);
     for (const f of this.estilhacos) this.scene.remove(f.mesh);
     this.naves.clear();
     this.aliensById.clear();
     this.meteorsById.clear();
     this.estilhacos = [];
-    this.dropship = null;
     this.fragGeo?.dispose();
     this.fragMat?.dispose();
     this.fragGeo = null;

@@ -1034,34 +1034,13 @@ export const CONFIG = {
         velMax: 34,
         raioRota: 260, // m — a reta atravessa a arena inteira
         humInterval: 1.9, // s entre repetições do zumbido enquanto ela passa
-        humVolume: 0.75,
+        /* O zumbido é CENÁRIO, não aviso.
+           A 0,75 ele passava por cima do estalo da corda e do guincho do alien
+           — e são esses dois que dizem ao jogador o que está acontecendo com
+           ELE. A nave continua audível de longe (o alcance de 240 m em
+           `audio.js` não mudou); ela só parou de mandar na mixagem. */
+        humVolume: 0.3,
         explosionRadius: 13, // m — quem estiver dentro quando ela cai, morre
-      },
-
-      /* -------------------------------------------------- nave de transporte --
-         Grande o bastante para se ficar em cima, e é isso que ela é: um posto de
-         tiro que anda. */
-      dropship: {
-        raio: 6.0, // m — raio do disco (o convés)
-        alturaVoo: 26, // m acima do chão em cruzeiro
-        raioOrbita: 70, // m — a órbita em volta da base
-        velOrbita: 0.16, // rad/s
-        velVertical: 4.0, // m/s na subida e na descida
-        tempoPousada: 14, // s parada no chão, esperando passageiro
-        tempoVoando: 26, // s de cruzeiro antes de procurar onde pousar
-        raioPouso: 55, // m — distância máxima do centro da base para pousar
-        hp: 3, // flechas até explodir
-        explosionRadius: 14, // m
-        reaparecerEm: 20, // s fora de cena depois de destruída
-        /* O MOTOR DELA SE OUVE. Pelo mesmo motivo do disco voador: o som é
-           posicionado onde nasce e não segue nada, então o ronco é reemitido na
-           posição atual a cada `humInterval`. É mais grave e mais espaçado que o
-           do disco — ela é grande e anda devagar. */
-        humInterval: 2.4, // s entre repetições do ronco
-        humVolume: 0.8,
-        // Manobra (descida e subida): os retrofoguetes acendem e ela fica mais
-        // alta, que é o aviso de que dá para correr e subir nela.
-        humVolumeManobra: 1.05,
       },
 
       /* -------------------------------------------------------- meteoritos --

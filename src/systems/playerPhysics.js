@@ -14,8 +14,39 @@ export class PlayerPhysics {
 
     this.desiredHorizontal = new THREE.Vector3();
     this._corrected = new THREE.Vector3();
+    /** Velocidade horizontal REAL durante o voo de jetpack. Ver `step`. */
+    this.jetVelocity = new THREE.Vector3();
+    /** @type {import("./jetpack.js").Jetpack|null} só nas fases que têm um. */
+    this.jetpack = null;
 
     this.build();
+  }
+
+  /**
+   * Liga ou desliga o jetpack desta fase.
+   *
+   * O jogador é o mesmo entre as fases; o equipamento não. Passar `null`
+   * devolve o comportamento de sempre — e é o que o vale recebe, sem nenhum
+   * `if (lua)` no caminho do movimento.
+   */
+  setJetpack(jetpack) {
+    this.jetpack = jetpack;
+    this.jetVelocity.set(0, 0, 0);
+  }
+
+  /**
+   * O toque no espaço. Uma tecla, dois significados, decididos aqui.
+   *
+   * No chão é salto. No ar, com jetpack e combustível, é ignição — e o toque é
+   * CONSUMIDO pela ignição, senão o mesmo evento tentaria pular e acender.
+   */
+  onJumpPressed() {
+    if (this.jetpack?.onJumpPressed(this.grounded)) return;
+    this.queueJump();
+  }
+
+  onJumpReleased() {
+    this.jetpack?.onJumpReleased();
   }
 
   /**
@@ -93,6 +124,15 @@ export class PlayerPhysics {
   /** Velocidade horizontal desejada (m/s), consumida em cada passo fixo. */
   setHorizontalMove(vx, vz) {
     this.desiredHorizontal.set(vx, 0, vz);
+    /* O jetpack não quer a velocidade, quer a DIREÇÃO: no ar o WASD empurra,
+       não desloca. Normalizar aqui é o que faz o empuxo lateral ser o mesmo
+       andando ou correndo — no ar não existe "correr". */
+    const j = this.jetpack;
+    if (j) {
+      const m = Math.hypot(vx, vz);
+      if (m > 1e-4) j.moveDir.set(vx / m, 0, vz / m);
+      else j.moveDir.set(0, 0, 0);
+    }
   }
 
   /** Integra movimento no passo fixo — chamar antes de world.step(). */
@@ -107,15 +147,33 @@ export class PlayerPhysics {
       p.airborne = true;
     }
 
+    const jato = this.jetpack?.step(h, this) ?? false;
+
     if (!this.grounded) {
       this.verticalVelocity += CONFIG.physics.gravity * h;
+      if (jato) this.verticalVelocity += this.jetpack.thrust * h;
     }
 
     const t = this.body.translation();
+
+    /* Duas formas de andar, e a segunda só existe com jetpack aceso.
+     *
+     * No chão (e no ar sem jato) o movimento horizontal é uma VELOCIDADE
+     * DESEJADA: solta o W e para. É o certo para andar — pernas não têm
+     * inércia perceptível.
+     *
+     * Com o jato aceso, WASD vira ACELERAÇÃO sobre a velocidade que já existe.
+     * A diferença não é sutil: com velocidade desejada, um jetpack para no ar
+     * assim que a tecla é solta, e voar fica com a inércia de um cursor de
+     * mouse. Com aceleração, o corpo continua na direção em que estava indo e a
+     * correção custa tempo — que é o que torna pousar no topo de um foguete uma
+     * manobra em vez de um clique. */
+    const horizontal = jato ? this.jetVelocity : this.desiredHorizontal;
+
     const desired = {
-      x: this.desiredHorizontal.x * h,
+      x: horizontal.x * h,
       y: this.grounded ? 0 : this.verticalVelocity * h,
-      z: this.desiredHorizontal.z * h,
+      z: horizontal.z * h,
     };
 
     this.controller.computeColliderMovement(this.collider, desired);
@@ -163,10 +221,16 @@ export class PlayerPhysics {
       p.airborne = true;
     }
 
+    /* A BARREIRA. Aqui ela é só isto: um ponto onde `isWalkable` diz não.
+     *
+     * Só o horizontal é revertido. Congelar `y` junto — que era o que acontecia
+     * — prendia no ar quem chegasse à barreira voando de jetpack: a pessoa
+     * ficava suspensa contra uma parede invisível em vez de escorregar por ela
+     * e continuar caindo. */
     if (!terrain.isWalkable(nx, nz)) {
       nx = t.x;
       nz = t.z;
-      ny = t.y;
+      this.jetVelocity.set(0, 0, 0);
       if (this.grounded) {
         ny = terrain.heightAt(nx, nz) + CONFIG.player.height / 2;
       }

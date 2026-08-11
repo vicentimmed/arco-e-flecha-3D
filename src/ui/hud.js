@@ -194,6 +194,15 @@ export class HUD {
         <div id="power-label">0 m/s</div>
       </div>
 
+      <!-- Combustível do jetpack. Some quando está cheio e no chão: a mira já
+           tem informação demais em volta para carregar um medidor que não muda.
+           Pulsa vermelho abaixo de 25 %, e esse é o aviso que precisa chegar
+           ANTES de o tanque acabar, não junto. -->
+      <div id="fuel" hidden>
+        <div id="fuel-track"><div id="fuel-fill"></div></div>
+        <span id="fuel-label">JETPACK</span>
+      </div>
+
       <!-- Onda nova da caçada. Some sozinha; ver announceWave(). Sem crases
            neste bloco: ele é um template literal, e uma crase o encerraria. -->
       <div id="wave-banner" hidden>
@@ -282,6 +291,8 @@ export class HUD {
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
+      fuel: root.querySelector("#fuel"),
+      fuelFill: root.querySelector("#fuel-fill"),
       modeLoading: root.querySelector("#mode-loading"),
       modeLoadingTitle: root.querySelector("#mode-loading-title"),
       modeLoadingFill: root.querySelector("#mode-loading-fill"),
@@ -389,6 +400,30 @@ export class HUD {
   /** Avisa quando a conexão cai — some sozinho quando ela volta. */
   setConnection(online) {
     this.el.netChip.hidden = online;
+  }
+
+  /**
+   * O medidor de combustível do jetpack.
+   *
+   * @param {import("../systems/jetpack.js").Jetpack|null} jetpack
+   *   `null` nas fases sem jetpack — e aí o medidor simplesmente não existe.
+   */
+  setFuel(jetpack) {
+    const el = this.el.fuel;
+    if (!jetpack) {
+      el.hidden = true;
+      return;
+    }
+    /* Cheio E parado no chão não precisa ocupar a tela: é justamente quando a
+       informação não muda. Some, e volta assim que a pessoa decola. */
+    const ocioso = jetpack.isFull && !jetpack.active;
+    el.hidden = ocioso;
+    if (ocioso) return;
+
+    this.el.fuelFill.style.width = `${(jetpack.fuelFraction * 100).toFixed(1)}%`;
+    el.classList.toggle("queimando", jetpack.active);
+    el.classList.toggle("baixo", jetpack.isLow);
+    el.classList.toggle("enchendo", !jetpack.active && !jetpack.isFull);
   }
 
   /**

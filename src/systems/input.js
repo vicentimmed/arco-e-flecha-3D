@@ -99,6 +99,11 @@ export class Input {
       askRespawn: false, // K — renascer noutro lugar
       askResetScores: false, // Y — zerar o placar de todos
       setMode: null, // "free" | "duel" | "boarHunt"
+      setLevel: null, // "valley" | "moon" — a FASE, não o modo
+      /* O espaço tem DOIS eventos, e o jetpack precisa dos dois. `jump` é a
+         BORDA (pular, e acender o jato no segundo toque); `jumpReleased` é o
+         soltar, que apaga o jato guardando o combustível que sobrou. */
+      jumpReleased: false,
     };
 
     this.bind();
@@ -305,6 +310,11 @@ export class Input {
         case "Digit8":
           this.actions.setMode = "birdHunt";
           break;
+        case "Digit9":
+          /* A Lua não é um modo: é uma FASE, e ela leva a sala inteira junto.
+             Ver `levels/` e `docs/plano-lua.md`. */
+          this.actions.setLevel = "moon";
+          break;
         case "KeyC":
           this.firstPerson = true;
           break;
@@ -362,6 +372,7 @@ export class Input {
       this.keys.delete(e.code);
       if (e.code === "KeyC") this.firstPerson = false;
       if (e.code === "Digit0" || e.code === "Numpad0") this.scoreboard = false;
+      if (e.code === "Space") this.actions.jumpReleased = true;
       this.updateMovement(e);
     });
 
@@ -369,6 +380,9 @@ export class Input {
       this.keys.clear();
       this.primaryDown = false;
       this.drawing = false;
+      /* Perder o foco com o espaço apertado é o caminho para um jetpack que
+         queima sozinho numa aba em segundo plano. O `blur` solta a tecla. */
+      this.actions.jumpReleased = true;
       // O keyup do zero se perde junto com o foco; sem isto o placar ficaria
       // aberto para sempre ao voltar para a aba.
       this.scoreboard = false;
@@ -416,6 +430,8 @@ export class Input {
     a.toggleMusic = false;
     a.askRespawn = false;
     a.askResetScores = false;
+    a.setLevel = null;
+    a.jumpReleased = false;
     a.setMode = null;
     return snapshot;
   }

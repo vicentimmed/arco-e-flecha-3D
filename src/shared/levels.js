@@ -16,6 +16,7 @@
 
 import { CONFIG } from "../config.js";
 import { TerrainField } from "./terrainField.js";
+import { MoonField } from "./moonField.js";
 
 /** A fase que o jogo monta no arranque, e o destino de qualquer id inválido. */
 export const DEFAULT_LEVEL = "valley";
@@ -48,6 +49,24 @@ export const LEVEL_INFO = {
     ],
     fisica: {},
     campo: () => new TerrainField(),
+  },
+
+  moon: {
+    id: "moon",
+    nome: "Lua",
+    /* Só livre e duelo. Porcos, alces, pássaros, zumbis e a série de alvos
+       dependem de bacia plana, copas de árvore e trilha de terra — coisas que
+       não existem lá, e fingir que existem seria pior que recusar. */
+    modos: ["free", "duel"],
+    fisica: {
+      gravity: CONFIG.levels.moon.gravity,
+      airDensity: CONFIG.levels.moon.airDensity,
+      wind: CONFIG.levels.moon.wind,
+      jumpSpeed: CONFIG.levels.moon.jumpSpeed,
+      jetpack: CONFIG.levels.moon.jetpack,
+      arrow: CONFIG.levels.moon.arrow,
+    },
+    campo: () => new MoonField(),
   },
 };
 
@@ -90,19 +109,46 @@ export function fallbackMode(id, mode) {
   return modos.includes(mode) ? mode : modos[0];
 }
 
+/* ---------------------------------------------------------------- física ----
+
+   Os valores de REFERÊNCIA, congelados no carregamento do módulo.
+
+   Isto parece redundante — os números estão logo ali em `CONFIG` — e não é. A
+   fase é aplicada ESCREVENDO em `CONFIG` (o mesmo caminho que `applyQuality`
+   já usa para os presets gráficos), porque é de `CONFIG` que a flecha lê a
+   densidade do ar e o jogador lê a força do salto.
+
+   Se `levelPhysics()` lesse `CONFIG` na hora, o padrão do vale passaria a ser
+   "o que a última fase deixou lá": entrar na Lua e voltar ao vale traria a
+   gravidade lunar junto, e o bug apareceria como um vale onde se pula 2,6 m —
+   sem nenhuma linha de código lunar rodando para acusar.
+
+   Capturado aqui, no topo, antes de qualquer fase existir. */
+const BASE = {
+  gravity: CONFIG.physics.gravity,
+  airDensity: CONFIG.physics.airDensity,
+  wind: true,
+  jumpSpeed: CONFIG.player.jumpSpeed,
+  arrow: {
+    maxLifetime: CONFIG.arrow.maxLifetime,
+    maxAltitude: CONFIG.arrow.maxAltitude,
+    despawnMargin: Infinity, // o vale não tem barreira que apague flecha
+    fadeOut: 0,
+  },
+  jetpack: null, // só existe onde a fase declara
+};
+
 /**
- * A física da fase, já resolvida contra os padrões de `CONFIG`.
+ * A física da fase, resolvida contra a referência.
  *
  * Uma fase declara só o que difere; tudo o mais herda. É o que permite mexer na
- * gravidade do jogo inteiro num lugar só sem ter de revisar cada fase.
+ * gravidade do jogo inteiro num lugar só sem revisar cada fase.
  */
 export function levelPhysics(id) {
+  const fase = levelInfo(id).fisica;
   return {
-    gravity: CONFIG.physics.gravity,
-    airDensity: CONFIG.physics.airDensity,
-    /** Há ar mexendo? Falso na Lua — e aí não há vento NEM arrasto. */
-    wind: true,
-    jumpSpeed: CONFIG.player.jumpSpeed,
-    ...levelInfo(id).fisica,
+    ...BASE,
+    ...fase,
+    arrow: { ...BASE.arrow, ...(fase.arrow ?? {}) },
   };
 }

@@ -18,6 +18,7 @@ import { entityRegistry } from "./core/entityRegistry.js";
 import { gameEvents, EventType, vec3Payload } from "./core/events.js";
 import { Renderer } from "./core/renderer.js";
 import { LevelManager, DEFAULT_LEVEL } from "./levels/index.js";
+import { levelPhysics, levelInfo } from "./shared/levels.js";
 import { Player } from "./entities/player.js";
 import { ArrowManager } from "./entities/arrow.js";
 import { Wind } from "./systems/wind.js";
@@ -26,6 +27,7 @@ import { AimSolver } from "./systems/aim.js";
 import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
 import { PlayerPhysics } from "./systems/playerPhysics.js";
+import { Jetpack } from "./systems/jetpack.js";
 import { AudioSystem } from "./systems/audio.js";
 import { ParticleSystem } from "./systems/particles.js";
 import { installImpactEffects, RECEITAS } from "./systems/impactFx.js";
@@ -916,6 +918,7 @@ class Game {
     // Não recebe `dt`: os dois gatilhos são de ESTADO (tocou o chão, cruzou meio
     // ciclo de passada), não de tempo decorrido. Ver `updateFootDust`.
     this.updateFootDust();
+    this.updateJetFlame(dt);
     this.updateCamera(dt);
     this.solveAim();
     if (
@@ -1022,6 +1025,7 @@ class Game {
     }
 
     if (a.setMode) this.askModeChange(a.setMode);
+    if (a.setLevel) this.askLevelChange(a.setLevel);
     if (a.toggleMusic) {
       const on = this.audio.toggleMusic();
       this.hud.toast(on ? "música ligada" : "música desligada", "miss");
@@ -1182,6 +1186,25 @@ class Game {
   /* ------------------------------------------------------ troca de fase --- */
 
   /**
+   * Pedido de troca de fase pelo teclado.
+   *
+   * Confirma antes porque a fase é da SALA inteira: apertar `9` sem querer
+   * arrancaria doze pessoas do meio de uma partida. Não é convite — quem
+   * confirma leva todo mundo junto, como as teclas de modo cooperativo já
+   * fazem hoje.
+   *
+   * A troca em si ainda é LOCAL: a sincronia pela sala é a etapa seguinte
+   * (`docs/plano-fases.md`, F0.4). Jogando sozinho, funciona por inteiro.
+   */
+  askLevelChange(id) {
+    if (this.levels.id === id || this.swappingLevel) return;
+    const nome = levelInfo(id).nome;
+    this.ask(`Ir para ${nome === "Lua" ? "a Lua" : `o ${nome}`}?`, () =>
+      this.changeLevel(id, { titulo: `viajando para ${nome.toLowerCase()}…` }),
+    );
+  }
+
+  /**
    * Troca a fase em cena, com carregamento.
    *
    * O `swappingLevel` congela o laço principal enquanto o mundo não existe
@@ -1254,8 +1277,58 @@ class Game {
    * significa que a troca exercita o mesmo código todo dia, em vez de um
    * caminho especial que só roda quando alguém aperta a tecla.
    */
+  /**
+   * Escreve a física da fase onde o jogo já a lê.
+   *
+   * Não há indireção nova: gravidade, densidade do ar, força do salto e os
+   * limites da flecha continuam saindo de `CONFIG`, exatamente como sempre —
+   * só que agora `CONFIG` é reescrito na troca de fase. É o mesmo caminho que
+   * `applyQuality()` usa para os presets gráficos, e é o que evita ter de
+   * caçar e trocar uma dúzia de leitores espalhados.
+   *
+   * Os valores de referência não se perdem nisso: eles estão congelados em
+   * `shared/levels.js`, capturados antes de qualquer escrita.
+   */
+  applyLevelPhysics(id) {
+    const f = levelPhysics(id);
+
+    CONFIG.physics.gravity = f.gravity;
+    /* Zerar a densidade DESLIGA O ARRASTO PELA CONTA: a força é proporcional a
+       ρ (ver `entities/arrow.js`). Não existe um `if (lua)` na aerodinâmica. */
+    CONFIG.physics.airDensity = f.airDensity;
+    CONFIG.player.jumpSpeed = f.jumpSpeed;
+    CONFIG.arrow.maxLifetime = f.arrow.maxLifetime;
+    CONFIG.arrow.maxAltitude = f.arrow.maxAltitude;
+
+    this.physics.gravity = f.gravity;
+
+    /* Sem ar não há vento — e sem vento a bandeira do HUD não tem o que dizer.
+       O influxo do vento na flecha é decisão da SALA nos outros modos, mas aqui
+       ele é impossível, não desligado: não há o que soprar. */
+    // Guardas porque isto também roda na PRIMEIRA montagem, quando metade do
+    // jogo ainda não existe. Um caminho só para montar e para trocar significa
+    // que a troca exercita o mesmo código todo dia.
+    this.wind?.setEnabled(f.wind);
+    if (!f.wind && this.arrows) this.arrows.options.windInfluence = false;
+
+    /* Sem ar e sem vento é a mesma coisa que vácuo, e vácuo é o que o céu
+       precisa saber: preto até o chão, Sol sem halo, sem névoa, estrelas de
+       dia. Uma condição só decide as duas metades do cenário — não há como o
+       céu dizer "Lua" enquanto a física diz "vale". */
+    this.renderer.setSpace(f.airDensity <= 0 ? 1 : 0);
+
+    /* O jetpack é EQUIPAMENTO DA FASE, não do jogador: quem vai à Lua ganha um,
+       quem volta ao vale devolve. Passar `null` restaura o movimento de sempre,
+       sem nenhum `if (lua)` dentro do caminho do salto. */
+    this.jetpack = f.jetpack ? new Jetpack(f.jetpack) : null;
+    this.playerPhysics?.setJetpack(this.jetpack);
+
+    this.levelPhysicsInfo = f;
+  }
+
   onLevelReady(fase) {
     const terrain = fase.terrain;
+    this.applyLevelPhysics(this.levels.id);
 
     if (this.player) this.player.terrain = terrain;
     if (this.death) {
@@ -1272,6 +1345,13 @@ class Game {
        trocado as capturas por acessores. */
 
     if (this.playerPhysics) {
+      /* A posição do vale pode não existir na fase nova — fora da barreira da
+         Lua, por exemplo. Sem esta checagem a pessoa nasceria num ponto de onde
+         `isWalkable` é falso e ficaria colada no lugar, sem entender por quê. */
+      if (!terrain.isWalkable(this.player.position.x, this.player.position.z)) {
+        const c = terrain.spawnCenter ?? { x: CONFIG.spawn.centerX, z: CONFIG.spawn.centerZ };
+        this.player.position.set(c.x, 0, c.z);
+      }
       this.playerPhysics.rebuild();
       this.aim.setExcludedCollider(this.playerPhysics.collider);
     }
@@ -1528,6 +1608,9 @@ class Game {
     else if (morto) this.drawTime = 0;
 
     if (actions.jump && !morto && !atacando) this.player.jump();
+    // O soltar vale SEMPRE, mesmo morto ou atacando: um jato que continua
+    // queimando porque a tecla escapou é pior que qualquer regra de estado.
+    if (actions.jumpReleased) this.player.jumpReleased();
 
     let yaw = this.input.yaw;
     let pitch = this.input.pitch;
@@ -1576,6 +1659,45 @@ class Game {
    * Só correndo, nunca andando: uma caminhada não levanta terra, e poeira em
    * todo passo transforma o campo num deserto.
    */
+  /**
+   * O fogo do jetpack.
+   *
+   * Sai do pool de partículas que já existe, então NÃO custa uma chamada de
+   * desenho nova — e não é uma `PointLight`: uma luz por jogador vezes doze é
+   * exatamente o que derruba o modo zumbi, e um jato aceso é justamente o
+   * momento em que ninguém pode perder quadros.
+   *
+   * O sopro sai PARA BAIXO e um pouco contra o movimento, porque é o gás que
+   * empurra o corpo — e é essa direção que faz a chama ler como propulsão em
+   * vez de fumaça. No vácuo ele não se dispersa em nuvem: as partículas seguem
+   * em linha reta e somem, que é o que gás faz sem ar em volta.
+   */
+  updateJetFlame(dt) {
+    const j = this.jetpack;
+    if (!j?.active) return;
+
+    this._jetPuff = (this._jetPuff ?? 0) + dt;
+    if (this._jetPuff < 0.02) return;
+    this._jetPuff = 0;
+
+    const p = this.player;
+    gameEvents.emit(EventType.PARTICLES, {
+      position: { x: p.position.x, y: p.position.y + 0.75, z: p.position.z },
+      count: 3,
+      color: j.isLow ? 0xff5a2a : 0xffb347,
+      speed: 7.5,
+      spread: 0.22,
+      direction: { x: 0, y: -1, z: 0 },
+      size: 0.16,
+      grow: 2.2,
+      life: 0.34,
+      // Sem ar: a brasa não flutua nem é freada, ela só cai devagar.
+      gravity: -1.62,
+      drag: 0.2,
+      alpha: 0.8,
+    });
+  }
+
   updateFootDust() {
     const p = this.player;
     const noChao = !p.airborne;
@@ -1997,6 +2119,7 @@ class Game {
     const fraction = drawFraction(this.drawTime);
     this.hud.setDraw(fraction, fraction > 0 ? drawSpeed(this.drawTime) : 0);
     this.hud.setFocus(this.aim.focusDistance, this.aim.hasFocus);
+    this.hud.setFuel(this.jetpack);
     this.hud.setWind(
       this.wind.speed,
       this.wind.relativeAngle(this.aimYaw ?? 0),

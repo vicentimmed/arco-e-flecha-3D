@@ -37,7 +37,41 @@ const SKY_FRAG = /* glsl */ `
   uniform vec3 nightHorizon;
   uniform vec3 moonDir;
 
+  // Vácuo: 0 = há atmosfera, 1 = Lua. Ver o bloco do vácuo, no fim.
+  uniform float space;
+  uniform vec3 earthDir;
+
   varying vec3 vDir;
+
+  /* Ruído de valor 3D — só a Terra usa, e só nos poucos pixels do disco.
+     Escrito aqui em vez de amostrar uma textura porque o projeto inteiro é
+     gerado por código, sem assets externos. */
+  float hash3(vec3 p) {
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+  }
+
+  float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash3(i + vec3(0,0,0)), hash3(i + vec3(1,0,0)), f.x),
+          mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), f.x),
+          mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), f.x), f.y),
+      f.z);
+  }
+
+  float fbm3(vec3 p) {
+    float s = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+      s += a * noise3(p);
+      p *= 2.03;
+      a *= 0.5;
+    }
+    return s;
+  }
 
   void main() {
     vec3 dir = normalize(vDir);
@@ -68,6 +102,72 @@ const SKY_FRAG = /* glsl */ `
     noite += vec3(0.20, 0.26, 0.42) * pow(m, 3.0) * 0.05;
 
     vec3 col = mix(dia, noite, night);
+
+    /* --------------------------------------------------------------- vácuo --
+       O céu da Lua não é "um céu escuro": é a AUSÊNCIA de céu.
+
+       Sem atmosfera não há espalhamento, e sem espalhamento não há gradiente,
+       não há halo em volta do Sol e não há azul em lugar nenhum. O preto vai
+       até a linha do chão. É essa dureza que o olho lê como "não tem ar",
+       antes de qualquer outra pista. */
+    if (space > 0.001) {
+      /* PRETO ATÉ O CHÃO. Um degradê junto ao horizonte, por mais discreto que
+         seja, é espalhamento — e espalhamento é ar. O que sobra aqui é quase
+         nada, só para a compressão de vídeo não formar banda no preto puro. */
+      vec3 vazio = mix(vec3(0.004, 0.004, 0.006), vec3(0.0), ceu);
+
+      /* O Sol: disco DURO, sem halo. O halo do vale é espalhamento
+         atmosférico; aqui o Sol é um recorte branco violento, e quem dá o
+         brilho em volta é o bloom do pós-processamento — que é como funciona
+         numa lente de verdade, e não no ar. */
+      vazio += vec3(1.0, 0.97, 0.92) * smoothstep(0.99975, 0.99988, sun) * 6.0;
+
+      /* ------------------------------------------------------------ a Terra --
+         Disco de ~2° com continentes, nuvens, FASE e um fio de atmosfera.
+
+         Fica parada no céu, e isso não é economia: da superfície lunar a Terra
+         realmente não nasce nem se põe. A rotação é síncrona, então ela
+         permanece no mesmo ponto para sempre — só muda de fase. */
+      vec3 eDir = normalize(earthDir);
+      float ce = dot(dir, eDir);
+      float raio = 0.9993;              // ~2,2° de diâmetro aparente
+      if (ce > raio - 0.0012) {
+        // Coordenada dentro do disco: 0 no centro, 1 na borda.
+        float r = sqrt(max(0.0, (1.0 - ce) / (1.0 - raio)));
+
+        // Base do "globo": a normal aproximada da esfera vista de frente.
+        vec3 up = normalize(cross(eDir, vec3(0.0, 1.0, 0.0)) + vec3(1e-5));
+        vec3 rt = normalize(cross(up, eDir));
+        vec2 uv = vec2(dot(dir - eDir * ce, rt), dot(dir - eDir * ce, up));
+        uv /= max(1e-5, (1.0 - raio));
+        float z = sqrt(max(0.0, 1.0 - dot(uv, uv)));
+        vec3 nrm = normalize(rt * uv.x + up * uv.y + eDir * z);
+
+        // Continentes e nuvens por ruído sobre a esfera. Não é um mapa da
+        // Terra — é uma Terra plausível a 384 mil km, que é o que se enxerga.
+        float land = fbm3(nrm * 2.6);
+        float cloud = fbm3(nrm * 4.1 + vec3(11.3));
+        vec3 oceano = vec3(0.055, 0.22, 0.48);
+        vec3 terra = mix(vec3(0.20, 0.34, 0.15), vec3(0.42, 0.36, 0.22),
+                         smoothstep(0.52, 0.72, land));
+        vec3 globo = mix(oceano, terra, smoothstep(0.50, 0.56, land));
+        globo = mix(globo, vec3(0.92, 0.94, 0.97),
+                    smoothstep(0.55, 0.75, cloud) * 0.75);
+
+        // A FASE: o mesmo Sol que ilumina o chão ilumina a Terra, então o
+        // terminador acompanha sozinho a direção da luz da cena.
+        float luz = clamp(dot(nrm, normalize(sunDir)), 0.0, 1.0);
+        globo *= 0.04 + 1.55 * pow(luz, 0.85);
+
+        float borda = smoothstep(1.0, 0.965, r);
+        vazio = mix(vazio, globo, borda);
+        // Fio de atmosfera: azul finíssimo só no limbo iluminado.
+        vazio += vec3(0.28, 0.52, 0.95) *
+                 smoothstep(0.90, 1.0, r) * smoothstep(1.02, 0.98, r) * luz * 0.7;
+      }
+
+      col = mix(col, vazio, space);
+    }
 
     gl_FragColor = vec4(col, 1.0);
 
@@ -172,8 +272,14 @@ export class Renderer {
        porque uma lua baixa ficaria atrás dos cumes e nunca apareceria no
        enquadramento de quem está no centro do vale. */
     this.moonDirection = new THREE.Vector3(0.5, 0.72, -0.48).normalize();
+    /* A Terra vista da Lua: alta o bastante para caber no enquadramento de quem
+       olha o horizonte, e do lado OPOSTO ao Sol, para aparecer quase cheia. Uma
+       Terra do mesmo lado do Sol seria um risco fino contra a luz. */
+    this.earthDirection = new THREE.Vector3(-0.42, 0.62, -0.66).normalize();
     /** 0 = dia, 1 = noite fechada. Ver `setNight`. */
     this._night = 0;
+    /** 0 = há atmosfera, 1 = vácuo lunar. Ver `setSpace`. */
+    this._space = 0;
     /** 0 = céu limpo, 1 = tempestade do chefão. Ver `setStorm`. */
     this._storm = 0;
 
@@ -271,6 +377,8 @@ export class Renderer {
         nightZenith: { value: new THREE.Color("#05070f") },
         nightHorizon: { value: new THREE.Color("#131b2e") },
         moonDir: { value: this.moonDirection.clone() },
+        space: { value: 0 },
+        earthDir: { value: this.earthDirection.clone() },
       },
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
@@ -348,6 +456,66 @@ export class Renderer {
     this.stars.visible = n > 0.15;
     const starBase = Math.max(0, (n - 0.15) / 0.85);
     this.stars.material.opacity = starBase * (1 - this._storm * 0.9);
+  }
+
+  /**
+   * Entra e sai do vácuo (0 → 1). A virada da Lua, num ponto só.
+   *
+   * Segue a mesma disciplina de `setNight`: tudo o que o vácuo muda passa por
+   * aqui, e é isso que garante que voltar ao vale desfaça exatamente o que a
+   * ida à Lua fez. Espalhado por seis chamadas, alguma sobra ficaria — uma
+   * névoa que não voltou, uma estrela acesa de dia — e só apareceria duas fases
+   * depois.
+   *
+   * Diferente da noite, esta troca NÃO é gradual: ela acontece atrás da tela de
+   * carregamento, entre uma fase e outra. Um vale que desbota até virar Lua
+   * seria bonito e mentiroso.
+   */
+  setSpace(t) {
+    const s = Math.max(0, Math.min(1, t));
+    this._space = s;
+    this.skyMaterial.uniforms.space.value = s;
+
+    /* NÉVOA DESLIGADA. É o item que mais denuncia o vácuo: sem ar não há
+       perspectiva aérea, e o que está a 300 m tem exatamente o mesmo contraste
+       que a pedra ao lado do pé. O horizonte fica recortado como lâmina. */
+    this.scene.fog.density = CONFIG.world.fogDensity * (1 - s);
+
+    /* Sol RASANTE e implacável. O ângulo baixo é a decisão de maior retorno
+       visual do cenário inteiro: ele estica as sombras e transforma cada
+       cratera de dois metros num acidente legível. Sem ele, o mesmo terreno
+       lê como um estacionamento cinza. */
+    if (s > 0.5) {
+      this.sunDirection.set(0.82, 0.26, 0.51).normalize();
+      /* Luz do Sol BRANCA. O amarelo do sol do vale não é do Sol: é do ar, que
+         espalha o azul e deixa passar o resto. Sem atmosfera, a luz chega como
+         saiu — e é ela que dá ao regolito o cinza levemente pardo das fotos da
+         Apollo, em vez do bege de deserto. */
+      this.sun.color.setHex(0xfff6ee);
+    } else {
+      this.sunDirection.copy(SUN_DIR);
+      this.sun.color.setHex(0xfff0d2);
+    }
+    this.skyMaterial.uniforms.sunDir.value.copy(this.sunDirection);
+    /* A posição da luz não é escrita aqui: `updateShadowFocus` já a recalcula
+       todo quadro a partir de `sunDirection`, seguindo o jogador. Mudar o vetor
+       é tudo o que é preciso — o frustum de sombra acompanha sozinho. */
+
+    /* Luz de ambiente quase zero. No vácuo não há céu para reirradiar: a
+       sombra é preta de verdade, e é daí que vem o contraste das fotos da
+       Apollo. O pouco que sobra é rebote do próprio regolito — sem ele, o lado
+       escuro de um duelista viraria uma silhueta ilegível. */
+    this.hemi.intensity = HEMI_DAY * (1 - s) + 0.06 * s;
+    this.hemi.groundColor.lerp(new THREE.Color("#6b6459"), s);
+    this.fill.intensity = FILL_DAY * (1 - s) + 0.04 * s;
+
+    // Estrelas SEM CINTILAR: a cintilação é turbulência de ar. Aqui elas são
+    // pontos fixos e frios, e ficam visíveis em pleno "dia".
+    this.stars.visible = s > 0.5 || this._night > 0.15;
+    if (s > 0.5) this.stars.material.opacity = 0.85;
+
+    // Nuvem no vácuo seria absurdo.
+    this.clouds.visible = s < 0.5 && (this._night < 0.5 || this._storm > 0.05);
   }
 
   /**

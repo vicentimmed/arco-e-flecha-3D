@@ -810,6 +810,146 @@ export const CONFIG = {
     },
   },
 
+  /* ------------------------------------------------------------------ fases -
+     O que muda de um cenário para outro. O vale não aparece aqui: ele é a
+     REFERÊNCIA, e os valores dele são os de `physics` e `player` acima — repetir
+     seria criar duas fontes para o mesmo número. Ver `shared/levels.js`. */
+  levels: {
+    /* ------------------------------------------------------------------ Lua --
+       Tudo aqui sai de física real, não de "meio da Terra" arbitrário. */
+    moon: {
+      gravity: -1.62, // m/s² — o valor da Lua
+      /* Vácuo. Zerar a densidade DESLIGA O ARRASTO PELA MATEMÁTICA (a força é
+         proporcional a ρ, ver `entities/arrow.js`), não por um `if`. E como o
+         arrasto é o que gera o torque no centro de pressão, a flecha deixa de
+         se realinhar: ela mantém a atitude de lançamento durante todo o arco,
+         que é o que aconteceria de verdade. */
+      airDensity: 0,
+      wind: false,
+
+      /* Salto: 2,60 m de altura e 3,58 s no ar, contra 0,90 m e 0,86 s no vale.
+         Manter os 4,2 m/s originais daria 5,4 m e 5,2 s — alto demais para
+         mirar, e o duelo viraria uma troca de tiros entre dois pontos no céu. */
+      jumpSpeed: 2.9, // m/s
+
+      /* ---------------------------------------------------------- barreira --
+         Arena de 330 m de diâmetro: três vezes o anel de duelo do vale. O
+         centro cai no ponto mais denso da malha. */
+      barrier: { centerX: 0, centerZ: -97, radius: 165 }, // m
+
+      /* --------------------------------------------------------- curvatura --
+         A curvatura real é invisível numa arena: com R = 1.737 km o chão cai
+         8 mm em 165 m. Ela é exagerada de propósito — mas o exagero tem teto,
+         porque um raio pequeno demais traz o horizonte para dentro da arena e
+         o cenário vira uma colina.
+
+         Com 26 km, o horizonte (√(2·h·R)) fica a 300 m de quem está em pé e a
+         1.243 m de quem está no topo do foguete. Ou seja: subir AFASTA O
+         HORIZONTE EM 4×, e isso é a mesma conta dos dois lados, não um efeito. */
+      curvatureRadius: 26000, // m
+
+      /* ------------------------------------------------------------- malha --
+         Mais barata que a do vale (86 k triângulos) porque não há serra para
+         descrever: 57,8 k na arena + 5,1 k no anel distante.
+
+         O anel existe por causa do vácuo: sem névoa, o horizonte é recortado e
+         nítido, e sem ele o jogador veria a malha acabar e o vazio começar. Ele
+         vai até 1,6 km — além do horizonte visto do topo do foguete. */
+      world: {
+        half: 350, // m — meia-extensão da grade da arena
+        segments: 170, // ⇒ 57,8 k triângulos
+        gridFocus: 0.28, // célula de 1,15 m no centro, 5,8 m na barreira
+        skirtOuter: 1600, // m — até onde vai o anel distante
+        skirtRings: 20,
+        skirtSectors: 128,
+      },
+
+      /* ----------------------------------------------------------- terreno -- */
+      undulation: 0.9, // m — ondulação larga (mares suaves), não morro
+      regolith: 0.25, // m — grão fino de 25 cm
+
+      /* ---------------------------------------------------------- crateras --
+         Três escalas que se SOBREPÕEM, aplicadas em ordem: a mais nova corta a
+         borda da mais velha. Um campo com todas as bordas inteiras lê como
+         bolhas; com umas cortando as outras, lê como Lua.
+
+         O tamanho cresce com a distância da base, e isso não é só estética: a
+         malha é adensada no centro, então cratera pequena só existe onde há
+         célula fina para descrevê-la. */
+        craters: {
+        /* Profundidade = 0,30 × raio, ou seja ~1/6 do diâmetro. Uma cratera
+           simples de verdade fica perto de 1/5 do diâmetro; 0,18, que era o
+           valor anterior, produzia um PRATO — de dentro do jogo lia como uma
+           depressão no gramado, não como um impacto. */
+        depthRatio: 0.30,
+        rimRatio: 0.07, // borda elevada = 0,07 × raio
+        ejectaReach: 0.6, // manto de ejeção = 0,6 × raio além da borda
+        /* Só o que a base realmente ocupa. Antes eram 46 m SOMADOS ao maior
+           raio do escalão, e o efeito colateral foi um miolo de 55 m de raio
+           completamente liso — justamente onde se anda. */
+        clearAroundBase: 30, // m
+        tiers: [
+          // grandes: metade externa e horizonte, onde dão escala ao mundo
+          { count: 12, rMin: 26, rMax: 45, dMin: 0.5, dMax: 1.7 },
+          { count: 34, rMin: 10, rMax: 26, dMin: 0.25, dMax: 1.3 },
+          { count: 80, rMin: 3.5, rMax: 10, dMin: 0.1, dMax: 1.0 },
+          /* As MARCAS: crateras de um a três metros, densas e por toda parte.
+             São elas que fazem o chão ler como regolito na escala de quem
+             caminha — sem elas, os 30 m em volta do pé são uma placa lisa por
+             mais crateras grandes que existam no horizonte. */
+          { count: 130, rMin: 1.2, rMax: 3.5, dMin: 0.05, dMax: 0.95 },
+        ],
+        /* Raios de ejeção — as estrias claras que saem das crateras jovens (o
+           efeito Tycho). É a coisa mais reconhecível da Lua vista de longe, e
+           aqui é um cosseno no ângulo em torno da cratera: cor de vértice,
+           zero custo em tempo de execução. */
+        rayChance: 0.35, // fração das crateras que tem raios
+        rayCount: 9, // estrias por cratera
+        rayReach: 5.5, // × raio — até onde a estria vai
+      },
+
+      /* ------------------------------------------------------------ flecha --
+         Sem arrasto e com 1/6 de g, um tiro de 120 m/s a 45° alcança 8,9 km e,
+         reto para cima, sobe 4,4 km e leva 148 s para voltar. Cada flecha no ar
+         é um corpo rígido com CCD e um traçado — sem teto, um duelo enche a
+         memória de projéteis que nunca vão colidir com nada.
+
+         Os 12 s NÃO são curtos: o arco mais longo que ainda cai DENTRO da arena
+         (60° cobrindo os 165 m) sobe 71 m e dura 9,3 s. Cobre com folga todo
+         tiro que ainda pode acertar alguém, e mata os que já não podem. */
+      arrow: {
+        maxLifetime: 12, // s (no vale são 25, e lá o arrasto derruba antes)
+        maxAltitude: 300, // m — pega o tiro reto para cima
+        despawnMargin: 15, // m além da barreira; some com um fade curto
+        fadeOut: 0.25, // s — some sem parecer que travou
+      },
+
+      /* ----------------------------------------------------------- jetpack --
+         Subir os 28 m até a plataforma do foguete leva ~3,9 s, sobrando 2 s
+         para se posicionar lá em cima. Descer de lá é queda livre de 5,9 s. */
+      jetpack: {
+        fuel: 6.0, // s de voo contínuo
+        refuelRate: 2.0, // /s — cheio em 3 s
+        refuelDelay: 0.6, // s depois de pousar (voar de novo não é grátis)
+        thrust: 6.0, // m/s² — empuxo líquido de +4,38 contra a gravidade
+        maxRiseSpeed: 9.0, // m/s
+        airThrust: 7.0, // m/s² — WASD no ar, por ACELERAÇÃO
+        maxAirSpeed: 12.0, // m/s
+        airDrag: 0.7, // 1/s — controle sem virar "andar no ar"
+        lowFuel: 0.25, // fração em que o medidor começa a pulsar
+      },
+
+      /* -------------------------------------------------------------- base -- */
+      base: { x: 0, z: -97 },
+
+      /* ------------------------------------------------------------- duelo --
+         Sem arrasto e com 1/6 de g, um tiro tenso de 120 m/s cai 12 cm em 46 m:
+         o anel do vale transformaria o arco no revólver que o duelo existe para
+         evitar. A 95 m a queda volta a ser leitura. */
+      duel: { ringRadius: 95, minSeparation: 90 },
+    },
+  },
+
   debug: {
     // Critério de aceite nº 1: sem arrasto e sem vento, 45° a 60 m/s deve bater
     // com v₀²·sen(2θ)/g dentro de 1 %.

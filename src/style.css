@@ -1494,3 +1494,74 @@ body {
   color: var(--red);
   font-weight: 700;
 }
+
+/* ------------------------------------------------------- jetpack (Lua) -----
+   O medidor de combustível fica logo ABAIXO da barra de força do arco, no mesmo
+   eixo do retículo: os dois recursos que a pessoa gerencia ficam no mesmo lugar
+   do olhar, e nunca aparecem ao mesmo tempo com urgência.
+
+   Os três estados são cor, não texto — no meio de um voo ninguém lê rótulo. */
+#fuel {
+  position: absolute;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  width: 190px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: opacity 140ms ease;
+}
+
+#fuel[hidden] {
+  display: none;
+}
+
+#fuel-track {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-stroke);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+#fuel-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6fb7ff, #b9e0ff);
+  transition: width 90ms linear, background 200ms ease;
+}
+
+#fuel-label {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--ui-dim);
+  text-shadow: var(--text-shadow);
+}
+
+/* Queimando: âmbar, a cor da chama. */
+#fuel.queimando #fuel-fill {
+  background: linear-gradient(90deg, #ff9a2e, #ffd07a);
+}
+
+/* Enchendo no chão: verde, e sem transição de largura para a subida ser lida
+   como progresso e não como oscilação. */
+#fuel.enchendo #fuel-fill {
+  background: linear-gradient(90deg, #4fbf6a, #a5e8b6);
+}
+
+/* Abaixo de 25 %: pulsa. É o aviso que precisa chegar ANTES de acabar — quando
+   acaba, a pessoa já está caindo e não há mais o que decidir. */
+#fuel.baixo #fuel-fill {
+  background: linear-gradient(90deg, #ff3b30, #ff8a80);
+  animation: fuel-alerta 480ms ease-in-out infinite;
+}
+
+@keyframes fuel-alerta {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

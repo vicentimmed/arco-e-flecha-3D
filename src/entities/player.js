@@ -885,8 +885,21 @@ export class Player {
     return moving;
   }
 
+  /**
+   * O toque no espaço.
+   *
+   * Quem decide se isso é um salto ou a ignição do jetpack é o
+   * `PlayerPhysics` — ele é quem sabe se os pés estão no chão. Aqui a tecla
+   * continua sendo só "a tecla de pular".
+   */
   jump() {
-    this.physicsBody?.queueJump();
+    if (this.physicsBody?.onJumpPressed) this.physicsBody.onJumpPressed();
+    else this.physicsBody?.queueJump();
+  }
+
+  /** Soltou o espaço: apaga o jato (guardando o combustível que sobrou). */
+  jumpReleased() {
+    this.physicsBody?.onJumpReleased?.();
   }
 
   getHitBody() {

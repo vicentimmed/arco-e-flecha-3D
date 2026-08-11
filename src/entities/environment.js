@@ -62,7 +62,7 @@ const _n1 = new THREE.Vector3();
  * Reparametrização da malha: leva t ∈ [-1,1] em [-1,1] concentrando amostras
  * perto de 0. `a` é a derivada na origem — quanto menor, mais denso o centro.
  */
-function focusWarp(t, a) {
+export function focusWarp(t, a) {
   return t * (a + (1 - a) * t * t);
 }
 
@@ -385,7 +385,7 @@ let sharedDetail = null;
  * A malha do terreno tem célula de 0,7 a 4,5 m; o detalhe fino (~2,4 m) e a
  * variação macro (~22 m) vivem só aqui, no fragmento, onde não custam vértice.
  */
-function applyTerrainDetail(material) {
+export function applyTerrainDetail(material) {
   if (!sharedDetail) sharedDetail = shared(detailTexture());
   const uniforms = {
     detailMap: { value: sharedDetail },

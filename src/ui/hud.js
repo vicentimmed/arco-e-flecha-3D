@@ -48,6 +48,8 @@ const ATALHOS = [
       [["W", "A", "S", "D"], "andar"],
       [["Shift"], "correr"],
       [["Space"], "pular"],
+      // Na Lua a mesma tecla tem um segundo significado no ar. Ver `jetpack.js`.
+      [["Space", "Space"], "jetpack (só na Lua)"],
       [["K"], "renascer"],
     ],
   },
@@ -62,6 +64,13 @@ const ATALHOS = [
       [["6"], "noite dos zumbis"],
       [["7"], "zumbi (só chefão)"],
       [["8"], "caça aos pássaros"],
+    ],
+  },
+  {
+    titulo: "Fases",
+    itens: [
+      // A mesma tecla leva e traz — ver `askLevelChange`.
+      [["9"], "Lua (ir e voltar)"],
     ],
   },
   {

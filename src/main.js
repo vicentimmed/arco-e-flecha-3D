@@ -18,7 +18,7 @@ import { entityRegistry } from "./core/entityRegistry.js";
 import { gameEvents, EventType, vec3Payload } from "./core/events.js";
 import { Renderer } from "./core/renderer.js";
 import { LevelManager, DEFAULT_LEVEL } from "./levels/index.js";
-import { levelPhysics, levelInfo } from "./shared/levels.js";
+import { levelPhysics, levelInfo, levelAllowsMode } from "./shared/levels.js";
 import { Player } from "./entities/player.js";
 import { ArrowManager } from "./entities/arrow.js";
 import { Wind } from "./systems/wind.js";
@@ -1197,10 +1197,17 @@ class Game {
    * (`docs/plano-fases.md`, F0.4). Jogando sozinho, funciona por inteiro.
    */
   askLevelChange(id) {
-    if (this.levels.id === id || this.swappingLevel) return;
-    const nome = levelInfo(id).nome;
-    this.ask(`Ir para ${nome === "Lua" ? "a Lua" : `o ${nome}`}?`, () =>
-      this.changeLevel(id, { titulo: `viajando para ${nome.toLowerCase()}…` }),
+    if (this.swappingLevel) return;
+
+    /* A MESMA TECLA leva e traz. Sem isso, quem foi para a Lua não teria como
+       voltar: as teclas 1–8 são de MODO, e modo não é fase. Uma tecla que só
+       funciona de ida é uma tecla quebrada na metade das vezes que se aperta. */
+    const alvo = this.levels.id === id ? DEFAULT_LEVEL : id;
+    const nome = levelInfo(alvo).nome;
+    const artigo = alvo === "moon" ? "a Lua" : `o ${nome}`;
+
+    this.ask(`Ir para ${artigo}?`, () =>
+      this.changeLevel(alvo, { titulo: `viajando para ${nome.toLowerCase()}…` }),
     );
   }
 
@@ -1446,6 +1453,18 @@ class Game {
    */
   askModeChange(mode) {
     if (!this.net.connected) return;
+
+    /* Nem todo modo existe em toda fase. Os porcos, o alce, as aves, a horda e
+       a série de alvos dependem de bacia plana, copas de árvore e trilha de
+       terra — a Lua não tem nada disso, e a sala nem sequer sabe que existe uma
+       Lua ainda (a sincronia de fase pela rede é a etapa seguinte).
+       Deixar passar não daria um modo estranho: daria porcos pastando no vácuo
+       sobre um terreno que só existe no cliente. */
+    if (!levelAllowsMode(this.levels.id, mode)) {
+      this.hud.toast(`${MODE_LABELS[mode] ?? mode} não existe ${this.levels.id === "moon" ? "na Lua" : "aqui"}`, "miss");
+      return;
+    }
+
     if (mode === "duel") {
       this.net.send(C2S.MODE, { mode });
       return;

@@ -12,7 +12,14 @@ import { CONFIG } from "../config.js";
 import { installDirectionalFog } from "./directionalFog.js";
 import { GradeShader } from "./gradePass.js";
 import { SUN_DIR } from "./sun.js";
+import { shared } from "../levels/resources.js";
+import earthUrl from "../assets/images/terra.png";
 
+/* ⚠️ NADA DE CRASE nos dois blocos de shader abaixo.
+   Eles são template literals, então uma crase num comentário GLSL encerra a
+   string no meio e o erro que aparece é um "falta ponto e vírgula" apontando
+   para uma linha de comentário — que não diz nada a quem procura. Já custou
+   três builds quebrados. Para citar um identificador, escreva sem marcação. */
 const SKY_VERT = /* glsl */ `
   varying vec3 vDir;
   void main() {
@@ -40,6 +47,9 @@ const SKY_FRAG = /* glsl */ `
   // Vácuo: 0 = há atmosfera, 1 = Lua. Ver o bloco do vácuo, no fim.
   uniform float space;
   uniform vec3 earthDir;
+  uniform sampler2D earthMap;
+  uniform float earthSize; // meia-largura angular do disco
+  uniform float earthCos;  // cosseno do raio angular — teste barato de recorte
 
   varying vec3 vDir;
 
@@ -123,47 +133,58 @@ const SKY_FRAG = /* glsl */ `
       vazio += vec3(1.0, 0.97, 0.92) * smoothstep(0.99975, 0.99988, sun) * 6.0;
 
       /* ------------------------------------------------------------ a Terra --
-         Disco de ~2° com continentes, nuvens, FASE e um fio de atmosfera.
+         Agora é uma FOTO, não mais ruído.
+
+         O disco procedural resolvia a silhueta e falhava no que importa: a
+         Terra é o objeto mais reconhecível que existe, e qualquer continente
+         inventado lê como "planeta genérico". Com a foto, o olho identifica na
+         hora — e é ela que dá a escala emocional de estar na Lua.
+
+         A imagem já vem recortada com alfa, então o disco não precisa de
+         máscara: o próprio alfa diz onde o planeta acaba.
 
          Fica parada no céu, e isso não é economia: da superfície lunar a Terra
-         realmente não nasce nem se põe. A rotação é síncrona, então ela
-         permanece no mesmo ponto para sempre — só muda de fase. */
+         realmente não nasce nem se põe. A rotação é síncrona. */
       vec3 eDir = normalize(earthDir);
       float ce = dot(dir, eDir);
-      float raio = 0.9993;              // ~2,2° de diâmetro aparente
-      if (ce > raio - 0.0012) {
-        // Coordenada dentro do disco: 0 no centro, 1 na borda.
-        float r = sqrt(max(0.0, (1.0 - ce) / (1.0 - raio)));
-
-        // Base do "globo": a normal aproximada da esfera vista de frente.
+      if (ce > earthCos) {
+        // Base ortonormal do disco, para projetar a direção do olhar em UV.
         vec3 up = normalize(cross(eDir, vec3(0.0, 1.0, 0.0)) + vec3(1e-5));
         vec3 rt = normalize(cross(up, eDir));
         vec2 uv = vec2(dot(dir - eDir * ce, rt), dot(dir - eDir * ce, up));
-        uv /= max(1e-5, (1.0 - raio));
-        float z = sqrt(max(0.0, 1.0 - dot(uv, uv)));
-        vec3 nrm = normalize(rt * uv.x + up * uv.y + eDir * z);
+        uv /= max(1e-5, earthSize);
+        vec2 st = uv * 0.5 + 0.5;
 
-        // Continentes e nuvens por ruído sobre a esfera. Não é um mapa da
-        // Terra — é uma Terra plausível a 384 mil km, que é o que se enxerga.
-        float land = fbm3(nrm * 2.6);
-        float cloud = fbm3(nrm * 4.1 + vec3(11.3));
-        vec3 oceano = vec3(0.055, 0.22, 0.48);
-        vec3 terra = mix(vec3(0.20, 0.34, 0.15), vec3(0.42, 0.36, 0.22),
-                         smoothstep(0.52, 0.72, land));
-        vec3 globo = mix(oceano, terra, smoothstep(0.50, 0.56, land));
-        globo = mix(globo, vec3(0.92, 0.94, 0.97),
-                    smoothstep(0.55, 0.75, cloud) * 0.75);
+        if (st.x > 0.0 && st.x < 1.0 && st.y > 0.0 && st.y < 1.0) {
+          vec4 tex = texture2D(earthMap, st);
 
-        // A FASE: o mesmo Sol que ilumina o chão ilumina a Terra, então o
-        // terminador acompanha sozinho a direção da luz da cena.
-        float luz = clamp(dot(nrm, normalize(sunDir)), 0.0, 1.0);
-        globo *= 0.04 + 1.55 * pow(luz, 0.85);
+          /* A FASE. O mesmo Sol que ilumina o chão ilumina a Terra, então o
+             terminador acompanha sozinho a direção da luz da cena — mover o
+             Sol move a sombra no planeta, sem nenhum parâmetro extra.
 
-        float borda = smoothstep(1.0, 0.965, r);
-        vazio = mix(vazio, globo, borda);
-        // Fio de atmosfera: azul finíssimo só no limbo iluminado.
-        vazio += vec3(0.28, 0.52, 0.95) *
-                 smoothstep(0.90, 1.0, r) * smoothstep(1.02, 0.98, r) * luz * 0.7;
+             A esfera é reconstruída a partir do UV: z é a profundidade do
+             ponto na bola, e é ela que faz o terminador ser um arco curvo em
+             vez de uma linha reta cortando a foto. */
+          float d2 = dot(uv, uv);
+          float z = sqrt(max(0.0, 1.0 - d2));
+          /* O -eDir é o detalhe que decide se o planeta acende ou não.
+             eDir aponta DO OBSERVADOR PARA a Terra; a normal da superfície que
+             se vê aponta ao contrário, da Terra de volta para quem olha. Com o
+             sinal trocado, o hemisfério visível era tratado como o hemisfério
+             oposto e a Terra aparecia sempre em fase nova — um disco escuro
+             que ninguém identifica. */
+          vec3 nrm = normalize(rt * uv.x + up * uv.y - eDir * z);
+          float luz = clamp(dot(nrm, normalize(sunDir)), 0.0, 1.0);
+          // Nunca vai a zero: o lado escuro da Terra tem cidades e luar.
+          float ilum = 0.10 + 1.35 * pow(luz, 0.8);
+
+          vazio = mix(vazio, tex.rgb * ilum, tex.a);
+
+          // Fio de atmosfera no limbo iluminado — o azul que envolve a borda.
+          float r = sqrt(d2);
+          vazio += vec3(0.30, 0.55, 0.98) * tex.a *
+                   smoothstep(0.86, 0.99, r) * luz * 0.55;
+        }
       }
 
       col = mix(col, vazio, space);
@@ -203,6 +224,30 @@ const HEMI_DAY = 0.5;
 const HEMI_NIGHT = 0.055;
 const FILL_DAY = 0.2;
 const SUN_DAY = 3.1;
+
+/**
+ * A textura da Terra, carregada uma vez.
+ *
+ * É recurso de MÓDULO: uma só existe e ela precisa sobreviver a qualquer troca
+ * de fase — destruí-la junto com a Lua deixaria o céu com um retângulo preto na
+ * segunda visita. Ver `levels/resources.js`.
+ *
+ * O carregamento é assíncrono e o céu não espera por ele: até a imagem chegar,
+ * o alfa é zero e o disco simplesmente não aparece. Um planeta que surge meio
+ * segundo depois do carregamento é melhor que um quadro travado.
+ */
+let _earthTex = null;
+function earthTexture() {
+  if (_earthTex) return _earthTex;
+  _earthTex = shared(new THREE.TextureLoader().load(earthUrl));
+  _earthTex.colorSpace = THREE.SRGBColorSpace;
+  // Sem repetição: fora do disco não há imagem, e `RepeatWrapping` faria a
+  // borda da foto reaparecer do outro lado do céu.
+  _earthTex.wrapS = THREE.ClampToEdgeWrapping;
+  _earthTex.wrapT = THREE.ClampToEdgeWrapping;
+  _earthTex.anisotropy = 4;
+  return _earthTex;
+}
 
 /** Tamanho da janela, nunca zero (abas em segundo plano reportam 0×0, e
  *  aspect = 0/0 = NaN envenenaria a matriz de projeção). */
@@ -379,6 +424,14 @@ export class Renderer {
         moonDir: { value: this.moonDirection.clone() },
         space: { value: 0 },
         earthDir: { value: this.earthDirection.clone() },
+        earthMap: { value: earthTexture() },
+        /* Tamanho aparente. A Terra vista da Lua tem ~2° de diâmetro — quase
+           quatro vezes a Lua vista daqui. Uso 0,055 de meia-largura (≈6,3°)
+           porque o correto é DECEPCIONANTE: a 2° ela vira um ponto azul e o
+           jogador não a reconhece. É a mesma licença que toda foto de pôster
+           lunar toma, e pela mesma razão. */
+        earthSize: { value: 0.085 },
+        earthCos: { value: Math.cos(Math.atan(0.085) * 1.5) },
       },
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
@@ -501,13 +554,30 @@ export class Renderer {
        todo quadro a partir de `sunDirection`, seguindo o jogador. Mudar o vetor
        é tudo o que é preciso — o frustum de sombra acompanha sozinho. */
 
-    /* Luz de ambiente quase zero. No vácuo não há céu para reirradiar: a
-       sombra é preta de verdade, e é daí que vem o contraste das fotos da
-       Apollo. O pouco que sobra é rebote do próprio regolito — sem ele, o lado
-       escuro de um duelista viraria uma silhueta ilegível. */
-    this.hemi.intensity = HEMI_DAY * (1 - s) + 0.06 * s;
-    this.hemi.groundColor.lerp(new THREE.Color("#6b6459"), s);
-    this.fill.intensity = FILL_DAY * (1 - s) + 0.04 * s;
+    /* SOMBRA CLARA, e não é falta de rigor.
+
+       A física diz "sem atmosfera não há céu para reirradiar, logo a sombra é
+       preta". Levado ao pé da letra, isso produzia um jogo onde metade das
+       superfícies é um buraco sem informação — não dá para ler o relevo, não dá
+       para ver o adversário no lado escuro, e cada cratera vira uma mancha.
+
+       O que salva a fidelidade é que a sombra lunar real também NÃO é preta: o
+       regolito é um refletor difuso muito eficiente, e a luz que ele devolve
+       ilumina tudo o que está na sombra. Nas fotos da Apollo dá para ler os
+       detalhes do módulo no lado escuro justamente por isso. Então o número
+       sobe de 0,06 para 0,42 — e a cor do rebote é a do próprio chão. */
+    this.hemi.intensity = HEMI_DAY * (1 - s) + 0.42 * s;
+    this.hemi.groundColor.lerp(new THREE.Color("#c2beb6"), s);
+    this.fill.intensity = FILL_DAY * (1 - s) + 0.30 * s;
+
+    /* Borda MOLE. O sol é um disco de meio grau, não um ponto: a sombra dele
+       tem penumbra, e uma borda recortada em serrilha é o que mais denuncia
+       "isto é um shadow map". `radius` espalha a amostragem do PCF. */
+    this.sun.shadow.radius = s > 0.5 ? 5 : 1;
+    this.sun.shadow.blurSamples = s > 0.5 ? 16 : 8;
+    // Sol mais fraco na Lua: com o ambiente alto, manter 3,4 estouraria o
+    // regolito claro em branco puro e apagaria as crateras de novo.
+    this.sun.intensity = SUN_DAY * (1 - s) + 2.5 * s;
 
     // Estrelas SEM CINTILAR: a cintilação é turbulência de ar. Aqui elas são
     // pontos fixos e frios, e ficam visíveis em pleno "dia".

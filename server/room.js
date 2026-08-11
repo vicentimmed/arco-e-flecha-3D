@@ -31,6 +31,7 @@ import {
   createField,
   levelForMode,
   levelUsesDuelInvites,
+  levelHasFauna,
   fallbackMode,
 } from "../src/shared/levels.js";
 
@@ -693,10 +694,11 @@ export class Room {
 
     if (isZombieMode(this.mode)) this.tickZombies(agora, jogadores);
 
-    /* Os pássaros somem no modo zumbi. Não é economia — é o clima: um bando
-       cantando e circulando sobre um cerco de mortos-vivos desmancha a noite
-       que o modo inteiro constrói. */
-    if (!isZombieMode(this.mode)) {
+    /* Os pássaros somem no modo zumbi e em qualquer fase SEM FAUNA. Não é
+       economia — é o clima: um bando cantando e circulando sobre um cerco de
+       mortos-vivos desmancha a noite que o modo inteiro constrói, e no vácuo
+       da Lua ele é simplesmente impossível. */
+    if (!isZombieMode(this.mode) && levelHasFauna(this.level)) {
       this.birds.update(this.boarStep, agora);
       // A rara caiu no chão: agora sim a tela de vitória.
       if (

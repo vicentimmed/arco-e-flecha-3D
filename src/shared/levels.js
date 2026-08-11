@@ -65,11 +65,18 @@ export const LEVEL_INFO = {
      * é uma decisão coletiva — a sala inteira viajou junto —, e ninguém pousa
      * num campo de duelo de 330 m de diâmetro para ficar assistindo. */
     duelInvites: false,
+    /* Sem fauna nenhuma. Os pássaros são cenário vivo em TODOS os modos do
+       vale — voam de fundo mesmo durante um duelo —, e ninguém os desligou ao
+       criar a Lua porque eles nunca tinham dependido de fase. No vácuo eles
+       ficam absurdos duas vezes: pela biologia e pelo som, já que o ambiente
+       de "dia" toca um loop de passarinhos. */
+    fauna: false,
     fisica: {
       gravity: CONFIG.levels.moon.gravity,
       airDensity: CONFIG.levels.moon.airDensity,
       wind: CONFIG.levels.moon.wind,
       jumpSpeed: CONFIG.levels.moon.jumpSpeed,
+      runSpeed: CONFIG.player.runSpeed * CONFIG.levels.moon.runMultiplier,
       jetpack: CONFIG.levels.moon.jetpack,
       arrow: CONFIG.levels.moon.arrow,
     },
@@ -98,6 +105,18 @@ export function levelAllowsMode(id, mode) {
 /** O duelo desta fase passa por convite, ou entra direto com todo mundo? */
 export function levelUsesDuelInvites(id) {
   return levelInfo(id).duelInvites !== false;
+}
+
+/**
+ * Esta fase tem bicho vivo?
+ *
+ * Decide três coisas de uma vez: se o servidor emite pássaros, se o ambiente
+ * sonoro toca o loop de dia, e se o HUD mostra os contadores de porcos e fauna.
+ * As três respostas são a mesma pergunta, e separá-las era o caminho para uma
+ * delas ficar para trás.
+ */
+export function levelHasFauna(id) {
+  return levelInfo(id).fauna !== false;
 }
 
 /**
@@ -141,6 +160,7 @@ const BASE = {
   airDensity: CONFIG.physics.airDensity,
   wind: true,
   jumpSpeed: CONFIG.player.jumpSpeed,
+  runSpeed: CONFIG.player.runSpeed,
   arrow: {
     maxLifetime: CONFIG.arrow.maxLifetime,
     maxAltitude: CONFIG.arrow.maxAltitude,

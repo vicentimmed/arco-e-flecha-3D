@@ -292,6 +292,8 @@ export class Player {
        medida em METROS PERCORRIDOS, não em segundos. */
     this.gaitPhase = 0; // rad — 2π = um ciclo completo (dois passos)
     this.gaitBlend = 0; // 0 parado … 1 em passo pleno
+    /** Velocidade no instante em que os pés saíram do chão. Ver `move()`. */
+    this._takeoffSpeed = CONFIG.player.walkSpeed;
     this.runBlend = 0; // 0 andando … 1 correndo
     this.moveF = 0; // componente frontal do movimento local, suavizada
     this.moveS = 0; // componente lateral do movimento local, suavizada
@@ -831,12 +833,26 @@ export class Player {
     const p = CONFIG.player;
     const g = CONFIG.gait;
     const moving = forward !== 0 || strafe !== 0;
-    const target = moving ? (wantRun ? p.runSpeed : p.walkSpeed) : 0;
+
+    /* CORRER É COISA DE QUEM TEM CHÃO.
+     *
+     * Sem apoio não há de onde empurrar: quem sai do chão leva a velocidade que
+     * tinha e nada que se aperte depois muda isso. Antes, Shift no meio do
+     * salto esticava o pulo — uma tecla apertada DEPOIS de os pés saírem do
+     * chão alterando a trajetória, que é o oposto do que qualquer um espera.
+     *
+     * A velocidade de decolagem é GUARDADA em vez de simplesmente cair para a
+     * caminhada. Cair para a caminhada seria o outro erro, simétrico: quem
+     * pulou correndo frearia no ar sem motivo nenhum. */
+    if (!this.airborne) this._takeoffSpeed = wantRun ? p.runSpeed : p.walkSpeed;
+    const alvoNoChao = wantRun ? p.runSpeed : p.walkSpeed;
+    const target = moving ? (this.airborne ? this._takeoffSpeed : alvoNoChao) : 0;
 
     // A velocidade persegue o alvo em vez de saltar: sair andando e frear têm
     // peso, e Shift acelera de forma contínua.
     this.speed = damp(this.speed, target, p.speedSmoothing, dt);
-    this.runBlend = damp(this.runBlend, moving && wantRun ? 1 : 0, p.runSmoothing, dt);
+    const correndo = moving && wantRun && !this.airborne;
+    this.runBlend = damp(this.runBlend, correndo ? 1 : 0, p.runSmoothing, dt);
 
     let fx = 0;
     let sx = 0;
@@ -869,15 +885,31 @@ export class Player {
        inteira, garantindo o retorno suave à pose neutra ao parar. */
     this.moveF = damp(this.moveF, fx, g.blendSmoothing, dt);
     this.moveS = damp(this.moveS, sx, g.blendSmoothing, dt);
-    this.gaitBlend = damp(this.gaitBlend, moving ? 1 : 0, g.blendSmoothing, dt);
+
+    /* NO AR NÃO SE CAMINHA.
+     *
+     * O ciclo de passada era ligado por "está se movendo?", e no ar isso
+     * continua verdade — a pessoa está atravessando o espaço. O resultado era
+     * um boneco pedalando enquanto voa, e só quem pulava PARADO via a pose de
+     * salto correta, o que fazia o bug parecer aleatório.
+     *
+     * A condição certa é "há chão sob o pé para empurrar". Sem chão, o
+     * `gaitBlend` cai a zero e a pose de salto — que já existe e é montada a
+     * partir de `airborne` — assume sozinha. */
+    const caminhando = moving && !this.airborne;
+    this.gaitBlend = damp(this.gaitBlend, caminhando ? 1 : 0, g.blendSmoothing, dt);
 
     /* A FASE ANDA COM A DISTÂNCIA, não com o relógio: um ciclo completo a cada
        `strideLength` metros. Assim a cadência acompanha sozinha a velocidade
        real — o pé nunca patina no chão nem "corre no lugar" — e a corrida sai
        mais rápida de graça, ainda por cima com a passada mais longa. */
     const stride = g.strideLength * (1 + g.runStrideGain * this.runBlend);
-    this.gaitPhase += (step / stride) * TAU;
-    if (this.gaitPhase > TAU) this.gaitPhase -= TAU;
+    // A fase congela no ar junto com o `gaitBlend`: deixá-la correr faria o
+    // boneco pousar num ponto arbitrário do ciclo, com a perna no alto.
+    if (!this.airborne) {
+      this.gaitPhase += (step / stride) * TAU;
+      if (this.gaitPhase > TAU) this.gaitPhase -= TAU;
+    }
 
     this.bobPhase += dt * 1.3; // respiração — independe da marcha
 

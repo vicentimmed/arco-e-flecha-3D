@@ -187,6 +187,13 @@ export class HUD {
         <span class="value">reconectando…</span>
       </div>
 
+      <!-- FPS, sempre visível, em qualquer modo e fase.
+           Fica fora do painel de depuração de propósito: o painel é para quem
+           está investigando, e a taxa de quadros é para quem está JOGANDO —
+           quando o jogo engasga, a primeira pergunta é essa, e ela não pode
+           depender de lembrar um atalho. Muda de cor em 50 e em 30. -->
+      <div id="fps-meter"><b id="fps-value">60</b><span>FPS</span></div>
+
       <!-- Faixa do modo de jogo e dos convites de duelo. -->
       <div id="mode-banner" hidden></div>
 
@@ -284,6 +291,8 @@ export class HUD {
       windArrow: root.querySelector("#wind-arrow"),
       windSpeed: root.querySelector("#wind-speed"),
       focus: root.querySelector("#focus"),
+      boarChip: root.querySelector("#boar-chip"),
+      faunaChip: root.querySelector("#fauna-chip"),
       boarCount: root.querySelector("#boar-count"),
       faunaCount: root.querySelector("#fauna-count"),
       elkChip: root.querySelector("#elk-chip"),
@@ -300,6 +309,8 @@ export class HUD {
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
+      fpsMeter: root.querySelector("#fps-meter"),
+      fpsValue: root.querySelector("#fps-value"),
       fuel: root.querySelector("#fuel"),
       fuelFill: root.querySelector("#fuel-fill"),
       modeLoading: root.querySelector("#mode-loading"),
@@ -392,6 +403,19 @@ export class HUD {
   }
 
   /**
+   * Fases sem bicho escondem os contadores de bicho.
+   *
+   * "0 vivos / 0 mortos" numa Lua onde porco é impossível não é informação
+   * neutra: é uma promessa de que existe caça em algum lugar, e o jogador perde
+   * tempo procurando. Quando a resposta é sempre zero, a pergunta não deve
+   * estar na tela.
+   */
+  setFauna(visivel) {
+    this.el.boarChip.hidden = !visivel;
+    this.el.faunaChip.hidden = !visivel;
+  }
+
+  /**
    * Vida do alce mais próximo.
    *
    * A barra sobre a cabeça do bicho some quando ele está atrás de você — e é
@@ -422,6 +446,23 @@ export class HUD {
   /** Avisa quando a conexão cai — some sozinho quando ela volta. */
   setConnection(online) {
     this.el.netChip.hidden = online;
+  }
+
+  /**
+   * A taxa de quadros.
+   *
+   * Escreve no DOM só quando o número INTEIRO muda. Sem essa guarda seriam
+   * sessenta escritas por segundo num elemento de texto, cada uma sujeitando o
+   * navegador a recalcular layout — um medidor de desempenho que custa
+   * desempenho é uma piada de mau gosto.
+   */
+  setFps(fps) {
+    const n = Math.round(fps);
+    if (n === this._fpsShown) return;
+    this._fpsShown = n;
+    this.el.fpsValue.textContent = String(n);
+    this.el.fpsMeter.classList.toggle("medio", n < 50 && n >= 30);
+    this.el.fpsMeter.classList.toggle("baixo", n < 30);
   }
 
   /**

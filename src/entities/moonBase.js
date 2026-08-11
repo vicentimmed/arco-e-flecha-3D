@@ -24,6 +24,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { makeRandom } from "../utils/math.js";
+import { shared } from "../levels/resources.js";
 
 /* A paleta de um programa espacial: branco de pintura térmica, metal escuro,
    e o OURO da manta de isolamento — que é a cor mais reconhecível de hardware
@@ -73,6 +74,71 @@ class Lote {
     this.porTinta.clear();
     return calls;
   }
+}
+
+/**
+ * A bandeira, desenhada em canvas.
+ *
+ * Treze listras, cinquenta estrelas e o cantão azul — pintados por código, como
+ * todo o resto do jogo. É recurso de MÓDULO (`shared`) porque uma só existe e
+ * ela sobrevive a qualquer troca de fase; destruí-la junto com a Lua deixaria a
+ * bandeira branca na segunda visita. Ver `levels/resources.js`.
+ */
+let _bandeira = null;
+function bandeiraTextura() {
+  if (_bandeira) return _bandeira;
+
+  const L = 1900;
+  const A = 1000;
+  const canvas = document.createElement("canvas");
+  canvas.width = L;
+  canvas.height = A;
+  const g = canvas.getContext("2d");
+
+  // 13 listras, começando e terminando em vermelho.
+  const hFaixa = A / 13;
+  for (let i = 0; i < 13; i++) {
+    g.fillStyle = i % 2 === 0 ? "#b22234" : "#ffffff";
+    g.fillRect(0, i * hFaixa, L, hFaixa + 1);
+  }
+
+  // Cantão: 7 listras de altura, 2/5 do comprimento.
+  const cL = L * 0.4;
+  const cA = hFaixa * 7;
+  g.fillStyle = "#3c3b6e";
+  g.fillRect(0, 0, cL, cA);
+
+  /* As 50 estrelas: cinco fileiras de seis alternadas com quatro de cinco.
+     Desenhadas como pentagramas de verdade — um círculo branco ficaria com
+     cara de confete, e a estrela é o que se reconhece à distância. */
+  g.fillStyle = "#ffffff";
+  const estrela = (cx, cy, r) => {
+    g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const ang = (Math.PI / 5) * i - Math.PI / 2;
+      const raio = i % 2 === 0 ? r : r * 0.382;
+      const px = cx + Math.cos(ang) * raio;
+      const py = cy + Math.sin(ang) * raio;
+      i === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
+    }
+    g.closePath();
+    g.fill();
+  };
+  const passoX = cL / 12;
+  const passoY = cA / 10;
+  for (let linha = 0; linha < 9; linha++) {
+    const n = linha % 2 === 0 ? 6 : 5;
+    const off = linha % 2 === 0 ? 1 : 2;
+    for (let i = 0; i < n; i++) {
+      estrela(passoX * (off + i * 2), passoY * (linha + 1), passoX * 0.62);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  _bandeira = shared(tex);
+  return _bandeira;
 }
 
 const _m = new THREE.Matrix4();
@@ -177,64 +243,89 @@ export class MoonBase {
     // Sino do motor, embaixo.
     lote.add("escuro", new THREE.CylinderGeometry(1.5, 2.2, 2.6, 16, 1, true), trs(x, solo - 0.4, z));
 
-    /* --------------------------------------------------- a plataforma --- */
-    const RP = 3.6; // m — raio do piso
+    /* ------------------------------------------------- as plataformas ---
+       DUAS, e sem parapeito nenhum.
+
+       O parapeito saiu porque ele resolvia um problema que o jogador não tem:
+       cair de lá é barato na Lua (queda de 28 m é lenta e não machuca) e a
+       grade tapava justamente a linha de tiro rasante, que é o motivo de
+       subir. Sem ela, o topo é um posto de tiro de 360°.
+
+       A do MEIO existe para a subida ter uma etapa. Ir direto ao topo custa
+       quatro dos seis segundos de tanque; parar na metade custa dois, e daí dá
+       para atirar, esperar encher e subir de novo. É a diferença entre um
+       ponto alto e uma rota. */
+    const RP = 3.6; // m — raio do piso do topo
+    const RM = 2.9; // m — o do meio, um pouco menor
     const yPiso = solo + ALTURA;
+    const yMeio = solo + 14;
 
     lote.add("metal", new THREE.CylinderGeometry(RP, RP, 0.35, 22), trs(x, yPiso, z));
-    // Parapeito: um anel de balaústres + o corrimão. Baixo de propósito — é
-    // para tropeçar, não para tapar a mira.
-    lote.add("metal", new THREE.TorusGeometry(RP - 0.15, 0.07, 5, 24), trs(x, yPiso + 1.0, z, Math.PI / 2));
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      lote.add(
-        "metal",
-        new THREE.CylinderGeometry(0.05, 0.05, 1.0, 5),
-        trs(x + Math.cos(a) * (RP - 0.15), yPiso + 0.5, z + Math.sin(a) * (RP - 0.15)),
-      );
-    }
+    lote.add("metal", new THREE.CylinderGeometry(RM, RM, 0.3, 20), trs(x, yMeio, z));
+    // Um friso na borda de cada piso: sem ele o disco some contra o casco e a
+    // plataforma não se lê de baixo.
+    lote.add("aviso", new THREE.TorusGeometry(RP, 0.1, 5, 24), trs(x, yPiso + 0.16, z, Math.PI / 2));
+    lote.add("aviso", new THREE.TorusGeometry(RM, 0.09, 5, 22), trs(x, yMeio + 0.14, z, Math.PI / 2));
+
     // Cone de nariz, acima da plataforma.
     lote.add("casco", new THREE.ConeGeometry(RAIO * 0.66, 5.5, 18), trs(x, yPiso + 3.1, z));
 
-    /* ------------------------------------------------ torre de serviço --- */
-    const tx = x + RAIO + 3.2;
-    for (let y = 0; y < ALTURA; y += 2.4) {
-      lote.add("metal", new THREE.BoxGeometry(2.2, 0.16, 0.16), trs(tx, solo + y, z));
-      lote.add("metal", new THREE.BoxGeometry(0.16, 2.6, 0.16), trs(tx - 1.0, solo + y + 1.2, z));
-      lote.add("metal", new THREE.BoxGeometry(0.16, 2.6, 0.16), trs(tx + 1.0, solo + y + 1.2, z));
-    }
+    /* ---------------------------------------------- baliza de aviação ---
+       Luz vermelha piscando no topo, como em qualquer estrutura alta.
+
+       É uma `PointLight` — a única do cenário. Vale o custo: num céu preto sem
+       névoa, ela é a coisa que localiza a base de qualquer ponto da arena, e o
+       piscar dá ao horizonte um relógio. O mesh emissivo sozinho apareceria,
+       mas não pintaria o cone de nariz de vermelho a cada pulso, que é o que
+       vende a luz como luz. */
+    const yBaliza = yPiso + 6.2;
+    this.beacon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.26, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff2a18, fog: false }),
+    );
+    this.beacon.position.set(x, yBaliza, z);
+    this.group.add(this.beacon);
+
+    this.beaconLight = new THREE.PointLight(0xff2a18, 0, 26, 1.6);
+    this.beaconLight.position.set(x, yBaliza, z);
+    this.group.add(this.beaconLight);
+    this.beaconPhase = 0;
 
     /* ------------------------------------------------------ colisores --- */
     // Corpo: um cilindro só. A flecha não precisa distinguir aleta de anel.
     this.solid(physics, RAPIER.ColliderDesc.cylinder(ALTURA / 2, RAIO), x, solo + ALTURA / 2, z, "foguete");
-    // A plataforma. É ela que o `computedGrounded()` encontra sob os pés.
+    // As plataformas. São elas que o `computedGrounded()` encontra sob os pés.
     this.solid(physics, RAPIER.ColliderDesc.cylinder(0.22, RP), x, yPiso + 0.05, z, "plataforma");
-    // Parapeito: um anel de caixas finas. Um cilindro oco não existe no
-    // Rapier, e uma cápsula fecharia o topo — ninguém conseguiria pousar.
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      this.solid(
-        physics,
-        RAPIER.ColliderDesc.cuboid(RP * 0.42, 0.5, 0.12),
-        x + Math.cos(a) * RP,
-        yPiso + 0.7,
-        z + Math.sin(a) * RP,
-        "parapeito",
-        -a,
-      );
-    }
-    this.solid(physics, RAPIER.ColliderDesc.cuboid(1.2, ALTURA / 2, 0.3), tx, solo + ALTURA / 2, z, "torre");
+    this.solid(physics, RAPIER.ColliderDesc.cylinder(0.2, RM), x, yMeio + 0.05, z, "plataforma-meio");
 
     this.platformY = yPiso;
+    this.midPlatformY = yMeio;
+  }
+
+  /** A baliza pisca: dois lampejos curtos e uma pausa longa, como as de verdade. */
+  update(dt) {
+    if (!this.beaconLight) return;
+    this.beaconPhase = (this.beaconPhase + dt) % 2.6;
+    const t = this.beaconPhase;
+    const aceso = t < 0.12 || (t > 0.34 && t < 0.46);
+    this.beaconLight.intensity = aceso ? 42 : 0;
+    this.beacon.material.opacity = aceso ? 1 : 0.25;
+    this.beacon.material.transparent = true;
   }
 
   /* ----------------------------------------------------------- hábitats --- */
 
   buildHabitats(lote, physics, B, chao) {
+    /* Os domos foram AFASTADOS uns dos outros e da base.
+     *
+     * Amontoados eles liam como um só objeto e, pior, não davam jogo: um duelo
+     * com jetpack precisa de vãos para atravessar e de silhuetas separadas para
+     * contornar. Espalhados, cada peça vira uma referência de navegação — "vou
+     * pelo domo grande" passa a significar alguma coisa. */
     const postos = [
-      { dx: -22, dz: 8, r: 5.2 },
-      { dx: -14, dz: 20, r: 4.4 },
-      { dx: -27, dz: 21, r: 3.8 },
+      { dx: -46, dz: 14, r: 5.6 },
+      { dx: -30, dz: 40, r: 4.6 },
+      { dx: -58, dz: 44, r: 4.0 },
     ];
 
     let anterior = null;
@@ -275,8 +366,8 @@ export class MoonBase {
        que dá para passar. */
     for (let fila = 0; fila < 2; fila++) {
       for (let i = 0; i < 6; i++) {
-        const x = B.x + 16 + fila * 9;
-        const z = B.z - 14 + i * 5.2;
+        const x = B.x + 38 + fila * 14;
+        const z = B.z - 30 + i * 11;
         const y = chao(x, z);
         // Inclinadas para o Sol rasante, como painel de verdade.
         lote.add("painel", new THREE.BoxGeometry(6.4, 0.12, 3.6), trs(x, y + 2.4, z, 0, 0, -0.42));
@@ -286,8 +377,8 @@ export class MoonBase {
   }
 
   buildDish(lote, physics, B, chao) {
-    const x = B.x + 6;
-    const z = B.z + 24;
+    const x = B.x + 22;
+    const z = B.z + 52;
     const y = chao(x, z);
 
     lote.add("metal", new THREE.CylinderGeometry(0.22, 0.3, 4.2, 8), trs(x, y + 2.1, z));
@@ -307,8 +398,8 @@ export class MoonBase {
 
   buildLanderAndRover(lote, physics, B, chao) {
     /* ---------------------------------------------------------- módulo --- */
-    const lx = B.x + 20;
-    const lz = B.z + 16;
+    const lx = B.x + 44;
+    const lz = B.z + 34;
     const ly = chao(lx, lz);
     lote.add("ouro", new THREE.BoxGeometry(4.2, 2.4, 4.2), trs(lx, ly + 2.2, lz));
     lote.add("casco", new THREE.CylinderGeometry(1.6, 2.0, 1.8, 8), trs(lx, ly + 4.2, lz));
@@ -320,8 +411,8 @@ export class MoonBase {
     this.solid(physics, RAPIER.ColliderDesc.cuboid(2.2, 1.8, 2.2), lx, ly + 2.2, lz, "módulo");
 
     /* ----------------------------------------------------------- rover --- */
-    const rx = B.x - 8;
-    const rz = B.z - 12;
+    const rx = B.x - 26;
+    const rz = B.z - 34;
     const ry = chao(rx, rz);
     lote.add("casco", new THREE.BoxGeometry(3.2, 0.7, 1.9), trs(rx, ry + 1.0, rz));
     lote.add("escuro", new THREE.BoxGeometry(1.3, 0.8, 1.5), trs(rx - 0.7, ry + 1.7, rz));
@@ -345,7 +436,7 @@ export class MoonBase {
     const rnd = makeRandom(31415);
     for (let i = 0; i < 14; i++) {
       const a = rnd() * Math.PI * 2;
-      const d = 12 + rnd() * 26;
+      const d = 18 + rnd() * 58;
       const x = B.x + Math.cos(a) * d;
       const z = B.z + Math.sin(a) * d;
       const y = chao(x, z);
@@ -358,14 +449,38 @@ export class MoonBase {
     }
   }
 
-  /** A bandeira. RÍGIDA — não há vento para tremular, e é isso que a torna certa. */
+  /**
+   * A bandeira dos Estados Unidos, como a que ficou lá em 1969.
+   *
+   * RÍGIDA, e essa é a parte interessante: ela tem uma barra horizontal no topo
+   * justamente porque não há vento na Lua — sem a barra, o pano penderia morto
+   * ao longo do mastro e não apareceria em foto nenhuma. O detalhe que parece
+   * um erro de física é, na verdade, a solução que a NASA teve de inventar.
+   *
+   * Fica FORA do grupo fundido porque precisa da própria textura; é uma chamada
+   * de desenho a mais, e a única do cenário que se paga sozinha.
+   */
   buildFlag(lote, B, chao) {
-    const x = B.x - 5;
-    const z = B.z + 9;
+    const x = B.x - 14;
+    const z = B.z + 22;
     const y = chao(x, z);
-    lote.add("metal", new THREE.CylinderGeometry(0.055, 0.055, 3.2, 6), trs(x, y + 1.6, z));
-    lote.add("metal", new THREE.CylinderGeometry(0.04, 0.04, 1.3, 5), trs(x + 0.65, y + 3.1, z, 0, 0, Math.PI / 2));
-    lote.add("aviso", new THREE.BoxGeometry(1.25, 0.78, 0.03), trs(x + 0.64, y + 2.72, z));
+
+    lote.add("metal", new THREE.CylinderGeometry(0.045, 0.045, 3.2, 6), trs(x, y + 1.6, z));
+    lote.add("metal", new THREE.CylinderGeometry(0.035, 0.035, 1.42, 5), trs(x + 0.71, y + 3.06, z, 0, 0, Math.PI / 2));
+
+    const pano = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4, 0.74),
+      new THREE.MeshStandardMaterial({
+        map: bandeiraTextura(),
+        roughness: 0.95,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      }),
+    );
+    pano.position.set(x + 0.7, y + 2.68, z + 0.004);
+    pano.castShadow = true;
+    pano.receiveShadow = true;
+    this.group.add(pano);
   }
 
   /* ------------------------------------------------------------ auxiliar -- */

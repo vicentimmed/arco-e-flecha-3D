@@ -74,6 +74,21 @@ export class PlayerPhysics {
     // resolvidos pelos colisores de troncos, rochas e cercas.
     this.controller.setMaxSlopeClimbAngle(Math.PI * 0.495);
 
+    /* DEGRAU AUTOMÁTICO — é isto que destrava as bordas de cratera.
+     *
+     * O terreno é um trimesh, e um trimesh não tem "rampa": tem triângulos. Na
+     * borda de uma cratera, onde o relevo sobe rápido dentro de uma célula de
+     * um metro, dois triângulos vizinhos formam um DEGRAU quase vertical. O
+     * controlador de personagem escorrega em rampas mas não sobe degraus, e
+     * como no chão o movimento vertical pedido é zero, ele não tinha por onde
+     * subir: o jogador simplesmente parava, com a tecla apertada e sem sair do
+     * lugar.
+     *
+     * Meio metro cobre qualquer lábio que a malha produza (a célula tem 1,15 m
+     * no miolo da arena) sem virar teleporte para cima de caixas — a largura
+     * mínima de 0,2 m exige que exista superfície onde pisar do outro lado. */
+    this.controller.enableAutostep(0.5, 0.2, true);
+
     const feetY = player.terrain.heightAt(player.position.x, player.position.z);
     player.position.y = feetY;
     const centerY = feetY + CONFIG.player.height / 2;
@@ -206,7 +221,15 @@ export class PlayerPhysics {
     const sobreColisor = descendo && this.controller.computedGrounded();
 
     if (sobreTerreno) {
-      ny = feetGround;
+      /* A folga de 2 cm não é frescura.
+       *
+       * `heightAt` é uma função contínua; o colisor é um trimesh que a
+       * amostra nos vértices. Entre dois vértices, onde o relevo é curvo — a
+       * borda de uma cratera é o caso —, o triângulo plano fica ACIMA da
+       * curva. Colar a cápsula na altura analítica a enfia dentro da malha, e
+       * um colisor penetrado é um colisor que não deixa mais ninguém andar.
+       * Erguer dois centímetros custa nada de visual e nunca penetra. */
+      ny = feetGround + 0.02;
       this.verticalVelocity = 0;
       this.grounded = true;
       p.airborne = false;

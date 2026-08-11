@@ -52,9 +52,12 @@ export class MoonLevel {
     return [];
   }
 
-  update() {
-    /* Nada se mexe sozinho aqui — ainda. Sem ar, não há balanço de grama nem
-       bandeira tremulando, e é essa quietude que o vácuo tem de transmitir. */
+  update(dt) {
+    /* Quase nada se mexe sozinho aqui: sem ar não há balanço de grama nem
+       bandeira tremulando, e é essa quietude que o vácuo transmite. O que pisca
+       é a baliza do foguete — e ela pisca justamente porque é a única coisa
+       viva num horizonte parado. */
+    this.base?.update(dt);
   }
 
   dispose() {

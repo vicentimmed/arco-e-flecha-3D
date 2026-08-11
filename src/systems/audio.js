@@ -50,6 +50,43 @@ function makeNoiseBuffer(ctx, duration, type = "impact") {
   return buffer;
 }
 
+/**
+ * O rugido do jetpack — um segundo, feito para dar LOOP contínuo.
+ *
+ * Ruído rosa (graves reforçados) atravessado por um zumbido baixo. O ruído
+ * branco puro sai fino demais e lê como chiado de rádio; o que faz um motor de
+ * foguete soar como motor é a energia embaixo.
+ *
+ * As duas pontas são casadas em `crossfade`: um buffer que começa e termina em
+ * amostras diferentes estala a cada volta, e a cada volta significa uma vez por
+ * segundo enquanto o jogador voa.
+ */
+function makeJetBuffer(ctx) {
+  const duration = 1.0;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  // Filtro de um polo: transforma ruído branco em rosa, barato.
+  let low = 0;
+  let phase = 0;
+  for (let i = 0; i < length; i++) {
+    const branco = Math.random() * 2 - 1;
+    low = low * 0.92 + branco * 0.08;
+    phase += (TAU * 58) / sampleRate; // zumbido grave do fluxo
+    data[i] = low * 2.6 + Math.sin(phase) * 0.09;
+  }
+
+  // Casa o fim com o começo para o loop não estalar.
+  const crossfade = Math.floor(sampleRate * 0.05);
+  for (let i = 0; i < crossfade; i++) {
+    const k = i / crossfade;
+    data[i] = data[i] * k + data[length - crossfade + i] * (1 - k);
+  }
+  return buffer;
+}
+
 /** Sopro curto de lâmina atravessando o ar. */
 function makeKnifeSwingBuffer(ctx) {
   const duration = 0.28;
@@ -461,6 +498,8 @@ export class AudioSystem {
     this.crickets.setLoop(true);
     this.crickets.setVolume(CRICKETS_VOLUME);
     this._ambientMode = "day"; // "day" | "night"
+    /** Fase sem ar: cala TODOS os ambientes. Ver `setAmbientSpace`. */
+    this._ambientSpace = false;
     this._ambientHowlTimer = 0;
     this.howlClips = null;
     this._loadAmbient(this.birds, passarosUrl, () => this._syncAmbient());
@@ -500,6 +539,7 @@ export class AudioSystem {
     this.buffers.hitCharacter = makeToneBuffer(this.ctx, 120, 0.2);
     this.buffers.hitScenery = makeNoiseBuffer(this.ctx, 0.14, "impact");
     this.buffers.knifeSwing = makeKnifeSwingBuffer(this.ctx);
+    this.buffers.jet = makeJetBuffer(this.ctx);
 
     // Alce: berro de peito, grave e com rosnado. O de dor é curto e sobe de
     // volta; o de morte é longo e só desce.
@@ -796,8 +836,56 @@ export class AudioSystem {
     }, AMBIENT_HOWL_VOLUME);
   }
 
+  /**
+   * Vácuo: NENHUM ambiente.
+   *
+   * Não é o mesmo que baixar o volume — é a ausência de meio. Sem ar não há o
+   * que vibrar, e um loop de passarinhos na Lua é a coisa mais absurda que o
+   * jogo poderia tocar. A trilha continua: música é do jogador, não do mundo.
+   */
+  /**
+   * O jato queimando: um loop que liga e desliga com rampa.
+   *
+   * A rampa de 80 ms existe porque cortar um som contínuo no zero estala, e o
+   * jetpack liga e desliga muitas vezes por voo — em pulsos, que é como ele foi
+   * feito para ser usado. Um estalo por pulso seria insuportável.
+   *
+   * Não é 3D: é o SEU jetpack, preso às suas costas. Espacializá-lo faria o som
+   * girar quando a câmera de terceira pessoa orbita, e o motor nas costas de
+   * alguém não gira em volta da cabeça dele.
+   */
+  setJet(ligado, intensidade = 1) {
+    if (!this.unlocked || !this.buffers.jet) return;
+
+    if (!this._jetNode) {
+      const fonte = this.ctx.createBufferSource();
+      fonte.buffer = this.buffers.jet;
+      fonte.loop = true;
+      const ganho = this.ctx.createGain();
+      ganho.gain.value = 0;
+      fonte.connect(ganho).connect(this.ctx.destination);
+      fonte.start();
+      this._jetNode = { fonte, ganho };
+    }
+
+    const alvo = ligado ? 0.34 * intensidade : 0;
+    const g = this._jetNode.ganho.gain;
+    g.cancelScheduledValues(this.ctx.currentTime);
+    g.setTargetAtTime(alvo, this.ctx.currentTime, 0.08);
+  }
+
+  setAmbientSpace(vacuo) {
+    this._ambientSpace = !!vacuo;
+    this._syncAmbient();
+  }
+
   _syncAmbient() {
     if (!this.unlocked) return;
+    if (this._ambientSpace) {
+      this._playOrStop(this.birds, false);
+      this._playOrStop(this.crickets, false);
+      return;
+    }
     const dia = this._ambientMode !== "night";
     this._playOrStop(this.birds, dia);
     this._playOrStop(this.crickets, !dia);

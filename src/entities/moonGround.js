@@ -31,15 +31,20 @@ import { MoonField } from "../shared/moonField.js";
 import { focusWarp, applyTerrainDetail } from "./environment.js";
 import { smoothstep } from "../utils/math.js";
 
-/* Regolito é CINZA-ESCURO, quase marrom (albedo ~0,12) — não branco. O branco é
-   o erro nº 1 de cenário lunar: ele vem da foto sobre-exposta, não do chão. O
-   contraste vem da luz rasante e das sombras quase pretas, não da tinta. */
+/* Regolito CLARO e neutro — cinza de cimento, não o pardo-escuro de antes.
+   Fisicamente o albedo lunar é baixo (~0,12), mas o que se vê nas fotos da
+   Apollo é uma superfície CLARA: a luz do Sol sem atmosfera é brutal, e o olho
+   (e a câmera) leem o resultado, não o albedo. Escurecer por fidelidade ao
+   número deixava a Lua com cara de asfalto molhado.
+
+   O tom também saiu do pardo para o neutro: regolito é basalto moído, e o
+   marrom vinha do sol amarelado do vale, que aqui já não existe. */
 const PALETA = {
-  regolito: new THREE.Color("#6b6459"),
-  fundo: new THREE.Color("#3b3731"), // dentro das tigelas, onde a luz não bate
-  mare: new THREE.Color("#4a4740"), // os "mares": manchas mais escuras
-  borda: new THREE.Color("#8a8378"), // material fresco escavado, ainda claro
-  raio: new THREE.Color("#9d968a"), // estrias de ejeção (efeito Tycho)
+  regolito: new THREE.Color("#b9b6b0"),
+  fundo: new THREE.Color("#7d7a75"), // dentro das tigelas, onde a luz não bate
+  mare: new THREE.Color("#9a9791"), // os "mares": manchas mais escuras
+  borda: new THREE.Color("#d6d3cc"), // material fresco escavado, ainda claro
+  raio: new THREE.Color("#e8e5de"), // estrias de ejeção (efeito Tycho)
 };
 
 const _cor = new THREE.Color();

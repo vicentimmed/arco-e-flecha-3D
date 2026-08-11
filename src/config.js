@@ -832,6 +832,14 @@ export const CONFIG = {
          mirar, e o duelo viraria uma troca de tiros entre dois pontos no céu. */
       jumpSpeed: 2.9, // m/s
 
+      /* Corrida pela METADE (9,6 → 4,8 m/s).
+         Correr num traje pressurizado a 1/6 de g não é correr: os astronautas
+         da Apollo saltitavam porque a tração não segura a passada. Além da
+         verossimilhança, isto conserta um problema de jogo — com a corrida
+         cheia, atravessar os 330 m da arena era rápido demais e o jetpack
+         deixava de ser a forma interessante de se locomover. */
+      runMultiplier: 0.5,
+
       /* ---------------------------------------------------------- barreira --
          Arena de 330 m de diâmetro: três vezes o anel de duelo do vale. O
          centro cai no ponto mais denso da malha. */

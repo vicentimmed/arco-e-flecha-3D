@@ -18,7 +18,12 @@ import { entityRegistry } from "./core/entityRegistry.js";
 import { gameEvents, EventType, vec3Payload } from "./core/events.js";
 import { Renderer } from "./core/renderer.js";
 import { LevelManager, DEFAULT_LEVEL } from "./levels/index.js";
-import { levelPhysics, levelInfo, levelAllowsMode } from "./shared/levels.js";
+import {
+  levelPhysics,
+  levelInfo,
+  levelAllowsMode,
+  levelHasFauna,
+} from "./shared/levels.js";
 import { Player } from "./entities/player.js";
 import { ArrowManager } from "./entities/arrow.js";
 import { Wind } from "./systems/wind.js";
@@ -1371,6 +1376,7 @@ class Game {
        ρ (ver `entities/arrow.js`). Não existe um `if (lua)` na aerodinâmica. */
     CONFIG.physics.airDensity = f.airDensity;
     CONFIG.player.jumpSpeed = f.jumpSpeed;
+    CONFIG.player.runSpeed = f.runSpeed;
     CONFIG.arrow.maxLifetime = f.arrow.maxLifetime;
     CONFIG.arrow.maxAltitude = f.arrow.maxAltitude;
 
@@ -1394,6 +1400,22 @@ class Game {
     /* O jetpack é EQUIPAMENTO DA FASE, não do jogador: quem vai à Lua ganha um,
        quem volta ao vale devolve. Passar `null` restaura o movimento de sempre,
        sem nenhum `if (lua)` dentro do caminho do salto. */
+    /* Fase sem fauna: nada de canto de passarinho e nada de contador de porco
+       na tela. Uma decisão, duas consequências.
+     *
+     * O que NÃO se faz aqui é limpar os bichos. Esta função roda DEPOIS do
+     * `physics.recreate()`, e `birds.clear()` remove os corpos de cada ave do
+     * mundo — do mundo que acabou de ser liberado. O Rapier responde a isso com
+     * um "null pointer passed to rust" que derruba a troca inteira no meio, e o
+     * sintoma visível é outro: a fase troca, mas a gravidade e o HUD ficam com
+     * os valores antigos, porque a exceção abortou o resto desta função.
+     *
+     * A varredura de bichos é do `beforeLevelDispose`, que roda ANTES da troca
+     * de mundo e já limpa todos eles. */
+    const temFauna = levelHasFauna(id);
+    this.audio?.setAmbientSpace(!temFauna);
+    this.hud?.setFauna(temFauna);
+
     this.jetpack = f.jetpack ? new Jetpack(f.jetpack) : null;
     this.playerPhysics?.setJetpack(this.jetpack);
     this.player?.setJetpackVisible(!!this.jetpack);
@@ -1767,6 +1789,9 @@ class Game {
     // O fogo nos bocais do PRÓPRIO boneco. Vai antes do `return` porque apagar
     // também é trabalho: sem isto a chama fica acesa depois de soltar a tecla.
     this.player.setJetFlame(j?.active ? 1 : 0);
+    // O rugido acompanha, e enfraquece junto com o tanque: o motor morrendo
+    // é o aviso que se ouve sem tirar o olho da mira.
+    this.audio.setJet(!!j?.active, j ? 0.55 + 0.45 * j.fuelFraction : 0);
     if (!j?.active) return;
 
     this._jetPuff = (this._jetPuff ?? 0) + dt;
@@ -1795,21 +1820,40 @@ class Game {
     const p = this.player;
     const noChao = !p.airborne;
 
+    /* A poeira do POUSO, proporcional à altura da queda.
+     *
+     * Antes era uma nuvem de tamanho fixo: descer do topo do foguete levantava
+     * a mesma pitada que um pulinho no lugar. Medindo o ponto mais alto do voo
+     * e comparando com onde os pés tocaram, a nuvem passa a CONTAR a queda —
+     * quem viu o baque de longe sabe que veio de cima. */
+    if (!noChao) {
+      this._apiceQueda = Math.max(this._apiceQueda ?? p.position.y, p.position.y);
+    }
+
     if (this._eraAereo && noChao) {
+      const altura = Math.max(0, (this._apiceQueda ?? p.position.y) - p.position.y);
+      /* Satura em 30 m: acima disso a nuvem já ocupa a tela inteira, e crescer
+         mais só atrapalharia a mira de quem acabou de pousar. */
+      const f = Math.min(1, altura / 30);
+      const cor = this.levelPhysicsInfo?.airDensity <= 0 ? 0xcfcac2 : 0xa8926a;
+
       gameEvents.emit(EventType.PARTICLES, {
         position: vec3Payload(p.position),
-        count: 14,
-        color: 0xa8926a,
-        speed: 2.4,
-        spread: 0.95,
-        direction: { x: 0, y: 0.35, z: 0 },
-        size: 0.12,
-        grow: 1.8,
-        life: 0.7,
-        gravity: -1.6,
-        drag: 3.2,
-        alpha: 0.42,
+        count: Math.round(14 + 70 * f),
+        color: cor,
+        speed: 2.4 + 5.5 * f,
+        // A nuvem abre PARA OS LADOS quanto mais forte o impacto: é o ar (ou,
+        // na Lua, o próprio material) escapando por baixo do pé.
+        spread: 0.95 + 0.5 * f,
+        direction: { x: 0, y: 0.35 - 0.2 * f, z: 0 },
+        size: 0.12 + 0.16 * f,
+        grow: 1.8 + 1.4 * f,
+        life: 0.7 + 1.6 * f,
+        gravity: CONFIG.physics.gravity * 0.16,
+        drag: 3.2 - 2.4 * f,
+        alpha: 0.42 + 0.3 * f,
       });
+      this._apiceQueda = null;
     }
     this._eraAereo = !noChao;
 
@@ -2213,6 +2257,7 @@ class Game {
     this.hud.setDraw(fraction, fraction > 0 ? drawSpeed(this.drawTime) : 0);
     this.hud.setFocus(this.aim.focusDistance, this.aim.hasFocus);
     this.hud.setFuel(this.jetpack);
+    this.hud.setFps(this.fps);
     this.hud.setWind(
       this.wind.speed,
       this.wind.relativeAngle(this.aimYaw ?? 0),

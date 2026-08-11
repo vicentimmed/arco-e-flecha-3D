@@ -1565,3 +1565,47 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* ----------------------------------------------------------- medidor de FPS -
+   Canto direito, acima dos chips de situação. Sempre visível, em todos os
+   modos — quando o jogo engasga, esta é a primeira pergunta, e ela não pode
+   depender de lembrar o atalho do painel de depuração.
+
+   As cores são um semáforo: verde acima de 50, âmbar entre 30 e 50, vermelho
+   abaixo. O número sozinho não diz se está bom; a cor diz. */
+#fps-meter {
+  position: absolute;
+  /* Canto INFERIOR direito. O superior já é uma pilha ajustada de chips
+     (vento, mira, porcos, fauna, horda) com posições absolutas encaixadas uma
+     na outra; enfiar o medidor lá empurraria as cinco. Aqui embaixo ele fica
+     no canto direito que o pedido pede, sozinho, e longe do retículo. */
+  bottom: 12px;
+  right: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-stroke);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  font-variant-numeric: tabular-nums;
+  z-index: 5;
+}
+
+#fps-meter b {
+  font-size: 14px;
+  font-weight: 700;
+  color: #6ee7a0;
+  text-shadow: var(--text-shadow);
+}
+
+#fps-meter span {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: var(--ui-dim);
+}
+
+#fps-meter.medio b { color: #ffc457; }
+#fps-meter.baixo b { color: #ff5f52; }

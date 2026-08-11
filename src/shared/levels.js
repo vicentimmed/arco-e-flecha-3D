@@ -40,6 +40,7 @@ export const LEVEL_INFO = {
     modos: [
       "free",
       "duel",
+      "teamDuel",
       "boarHunt",
       "series",
       "elkHunt",
@@ -57,7 +58,7 @@ export const LEVEL_INFO = {
     /* Só livre e duelo. Porcos, alces, pássaros, zumbis e a série de alvos
        dependem de bacia plana, copas de árvore e trilha de terra — coisas que
        não existem lá, e fingir que existem seria pior que recusar. */
-    modos: ["free", "duel"],
+    modos: ["free", "duel", "teamDuel"],
     /* DUELO SEM CONVITE.
      *
      * No vale o duelo é convite porque arrasta gente para uma briga no meio do

@@ -322,6 +322,11 @@ export class Input {
           // como o 9 faz com a fase.
           this.actions.toggleBot = e.shiftKey ? "remove" : "add";
           break;
+        case "KeyG":
+          // G de grupo: humanos contra a máquina. Não cabe em dígito — 1–8 já
+          // são dos outros modos e o 9 é da fase.
+          this.actions.setMode = "teamDuel";
+          break;
         case "KeyN":
           // N de nível. Shift+N volta — a mesma tecla nos dois sentidos, como o
           // B faz com os bots e o 9 com a fase.

@@ -230,6 +230,8 @@ export const S2C = {
   /** Acontecimento do espaço que não cabe numa amostra de 10 Hz:
    *  `{ kind: "explosion"|"meteorBurst", p, r, seed? }`. */
   SPACE_EVENT: "spaceEvent",
+  /** Placar do duelo de times: `{ humans, bots }`. */
+  TEAM_SCORES: "teamScores",
   /** Transformações dos zumbis, 10 Hz: `{ z: [...] }`. */
   ZOMBIES: "zombies",
   /** Chefão levou flecha: `{ id, c?, head }` — clarão vermelho nas outras telas. */

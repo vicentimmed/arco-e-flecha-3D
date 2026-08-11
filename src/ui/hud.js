@@ -58,6 +58,7 @@ const ATALHOS = [
     itens: [
       [["1"], "livre"],
       [["2"], "duelo"],
+      [["G"], "duelo de times (humanos × CPU)"],
       [["3"], "caçada aos porcos"],
       [["4"], "alvos em série"],
       [["5"], "caçada ao alce"],
@@ -233,6 +234,19 @@ export class HUD {
       <!-- Modo zumbi: horda, zumbis restantes e vidas. Fica junto dos outros
            chips de situação, e não no meio da tela, porque é informação que se
            consulta de relance entre um tiro e outro. -->
+      <!-- Placar do duelo de times. O time à frente fica destacado: é a única
+           informação que importa num relance, e ler dois números para descobrir
+           quem ganha é trabalho demais no meio de um tiroteio. -->
+      <div class="chip" id="team-chip" hidden>
+        <span class="team-lado" id="team-humans">
+          <span class="label">Humanos</span><span class="value" id="team-humans-v">0</span>
+        </span>
+        <span class="team-x">×</span>
+        <span class="team-lado" id="team-bots">
+          <span class="value" id="team-bots-v">0</span><span class="label">CPU</span>
+        </span>
+      </div>
+
       <div class="chip" id="zombie-chip" hidden>
         <span class="label">Horda</span><span class="value" id="zombie-horde">1</span>
         <span class="label">Zumbis</span><span class="value" id="zombie-left">0</span>
@@ -307,6 +321,11 @@ export class HUD {
       waveBanner: root.querySelector("#wave-banner"),
       waveN: root.querySelector("#wave-n"),
       waveSize: root.querySelector("#wave-size"),
+      teamChip: root.querySelector("#team-chip"),
+      teamHumans: root.querySelector("#team-humans"),
+      teamBots: root.querySelector("#team-bots"),
+      teamHumansV: root.querySelector("#team-humans-v"),
+      teamBotsV: root.querySelector("#team-bots-v"),
       zombieChip: root.querySelector("#zombie-chip"),
       zombieHorde: root.querySelector("#zombie-horde"),
       zombieLeft: root.querySelector("#zombie-left"),
@@ -537,6 +556,7 @@ export class HUD {
         {
           free: "MODO LIVRE",
           duel: "DUELO",
+          teamDuel: "DUELO DE TIMES",
           boarHunt: "CAÇADA AOS PORCOS",
           birdHunt: "CAÇA AOS PÁSSAROS",
           series: "ALVOS EM SÉRIE",
@@ -554,6 +574,26 @@ export class HUD {
             : "   1 para sair",
       ),
     );
+  }
+
+  /**
+   * Placar dos dois times, no alto da tela.
+   *
+   * @param {{humans:number, bots:number}|null} placar null esconde o painel
+   */
+  setTeamScores(placar) {
+    const chip = this.el.teamChip;
+    if (!placar) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    this.el.teamHumansV.textContent = String(placar.humans ?? 0);
+    this.el.teamBotsV.textContent = String(placar.bots ?? 0);
+    const h = (placar.humans ?? 0) > (placar.bots ?? 0);
+    const b = (placar.bots ?? 0) > (placar.humans ?? 0);
+    this.el.teamHumans.classList.toggle("liderando", h);
+    this.el.teamBots.classList.toggle("liderando", b);
   }
 
   /* --------------------------------------------------------------- zumbis -- */

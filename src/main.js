@@ -73,6 +73,7 @@ function isZombieMode(mode) {
 /** Nomes legíveis para o diálogo de confirmação ao trocar de modo. */
 const MODE_LABELS = {
   free: "modo livre",
+  teamDuel: "duelo de times",
   boarHunt: "caçada aos porcos",
   birdHunt: "caça aos pássaros",
   series: "alvos em série",
@@ -291,6 +292,8 @@ class Game {
     this.knifeHitIds = new Set();
     /** Em que plataforma o jogador está de pé agora, ou null. Ver `updateRideables`. */
     this.rideando = null;
+    /** Placar do duelo de times, vindo da sala. */
+    this.teamScores = { humans: 0, bots: 0 };
     this.accumulator = 0;
     this.lastTime = performance.now();
     this.fps = 60;
@@ -520,6 +523,7 @@ class Game {
       if (msg.snapshot.mode?.preparing) {
         this.beginModePreparation(msg.snapshot.mode.preparing);
       }
+      this.teamScores = msg.snapshot.teamScores ?? { humans: 0, bots: 0 };
       this.scoreboard.setScores(msg.snapshot.scores);
       this.hud.setConnection(true);
     });
@@ -901,6 +905,11 @@ class Game {
     /* Explosão e estilhaço: aqui é SÓ o efeito. Quem morreu já foi decidido
        pela sala e chega (ou chegou) por `S2C.KILL`. */
     net.on(S2C.SPACE_EVENT, (msg) => this.environment?.space?.onEvent(msg));
+
+    net.on(S2C.TEAM_SCORES, (msg) => {
+      this.teamScores = { humans: msg.humans ?? 0, bots: msg.bots ?? 0 };
+      this.hud.setTeamScores(this.mode === "teamDuel" ? this.teamScores : null);
+    });
 
     net.on(S2C.SCORES, (msg) => this.scoreboard.setScores(msg.scores));
     net.on(S2C.SCORES_RESET, (msg) => {
@@ -1298,6 +1307,8 @@ class Game {
     if (mudouModo) this.cancelKnifeAttack();
     this.mode = msg.mode;
     this.scoreboard.setMode(msg.mode);
+    // O placar de times só existe no modo dele.
+    this.hud.setTeamScores(msg.mode === "teamDuel" ? this.teamScores : null);
 
     /* No modo série, os sete alvos fixos SOMEM — o campo fica limpo e existe um
        alvo só, o da vez. Deixá-los na cena tiraria o sentido do modo: com alvos

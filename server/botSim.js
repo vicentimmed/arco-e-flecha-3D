@@ -201,11 +201,21 @@ export class Bot {
     return this.mirarEAtirar(dt, alvoTiro);
   }
 
+  /**
+   * O adversário mais próximo.
+   *
+   * `semFogoAmigo` liga no duelo de times: lá os bots são UM TIME, e um time
+   * que se mata sozinho não é adversário de ninguém — no primeiro teste eles
+   * abriram o placar entre si antes de qualquer pessoa atirar. Fora do modo de
+   * times eles continuam caçando uns aos outros, que é o que torna dois bots
+   * numa sala vazia uma demonstração da IA.
+   */
   escolherAlvo(alvos) {
     let melhor = null;
     let melhorD = Infinity;
     for (const e of alvos) {
       if (!e || e.id === this.id || !e.alive) continue;
+      if (this.semFogoAmigo && e.isBot) continue;
       const d = dist2(e.position, this.position);
       if (d < melhorD) {
         melhorD = d;
@@ -699,10 +709,14 @@ export class BotSquad {
     return this.setDifficulty(nomes[(i + passo + nomes.length) % nomes.length]);
   }
 
-  /** @returns {Array<{bot: Bot, tiro: object}>} os tiros deste passo */
-  update(dt, alvos, bichos) {
+  /**
+   * @param {boolean} semFogoAmigo no duelo de times os bots são um time só
+   * @returns {Array<{bot: Bot, tiro: object}>} os tiros deste passo
+   */
+  update(dt, alvos, bichos, semFogoAmigo = false) {
     const tiros = [];
     for (const b of this.list) {
+      b.semFogoAmigo = semFogoAmigo;
       const tiro = b.update(dt, alvos, bichos);
       if (tiro) tiros.push({ bot: b, tiro });
     }

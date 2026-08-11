@@ -222,6 +222,44 @@ body {
 
 /* ------------------------------------------------------------- zumbis ----- */
 
+/* -------------------------------------------------------- duelo de times ---
+   Fica no ALTO E AO CENTRO, e não na coluna direita com os outros chips: é o
+   placar da partida, e num duelo de times ele é a informação que se consulta
+   com mais frequência. Escondê-lo na lateral seria pedir que se procure. */
+#team-chip {
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  gap: 10px;
+  font-size: 14px;
+  border-color: rgba(224, 194, 74, 0.45);
+}
+
+#team-chip[hidden] {
+  display: none;
+}
+
+.team-lado {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.62;
+  transition: opacity 0.2s;
+}
+
+/* O time à frente acende. É a leitura de relance — quem está ganhando. */
+.team-lado.liderando {
+  opacity: 1;
+}
+
+.team-lado.liderando .value {
+  color: #ffd873;
+}
+
+.team-x {
+  opacity: 0.4;
+}
+
 #zombie-chip {
   top: 200px;
   right: 18px;

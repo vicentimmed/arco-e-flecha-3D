@@ -131,6 +131,13 @@ export class Room {
      * noutro, e o placar mentiria. Aqui quem aperta V muda para todo mundo.
      */
     this.windInfluence = true;
+    /* Placar do duelo de times.
+     *
+     * Não há nada a conferir aqui, e é essa a diferença que o Bloco B trouxe:
+     * o servidor é dono dos DOIS lados, então ele sabe quem matou quem sem
+     * perguntar a nenhum cliente. */
+    this.teamScores = { humans: 0, bots: 0 };
+
     /** Quem apertou "quero duelar" e ainda não desistiu. */
     this.duelInvites = new Set();
     this.inviteExpires = 0;
@@ -242,7 +249,7 @@ export class Room {
 
     const personagens = this.characterViews();
     const bichos = this.botPrey();
-    const tiros = this.bots.update(dt, personagens, bichos);
+    const tiros = this.bots.update(dt, personagens, bichos, this.mode === "teamDuel");
 
     // A pose de cada bot entra no mesmo formato dos humanos.
     for (const b of this.bots.list) {
@@ -359,6 +366,7 @@ export class Room {
     vitima.alive = false;
     vitima.score.deaths++;
     bot.score.kills++;
+    this.pontuarTime(vitima, bot);
 
     this.broadcastAll({
       t: S2C.KILL,
@@ -525,7 +533,11 @@ export class Room {
       modo === "series" ||
       modo === "elkHunt" ||
       modo === "zombie" ||
-      modo === "zombieBoss"
+      modo === "zombieBoss" ||
+      // O duelo de times entra como os cooperativos: quem aperta liga para a
+      // sala inteira. Não é convite porque não arrasta ninguém para brigar com
+      // ninguém — o adversário é a máquina.
+      modo === "teamDuel"
     ) {
       if (this.needsPreparation(modo, fase)) {
         this.prepareMode(modo, fase);
@@ -684,6 +696,24 @@ export class Room {
 
     this.resetWorld();
 
+    /* DUELO DE TIMES: começa parelho, um bot por humano.
+     *
+     * Depois disso o número é livre — quem quiser aperta B e engrossa o time da
+     * máquina no meio da partida. O equilíbrio inicial existe para a partida
+     * COMEÇAR justa; mantê-lo à força tiraria a única alavanca de dificuldade
+     * que o modo tem. Sair do modo desfaz a esquadra: um adversário sobrando
+     * depois que a partida acabou é alguém que ninguém convidou. */
+    if (modo === "teamDuel") {
+      const humanos = Math.max(1, this.players.size);
+      while (this.bots.count > humanos) this.removeBot();
+      while (this.bots.count < humanos) {
+        if (!this.addBot()) break;
+      }
+      this.broadcastTeamScores();
+    } else if (anterior === "teamDuel") {
+      this.clearBots();
+    }
+
     /* Em todo modo, ao entrar: todo mundo renasce piscando e é reposicionado.
        O drop padrão faz uma queda legível; a noite passa `drop: 0` para que a
        horda comece no chão, sem o pico visual da queda durante a transição. */
@@ -750,6 +780,7 @@ export class Room {
    * uma série de alvos é exatamente o tipo de sobra que a regra nova elimina.
    */
   resetWorld() {
+    this.teamScores = { humans: 0, bots: 0 };
     this.hunt.stop();
     this.hunt.boars = [];
     this.elks.stop();
@@ -1673,6 +1704,7 @@ export class Room {
     vitima.alive = false;
     vitima.score.deaths++;
     player.score.kills++;
+    this.pontuarTime(vitima, player);
 
     this.broadcastAll({
       t: S2C.KILL,
@@ -2085,6 +2117,7 @@ export class Room {
       series: this.series.view(),
       mode: this.modeView(),
       scores: this.scores(),
+      teamScores: this.teamScores,
     };
   }
 
@@ -2460,6 +2493,7 @@ export class Room {
     vitima.alive = false;
     vitima.score.deaths++;
     killer.score.kills++;
+    this.pontuarTime(vitima, killer);
 
     this.broadcastAll({
       t: S2C.KILL,
@@ -2558,6 +2592,36 @@ export class Room {
 
   broadcastScores() {
     this.broadcastAll({ t: S2C.SCORES, scores: this.scores() });
+  }
+
+  broadcastTeamScores() {
+    this.broadcastAll({ t: S2C.TEAM_SCORES, ...this.teamScores });
+  }
+
+  /**
+   * Um abate marcou ponto para um time.
+   *
+   * Um lugar só, chamado pelos três caminhos de morte (flecha de humano, flecha
+   * de bot e faca). Repare que não há nada a CONFERIR: o servidor é dono das
+   * duas pontas, então o placar é um fato, não uma declaração de cliente. Era
+   * essa a diferença que faltava — com bots locais, este número teria de vir
+   * por confiança.
+   *
+   * SÓ PONTUA QUEM MATA O TIME CONTRÁRIO. Sem esta checagem, dois bots se
+   * acertando marcavam ponto para os humanos, e o placar abria 2 × 0 antes de
+   * qualquer pessoa atirar — foi exatamente o que aconteceu no primeiro teste.
+   * Fogo amigo não é ponto de ninguém, dos dois lados.
+   *
+   * A morte causada pela Lua (alien, explosão) também não conta: não é o outro
+   * time que matou, é o cenário.
+   */
+  pontuarTime(vitima, matador) {
+    if (this.mode !== "teamDuel") return;
+    if (!matador) return;
+    const mesmoTime = !!vitima.isBot === !!matador.isBot;
+    if (mesmoTime) return;
+    this.teamScores[vitima.isBot ? "humans" : "bots"]++;
+    this.broadcastTeamScores();
   }
 
   /**

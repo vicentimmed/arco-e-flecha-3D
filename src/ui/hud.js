@@ -360,7 +360,20 @@ export class HUD {
    * @param {number} speed m/s
    * @param {number} relativeAngle rad — 0 = vento soprando na direção do olhar
    */
-  setWind(speed, relativeAngle) {
+  setWind(speed, relativeAngle, vacuo = false) {
+    /* No vácuo o widget não some: ele DIZ que não há ar.
+     *
+     * Sumir seria ambíguo — o jogador não saberia se o vento é zero, se o
+     * medidor quebrou, ou se ele simplesmente não está olhando. E a ausência de
+     * ar é a informação mais importante do cenário: é ela que explica por que a
+     * flecha não deriva e por que não cai como no vale. */
+    if (vacuo) {
+      this.el.windSpeed.textContent = "vácuo";
+      this.el.windArrow.style.transform = "rotate(0deg)";
+      this.el.windArrow.style.opacity = "0.2";
+      return;
+    }
+    this.el.windArrow.style.opacity = "";
     this.el.windSpeed.textContent = `${speed.toFixed(1)} m/s`;
     this.el.windArrow.style.transform = `rotate(${180 - radToDeg(relativeAngle)}deg)`;
   }
@@ -442,12 +455,16 @@ export class HUD {
    * funciona quando outra pessoa também aperta é invisível sem isto, e ninguém
    * descobriria o duelo sozinho.
    */
-  setMode(mode, invites = [], needed = 2, selfId = null) {
+  setMode(mode, invites = [], needed = 2, selfId = null, level = "valley") {
     const banner = this.el.modeBanner;
     banner.replaceChildren();
 
     const pendente = mode !== "duel" && invites.length > 0;
-    if (mode === "free" && !pendente) {
+    /* Fora do vale a faixa aparece SEMPRE, mesmo no modo livre. Estar na Lua é
+       informação de estado: sem a faixa, quem entra na sala com a partida já em
+       curso não teria nada na tela dizendo por que pula seis metros. */
+    const foraDoVale = level !== "valley";
+    if (mode === "free" && !pendente && !foraDoVale) {
       banner.hidden = true;
       return;
     }
@@ -468,10 +485,12 @@ export class HUD {
       return;
     }
 
-    banner.className = mode;
+    banner.className = foraDoVale ? `${mode} lua` : mode;
+    if (foraDoVale) banner.append(texto("LUA", "forte"), texto("   ·   "));
     banner.append(
       texto(
         {
+          free: "MODO LIVRE",
           duel: "DUELO",
           boarHunt: "CAÇADA AOS PORCOS",
           birdHunt: "CAÇA AOS PÁSSAROS",
@@ -483,9 +502,11 @@ export class HUD {
         "forte",
       ),
       texto(
-        mode === "birdHunt"
-          ? "   5 aves ou a rara · 1 para sair"
-          : "   1 para sair",
+        foraDoVale
+          ? "   9 para voltar"
+          : mode === "birdHunt"
+            ? "   5 aves ou a rara · 1 para sair"
+            : "   1 para sair",
       ),
     );
   }

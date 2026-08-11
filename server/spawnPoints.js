@@ -20,8 +20,27 @@ import { CONFIG } from "../src/config.js";
  * @param {() => number} random
  * @returns {{x:number, z:number, y:number}} pés no chão (a queda vem depois)
  */
-export function pickSpawnPoint(terrain, ocupados = [], random = Math.random) {
+/**
+ * O centro e o raio do sorteio, perguntados AO TERRENO.
+ *
+ * O `CONFIG.spawn` descreve a bacia do vale — centro em (0, −40), raio de 38 m.
+ * Aplicado à Lua, ele sortearia num pedaço arbitrário de um mapa três vezes
+ * maior, e metade das tentativas cairia em cratera. Cada campo de altura sabe
+ * onde é a sua área boa; quem não declara nada continua com o vale.
+ */
+function areaDeNascimento(terrain) {
   const S = CONFIG.spawn;
+  const c = terrain.spawnCenter;
+  return {
+    centerX: c?.x ?? S.centerX,
+    centerZ: c?.z ?? S.centerZ,
+    radius: c?.radius ?? S.radius,
+    minRadius: c?.minRadius ?? S.minRadius,
+  };
+}
+
+export function pickSpawnPoint(terrain, ocupados = [], random = Math.random) {
+  const S = { ...CONFIG.spawn, ...areaDeNascimento(terrain) };
   let melhor = null;
   let melhorFolga = -Infinity;
 
@@ -60,8 +79,16 @@ export function pickSpawnPoint(terrain, ocupados = [], random = Math.random) {
  * o arco num revólver.
  */
 export function duelPositions(terrain, count, random = Math.random) {
-  const D = CONFIG.modes.duel;
-  const S = CONFIG.spawn;
+  /* O ANEL DA LUA É O DOBRO DO DO VALE, e não é capricho.
+   *
+   * Sem arrasto e com 1/6 de g, um tiro tenso de 120 m/s cai 12 cm em 46 m: o
+   * anel do vale transformaria o arco no revólver que o duelo existe para
+   * evitar. A 95 m a flecha volta a cair meio metro, e a queda volta a ser
+   * leitura em vez de detalhe. */
+  const D = terrain.spawnCenter
+    ? CONFIG.levels.moon.duel
+    : CONFIG.modes.duel;
+  const S = { ...CONFIG.spawn, ...areaDeNascimento(terrain) };
   const giro = random() * Math.PI * 2; // a arena não começa sempre igual
   const saida = [];
 

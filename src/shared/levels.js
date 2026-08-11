@@ -58,6 +58,13 @@ export const LEVEL_INFO = {
        dependem de bacia plana, copas de árvore e trilha de terra — coisas que
        não existem lá, e fingir que existem seria pior que recusar. */
     modos: ["free", "duel"],
+    /* DUELO SEM CONVITE.
+     *
+     * No vale o duelo é convite porque arrasta gente para uma briga no meio do
+     * cenário livre, onde cada um estava fazendo a sua coisa. Ir para a Lua já
+     * é uma decisão coletiva — a sala inteira viajou junto —, e ninguém pousa
+     * num campo de duelo de 330 m de diâmetro para ficar assistindo. */
+    duelInvites: false,
     fisica: {
       gravity: CONFIG.levels.moon.gravity,
       airDensity: CONFIG.levels.moon.airDensity,
@@ -86,6 +93,11 @@ export function createField(id) {
 /** Esta fase aceita este modo? */
 export function levelAllowsMode(id, mode) {
   return levelInfo(id).modos.includes(mode);
+}
+
+/** O duelo desta fase passa por convite, ou entra direto com todo mundo? */
+export function levelUsesDuelInvites(id) {
+  return levelInfo(id).duelInvites !== false;
 }
 
 /**

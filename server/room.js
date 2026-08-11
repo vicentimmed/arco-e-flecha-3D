@@ -24,7 +24,15 @@
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
-import { TerrainField, pathCenterX } from "../src/shared/terrainField.js";
+import { pathCenterX } from "../src/shared/terrainField.js";
+import {
+  DEFAULT_LEVEL,
+  LEVEL_IDS,
+  createField,
+  levelForMode,
+  levelUsesDuelInvites,
+  fallbackMode,
+} from "../src/shared/levels.js";
 
 function isZombieMode(mode) {
   return mode === "zombie" || mode === "zombieBoss";
@@ -52,7 +60,17 @@ export class Room {
   constructor({ log = () => {} } = {}) {
     this.log = log;
     this.epoch = Date.now();
-    this.terrain = new TerrainField();
+
+    /* Um campo de altura por FASE, todos construídos de uma vez.
+     *
+     * Construir sob demanda pareceria econômico e criaria um pico de trabalho
+     * exatamente no instante da troca, com todos os clientes esperando. Aqui
+     * eles custam milissegundos (o da Lua é uma lista de 252 crateras) e ficam
+     * prontos para sempre — trocar de fase no servidor passa a ser trocar um
+     * ponteiro. */
+    this.fields = Object.fromEntries(LEVEL_IDS.map((id) => [id, createField(id)]));
+    this.level = DEFAULT_LEVEL;
+
     this.colors = new ColorPool();
 
     /** @type {Map<object, object>} conexão → jogador */
@@ -118,6 +136,22 @@ export class Room {
     this.boarTimer = setInterval(() => this.tickCreatures(), 1000 / net.boarHz);
   }
 
+  /**
+   * O chão da fase em curso.
+   *
+   * Acessor, e não propriedade, pelo mesmo motivo do cliente: guardado numa
+   * variável, ele ficaria apontando para o vale depois de a sala ir para a Lua,
+   * e os jogadores nasceriam em alturas de um terreno que ninguém está vendo.
+   *
+   * As simulações de bicho (`BoarHunt`, `ElkHunt`, `BirdFlock`, `ZombieNight`,
+   * `TargetSeries`) recebem o campo do VALE no construtor e continuam com ele —
+   * o que é correto, porque nenhuma delas roda fora do vale (ver `modos` de
+   * cada fase em `shared/levels.js`).
+   */
+  get terrain() {
+    return this.fields[this.level] ?? this.fields[DEFAULT_LEVEL];
+  }
+
   /* ---------------------------------------------------------------- modos -- */
 
   /**
@@ -138,7 +172,27 @@ export class Room {
    * Já em duelo, apertar `2` de novo reinicia a partida do zero com quem já
    * está dentro — não é um convite novo.
    */
+  /**
+   * Pedido de FASE (tecla 9). Leva a sala inteira, sem convite.
+   *
+   * O modo vai junto na decisão: nem toda fase aceita o modo em curso. Quem
+   * está numa caçada aos porcos e pede a Lua não pode continuar caçando porcos
+   * lá — `fallbackMode` escolhe o primeiro modo que a fase aceita, que é o
+   * livre. É o mesmo raciocínio de `requestMode`, na direção contrária.
+   */
+  requestLevel(player, fase) {
+    if (!LEVEL_IDS.includes(fase) || fase === this.level) return;
+    const modo = fallbackMode(fase, this.mode);
+    this.prepareMode(modo, fase);
+  }
+
   requestMode(player, modo) {
+    /* O modo pode não existir na fase em curso — e aí a troca de modo arrasta
+       junto a troca de FASE, em vez de a tecla parecer quebrada. É o que faz a
+       caçada aos porcos funcionar mesmo estando na Lua: a sala volta ao vale e
+       começa a caçada. */
+    const fase = levelForMode(modo, this.level);
+
     /* A noite dos zumbis entra na mesma lista dos modos cooperativos: quem
        aperta liga para a sala inteira. Não é convite como o duelo porque
        ninguém é arrastado para brigar com ninguém — a horda é problema de
@@ -151,8 +205,8 @@ export class Room {
       modo === "zombie" ||
       modo === "zombieBoss"
     ) {
-      if (isZombieMode(modo)) {
-        this.prepareMode(modo);
+      if (this.needsPreparation(modo, fase)) {
+        this.prepareMode(modo, fase);
       } else {
         this.cancelModePreparation();
         this.setMode(modo);
@@ -172,6 +226,16 @@ export class Room {
     if (modo !== "duel") return;
 
     this.cancelModePreparation();
+
+    /* Fase sem convite (a Lua): a tecla começa o duelo na hora, com todos.
+       Precisa vir ANTES da checagem de "já estou duelando", senão apertar de
+       novo lá reiniciaria em vez de simplesmente não fazer nada — que é o
+       mesmo comportamento do vale e está certo nos dois. */
+    if (!levelUsesDuelInvites(this.level)) {
+      this.setMode("duel");
+      return;
+    }
+
     if (this.mode === "duel") {
       // Já duelando: reinicia a partida com quem já está dentro.
       this.setMode("duel");
@@ -210,14 +274,31 @@ export class Room {
    * Ligar um modo agora é começar do zero: campo limpo, placar zerado. É o que
    * transforma "trocar de modo" em "começar uma partida" — e roda mesmo que o
    * modo pedido já seja o atual: é assim que a tecla do modo também reinicia.
+   *
+   * A tela de carregamento entra quando `needsPreparation` diz que sim.
    */
-  prepareMode(modo) {
-    if (!isZombieMode(modo) || !this.players.size) return;
+
+  /**
+   * Uma troca precisa de tela de carregamento?
+   *
+   * Duas coisas exigem: a noite dos zumbis, que compila shaders e limpa a fauna
+   * antes de entrar, e a TROCA DE FASE, que destrói o mundo e constrói outro.
+   * Nos dois casos o custo é de centenas de milissegundos no cliente, e sem a
+   * espera coordenada uns entrariam segundos antes dos outros — em modos onde
+   * isso decide a partida.
+   */
+  needsPreparation(modo, fase) {
+    return isZombieMode(modo) || fase !== this.level;
+  }
+
+  prepareMode(modo, fase = this.level) {
+    if (!this.needsPreparation(modo, fase) || !this.players.size) return;
 
     this.cancelModePreparation();
     const token = this.nextModeToken++;
     this.pendingMode = {
       mode: modo,
+      level: fase,
       token,
       ready: new Set(),
       timer: setTimeout(() => {
@@ -225,7 +306,7 @@ export class Room {
         // Um navegador lento não deve deixar a sala travada para sempre. Os
         // clientes que já terminaram entram sincronizados; os demais recebem
         // o commit e concluem a preparação localmente enquanto o overlay some.
-        this.log(`preparo da noite expirou (${modo})`);
+        this.log(`preparo expirou (${modo} / ${fase})`);
         this.commitPreparedMode(token);
       }, (CONFIG.net.modePrepareTimeout ?? 12) * 1000),
     };
@@ -233,11 +314,12 @@ export class Room {
     this.broadcastAll({
       t: S2C.MODE_PREPARE,
       mode: modo,
+      level: fase,
       token,
       ready: 0,
       total: this.players.size,
     });
-    this.log(`preparando modo: ${modo}`);
+    this.log(`preparando: ${modo} em ${fase}`);
   }
 
   commitPreparedMode(token) {
@@ -245,6 +327,10 @@ export class Room {
     if (!pending || pending.token !== token) return;
     clearTimeout(pending.timer);
     this.pendingMode = null;
+    /* A FASE muda ANTES do modo. `setMode` sorteia nascimentos, e o sorteio
+       pergunta a altura do chão — se o modo entrasse primeiro, todo mundo
+       nasceria em cotas do cenário anterior e cairia dentro do novo. */
+    this.level = pending.level ?? this.level;
     this.setMode(pending.mode);
   }
 
@@ -494,8 +580,15 @@ export class Room {
    * a deriva do vento, a antecipação. O anel de 46 m devolve isso.
    */
   startDuel() {
-    const participantes = [...this.players.values()].filter((p) =>
-      this.duelInvites.has(p.id),
+    /* NA LUA O DUELO NÃO TEM CONVITE.
+     *
+     * No vale ele é convite porque arrasta gente para uma briga no meio do
+     * cenário livre, onde cada um estava fazendo a sua coisa. Ir para a Lua já
+     * é uma decisão coletiva — a sala inteira viajou junto —, e ninguém pousa
+     * num campo de duelo de 330 m para ficar de fora. */
+    const semConvite = !levelUsesDuelInvites(this.level);
+    const participantes = [...this.players.values()].filter(
+      (p) => semConvite || this.duelInvites.has(p.id),
     );
     if (!participantes.length) return;
 
@@ -1621,9 +1714,15 @@ export class Room {
         this.commitPreparedMode(this.pendingMode.token);
       }
     }
-    // O duelo acaba se sobrar menos de dois: uma pessoa duelando sozinha é só
-    // uma pessoa presa num modo.
-    if (this.mode === "duel" && this.duelInvites.size < CONFIG.modes.duel.minPlayers) {
+    /* O duelo acaba se sobrar menos de dois: uma pessoa duelando sozinha é só
+       uma pessoa presa num modo.
+       Onde não há convite (a Lua), quem conta são os JOGADORES — `duelInvites`
+       está sempre vazia lá, e usá-la encerraria o duelo no instante em que
+       começasse. */
+    const duelistas = levelUsesDuelInvites(this.level)
+      ? this.duelInvites.size
+      : this.players.size;
+    if (this.mode === "duel" && duelistas < CONFIG.modes.duel.minPlayers) {
       this.setMode("free");
     }
     this.broadcast({ t: S2C.LEAVE, id: player.id, name: player.name });
@@ -1777,6 +1876,10 @@ export class Room {
 
       case C2S.MODE:
         this.requestMode(player, msg.mode);
+        break;
+
+      case C2S.LEVEL:
+        this.requestLevel(player, msg.level);
         break;
 
       case C2S.MODE_READY: {
@@ -2079,6 +2182,7 @@ export class Room {
   modeView() {
     return {
       mode: this.mode,
+      level: this.level,
       // Quem quer duelar, com nome: é o que a sala vê como convite na tela.
       invites: [...this.players.values()]
         .filter((p) => p.duelReady)
@@ -2088,6 +2192,7 @@ export class Room {
       preparing: this.pendingMode
         ? {
             mode: this.pendingMode.mode,
+            level: this.pendingMode.level,
             token: this.pendingMode.token,
             ready: this.pendingMode.ready.size,
             total: this.players.size,

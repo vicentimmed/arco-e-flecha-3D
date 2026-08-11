@@ -213,6 +213,7 @@ class Game {
     this.modePreparing = false;
     this.modePrepareToken = null;
     this.modePrepareTarget = null;
+    this.modePrepareLevel = null;
     this.modePreparePromise = null;
 
     this.aim = new AimSolver(physics);
@@ -243,6 +244,8 @@ class Game {
       // Para o contador de draw calls e a chave do pós-processamento.
       renderer: this.renderer,
       particles: this.particles,
+      // Para as linhas de fase e o critério de aceite da troca.
+      levels: this.levels,
       net: null, // preenchido abaixo, depois do NetClient
     });
 
@@ -1051,7 +1054,13 @@ class Game {
    * meshes da horda; só depois o cliente se declara pronto para a sala.
    */
   beginModePreparation(msg) {
-    if (!isZombieMode(msg?.mode) || msg.token == null) return;
+    if (msg?.token == null) return;
+    /* Duas coisas passam por aqui agora: a noite dos zumbis, que compila
+       shaders, e a TROCA DE FASE, que destrói um mundo e constrói outro. As
+       duas custam centenas de milissegundos e as duas precisam que a sala
+       espere todo mundo — o que muda é só o que se faz durante a espera. */
+    const trocaDeFase = msg.level != null && msg.level !== this.levels.id;
+    if (!isZombieMode(msg.mode) && !trocaDeFase) return;
 
     if (this.modePreparing && this.modePrepareToken === msg.token) {
       this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "aguardando os outros jogadores…");
@@ -1062,12 +1071,24 @@ class Game {
     this.modePreparing = true;
     this.modePrepareToken = msg.token;
     this.modePrepareTarget = msg.mode;
-    this.hud.showModeLoading(msg.mode === "zombieBoss" ? "preparando o chefão…" : "preparando a noite…");
-    this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "limpando o céu e preparando a arena…");
+    this.modePrepareLevel = trocaDeFase ? msg.level : null;
+
+    const titulo = trocaDeFase
+      ? `viajando para ${levelInfo(msg.level).nome.toLowerCase()}…`
+      : msg.mode === "zombieBoss"
+        ? "preparando o chefão…"
+        : "preparando a noite…";
+    this.hud.showModeLoading(titulo);
+    this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "preparando…");
     this.playerPhysics.setHorizontalMove(0, 0);
-    this.birds.clear();
-    this.torches.build({ dormant: true });
-    this.zombies.prepare();
+
+    if (!trocaDeFase) {
+      // Aquecimento da noite. Numa troca de fase isto não faz sentido: o mundo
+      // que seria aquecido está prestes a deixar de existir.
+      this.birds.clear();
+      this.torches.build({ dormant: true });
+      this.zombies.prepare();
+    }
 
     const token = msg.token;
     this.modePreparePromise = this.finishModePreparation(token).finally(() => {
@@ -1076,6 +1097,20 @@ class Game {
   }
 
   async finishModePreparation(token) {
+    /* Caminho da TROCA DE FASE: demole, reconstrói e só então se declara
+       pronto. A tela de carregamento já está na frente — `changeLevel` a
+       reaproveita e vai preenchendo o progresso. */
+    if (this.modePrepareLevel) {
+      await this.changeLevel(this.modePrepareLevel, {
+        titulo: `viajando para ${levelInfo(this.modePrepareLevel).nome.toLowerCase()}…`,
+        keepOverlay: true,
+      });
+      if (this.modePrepareToken !== token || !this.modePreparing) return;
+      this.hud.updateModeLoading(1, 1, "sincronizando a entrada…");
+      this.net.send(C2S.MODE_READY, { mode: this.modePrepareTarget, token });
+      return;
+    }
+
     this.zombies.setWarmupVisible(true);
     this.torches.setWarmupVisible(true);
     this.hud.updateModeLoading(0, 1, "aquecendo iluminação e shaders…");
@@ -1104,6 +1139,7 @@ class Game {
     this.modePreparing = false;
     this.modePrepareToken = null;
     this.modePrepareTarget = null;
+    this.modePrepareLevel = null;
     this.modePreparePromise = null;
     this.zombies.setWarmupVisible(false);
     this.torches.setWarmupVisible(false);
@@ -1120,6 +1156,21 @@ class Game {
   applyMode(msg) {
     if (!msg) return;
     if (this.modePreparing) this.cancelModePreparation();
+
+    /* REDE DE SEGURANÇA DA FASE.
+     *
+     * O caminho normal é o handshake: a sala prepara, todos carregam, ela
+     * confirma. Mas há dois caminhos que pulam a preparação — quem ENTRA na
+     * sala já com uma partida em curso, e quem perdeu a mensagem de preparo
+     * por uma queda de rede. Nos dois, esta é a única chance de descobrir que
+     * o mundo é outro, e sem ela a pessoa jogaria no vale com todo mundo na
+     * Lua, vendo os amigos flutuarem dentro de uma montanha. */
+    if (msg.level && msg.level !== this.levels.id && !this.swappingLevel) {
+      this.changeLevel(msg.level, {
+        titulo: `viajando para ${levelInfo(msg.level).nome.toLowerCase()}…`,
+      });
+    }
+
     const mudouModo = this.mode !== msg.mode;
     if (mudouModo) this.cancelKnifeAttack();
     this.mode = msg.mode;
@@ -1134,7 +1185,13 @@ class Game {
     const escondeFixos = msg.mode === "series" || isZombieMode(msg.mode);
     for (const alvo of this.targets) alvo.setActive(!escondeFixos);
     this.marker.visible = !escondeFixos;
-    this.hud.setMode(msg.mode, msg.invites ?? [], msg.needed ?? 2, this.net.me?.id);
+    this.hud.setMode(
+      msg.mode,
+      msg.invites ?? [],
+      msg.needed ?? 2,
+      this.net.me?.id,
+      msg.level ?? this.levels.id,
+    );
 
     if (msg.mode === "series") {
       this.series.showFence();
@@ -1206,9 +1263,15 @@ class Game {
     const nome = levelInfo(alvo).nome;
     const artigo = alvo === "moon" ? "a Lua" : `o ${nome}`;
 
-    this.ask(`Ir para ${artigo}?`, () =>
-      this.changeLevel(alvo, { titulo: `viajando para ${nome.toLowerCase()}…` }),
-    );
+    this.ask(`Ir para ${artigo}?`, () => {
+      /* A FASE É DA SALA. Quem confirma pede ao servidor, que prepara todo
+         mundo junto e só então confirma a troca — trocar localmente deixaria
+         cada um numa fase, com as poses dos outros chegando em coordenadas de
+         um terreno que não é o seu. Sem servidor (queda de rede), a troca local
+         ainda funciona e é melhor que uma tecla que não faz nada. */
+      if (this.net.connected) this.net.send(C2S.LEVEL, { level: alvo });
+      else this.changeLevel(alvo, { titulo: `viajando para ${nome.toLowerCase()}…` });
+    });
   }
 
   /**
@@ -1221,7 +1284,7 @@ class Game {
    *
    * @returns {Promise<object|null>} diagnóstico da troca (`ms`, `freed`)
    */
-  async changeLevel(id, { titulo = "carregando fase…", force = false } = {}) {
+  async changeLevel(id, { titulo = "carregando fase…", force = false, keepOverlay = false } = {}) {
     if (this.swappingLevel) return null;
     // `force` existe para o critério de aceite: reconstruir a MESMA fase é o
     // teste que prova a mecânica sem nenhuma variável nova — se `vale → vale`
@@ -1241,7 +1304,11 @@ class Game {
       return null;
     } finally {
       this.swappingLevel = false;
-      this.hud.hideModeLoading();
+      /* Numa troca em rede a tela FICA: o mundo local já está pronto, mas a
+         sala ainda espera os outros clientes. Escondê-la aqui devolveria o
+         controle a quem terminou primeiro, e ele passaria segundos jogando
+         sozinho numa fase que os amigos ainda estão carregando. */
+      if (!keepOverlay) this.hud.hideModeLoading();
       this.lastTime = performance.now(); // não cobra o carregamento como dt
     }
   }
@@ -2149,6 +2216,7 @@ class Game {
     this.hud.setWind(
       this.wind.speed,
       this.wind.relativeAngle(this.aimYaw ?? 0),
+      !this.wind.enabled,
     );
     /* Quantos bichos existem em campo AGORA, em qualquer modo. É informação de
        situação, não de modo: saber que há doze porcos vivos muda o que se faz

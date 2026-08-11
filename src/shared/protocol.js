@@ -80,6 +80,8 @@ export const C2S = {
   RESPAWN: "respawn",
   /** Pedido de modo de jogo: `{ mode }`. */
   MODE: "mode",
+  /** Pedido de FASE: `{ level }`. Leva a sala inteira, sem convite. */
+  LEVEL: "level",
   /** Cliente terminou de preparar uma troca: `{ mode, token }`. */
   MODE_READY: "modeReady",
   /** "Acertei este porco": `{ id, distance }`. */

@@ -42,6 +42,18 @@ export class DebugPanel {
       <div class="row"><span>apogeu</span><b id="d-apex">—</b></div>
       <div class="row"><span>alcance</span><b id="d-range">—</b></div>
 
+      <!-- FASE E TROCA. Sem crases neste bloco: ele é um template literal, e
+           uma crase o encerraria.
+           A linha geo/tex é o critério de aceite do sistema de fases: ir e
+           voltar entre duas fases tem de devolver os MESMOS números. Se eles
+           subirem a cada viagem, algo do cenário antigo ficou na memória de
+           vídeo — e é o tipo de vazamento que não dá erro, só engasga vinte
+           minutos depois. Ver docs/plano-fases.md. -->
+      <div class="row"><span>fase</span><b id="d-level">—</b></div>
+      <div class="row"><span>última troca</span><b id="d-swap">—</b></div>
+      <div class="row"><span>geo / tex (deve repetir)</span><b id="d-leak">—</b></div>
+      <div class="row"><span>corpos de física</span><b id="d-bodies">—</b></div>
+
       <h3>Parâmetros</h3>
       <div class="slider" data-key="mass">
         <label>massa da flecha <b>25 g</b></label>
@@ -115,6 +127,10 @@ export class DebugPanel {
       time: this.el.querySelector("#d-time"),
       apex: this.el.querySelector("#d-apex"),
       range: this.el.querySelector("#d-range"),
+      level: this.el.querySelector("#d-level"),
+      swap: this.el.querySelector("#d-swap"),
+      leak: this.el.querySelector("#d-leak"),
+      bodies: this.el.querySelector("#d-bodies"),
       report: this.el.querySelector("#d-report"),
     };
 
@@ -262,6 +278,21 @@ export class DebugPanel {
 
     const f = this.fields;
     f.fps.textContent = stats.fps.toFixed(0);
+
+    /* Fase e diagnóstico da troca. Os dois primeiros são informativos; o
+       terceiro é o CRITÉRIO: ir e voltar entre fases tem de repetir os mesmos
+       geo/tex. Vazamento aqui não dá erro — só engasga meia hora depois. */
+    const gerente = this.ctx.levels;
+    if (gerente) {
+      f.level.textContent = gerente.id ?? "—";
+      const s = gerente.lastSwap;
+      f.swap.textContent = s
+        ? `${s.ms} ms · devolveu ${s.freed?.geometries ?? 0} geo / ${s.freed?.textures ?? 0} tex`
+        : "—";
+      const mem = this.ctx.renderer?.renderer?.info?.memory;
+      if (mem) f.leak.textContent = `${mem.geometries} / ${mem.textures}`;
+      f.bodies.textContent = this.ctx.physics?.bodyCount ?? "—";
+    }
 
     /* O contador de desenho.
      *

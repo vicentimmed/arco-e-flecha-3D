@@ -14,6 +14,10 @@ export const EventType = {
   BIRD_HIT: "BIRD_HIT",
   ZOMBIE_HIT: "ZOMBIE_HIT",
   TORCH_HIT: "TORCH_HIT",
+  /* O alien chegou perto e golpeou. Só a Lua emite — ver `systems/spaceLife.js`.
+     Sem servidor por trás (o alien é inteiramente local, como o bot e a nave),
+     então quem escuta decide sozinho se a vítima é o próprio jogador. */
+  ALIEN_MELEE_HIT: "ALIEN_MELEE_HIT",
   AUDIO_PLAY: "AUDIO_PLAY",
   /* Um lote de partículas. Segue o mesmo desenho de `AUDIO_PLAY`: quem emite
      descreve o EFEITO (cor, quantidade, quanto dura) e não conhece o pool nem a

@@ -76,6 +76,12 @@ export class MoonLevel {
        no chão. Ver `systems/spaceLife.js`. */
     this.base?.update(dt);
     this.space?.update(dt, jogadores);
+
+    // O rover atropela: quem cruza o caminho dele não sobrevive.
+    const rover = this.base?.rover;
+    if (rover && this.space) {
+      this.space.killAliensNear(rover.x, rover.z, rover.contactRadius);
+    }
   }
 
   dispose() {

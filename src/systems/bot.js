@@ -24,10 +24,12 @@
    ------------------------------------------------------------- a dificuldade
 
    Um bot que resolve a balística exata acerta SEMPRE, e isso é tão sem graça
-   quanto um que erra sempre. O que existe aqui é um erro deliberado, em duas
-   partes: um desvio angular constante (a "mão" dele) e um tempo de reação
-   antes de responder ao que você fez. Mexer nesses dois números move a
-   dificuldade inteira sem tocar em nenhuma outra linha.
+   quanto um que erra sempre. O que existe aqui é um erro deliberado: uma
+   chance de errar o tiro de propósito (`missChance`), um tremor de mão
+   presente em TODO tiro (`erroMira`) e um tempo de reação antes de responder
+   ao que você fez (`reacao`). A tabela de dificuldade — fácil por padrão —
+   mora em `CONFIG.bot` (`config.js`), num lugar só: trocar a perícia do bot é
+   trocar `CONFIG.bot.difficulty`, sem tocar em nenhuma linha deste arquivo.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -42,15 +44,24 @@ import { clamp } from "../utils/math.js";
 
 const TAU = Math.PI * 2;
 
-/** Níveis de perícia. Só estes dois números separam um treino de uma ameaça. */
+/**
+ * Perícia padrão, caso `CONFIG.bot.difficulty` aponte para algo que não existe
+ * na tabela — rede de segurança, não o caminho normal. A dificuldade de
+ * verdade mora em `config.js` (`CONFIG.bot.difficulties`), num lugar só, para
+ * que trocá-la não exija caçar número espalhado por este arquivo.
+ */
 const PERICIA = {
-  /** Desvio angular aplicado ao tiro (rad). 0,01 rad ≈ 50 cm a 50 m. */
-  erroMira: 0.012,
-  /** Segundos até o bot reagir a uma mudança sua. */
-  reacao: 0.28,
-  /** Fração do tempo em que ele lidera o alvo corretamente. */
-  precisaoLead: 0.85,
+  erroMira: 0.02,
+  missChance: 0.45,
+  missSpread: 7,
+  reacao: 0.55,
+  precisaoLead: 0.5,
 };
+
+/** A perícia configurada em `CONFIG.bot.difficulty`, com a rede de segurança acima. */
+function periciaPadrao() {
+  return CONFIG.bot?.difficulties?.[CONFIG.bot?.difficulty] ?? PERICIA;
+}
 
 export class Bot {
   /**
@@ -65,7 +76,7 @@ export class Bot {
 
     this.nome = opcoes.nome ?? "CPU";
     this.cor = opcoes.cor ?? "#e0554a";
-    this.pericia = { ...PERICIA, ...(opcoes.pericia ?? {}) };
+    this.pericia = { ...periciaPadrao(), ...(opcoes.pericia ?? {}) };
 
     this.entityId = `bot${entityRegistry.createId()}`;
     this.player = new Player(this.terrain, this.entityId);
@@ -559,8 +570,14 @@ export class Bot {
   atirar(v) {
     this.player.getMuzzle(this._muzzle);
 
-    // A mão do bot treme: é este desvio que separa um treino de um carrasco.
-    const e = this.pericia.erroMira;
+    /* A mão do bot treme: é este desvio que separa um treino de um carrasco.
+     * `missChance` decide se ESTE tiro em particular sai deliberadamente
+     * torto (desvio ampliado por `missSpread`) — a "porcentagem de errar o
+     * tiro". O tremor de `erroMira` sozinho continua presente mesmo quando
+     * não erra de propósito: é o "atirar certeiro" da dificuldade, e nunca
+     * chega a zero. */
+    const errouDeProposito = Math.random() < (this.pericia.missChance ?? 0);
+    const e = this.pericia.erroMira * (errouDeProposito ? (this.pericia.missSpread ?? 1) : 1);
     const yaw = this.player.yaw + (Math.random() - 0.5) * 2 * e;
     const pitch = this.player.pitch + (Math.random() - 0.5) * 2 * e;
     /* A MESMA função que a mira do jogador usa (`AimSolver.axisFrom`), e não
@@ -657,7 +674,11 @@ export class BotManager {
 
   /** A fase mudou: terreno novo e cápsula nova, como nos jogadores remotos. */
   relevel(terrain) {
-    this.ctx.terrain = terrain;
+    /* NÃO se atribui a `this.ctx.terrain`: é um getter (`get terrain() {
+       return this.jogo.terrain; }`, montado em main.js) sem setter, e
+       `onLevelReady` — de onde `relevel` é chamado — já roda DEPOIS da fase
+       nova estar instalada, então o getter já devolve o terreno certo sozinho.
+       Escrever nele lançava `TypeError` e derrubava toda troca de fase. */
     for (const b of this.bots) {
       b.terrain = terrain;
       b.player.terrain = terrain;

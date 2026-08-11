@@ -50,6 +50,12 @@ const SKY_FRAG = /* glsl */ `
   uniform sampler2D earthMap;
   uniform float earthSize; // meia-largura angular do disco
   uniform float earthCos;  // cosseno do raio angular — teste barato de recorte
+  // A FOTO é 1200×675 (16:9), não quadrada, com o círculo do planeta centrado
+  // e inscrito nela. earthAspect = largura/altura da imagem — sem esta
+  // correção, o UV abaixo (isotrópico, mesma escala nos dois eixos) amostra o
+  // retângulo inteiro como se o círculo tocasse as quatro bordas, e o disco
+  // sai OVAL: mais alto que largo, na mesma proporção da foto.
+  uniform float earthAspect;
 
   varying vec3 vDir;
 
@@ -153,7 +159,9 @@ const SKY_FRAG = /* glsl */ `
         vec3 rt = normalize(cross(up, eDir));
         vec2 uv = vec2(dot(dir - eDir * ce, rt), dot(dir - eDir * ce, up));
         uv /= max(1e-5, earthSize);
-        vec2 st = uv * 0.5 + 0.5;
+        // Corrige o aspecto ANTES de mapear para a textura: o círculo (isotrópico
+        // no espaço angular) precisa cair no retângulo que a foto realmente tem.
+        vec2 st = vec2(uv.x / earthAspect, uv.y) * 0.5 + 0.5;
 
         if (st.x > 0.0 && st.x < 1.0 && st.y > 0.0 && st.y < 1.0) {
           vec4 tex = texture2D(earthMap, st);
@@ -426,12 +434,15 @@ export class Renderer {
         earthDir: { value: this.earthDirection.clone() },
         earthMap: { value: earthTexture() },
         /* Tamanho aparente. A Terra vista da Lua tem ~2° de diâmetro — quase
-           quatro vezes a Lua vista daqui. Uso 0,055 de meia-largura (≈6,3°)
+           quatro vezes a Lua vista daqui. Uso 0,11 de meia-largura (≈12,5°)
            porque o correto é DECEPCIONANTE: a 2° ela vira um ponto azul e o
            jogador não a reconhece. É a mesma licença que toda foto de pôster
-           lunar toma, e pela mesma razão. */
-        earthSize: { value: 0.085 },
-        earthCos: { value: Math.cos(Math.atan(0.085) * 1.5) },
+           lunar toma, e pela mesma razão — subiu de 0,085 porque mesmo esse
+           exagero ainda lia como pequeno demais no céu cheio. */
+        earthSize: { value: 0.11 },
+        earthCos: { value: Math.cos(Math.atan(0.11) * 1.5) },
+        // 1200×675: ver o comentário do uniform no shader.
+        earthAspect: { value: 1200 / 675 },
       },
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,

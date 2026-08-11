@@ -837,8 +837,10 @@ export const CONFIG = {
          da Apollo saltitavam porque a tração não segura a passada. Além da
          verossimilhança, isto conserta um problema de jogo — com a corrida
          cheia, atravessar os 330 m da arena era rápido demais e o jetpack
-         deixava de ser a forma interessante de se locomover. */
-      runMultiplier: 0.5,
+         deixava de ser a forma interessante de se locomover. Subiu um pouco
+         (0,5 → 0,6) porque a marcha ficava arrastada demais para cruzar os
+         vãos entre as estruturas da base a pé. */
+      runMultiplier: 0.6,
 
       /* ---------------------------------------------------------- barreira --
          Arena de 330 m de diâmetro: três vezes o anel de duelo do vale. O
@@ -1190,6 +1192,50 @@ export const CONFIG = {
     corpseLifetime: 8, // s até o corpo sumir do chão
     fallSpeed: 14, // m/s — velocidade terminal da queda
     points: 150, // alvo pequeno e em movimento: paga bem
+  },
+
+  /* ------------------------------------------------------------------- bot --
+     A perícia do adversário de CPU. Ver `systems/bot.js` para a mira em si —
+     aqui ficam só os números que decidem o quanto ele erra.
+
+     DUAS coisas separadas decidem o resultado de um tiro:
+
+     • `missChance` é a pergunta "ele vai ERRAR de propósito este tiro?" — a
+       porcentagem de tiros que saem com um desvio GRANDE (`erroMira × missSpread`),
+       longe o bastante para não acertar quase nunca. É o "atirar torto".
+     • `erroMira`, sozinho, é o tremor da mão presente em TODO tiro — inclusive
+       nos que não erram de propósito. Mesmo "certeiro", o tiro carrega esse
+       tanto de imprecisão; é o que separa um bot fácil de um que não erra
+       jamais mesmo na dificuldade mais alta.
+
+     Trocar de dificuldade é só trocar `difficulty` — nenhum outro arquivo
+     precisa saber que a tabela existe. */
+  bot: {
+    /** Perícia padrão de bot novo. Troque aqui — não em `bot.js`. */
+    difficulty: "easy",
+    difficulties: {
+      easy: {
+        erroMira: 0.02, // rad — mão trêmula mesmo quando "acerta"
+        missChance: 0.45, // 45 % dos tiros saem deliberadamente torto
+        missSpread: 7, // × erroMira, no tiro que erra de propósito
+        reacao: 0.55, // s até reagir a uma mudança sua
+        precisaoLead: 0.5, // erra a liderança de alvo em movimento
+      },
+      medium: {
+        erroMira: 0.013,
+        missChance: 0.22,
+        missSpread: 7,
+        reacao: 0.32,
+        precisaoLead: 0.78,
+      },
+      hard: {
+        erroMira: 0.007,
+        missChance: 0.06,
+        missSpread: 6,
+        reacao: 0.16,
+        precisaoLead: 0.95,
+      },
+    },
   },
 };
 

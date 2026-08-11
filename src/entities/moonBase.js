@@ -25,6 +25,7 @@ import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { makeRandom } from "../utils/math.js";
 import { shared } from "../levels/resources.js";
+import { Rover } from "./rover.js";
 
 /* A paleta de um programa espacial: branco de pintura térmica, metal escuro,
    e o OURO da manta de isolamento — que é a cor mais reconhecível de hardware
@@ -180,11 +181,16 @@ export class MoonBase {
     this.buildHabitats(lote, physics, B, chao);
     this.buildSolarFarm(lote, B, chao);
     this.buildDish(lote, physics, B, chao);
-    this.buildLanderAndRover(lote, physics, B, chao);
+    this.buildLander(lote, physics, B, chao);
     this.buildCargo(lote, physics, B, chao);
     this.buildFlag(lote, B, chao);
 
     this.drawCalls = lote.flush(this.group);
+
+    /* O rover FICA DE FORA do lote fundido — ele se move, e uma geometria
+       fundida não move uma peça isolada. Ver `entities/rover.js`. */
+    this.rover = new Rover(this.group, physics, terrain, B.x, B.z);
+
     return this;
   }
 
@@ -256,7 +262,11 @@ export class MoonBase {
        para atirar, esperar encher e subir de novo. É a diferença entre um
        ponto alto e uma rota. */
     const RP = 3.6; // m — raio do piso do topo
-    const RM = 2.9; // m — o do meio, um pouco menor
+    /* O do meio ERA 2,9 m — perto demais do casco nessa altura (o corpo do
+       foguete já afina para ~2,53 m ali), sobrando uns 37 cm de aro para pisar.
+       Em 3,4 m a folga vira ~0,9 m, de verdade utilizável, sem ultrapassar o
+       piso de cima. */
+    const RM = 3.4; // m — o do meio, um pouco menor que o de cima
     const yPiso = solo + ALTURA;
     const yMeio = solo + 14;
 
@@ -304,6 +314,8 @@ export class MoonBase {
 
   /** A baliza pisca: dois lampejos curtos e uma pausa longa, como as de verdade. */
   update(dt) {
+    this.rover?.update(dt);
+
     if (!this.beaconLight) return;
     this.beaconPhase = (this.beaconPhase + dt) % 2.6;
     const t = this.beaconPhase;
@@ -396,8 +408,8 @@ export class MoonBase {
     this.solid(physics, RAPIER.ColliderDesc.cylinder(2.1, 0.4), x, y + 2.1, z, "antena");
   }
 
-  buildLanderAndRover(lote, physics, B, chao) {
-    /* ---------------------------------------------------------- módulo --- */
+  /** O módulo pousado. O rover mora em `entities/rover.js` — ele anda. */
+  buildLander(lote, physics, B, chao) {
     const lx = B.x + 44;
     const lz = B.z + 34;
     const ly = chao(lx, lz);
@@ -409,20 +421,6 @@ export class MoonBase {
       lote.add("metal", new THREE.CylinderGeometry(0.55, 0.55, 0.16, 10), trs(lx + Math.cos(a) * 3.3, ly + 0.1, lz + Math.sin(a) * 3.3));
     }
     this.solid(physics, RAPIER.ColliderDesc.cuboid(2.2, 1.8, 2.2), lx, ly + 2.2, lz, "módulo");
-
-    /* ----------------------------------------------------------- rover --- */
-    const rx = B.x - 26;
-    const rz = B.z - 34;
-    const ry = chao(rx, rz);
-    lote.add("casco", new THREE.BoxGeometry(3.2, 0.7, 1.9), trs(rx, ry + 1.0, rz));
-    lote.add("escuro", new THREE.BoxGeometry(1.3, 0.8, 1.5), trs(rx - 0.7, ry + 1.7, rz));
-    lote.add("painel", new THREE.BoxGeometry(2.0, 0.08, 1.7), trs(rx + 0.6, ry + 1.5, rz, 0, 0, -0.12));
-    for (const sx of [-1.1, 1.1]) {
-      for (const sz of [-1.05, 1.05]) {
-        lote.add("escuro", new THREE.CylinderGeometry(0.52, 0.52, 0.34, 12), trs(rx + sx, ry + 0.52, rz + sz, 0, 0, Math.PI / 2));
-      }
-    }
-    this.solid(physics, RAPIER.ColliderDesc.cuboid(1.7, 0.9, 1.1), rx, ry + 1.0, rz, "rover");
   }
 
   /**
@@ -507,5 +505,6 @@ export class MoonBase {
    *  `recreate()`. Ver `levels/index.js`. */
   dispose() {
     this.group = null;
+    this.rover = null;
   }
 }

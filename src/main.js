@@ -354,6 +354,32 @@ class Game {
       }
     });
 
+    /* Uma flecha de BOT acertou VOCÊ.
+     *
+     * O bot é inteiramente local — o servidor nunca ouviu falar dele —, e
+     * `registerKill` recusa de propósito um `C2S.KILL` em que vítima e
+     * remetente são a mesma pessoa (ver o comentário lá: "vitima === killer").
+     * Route por ali daria silêncio, exatamente o bug relatado: o bot acerta e
+     * nada acontece. A morte por bot (e a do alien, mais abaixo) por isso não
+     * passa pelo servidor — vive e morre só nesta tela, como o próprio bot. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.targetKind !== "character") return;
+      if (e.targetId !== this.player.entityId) return;
+      if (typeof e.ownerId !== "string" || !e.ownerId.startsWith("bot")) return;
+      this.killedByLocalNPC({
+        c: [mm(e.impact.x), mm(e.impact.y), mm(e.impact.z)],
+        v: e.velocity.map(mm),
+      });
+    });
+
+    /* O alien chegou perto e golpeou. Mesma razão do bot: sem servidor por
+       trás, então só quem é o alvo (você) reage — os outros clientes nem
+       sabem que este alien específico existe. */
+    gameEvents.on(EventType.ALIEN_MELEE_HIT, (e) => {
+      if (e.position !== this.player.position) return;
+      this.killedByLocalNPC(null);
+    });
+
     // Alvo da série: quem acertar primeiro leva. O servidor arbitra, porque
     // dois tiros quase juntos precisam de um desempate único para todos.
     gameEvents.on(EventType.ARROW_IMPACT, (e) => {
@@ -883,6 +909,88 @@ class Game {
     return remoto ? vec3Payload(remoto.player.position) : null;
   }
 
+  /**
+   * Morrer para algo que o servidor não conhece — bot ou alien.
+   *
+   * Os dois são inteiramente locais (a sala nunca ouviu falar deles), e
+   * `registerKill` recusa um `C2S.KILL` autoinfligido de propósito. O caminho
+   * normal (atirar → declarar → servidor confirma → `S2C.KILL` volta) não
+   * existe aqui, então o tombo e o renascimento acontecem só nesta tela —
+   * exatamente como o bot e o alien já só existem nesta tela.
+   *
+   * @param {{c:number[], v:number[]}|null} msg impacto e velocidade, como o
+   *   `S2C.KILL` traria; `null` para uma morte sem flecha (a cabeçada do alien).
+   */
+  killedByLocalNPC(msg) {
+    if (this.death.dying || this.respawn.isInvulnerable(this.net.serverTime)) return;
+    this.cancelKnifeAttack();
+    this.death.begin(this.net.serverTime, msg);
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "playerDeath",
+      position: vec3Payload(this.player.position),
+      volume: 1.1,
+    });
+    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+    setTimeout(() => this.reviveFromLocalDeath(), espera);
+  }
+
+  /** O renascimento de `killedByLocalNPC`: mesmo formato de `S2C.SPAWN`, sorteado aqui. */
+  reviveFromLocalDeath() {
+    if (!this.death.dying) return; // trocou de fase, renasceu por outro caminho etc.
+    this.arrows.removeAttachedTo(this.player);
+    this.death.revive();
+
+    const terrain = this.terrain;
+    const cx = terrain.spawnCenter?.x ?? CONFIG.spawn.centerX;
+    const cz = terrain.spawnCenter?.z ?? CONFIG.spawn.centerZ;
+    let x = cx;
+    let z = cz;
+    for (let i = 0; i < CONFIG.spawn.maxAttempts; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = CONFIG.spawn.minRadius + Math.random() * (CONFIG.spawn.radius - CONFIG.spawn.minRadius);
+      const tx = cx + Math.cos(a) * r;
+      const tz = cz + Math.sin(a) * r;
+      if (terrain.isWalkable(tx, tz)) {
+        x = tx;
+        z = tz;
+        break;
+      }
+    }
+
+    this.respawn.begin({
+      x,
+      z,
+      y: terrain.heightAt(x, z),
+      drop: CONFIG.spawn.dropHeight,
+      invulnUntil: this.net.serverTime + CONFIG.spawn.invulnerability * 1000,
+    });
+    this.reloadTimer = 0;
+    this.cancelKnifeAttack();
+    this.drawTime = 0;
+    this.input.drawing = false;
+  }
+
+  /**
+   * Carona no rover: se você está de pé no convés dele, anda junto.
+   *
+   * Roda DEPOIS de `environment.update` — o rover já se moveu este quadro —
+   * então `rover.carry` reprojeta a posição do referencial de ONTEM (que ele
+   * guardou) para o de agora. O corpo cinemático do jogador é realinhado na
+   * mão (`syncFromPlayer`) porque `player.position` acabou de ser escrito
+   * direto, por fora do character controller.
+   */
+  updateRoverRide() {
+    const rover = this.environment?.base?.rover;
+    if (!rover || this.death.dying) return;
+    // Acabou de pular (ou ligar o jato): deixa sair. Sem isto, `carry` grudava
+    // o pé de volta na altura do convés no mesmo quadro do impulso, e o pulo
+    // nunca decolava — a única forma de descer era andar para fora da borda.
+    if (this.playerPhysics.verticalVelocity > 0.5) return;
+    if (!rover.isOnDeck(this.player.position)) return;
+    rover.carry(this.player.position);
+    this.playerPhysics.syncFromPlayer();
+  }
+
   async connect(name) {
     await this.net.connect(name);
   }
@@ -982,6 +1090,7 @@ class Game {
     this.particles.update(dt);
     this.updateBossFlashes(dt);
     this.environment.update(dt, this.wind.vector, this.livePlayers());
+    this.updateRoverRide();
     this.death.update(this.net.serverTime);
     this.respawn.update(this.net.serverTime);
     // Depois da câmera do frame: a distância dela decide o descarte e a escala

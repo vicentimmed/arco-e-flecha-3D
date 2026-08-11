@@ -868,7 +868,7 @@ export class AudioSystem {
       this._jetNode = { fonte, ganho };
     }
 
-    const alvo = ligado ? 0.34 * intensidade : 0;
+    const alvo = ligado ? 0.2 * intensidade : 0;
     const g = this._jetNode.ganho.gain;
     g.cancelScheduledValues(this.ctx.currentTime);
     g.setTargetAtTime(alvo, this.ctx.currentTime, 0.08);

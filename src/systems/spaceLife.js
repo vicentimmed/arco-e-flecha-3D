@@ -85,10 +85,18 @@ class Ambiente {
     this.cadente.frustumCulled = false;
     parent.add(this.cadente);
 
-    this.cadenteT = 0;
-    this.proximaCadente = 4 + this.rnd() * 10;
+    /* Estado da cadente: ESPERANDO (contagem até a próxima) ou VOANDO
+       (progresso 0..1 ao longo do trajeto sorteado). Raras de propósito — no
+       céu de verdade elas não são um espetáculo contínuo, e aparecer a cada
+       poucos segundos vira ruído visual em vez de evento. */
+    this.cadenteVoando = false;
+    this.cadenteT = 20 + this.rnd() * 30;
+    this.cadenteProgresso = 0;
+    this.cadenteDuracao = 1.6;
     this._de = new THREE.Vector3();
     this._para = new THREE.Vector3();
+    this._cadHead = new THREE.Vector3();
+    this._cadTail = new THREE.Vector3();
   }
 
   semear(pos, i, inicial) {
@@ -127,42 +135,78 @@ class Ambiente {
     this.poeira.geometry.attributes.position.needsUpdate = true;
 
     /* -------------------------------------------------------- cadentes --- */
-    this.cadenteT -= dt;
-    if (this.cadenteT <= 0) {
-      const m = this.cadente.material;
-      if (m.opacity > 0) {
-        // Terminou a risca atual: apaga e agenda a próxima.
-        m.opacity = 0;
-        this.cadenteT = this.proximaCadente;
-        this.proximaCadente = 6 + this.rnd() * 16;
+    if (!this.cadenteVoando) {
+      this.cadenteT -= dt;
+      if (this.cadenteT <= 0) this.lancarCadente(c);
+    } else {
+      this.cadenteProgresso += dt / this.cadenteDuracao;
+      if (this.cadenteProgresso >= 1) {
+        this.cadente.material.opacity = 0;
+        this.cadenteVoando = false;
+        // Rara: a próxima demora entre vinte e cinquenta segundos.
+        this.cadenteT = 20 + this.rnd() * 30;
       } else {
-        // Nova risca, alta e longe, num setor qualquer do céu.
-        const a = this.rnd() * TAU;
-        const alt = 220 + this.rnd() * 180;
-        const dist = 420;
-        this._de.set(
-          c.x + Math.cos(a) * dist,
-          c.y + alt,
-          c.z + Math.sin(a) * dist,
-        );
-        const dir = new THREE.Vector3(
-          (this.rnd() - 0.5) * 2,
-          -0.35 - this.rnd() * 0.4,
-          (this.rnd() - 0.5) * 2,
-        ).normalize();
-        this._para.copy(this._de).addScaledVector(dir, 70 + this.rnd() * 60);
-
-        const p = this.cadente.geometry.attributes.position.array;
-        p[0] = this._de.x; p[1] = this._de.y; p[2] = this._de.z;
-        p[3] = this._para.x; p[4] = this._para.y; p[5] = this._para.z;
-        this.cadente.geometry.attributes.position.needsUpdate = true;
-        m.opacity = 0.9;
-        this.cadenteT = 0.45; // quanto a risca fica na tela
+        this.atualizarCadente(this.cadenteProgresso);
       }
-    } else if (this.cadente.material.opacity > 0) {
-      // Some depressa: uma cadente que demora a apagar lê como risco na tela.
-      this.cadente.material.opacity = Math.max(0, this.cadente.material.opacity - dt * 2.2);
     }
+  }
+
+  /** Sorteia o trajeto da próxima cadente, alta e longe, e a põe em voo. */
+  lancarCadente(c) {
+    const a = this.rnd() * TAU;
+    const alt = 220 + this.rnd() * 180;
+    const dist = 420;
+    this._de.set(
+      c.x + Math.cos(a) * dist,
+      c.y + alt,
+      c.z + Math.sin(a) * dist,
+    );
+    const dir = new THREE.Vector3(
+      (this.rnd() - 0.5) * 2,
+      -0.35 - this.rnd() * 0.4,
+      (this.rnd() - 0.5) * 2,
+    ).normalize();
+    this._para.copy(this._de).addScaledVector(dir, 70 + this.rnd() * 60);
+
+    this.cadenteVoando = true;
+    this.cadenteProgresso = 0;
+    this.cadenteDuracao = 1.3 + this.rnd() * 0.9;
+    this.cadente.material.opacity = 0;
+  }
+
+  /**
+   * Um METEORO cruzando o céu, não um palito que acende e apaga.
+   *
+   * A cabeça avança pelo trajeto sorteado; o RASTRO cresce atrás dela no
+   * primeiro terço do voo (nasce sem cauda e ela se estica), se mantém no
+   * meio e ENCOLHE no último terço — a cauda alcança a cabeça e as duas
+   * somem juntas. É essa variação de comprimento, e não um fade abrupto,
+   * que lê como "atravessando o céu" em vez de "piscou".
+   */
+  atualizarCadente(t) {
+    const CRESCE_ATE = 0.3;
+    const ENCOLHE_DE = 0.72;
+    const RASTRO_MAX = 0.4; // fração do trajeto total, no pico do rastro
+
+    let rastro;
+    if (t < CRESCE_ATE) rastro = RASTRO_MAX * (t / CRESCE_ATE);
+    else if (t < ENCOLHE_DE) rastro = RASTRO_MAX;
+    else rastro = RASTRO_MAX * Math.max(0, (1 - t) / (1 - ENCOLHE_DE));
+
+    const tCauda = Math.max(0, t - rastro);
+    this._cadHead.lerpVectors(this._de, this._para, t);
+    this._cadTail.lerpVectors(this._de, this._para, tCauda);
+
+    const p = this.cadente.geometry.attributes.position.array;
+    p[0] = this._cadTail.x; p[1] = this._cadTail.y; p[2] = this._cadTail.z;
+    p[3] = this._cadHead.x; p[4] = this._cadHead.y; p[5] = this._cadHead.z;
+    this.cadente.geometry.attributes.position.needsUpdate = true;
+
+    // Entra e sai suave: sem isto a risca aparece e some num salto de
+    // opacidade no primeiro e no último quadro do voo.
+    const fadeIn = Math.min(1, t / 0.06);
+    const fadeOut = Math.min(1, (1 - t) / 0.12);
+    this.cadente.material.opacity = 0.85 * Math.min(fadeIn, fadeOut);
   }
 }
 
@@ -355,6 +399,13 @@ class Nave {
 
 /* --------------------------------------------------------------- aliens --- */
 
+/** m — distância em que o alien para de perseguir e ataca. */
+const ALIEN_ATTACK_RANGE = 1.6;
+/** s — quanto tempo os braços ficam subindo antes do golpe valer. */
+const ALIEN_ATTACK_WINDUP = 0.5;
+/** s — pausa depois de golpear, antes de poder golpear de novo. */
+const ALIEN_ATTACK_COOLDOWN = 1.6;
+
 /**
  * O alien: pequeno, verde e teimoso.
  *
@@ -368,7 +419,13 @@ class Alien {
     this.physics = physics;
     this.terrain = terrain;
     this.dead = false;
-    this.hp = 2;
+    // Uma flechada mata — como o resto do bestiário pequeno do jogo (porco,
+    // pássaro). Vida em dobro aqui só faria o jogador gastar a segunda flecha
+    // achando que a primeira falhou, quando ela só não tinha efeito nenhum.
+    this.hp = 1;
+    /** Ataque corpo a corpo: "perseguindo" | "golpeando" | "recuando". */
+    this.attackState = "perseguindo";
+    this.attackT = 0;
 
     const pele = new THREE.MeshStandardMaterial({
       color: "#4fd44f",
@@ -398,6 +455,8 @@ class Alien {
       braco.position.set(lado * 0.42, 0.86, 0);
       braco.rotation.z = lado * 0.32;
       this.group.add(braco);
+      if (lado === -1) this.bracoE = braco;
+      else this.bracoD = braco;
 
       const perna = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.42, 4, 8), pele);
       perna.position.set(lado * 0.17, 0.26, 0);
@@ -484,11 +543,61 @@ class Alien {
         melhor = a;
       }
     }
+
+    /* O GOLPE. Chegou perto, para de perseguir, ergue os braços — o aviso —
+       e só depois do preparo é que o ataque conecta. Sem o aviso a morte
+       chegaria no mesmo quadro em que o alien encostou, e não haveria o que
+       reagir: nem recuar, nem virar e atirar nele primeiro. */
+    if (this.attackState === "golpeando") {
+      this.attackT += dt;
+      this.ergueBracos(Math.min(1, this.attackT / ALIEN_ATTACK_WINDUP));
+      if (melhor) {
+        this.group.rotation.y = Math.atan2(
+          melhor.x - this.group.position.x,
+          melhor.z - this.group.position.z,
+        );
+      }
+      if (this.attackT >= ALIEN_ATTACK_WINDUP) {
+        // Ainda ao alcance? O alvo pode ter se afastado durante o preparo —
+        // aí o golpe erra em vez de matar a distância.
+        if (melhor) {
+          const dGolpe = Math.hypot(
+            melhor.x - this.group.position.x,
+            melhor.z - this.group.position.z,
+          );
+          if (dGolpe <= ALIEN_ATTACK_RANGE + 0.4) {
+            gameEvents.emit(EventType.ALIEN_MELEE_HIT, { position: melhor });
+          }
+        }
+        this.attackState = "recuando";
+        this.attackT = 0;
+      }
+      return false;
+    }
+
+    if (this.attackState === "recuando") {
+      this.attackT += dt;
+      this.ergueBracos(Math.max(0, 1 - this.attackT / 0.35));
+      if (this.attackT >= ALIEN_ATTACK_COOLDOWN) {
+        this.attackState = "perseguindo";
+        this.attackT = 0;
+      }
+      return false;
+    }
+
     if (!melhor) return false;
 
     const dx = melhor.x - this.group.position.x;
     const dz = melhor.z - this.group.position.z;
     const d = Math.hypot(dx, dz) || 1;
+
+    if (d <= ALIEN_ATTACK_RANGE) {
+      this.attackState = "golpeando";
+      this.attackT = 0;
+      this.group.rotation.y = Math.atan2(dx, dz);
+      return false;
+    }
+
     const v = 2.6;
     if (d > 1.4) {
       const nx = this.group.position.x + (dx / d) * v * dt;
@@ -509,6 +618,13 @@ class Alien {
       z: this.group.position.z,
     });
     return false;
+  }
+
+  /** Pose do golpe: os dois braços sobem juntos, `t` = 0 (repouso) .. 1 (erguidos). */
+  ergueBracos(t) {
+    const ang = -t * 2.2;
+    if (this.bracoE) this.bracoE.rotation.x = ang;
+    if (this.bracoD) this.bracoD.rotation.x = ang;
   }
 
   dispose(scene) {
@@ -625,6 +741,22 @@ export class SpaceLife {
       position: { x: pos.x, y: chaoY + 1, z: pos.z },
       volume: 1.6,
     });
+  }
+
+  /**
+   * O rover atropelou. Mesmo caminho de morte de uma flechada — `atingir()`
+   * já mata em um golpe (`hp = 1`) — só que sem flecha nenhuma envolvida.
+   * Chamado por `levels/moonLevel.js`, que é quem conhece os dois lados
+   * (o rover mora em `base`, os aliens moram aqui).
+   */
+  killAliensNear(x, z, radius) {
+    const r2 = radius * radius;
+    for (const a of this.aliens) {
+      if (a.dead) continue;
+      const dx = a.group.position.x - x;
+      const dz = a.group.position.z - z;
+      if (dx * dx + dz * dz <= r2) a.atingir();
+    }
   }
 
   dispose() {

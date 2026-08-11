@@ -67,12 +67,14 @@ const ATALHOS = [
     ],
   },
   {
-    titulo: "Fases",
+    titulo: "Fases e bots",
     itens: [
       // A mesma tecla leva e traz — ver `askLevelChange`.
       [["9"], "Lua (ir e voltar)"],
       [["B"], "adicionar bot"],
       [["Shift", "B"], "remover bot"],
+      [["N"], "dificuldade do bot"],
+      [["Shift", "N"], "dificuldade anterior"],
     ],
   },
   {

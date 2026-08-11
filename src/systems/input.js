@@ -101,6 +101,7 @@ export class Input {
       setMode: null, // "free" | "duel" | "boarHunt"
       setLevel: null, // "valley" | "moon" — a FASE, não o modo
       toggleBot: null, // "add" | "remove" — adversário de CPU
+      cycleBotDifficulty: 0, // N: +1 avança, Shift+N volta, 0 = nada
       /* O espaço tem DOIS eventos, e o jetpack precisa dos dois. `jump` é a
          BORDA (pular, e acender o jato no segundo toque); `jumpReleased` é o
          soltar, que apaga o jato guardando o combustível que sobrou. */
@@ -321,6 +322,11 @@ export class Input {
           // como o 9 faz com a fase.
           this.actions.toggleBot = e.shiftKey ? "remove" : "add";
           break;
+        case "KeyN":
+          // N de nível. Shift+N volta — a mesma tecla nos dois sentidos, como o
+          // B faz com os bots e o 9 com a fase.
+          this.actions.cycleBotDifficulty = e.shiftKey ? -1 : 1;
+          break;
         case "KeyC":
           this.firstPerson = true;
           break;
@@ -438,6 +444,7 @@ export class Input {
     a.askResetScores = false;
     a.setLevel = null;
     a.toggleBot = null;
+    a.cycleBotDifficulty = 0;
     a.jumpReleased = false;
     a.setMode = null;
     return snapshot;

@@ -365,6 +365,14 @@ export const CONFIG = {
         grain: 0.02,
         terrainAO: true,
         cullDistance: 60,
+        pausaChance: 0.35,
+        pausaMin: 0.5,
+        pausaMax: 1.0,
+        avancoChance: 0.25,
+        avancoIntervalo: 8,
+        avancoMin: 2.5,
+        avancoMax: 4.5,
+        avancoMetros: 12,
       },
       high: {
         shadowMapSize: 2048,
@@ -1215,7 +1223,7 @@ export const CONFIG = {
   },
 
   /* ------------------------------------------------------------------- bot --
-     A perícia do adversário de CPU. Ver `systems/bot.js` para a mira em si —
+     A perícia do adversário de CPU. Ver `server/botSim.js` para a mira em si —
      aqui ficam só os números que decidem o quanto ele erra.
 
      DUAS coisas separadas decidem o resultado de um tiro:
@@ -1231,15 +1239,40 @@ export const CONFIG = {
      Trocar de dificuldade é só trocar `difficulty` — nenhum outro arquivo
      precisa saber que a tabela existe. */
   bot: {
-    /** Perícia padrão de bot novo. Troque aqui — não em `bot.js`. */
+    /** Perícia padrão de bot novo. Troque aqui — ou pela tecla N, em jogo. */
     difficulty: "easy",
+    /** Teto de adversários de CPU em campo ao mesmo tempo. */
+    maxBots: 6,
+
+    /* Coleira: até onde o bot pode se afastar da bacia jogável.
+       Medida em `arenaDistance` (negativo = dentro da arena), então 12 significa
+       "pode subir 12 m sopé acima e nem um metro além". Sem ela os bots subiam a
+       serra e duelavam no alto, fora do campo de visão de quem ficou embaixo. Na
+       Lua o valor não muda nada: lá `arenaDistance` já é negativo em toda a
+       arena e a barreira circular resolve sozinha. */
+    leash: 12, // m de `arenaDistance`
+
+    /* Quanto o bot PREFERE um adversário a um bicho.
+       A distância até o bicho é multiplicada por isto na escolha do alvo: com
+       1.8, um porco a 20 m só ganha de um duelista a 36 m. O bot continua sendo
+       um duelista que atira na caça de passagem, não um caçador que ignora
+       você. */
+    creaturePenalty: 1.8,
     difficulties: {
       easy: {
-        erroMira: 0.02, // rad — mão trêmula mesmo quando "acerta"
-        missChance: 0.45, // 45 % dos tiros saem deliberadamente torto
+        erroMira: 0.026, // rad — mão trêmula mesmo quando "acerta"
+        missChance: 0.62, // quase 2 em 3 tiros saem deliberadamente tortos
         missSpread: 7, // × erroMira, no tiro que erra de propósito
         reacao: 0.55, // s até reagir a uma mudança sua
         precisaoLead: 0.5, // erra a liderança de alvo em movimento
+        pausaChance: 0.55,
+        pausaMin: 0.8,
+        pausaMax: 1.6,
+        avancoChance: 0.3,
+        avancoIntervalo: 7,
+        avancoMin: 3.0,
+        avancoMax: 6.0,
+        avancoMetros: 16,
       },
       medium: {
         erroMira: 0.013,
@@ -1254,6 +1287,14 @@ export const CONFIG = {
         missSpread: 6,
         reacao: 0.16,
         precisaoLead: 0.95,
+        pausaChance: 0.2,
+        pausaMin: 0.35,
+        pausaMax: 0.7,
+        avancoChance: 0.2,
+        avancoIntervalo: 9,
+        avancoMin: 2.0,
+        avancoMax: 3.5,
+        avancoMetros: 10,
       },
     },
   },

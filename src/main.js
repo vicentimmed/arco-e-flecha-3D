@@ -33,7 +33,6 @@ import { TrailManager } from "./systems/trails.js";
 import { Input } from "./systems/input.js";
 import { PlayerPhysics } from "./systems/playerPhysics.js";
 import { Jetpack } from "./systems/jetpack.js";
-import { BotManager } from "./systems/bot.js";
 import { AudioSystem } from "./systems/audio.js";
 import { ParticleSystem } from "./systems/particles.js";
 import { installImpactEffects, RECEITAS } from "./systems/impactFx.js";
@@ -267,21 +266,12 @@ class Game {
     this.remotes = new RemotePlayers(this.scene, physics, this.terrain);
     this.remoteArrows = new RemoteArrows(this.arrows, () => this.targets);
     this.series = new TargetSeriesView(this.scene, physics, this.terrain, this.arrows);
-    /* Os adversários de CPU. Vivem FORA da fase, como você e os remotos: quem
-       troca de cenário continua duelando com o mesmo bot do outro lado.
-
-       O `terrain` entra como ACESSOR, não como valor: o contexto é guardado uma
-       vez e a fase muda várias, e um bot com a referência do vale demolido
-       procuraria o chão num terreno que já não existe. */
-    this.bots = new BotManager({
-      scene: this.scene,
-      physics,
-      arrows: this.arrows,
-      get terrain() {
-        return this.jogo.terrain;
-      },
-      jogo: this,
-    });
+    /* Os adversários de CPU NÃO moram mais aqui.
+     *
+     * Eles viraram jogadores da sala (`server/botSim.js`), e é o servidor que
+     * os simula. Deste lado eles chegam como qualquer outro arqueiro: um
+     * `RemotePlayer` montado pelo `S2C.JOIN`, animado pelo `S2C.STATES`, com
+     * flecha vinda do `S2C.SHOT`. Não há nada a instanciar. */
 
     this.respawn = new Respawn(this.player, this.playerPhysics);
     this.death = new Death(this.player, this.terrain);
@@ -356,23 +346,13 @@ class Game {
       }
     });
 
-    /* Uma flecha de BOT acertou VOCÊ.
+    /* A morte causada por bot NÃO é tratada aqui.
      *
-     * O bot é inteiramente local — o servidor nunca ouviu falar dele —, e
-     * `registerKill` recusa de propósito um `C2S.KILL` em que vítima e
-     * remetente são a mesma pessoa (ver o comentário lá: "vitima === killer").
-     * Route por ali daria silêncio, exatamente o bug relatado: o bot acerta e
-     * nada acontece. A morte por bot (e a do alien, mais abaixo) por isso não
-     * passa pelo servidor — vive e morre só nesta tela, como o próprio bot. */
-    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
-      if (e.targetKind !== "character") return;
-      if (e.targetId !== this.player.entityId) return;
-      if (typeof e.ownerId !== "string" || !e.ownerId.startsWith("bot")) return;
-      this.killedByLocalNPC({
-        c: [mm(e.impact.x), mm(e.impact.y), mm(e.impact.z)],
-        v: e.velocity.map(mm),
-      });
-    });
+     * Ela era, enquanto o bot vivia nesta tela: o servidor recusa um
+     * `C2S.KILL` autoinfligido, então a queda tinha de ser resolvida
+     * localmente. Com o bot na sala (`server/botSim.js`), quem simula a flecha
+     * dele é o servidor — e a morte chega pelo `S2C.KILL` de sempre, igual à de
+     * um humano, com o corpo caindo no mesmo lugar em todas as telas. */
 
     /* O alien chegou perto e golpeou. Mesma razão do bot: sem servidor por
        trás, então só quem é o alvo (você) reage — os outros clientes nem
@@ -889,6 +869,15 @@ class Game {
     net.on(S2C.MODE_PREPARE_CANCEL, () => this.cancelModePreparation());
     net.on(S2C.MODE, (msg) => this.applyMode(msg));
 
+    /* A dificuldade dos bots é da SALA, e o aviso vem dela: os bots vivem todos
+       no servidor, então quem apertou a tecla e quem só estava jogando veem a
+       mesma mudança no mesmo instante. */
+    net.on(S2C.BOT_DIFFICULTY, (msg) => {
+      const rotulo =
+        { easy: "fácil", medium: "médio", hard: "difícil" }[msg.level] ?? msg.level;
+      this.hud.toast(`bots: dificuldade ${rotulo}`, "hit");
+    });
+
     net.on(S2C.SCORES, (msg) => this.scoreboard.setScores(msg.scores));
     net.on(S2C.SCORES_RESET, (msg) => {
       this.hud.toast(`${msg.by} zerou o placar`, "miss");
@@ -1125,7 +1114,6 @@ class Game {
     // da etiqueta de nome.
     this.series.update(dt, this.renderer.camera);
     this.remotes.update(dt, this.net.serverTime, this.renderer.camera);
-    this.bots.update(dt, this.botTargets());
     this.pushState();
 
     this.updateHud();
@@ -1191,19 +1179,15 @@ class Game {
 
     if (a.setMode) this.askModeChange(a.setMode);
     if (a.setLevel) this.askLevelChange(a.setLevel);
+    /* Pôr e tirar bot é PEDIDO À SALA. O aviso na tela não sai daqui: ele vem
+       do `S2C.JOIN`/`S2C.LEAVE` que o servidor manda para todo mundo, porque um
+       adversário novo em campo é notícia para a sala inteira, não só para quem
+       apertou a tecla. */
     if (a.toggleBot) {
-      if (a.toggleBot === "add") {
-        const bot = this.bots.add();
-        this.hud.toast(
-          bot ? `${bot.nome} entrou no duelo` : "limite de bots atingido",
-          bot ? "hit" : "miss",
-        );
-      } else {
-        this.hud.toast(
-          this.bots.removeLast() ? "bot removido" : "nenhum bot em campo",
-          "miss",
-        );
-      }
+      this.net.send(C2S.BOT, { remove: a.toggleBot === "remove" });
+    }
+    if (a.cycleBotDifficulty) {
+      this.net.send(C2S.BOT_DIFFICULTY, { step: a.cycleBotDifficulty });
     }
     if (a.toggleMusic) {
       const on = this.audio.toggleMusic();
@@ -1427,33 +1411,10 @@ class Game {
     const lista = (this._livePlayers ??= []);
     lista.length = 0;
     if (!this.death.dying) lista.push(this.player.position);
+    /* Os bots entram aqui SOZINHOS, sem uma linha para eles: agora são
+       jogadores da sala e chegam como `RemotePlayer`, junto dos humanos. */
     for (const r of this.remotes.byId.values()) {
       if (!r.dyingSince) lista.push(r.player.position);
-    }
-    // O bot também é gente em campo: alien persegue e flecha acerta.
-    this.bots.positions(lista);
-    return lista;
-  }
-
-  /**
-   * Quem o bot pode caçar: você, os remotos e os OUTROS bots.
-   *
-   * Dois bots numa sala vazia duelam entre si — que é, de longe, a melhor
-   * forma de olhar a IA jogando sem estar no meio do tiroteio.
-   */
-  botTargets() {
-    const lista = (this._botTargets ??= []);
-    lista.length = 0;
-    if (!this.death.dying) {
-      lista.push({ position: this.player.position, entityId: this.player.entityId });
-    }
-    for (const r of this.remotes.byId.values()) {
-      if (!r.dyingSince) {
-        lista.push({ position: r.player.position, entityId: r.entityId });
-      }
-    }
-    for (const b of this.bots.bots) {
-      if (b.vivo) lista.push({ position: b.player.position, entityId: b.entityId });
     }
     return lista;
   }
@@ -1668,10 +1629,9 @@ class Game {
       this.playerPhysics.rebuild();
       this.aim.setExcludedCollider(this.playerPhysics.collider);
     }
+    /* Os bots vêm no mesmo balaio dos remotos: quem religa o terreno deles é
+       `setTerrain`, e quem os reposiciona é o servidor. Nada a fazer aqui. */
     if (this.remotes) this.remotes.setTerrain(terrain);
-    // Os bots atravessam a troca junto com os humanos: terreno novo, cápsula
-    // nova e um nascimento no anel de duelo da fase que entrou.
-    this.bots?.relevel(terrain);
   }
 
   /**

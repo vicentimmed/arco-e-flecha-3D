@@ -25,6 +25,8 @@
 
 import { CONFIG } from "../src/config.js";
 import { pathCenterX } from "../src/shared/terrainField.js";
+import { BotSquad } from "./botSim.js";
+import { simularFlechaDoBot, orientacaoDe } from "./botArrow.js";
 import {
   DEFAULT_LEVEL,
   LEVEL_IDS,
@@ -45,6 +47,7 @@ import {
   RejectReason,
   displayName,
   playerEntity,
+  packState,
 } from "../src/shared/protocol.js";
 import { ColorPool } from "./colors.js";
 import { pickSpawnPoint, duelPositions, elkHuntPositions } from "./spawnPoints.js";
@@ -91,6 +94,11 @@ export class Room {
      */
     this.stuckArrows = [];
 
+    /* Os adversários de CPU. Vivem AQUI, não no cliente — ver `botSim.js` para
+       o porquê. Eles não têm `conn`, e é só isso que os distingue de um jogador
+       humano em quase todo o resto desta classe. */
+    this.bots = new BotSquad(this.terrain, this.level);
+
     this.hunt = new BoarHunt(this.terrain);
     this.elks = new ElkHunt(this.terrain);
     this.elkWolves = new ElkWolfPack(this.terrain);
@@ -135,6 +143,248 @@ export class Room {
     // javali não precisa de 20 Hz para parecer que anda.
     this.boarStep = 1 / net.boarHz;
     this.boarTimer = setInterval(() => this.tickCreatures(), 1000 / net.boarHz);
+
+    /* Os bots andam no passo dos JOGADORES, não no dos bichos.
+       Eles são adversários de duelo: mirar, girar e soltar a corda a 10 Hz sai
+       aos trancos, e o giro limitado por quadro (que é o que permite flanqueá-los)
+       viraria um salto. `stateHz` é o mesmo relógio em que a pose deles é
+       transmitida, então cada amostra enviada é uma amostra recém-calculada. */
+    this.botStep = 1 / net.stateHz;
+    this.botLast = Date.now();
+    this.botTimer = setInterval(() => this.tickBots(), 1000 / net.stateHz);
+  }
+
+  /* ------------------------------------------------------------------ bots -- */
+
+  /** Um passo da IA de todos os bots, e os tiros que ele produziu. */
+  tickBots() {
+    if (!this.bots.count) {
+      this.botLast = Date.now();
+      return;
+    }
+    const agora = Date.now();
+    // `dt` medido, não nominal: um `setInterval` atrasado pelo laço de eventos
+    // faria o bot andar menos do que o relógio diz, e a mira usa `dt` para
+    // estimar a velocidade do alvo.
+    const dt = Math.min(0.25, (agora - this.botLast) / 1000);
+    this.botLast = agora;
+
+    const personagens = this.characterViews();
+    const bichos = this.botPrey();
+    const tiros = this.bots.update(dt, personagens, bichos);
+
+    // A pose de cada bot entra no mesmo formato dos humanos.
+    for (const b of this.bots.list) {
+      b.state = packState(b);
+      b.stateTime = this.now();
+    }
+
+    for (const { bot, tiro } of tiros) this.dispararDoBot(bot, tiro);
+  }
+
+  /**
+   * Os personagens no formato que a IA e a flecha entendem.
+   *
+   * O humano guarda a pose como array (`state.p`), o bot como objeto — esta é a
+   * única costura entre os dois, e ela mora aqui em vez de espalhada pelos dois
+   * consumidores.
+   */
+  characterViews() {
+    const lista = [];
+    for (const p of this.players.values()) {
+      if (!p.state) continue;
+      lista.push({
+        id: p.id,
+        alive: p.alive,
+        invulnUntil: p.invulnUntil,
+        isBot: false,
+        ref: p,
+        position: { x: p.state.p[0], y: p.state.p[1], z: p.state.p[2] },
+      });
+    }
+    for (const b of this.bots.list) {
+      lista.push({
+        id: b.id,
+        alive: b.alive,
+        invulnUntil: b.invulnUntil,
+        isBot: true,
+        ref: b,
+        position: b.position,
+      });
+    }
+    return lista;
+  }
+
+  /**
+   * O bot soltou a corda.
+   *
+   * Dois anúncios, e é o mesmo par que um jogador humano produz: `S2C.SHOT` põe
+   * a flecha voando em todas as telas (cada cliente a desenha como `visualOnly`,
+   * sem resolver nada), e `S2C.IMPACT` diz onde ela parou. Como o atirador é a
+   * sala, a simulação que decide o impacto roda aqui — ver `botArrow.js`.
+   */
+  dispararDoBot(bot, tiro) {
+    const id = this.nextBotArrowId = (this.nextBotArrowId ?? 0) + 1;
+    const o = [round(tiro.origem.x), round(tiro.origem.y), round(tiro.origem.z)];
+    const d = [round(tiro.direcao.x), round(tiro.direcao.y), round(tiro.direcao.z)];
+
+    this.broadcastAll({
+      t: S2C.SHOT,
+      owner: bot.id,
+      ownerEntity: playerEntity(bot.id),
+      id,
+      o,
+      d,
+      v: round(tiro.velocidade),
+      w: this.now(),
+    });
+
+    // O alce do modo pode ver a flecha a caminho e tentar desviar — vale para a
+    // do bot igual à de qualquer um.
+    if (this.mode === "elkHunt" && !this.elks.over) {
+      this.elks.noticeShot({ o, d, v: tiro.velocidade }, this.now());
+    }
+
+    const r = simularFlechaDoBot(tiro, {
+      terrain: this.terrain,
+      levelId: this.level,
+      personagens: this.characterViews(),
+      donoId: bot.id,
+      bichos: this.botPrey(),
+      agora: this.now(),
+    });
+
+    if (r.kind === "sumiu") return; // saiu do mundo: nada a encaixar
+
+    this.broadcastAll({
+      t: S2C.IMPACT,
+      owner: bot.id,
+      ownerEntity: playerEntity(bot.id),
+      id,
+      k: r.kind === "character" ? "character" : r.kind === "terrain" ? "terrain" : r.kind,
+      ti: r.alvo ? (r.kind === "character" ? playerEntity(r.alvo.id) : r.alvo.id) : "chão",
+      p: [round(r.ponto.x), round(r.ponto.y), round(r.ponto.z)],
+      q: orientacaoDe(r.velocidade).map(round),
+      c: [round(r.ponto.x), round(r.ponto.y), round(r.ponto.z)],
+      v: [round(r.velocidade.x), round(r.velocidade.y), round(r.velocidade.z)],
+    });
+
+    if (r.kind === "character") this.matarPeloBot(bot, r);
+    else if (r.kind === "boar") this.abaterBichoPeloBot(bot, "boar", r.alvo.id);
+    else if (r.kind === "elk") this.abaterBichoPeloBot(bot, "elk", r.alvo.id);
+    else if (r.kind === "zombie") this.abaterBichoPeloBot(bot, "zombie", r.alvo.id);
+  }
+
+  /**
+   * A flecha do bot acertou gente (ou outro bot).
+   *
+   * Sem `C2S.KILL` no meio: quem atirou É a sala, então ela declara direto. O
+   * resto do caminho — placar, aviso, respawn — é o mesmo de `registerKill`.
+   */
+  matarPeloBot(bot, r) {
+    const vitima = r.alvo.ref;
+    if (!vitima || !vitima.alive) return;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+    bot.score.kills++;
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      killer: bot.id,
+      killerName: bot.name,
+      killerColor: bot.color,
+      victimColor: vitima.color,
+      distance: null,
+      c: [round(r.ponto.x), round(r.ponto.y), round(r.ponto.z)],
+      v: [round(r.velocidade.x), round(r.velocidade.y), round(r.velocidade.z)],
+      cause: "arrow",
+    });
+    this.broadcastScores();
+
+    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+    setTimeout(() => {
+      if (vitima.isBot) {
+        if (this.bots.byId(vitima.id)) this.spawn(vitima);
+      } else if (this.players.has(vitima.conn)) {
+        this.spawn(vitima);
+      }
+    }, espera).unref?.();
+  }
+
+  /**
+   * O bot abateu um bicho.
+   *
+   * NÃO pontua: o bot não disputa placar de caçada, e creditar os pontos a
+   * alguém seria escolher um humano ao acaso. O que importa é que o bicho morre
+   * para TODO MUNDO — o servidor é dono dele e do bot, então não há duas
+   * versões do mundo para conciliar.
+   */
+  abaterBichoPeloBot(bot, tipo, id) {
+    const agora = this.now();
+    if (tipo === "boar") {
+      const porco = this.hunt.kill(id, agora);
+      if (!porco) return;
+      this.broadcastAll({
+        t: S2C.BOAR_DEATH,
+        id,
+        killer: bot.id,
+        killerName: bot.name,
+        killerColor: bot.color,
+        points: 0,
+        distance: null,
+      });
+    } else if (tipo === "elk") {
+      this.elks.hit?.(id);
+    } else if (tipo === "zombie") {
+      const bicho = this.zombies.zombies.find((z) => z.id === id);
+      if (bicho && !bicho.dead) {
+        bicho.hit?.(false);
+        if (bicho.dead) {
+          this.broadcastAll({ t: S2C.ZOMBIE_DEATH, id, killer: bot.id, points: 0, head: false });
+        }
+      }
+    }
+  }
+
+  /** Põe um adversário de CPU em campo, visível para a sala inteira. */
+  addBot() {
+    const ocupados = this.allCharacters()
+      .filter((c) => c.state)
+      .map((c) => ({ x: c.state.p[0], z: c.state.p[2] }));
+    const bot = this.bots.add(nextPlayerId++, ocupados);
+    if (!bot) return null;
+
+    bot.state = packState(bot);
+    bot.stateTime = this.now();
+    bot.invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
+
+    /* Entra pelo MESMO canal de um humano. É isso que faz o cliente desenhá-lo
+       sem uma linha de código nova: `S2C.JOIN` já cria um `RemotePlayer`, com
+       cápsula de física e etiqueta de nome. */
+    this.broadcastAll({
+      t: S2C.JOIN,
+      player: { id: bot.id, name: bot.name, color: bot.color, isBot: true },
+    });
+    this.broadcastScores();
+    this.log(`bot entrou: ${bot.name} (#${bot.id})`);
+    return bot;
+  }
+
+  removeBot() {
+    const bot = this.bots.removeLast();
+    if (!bot) return false;
+    this.broadcastAll({ t: S2C.LEAVE, id: bot.id, name: bot.name });
+    this.broadcastScores();
+    return true;
+  }
+
+  clearBots() {
+    for (const bot of this.bots.clear()) {
+      this.broadcastAll({ t: S2C.LEAVE, id: bot.id, name: bot.name });
+    }
   }
 
   /**
@@ -331,7 +581,18 @@ export class Room {
     /* A FASE muda ANTES do modo. `setMode` sorteia nascimentos, e o sorteio
        pergunta a altura do chão — se o modo entrasse primeiro, todo mundo
        nasceria em cotas do cenário anterior e cairia dentro do novo. */
+    const trocouFase = (pending.level ?? this.level) !== this.level;
     this.level = pending.level ?? this.level;
+    if (trocouFase) {
+      /* Os bots saem na troca de fase.
+       *
+       * Poderiam atravessar — `relevel` sabe religá-los — e ainda assim saem:
+       * quem viaja para a Lua está mudando de assunto, e chegar lá com a mesma
+       * escolta de CPU do vale não é o que ninguém pediu. Uma linha para mudar
+       * de ideia, se um dia um modo quiser o contrário. */
+      this.clearBots();
+      this.bots.relevel(this.terrain, this.level);
+    }
     this.setMode(pending.mode);
   }
 
@@ -621,16 +882,58 @@ export class Room {
    * Onde está cada jogador. O `id` e o `alive` vão junto porque o alce PRECISA
    * escolher uma vítima — os porcos só precisam saber de quem fugir.
    */
+  /**
+   * Jogadores e bots, juntos.
+   *
+   * Quase todo o resto da sala quer "quem tem corpo em campo", e não "quem tem
+   * socket": os porcos fogem dos dois, o alce escolhe vítima entre os dois, o
+   * placar mostra os dois e uma flecha acerta os dois. O único lugar que precisa
+   * da distinção é o ENVIO de pacote — e lá o critério é `conn`, que o bot não
+   * tem.
+   */
+  allCharacters() {
+    return [...this.players.values(), ...this.bots.list];
+  }
+
   playerPositions() {
-    return [...this.players.values()]
-      .filter((p) => p.state)
-      .map((p) => ({
+    const saida = [];
+    for (const p of this.players.values()) {
+      if (!p.state) continue;
+      saida.push({
         id: p.id,
         alive: p.alive,
         x: p.state.p[0],
         y: p.state.p[1],
         z: p.state.p[2],
-      }));
+      });
+    }
+    // Os bots também são gente em campo: o porco foge deles, o alce os
+    // persegue e o alien vai atrás. Sem isto, eles seriam fantasmas para a fauna.
+    for (const b of this.bots.list) {
+      saida.push({ id: b.id, alive: b.alive, x: b.position.x, y: b.position.y, z: b.position.z });
+    }
+    return saida;
+  }
+
+  /**
+   * Os bichos que o bot pode caçar.
+   *
+   * PÁSSAROS FICAM DE FORA de propósito: alvo pequeno, alto e em movimento — o
+   * bot passaria o duelo de cabeça erguida mirando o céu, e um adversário
+   * distraído por pardais não é adversário.
+   */
+  botPrey() {
+    const lista = [];
+    for (const b of this.hunt.boars) {
+      if (!b.dead) lista.push({ kind: "boar", id: b.id, x: b.x, y: b.y, z: b.z });
+    }
+    for (const e of this.elks.elks) {
+      if (!e.dead) lista.push({ kind: "elk", id: e.id, x: e.x, y: e.y, z: e.z });
+    }
+    for (const z of this.zombies.zombies) {
+      if (!z.dead) lista.push({ kind: "zombie", id: z.id, x: z.x, y: z.y, z: z.z });
+    }
+    return lista;
   }
 
   /**
@@ -1687,7 +1990,10 @@ export class Room {
    */
   snapshot(exceto) {
     return {
-      players: [...this.players.values()]
+      // Bots entram na MESMA lista dos humanos: quem chega no meio da partida
+      // precisa vê-los tanto quanto vê as pessoas, e o cliente já sabe montar
+      // um `RemotePlayer` a partir desta entrada.
+      players: this.allCharacters()
         .filter((p) => p !== exceto)
         .map((p) => ({ ...publicView(p), state: p.state })),
       arrows: this.stuckArrows,
@@ -1875,6 +2181,22 @@ export class Room {
       case C2S.KILL:
         this.registerKill(player, msg);
         break;
+
+      case C2S.BOT:
+        if (msg.remove) this.removeBot();
+        else this.addBot();
+        break;
+
+      case C2S.BOT_DIFFICULTY: {
+        /* A perícia é UMA SÓ, da sala — os bots vivem todos aqui. Por isso
+           trocá-la vale para todo mundo no mesmo instante, sem sincronizar
+           nada: é o significado literal de "em tempo real para todos". */
+        const nivel = msg.level
+          ? this.bots.setDifficulty(msg.level)
+          : this.bots.cycleDifficulty(msg.step === -1 ? -1 : 1);
+        this.broadcastAll({ t: S2C.BOT_DIFFICULTY, level: nivel });
+        break;
+      }
 
       case C2S.MODE:
         this.requestMode(player, msg.mode);
@@ -2072,9 +2394,15 @@ export class Room {
     }, espera).unref?.();
   }
 
+  /**
+   * Quem tem este id — humano OU bot.
+   *
+   * É por aqui que `registerKill` encontra a vítima, e é o que faz a flecha de
+   * um humano matar um bot pelo caminho normal, sem nenhum caso especial.
+   */
   playerById(id) {
     for (const p of this.players.values()) if (p.id === id) return p;
-    return null;
+    return this.bots.byId(id);
   }
 
   /* --------------------------------------------------------------- nascer -- */
@@ -2088,7 +2416,7 @@ export class Room {
    * que deixa explícito, para quem está vendo, que aquilo ali é um renascimento.
    */
   spawn(player) {
-    const ocupados = [...this.players.values()]
+    const ocupados = this.allCharacters()
       .filter((p) => p !== player && p.state)
       .map((p) => ({ x: p.state.p[0], z: p.state.p[2] }));
 
@@ -2096,6 +2424,11 @@ export class Room {
     const invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
     player.alive = true;
     player.invulnUntil = invulnUntil;
+    /* O bot não recebe `S2C.SPAWN` — ele não tem cliente para obedecer a ela.
+       Quem o move é a própria IA, então o nascimento é escrito direto no corpo.
+       A mensagem sai mesmo assim, logo abaixo: é ela que faz as OUTRAS telas
+       porem o boneco no lugar novo. */
+    if (player.isBot) player.renascer(ponto.x, ponto.z);
     this.stampSpawnState(player, ponto.x, ponto.z);
 
     // Na caçada, voltar à vida também é voltar a encarar o bicho: o ponto de
@@ -2120,11 +2453,14 @@ export class Room {
   /* --------------------------------------------------------------- placar -- */
 
   scores() {
-    return [...this.players.values()].map((p) => ({
+    return this.allCharacters().map((p) => ({
       id: p.id,
       name: p.name,
       color: p.color,
-      ping: p.ping,
+      ping: p.ping ?? 0,
+      // O placar marca quem é CPU: um "CPU 2" liderando é informação diferente
+      // de um humano liderando, e a tela merece poder mostrar isso.
+      isBot: p.isBot === true,
       ...p.score,
     }));
   }
@@ -2205,14 +2541,26 @@ export class Room {
 
   /* --------------------------------------------------------------- envio --- */
 
-  /** Poses de todos, numa mensagem só. Nada a fazer se ninguém tem com quem falar. */
+  /**
+   * Poses de todos, numa mensagem só.
+   *
+   * O corte é "há mais de um CORPO em campo", e não mais de um socket: um
+   * humano sozinho com três bots precisa das poses tanto quanto dois humanos
+   * precisam. Com o teste antigo (`players.size < 2`) o bot existia, andava e
+   * atirava — e ficava congelado no ponto de nascimento na tela de quem jogava
+   * sozinho, que é o caso mais comum de todos.
+   */
   broadcastStates() {
-    if (this.players.size < 2) return;
+    if (!this.players.size) return;
+    if (this.players.size + this.bots.count < 2) return;
     const s = [];
     for (const p of this.players.values()) {
       // `w` = quando o dono capturou a pose. É esse instante que a interpolação
       // do outro lado usa, e não o da retransmissão.
       if (p.state) s.push({ id: p.id, w: p.stateTime, ...p.state });
+    }
+    for (const b of this.bots.list) {
+      if (b.state) s.push({ id: b.id, w: b.stateTime, ...b.state });
     }
     if (!s.length) return;
     this.broadcastAll({ t: S2C.STATES, time: this.now(), s });
@@ -2235,6 +2583,7 @@ export class Room {
     clearInterval(this.stateTimer);
     clearInterval(this.sweepTimer);
     clearInterval(this.boarTimer);
+    clearInterval(this.botTimer);
     if (this.pendingMode) clearTimeout(this.pendingMode.timer);
     this.pendingMode = null;
     this.hunt.stop();
@@ -2317,7 +2666,7 @@ function emptyScore() {
 }
 
 function publicView(p) {
-  return { id: p.id, name: p.name, color: p.color };
+  return { id: p.id, name: p.name, color: p.color, isBot: p.isBot === true };
 }
 
 function send(conn, msg) {

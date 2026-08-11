@@ -60,8 +60,14 @@
  * 11 — entraram as FASES: o jogo deixou de ter um cenário só. A pose passou a
  * carregar o estado do jetpack (`j`), sem o qual o arqueiro alheio sobe pelo ar
  * na Lua com as costas apagadas e nada explicando por que ele voa.
+ *
+ * 12 — os adversários de CPU deixaram de ser locais e passaram a viver na
+ * sala, como os porcos e os zumbis. Antes cada cliente hospedava os próprios e
+ * ninguém mais os via: dois amigos jogavam contra adversários invisíveis um
+ * para o outro. Uma aba antiga veria os outros atirando em alguém que, para
+ * ela, não existe — e levaria flechada de um arqueiro que não está lá.
  */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -112,6 +118,10 @@ export const C2S = {
   TORCH_HIT: "torchHit",
   /** Sincronismo de relógio: `{ c: clientClock }`. */
   PING: "ping",
+  /** Põe ou tira um adversário de CPU: `{ remove?: boolean }`. */
+  BOT: "bot",
+  /** Muda a perícia dos bots: `{ step: 1 | -1 }` ou `{ level: "easy" }`. */
+  BOT_DIFFICULTY: "botDifficulty",
 };
 
 /* --------------------------------------------------------- servidor → cliente */
@@ -203,6 +213,8 @@ export const S2C = {
   SCORES: "scores",
   /** Alguém zerou o placar: `{ by }`. */
   SCORES_RESET: "scoresReset",
+  /** A perícia dos bots mudou: `{ level }`. Vira aviso na tela de todos. */
+  BOT_DIFFICULTY: "botDifficulty",
   /** Transformações dos zumbis, 10 Hz: `{ z: [...] }`. */
   ZOMBIES: "zombies",
   /** Chefão levou flecha: `{ id, c?, head }` — clarão vermelho nas outras telas. */

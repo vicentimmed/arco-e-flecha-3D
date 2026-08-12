@@ -84,10 +84,13 @@ export class NetClient {
    * A partir daí a conexão se mantém sozinha.
    *
    * @param {string} name
-   * @param {{level?: string, mode?: string}} [entrada] a PORTA escolhida na tela
-   *   inicial. Ela decide em qual sala esta conexão entra (ver `RoomHost`), e é
-   *   guardada aqui porque a RECONEXÃO precisa da mesma porta: cair da rede e
-   *   voltar no vale, tendo entrado pela Lua, seria trocar de jogo sozinho.
+   * @param {{level?: string, mode?: string, skin?: string}} [entrada] a PORTA
+   *   escolhida na tela inicial, mais o corpo. Ela decide em qual sala esta
+   *   conexão entra (ver `RoomHost`), e é guardada aqui porque a RECONEXÃO
+   *   precisa da mesma porta: cair da rede e voltar no vale, tendo entrado pela
+   *   Lua, seria trocar de jogo sozinho. A skin viaja junto pela mesma razão —
+   *   reconectar de atleta, tendo entrado de medieval, trocaria de corpo no meio
+   *   da partida na tela de todo mundo menos na sua.
    */
   connect(name, entrada = null) {
     this.name = name;
@@ -108,6 +111,11 @@ export class NetClient {
       return;
     }
     this.socket = socket;
+    /* O jogo inteiro é JSON, com UMA exceção: as poses do cerco (ver
+       `Siege.packFrame` e o cabeçalho de `shared/protocol.js`). Sem declarar
+       isto, um quadro binário chega como `Blob` e a leitura vira assíncrona —
+       o que reordenaria as poses em relação às mensagens de texto. */
+    socket.binaryType = "arraybuffer";
 
     socket.addEventListener("open", () => {
       this.raw({
@@ -116,10 +124,24 @@ export class NetClient {
         version: PROTOCOL_VERSION,
         ...(this.entry?.level ? { level: this.entry.level } : {}),
         ...(this.entry?.mode ? { mode: this.entry.mode } : {}),
+        /* A skin viaja UMA VEZ, aqui, como o nome e a cor. Ela não tem lugar no
+           pacote de poses de 20 Hz: um corpo não troca de roupa no meio de uma
+           partida, e mandar isso sessenta vezes por segundo seria pagar tráfego
+           eterno por um dado que nunca muda. */
+        ...(this.entry?.skin ? { skin: this.entry.skin } : {}),
       });
     });
 
     socket.addEventListener("message", (event) => {
+      /* Quadro binário: o tipo é o primeiro BYTE, não um campo `t`.
+         Ele é emitido como um evento normal (`frame:1`), então quem escuta não
+         precisa saber que o transporte foi diferente. */
+      if (event.data instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(event.data);
+        if (bytes.length) this.emit(`frame:${bytes[0]}`, event.data);
+        return;
+      }
+
       let msg;
       try {
         msg = JSON.parse(event.data);

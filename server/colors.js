@@ -18,6 +18,12 @@
  * Matizes escolhidos para se destacarem do cenário — que é verde, marrom e
  * cinza — e uns dos outros. Nada de verde-grama nem de marrom-terra: numa
  * arena desse tamanho, reconhecer quem é a 60 m depende inteiramente disso.
+ *
+ * SEM ROSA, LILÁS OU MAGENTA — a pedido. Saíram `f06fa8` (rosa, ~333° de matiz)
+ * e `d94bd0` (magenta, ~304°); nenhum tom entre vermelho e roxo ocupa mais essa
+ * faixa. O `roxo` que sobra (`8e5ce0`, ~263°) é violeta puxado para o azul, não
+ * lilás — a mesma checagem que vale aqui vale para a paleta separada dos bots,
+ * em `botSim.js`.
  */
 const PALETTE = [
   0xe2483d, // vermelho
@@ -25,12 +31,10 @@ const PALETTE = [
   0xf2b134, // âmbar
   0x8e5ce0, // roxo
   0x25b8a0, // turquesa
-  0xf06fa8, // rosa
   0xa9d94b, // limão
   0xff8a3d, // laranja
   0x4fd1f5, // ciano
   0xc9a227, // ocre
-  0xd94bd0, // magenta
   0x6f7ce0, // anil
   0x2fbf5e, // esmeralda
   0xe0e0e0, // prata

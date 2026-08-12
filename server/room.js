@@ -28,6 +28,7 @@ import { pathCenterX } from "../src/shared/terrainField.js";
 import { BotSquad, obstaculosDe } from "./botSim.js";
 import { simularFlechaDoBot, orientacaoDe } from "./botArrow.js";
 import { SpaceField } from "./spaceSim.js";
+import { FlagField } from "./flagSim.js";
 import {
   DEFAULT_LEVEL,
   LEVEL_IDS,
@@ -42,6 +43,16 @@ import {
 function isZombieMode(mode) {
   return mode === "zombie" || mode === "zombieBoss";
 }
+
+/** A chuva de meteoros. Um modo só, mas testado em muitos lugares. */
+function isMeteorMode(mode) {
+  return mode === "meteorRain";
+}
+
+/** O cerco ao castelo. Ver `server/siegeSim.js` e `docs/plano-cerco.md`. */
+function isSiegeMode(mode) {
+  return mode === "siege";
+}
 import {
   C2S,
   S2C,
@@ -51,6 +62,7 @@ import {
   playerEntity,
   packState,
 } from "../src/shared/protocol.js";
+import { sanitizeSkin } from "../src/shared/skins.js";
 import { ColorPool } from "./colors.js";
 import { pickSpawnPoint, duelPositions, elkHuntPositions } from "./spawnPoints.js";
 import { BoarHunt, boarPoints } from "./boarSim.js";
@@ -58,7 +70,15 @@ import { ElkHunt } from "./elkSim.js";
 import { ElkWolfPack } from "./elkWolves.js";
 import { BirdFlock } from "./birdSim.js";
 import { ZombieNight } from "./zombieSim.js";
+import { MeteorRain } from "./meteorSim.js";
+import { Siege } from "./siegeSim.js";
 import { TargetSeries } from "./targetSeries.js";
+import {
+  CASTLE,
+  gateInfo,
+  walkwayPosts,
+  trebuchetPosts,
+} from "../src/shared/castleProps.js";
 
 let nextPlayerId = 1;
 
@@ -133,6 +153,24 @@ export class Room {
     /** Vitória pela rara adiada até o corpo tocar o chão. */
     this.pendingSpecialBirdWin = null;
     this.zombies = new ZombieNight(this.terrain);
+    /* A chuva de meteoros. Vive na Lua, e o campo é da FASE: sai inteiro com
+       ela e renasce do outro lado (ver `commitPreparedMode`). */
+    this.meteors = new MeteorRain(this.terrain);
+    /* O cerco. Vive no castelo, e o campo é da FASE — sai inteiro com ela e
+       renasce do outro lado, como a chuva. Ver `commitPreparedMode`. */
+    this.siege = new Siege(this.terrain);
+    /**
+     * Os três trabucos: `{ pronto: ms em que estará carregado, wind: Set }`.
+     *
+     * Moram na SALA e não no cliente pelo mesmo motivo que a bandeira mora em
+     * `flagSim.js`: o engenho é UM, e duas telas discordando sobre se ele está
+     * carregado é duas pessoas atirando a mesma pedra.
+     */
+    this.trebuchets = trebuchetPosts().map((p) => ({ i: p.id, pronto: 0, wind: new Set() }));
+    /** Quem está com a mão no reparo do portão, por id. */
+    this.repairing = new Set();
+    /** Carga do especial de cada jogador, por id. Ver `CONFIG.special`. */
+    this.kameCharge = new Map();
     /**
      * As quatro tochas do modo zumbi: acesa (true) ou apagada (false).
      *
@@ -154,6 +192,20 @@ export class Room {
      * o servidor é dono dos DOIS lados, então ele sabe quem matou quem sem
      * perguntar a nenhum cliente. */
     this.teamScores = { humans: 0, bots: 0 };
+
+    /* A bandeira. Vazia fora do modo dela — ver `flagSim.js`. */
+    this.flag = new FlagField();
+
+    /**
+     * O ÚLTIMO EM PÉ: quem ainda não morreu nesta rodada.
+     *
+     * Um `Set` de ids, e não um campo `standAlive` em cada jogador, porque a
+     * pergunta que o modo faz o tempo todo é "quantos sobraram?" — e essa é uma
+     * pergunta sobre a RODADA, não sobre uma pessoa. Quem entra na sala no meio
+     * da rodada simplesmente não está no conjunto: assiste, e entra na próxima.
+     */
+    this.standAlive = new Set();
+    this.standOver = false;
 
     /** Quem apertou "quero duelar" e ainda não desistiu. */
     this.duelInvites = new Set();
@@ -198,6 +250,10 @@ export class Room {
       return;
     }
     if (!this.space.ativo) this.space.ligar();
+    /* O céu é do MODO: na chuva, nave e meteorito em deriva saem de cena e o
+       alien fica raro (ver `SpaceField.setPerfil`). */
+    this.space.setPerfil(this.mode);
+    this.space.setHorde(this.meteors.horde);
 
     const jogadores = this.playerPositions();
     const { mortes, eventos } = this.space.update(dt, jogadores);
@@ -243,31 +299,259 @@ export class Room {
     });
     this.broadcastScores();
 
-    this.agendarRenascimento(vitima);
+    this.aoMorrer(vitima);
   }
 
   /**
-   * O corpo cai, e só então quem morreu volta.
+   * ALGUÉM MORREU. O que acontece a seguir.
    *
-   * UM lugar só, e é o que corrige o defeito que dava: metade dos caminhos de
-   * morte testava `this.players.has(vitima.conn)` para saber se ainda vale
-   * renascer alguém, e o bot não tem `conn`. O resultado era um CPU morto por
-   * um humano que ficava caído para sempre, enquanto o mesmo CPU morto por
-   * outro CPU renascia normalmente — quem matou decidia se a vítima voltava.
+   * Este é o funil por onde passa toda morte de arqueiro, venha ela de flecha,
+   * de faca, de chifrada, de porco ou da Lua — os seis caminhos chamam aqui
+   * logo depois de anunciar o `KILL`. Ter um funil só é o que permitiu que dois
+   * modos inteiros mudassem a regra da morte sem tocar em nenhum deles.
    *
-   * O teste certo é "esta vítima ainda está na sala?", e ele é diferente para
-   * cada natureza: o humano some quando o socket cai, o bot quando é removido
-   * do esquadrão.
+   * São três desfechos possíveis, e o modo escolhe:
+   *
+   * • ROUBA BANDEIRA — se a vítima carregava a bandeira, ela CAI aqui, no
+   *   lugar da morte, antes de qualquer outra coisa. Depois a pessoa renasce na
+   *   base do próprio time.
+   * • O ÚLTIMO EM PÉ — não renasce. Sai do conjunto dos vivos e passa a
+   *   assistir; se sobrou um, a rodada acabou.
+   * • QUALQUER OUTRO — o corpo cai e a pessoa volta, que é a regra de sempre.
+   *
+   * O teste de "ainda está na sala" é diferente para cada natureza: o humano
+   * some quando o socket cai, o bot quando é removido do esquadrão. Testar só
+   * `players.has(conn)` era o que deixava um CPU morto por um humano caído para
+   * sempre, enquanto o mesmo CPU morto por outro CPU renascia.
    */
-  agendarRenascimento(vitima) {
-    const espera = (CONFIG.spawn.deathDuration + CONFIG.spawn.respawnDelay) * 1000;
+  aoMorrer(vitima) {
+    /* A bandeira cai PRIMEIRO. Ela é estado compartilhado da partida, e um
+       instante de "morto mas ainda carregando" é um instante em que o placar
+       pode ser decidido por um cadáver. */
+    if (this.mode === "captureFlag") this.derrubarBandeira(vitima);
+
+    if (this.mode === "lastStand") {
+      this.eliminar(vitima);
+      return;
+    }
+
+    /* A bandeira tem espera PRÓPRIA, e mais longa. Morrer defendendo a base
+       precisa custar: com os 1,8 s padrão, o defensor volta antes de o atacante
+       cruzar o disco, e atacar deixa de ter chance nenhuma. */
+    const atraso =
+      this.mode === "captureFlag"
+        ? CONFIG.modes.captureFlag.respawnDelay
+        : CONFIG.spawn.respawnDelay;
+    const espera = (CONFIG.spawn.deathDuration + atraso) * 1000;
     setTimeout(() => {
-      if (vitima.isBot) {
-        if (this.bots.byId(vitima.id)) this.spawn(vitima);
-      } else if (this.players.has(vitima.conn)) {
-        this.spawn(vitima);
-      }
+      const naSala = vitima.isBot
+        ? !!this.bots.byId(vitima.id)
+        : this.players.has(vitima.conn);
+      if (!naSala) return;
+      /* Na bandeira renasce-se EM CASA, não no meio do mapa. É o que faz a base
+         valer alguma coisa: sem isso, defendê-la seria defender um ponto vazio
+         que a equipe adversária alcança tão depressa quanto a dona. */
+      if (this.mode === "captureFlag") this.spawnNaBase(vitima);
+      else this.spawn(vitima);
     }, espera).unref?.();
+  }
+
+  /* ------------------------------------------------------- o último em pé -- */
+
+  /**
+   * Tira alguém da rodada — e vê se sobrou um.
+   *
+   * Não manda `SPAWN` nenhum, e é essa AUSÊNCIA que o cliente lê como "você
+   * virou espectador" (`main.js`, `S2C.STAND_STATUS`). A eliminação é anunciada
+   * por mensagem própria em vez de deduzida do `KILL`, porque nem toda morte
+   * elimina: fora deste modo o mesmo `KILL` significa "volta em quatro
+   * segundos", e deduzir daria ao cliente a chance de deduzir errado.
+   */
+  eliminar(vitima) {
+    if (!this.standAlive.delete(vitima.id)) return;
+    this.broadcastStandStatus();
+    this.checarUltimoEmPe();
+  }
+
+  /** Sobrou um? Então a rodada acabou. */
+  checarUltimoEmPe() {
+    if (this.mode !== "lastStand" || this.standOver) return;
+    if (this.standAlive.size > 1) return;
+
+    this.standOver = true;
+    const vencedorId = [...this.standAlive][0] ?? null;
+    const vencedor = vencedorId != null ? this.playerById(vencedorId) : null;
+
+    /* O ranking sai por ABATES, e o vencedor vem à parte. Não é a mesma coisa:
+       ganha quem sobrou, não quem matou mais — e é perfeitamente possível
+       vencer sem ter atirado uma flecha, escondido atrás de uma pedra enquanto
+       os outros se acabavam. Isso é uma vitória legítima do modo, e a tela
+       final precisa mostrar as duas informações para que ela seja LEGÍVEL. */
+    const ranking = this.allCharacters()
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        kills: p.score.kills,
+        survived: this.standAlive.has(p.id),
+      }))
+      .sort((a, b) => Number(b.survived) - Number(a.survived) || b.kills - a.kills);
+
+    this.broadcastAll({
+      t: S2C.STAND_OVER,
+      winner: vencedorId,
+      winnerName: vencedor?.name ?? null,
+      winnerColor: vencedor?.color ?? null,
+      ranking,
+    });
+    this.log(
+      vencedor ? `último em pé: ${vencedor.name}` : "último em pé: ninguém sobrou",
+    );
+  }
+
+  broadcastStandStatus() {
+    if (this.mode !== "lastStand") return;
+    const vivos = [];
+    for (const p of this.allCharacters()) {
+      if (this.standAlive.has(p.id)) {
+        vivos.push({ id: p.id, name: p.name, color: p.color });
+      }
+    }
+    this.broadcastAll({
+      t: S2C.STAND_STATUS,
+      alive: vivos,
+      total: this.standTotal ?? vivos.length,
+      over: this.standOver,
+    });
+  }
+
+  /* -------------------------------------------------------- rouba bandeira -- */
+
+  /** A que time alguém pertence. Humanos de um lado, CPU do outro. */
+  timeDe(id) {
+    const p = this.playerById(id);
+    return p?.isBot ? "bots" : "humans";
+  }
+
+  /** A vítima carregava a bandeira? Então ela cai aqui. */
+  derrubarBandeira(vitima) {
+    const onde = vitima.state
+      ? { x: vitima.state.p[0], y: vitima.state.p[1], z: vitima.state.p[2] }
+      : vitima.position;
+    const ev = this.flag.soltar(vitima.id, onde);
+    if (!ev) return;
+    this.broadcastAll({ t: S2C.FLAG_EVENT, ...ev, byName: vitima.name });
+    this.broadcastFlag();
+  }
+
+  /**
+   * Renasce na base do próprio time, e não no sorteio do mapa.
+   *
+   * O ponto exato é sorteado num disco em volta da base: nascer sempre na mesma
+   * coordenada faria da porta de casa um ponto de emboscada de tiro certo.
+   */
+  spawnNaBase(player) {
+    const base = this.flag.bases?.[this.timeDe(player.id)];
+    if (!base) return this.spawn(player);
+
+    const raio = CONFIG.modes.captureFlag.baseRadius;
+    let ponto = { x: base.x, z: base.z };
+    for (let i = 0; i < 12; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * raio;
+      const x = base.x + Math.cos(ang) * r;
+      const z = base.z + Math.sin(ang) * r;
+      if (this.terrain.isFlatGround?.(x, z) ?? true) {
+        ponto = { x, z };
+        break;
+      }
+    }
+    this.spawn(player, ponto);
+  }
+
+  /**
+   * Um passo da bandeira, no relógio dos bichos.
+   *
+   * Quem pega a bandeira é decidido AQUI e em nenhum cliente: encostar é pegar,
+   * e a sala já sabe onde todo mundo está. Ver o cabeçalho de `flagSim.js`.
+   */
+  tickFlag(dt) {
+    if (this.mode !== "captureFlag" || !this.flag.ativo) return;
+
+    const eventos = this.flag.update(dt, this.playerPositions(), (id) => this.timeDe(id));
+    for (const ev of eventos) {
+      const quem = ev.by != null ? this.playerById(ev.by) : null;
+      this.broadcastAll({ t: S2C.FLAG_EVENT, ...ev, byName: quem?.name ?? null });
+      if (ev.kind === "capture") {
+        this.teamScores = { ...this.flag.scores };
+        this.broadcastTeamScores();
+        this.log(`bandeira: ${quem?.name ?? "?"} entregou (${ev.team})`);
+      }
+    }
+
+    if (this.flag.over && !this.flagOverAnunciado) {
+      this.flagOverAnunciado = true;
+      const ranking = this.allCharacters()
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          team: this.timeDe(p.id),
+          kills: p.score.kills,
+        }))
+        .sort((a, b) => b.kills - a.kills);
+      this.broadcastAll({
+        t: S2C.FLAG_OVER,
+        winner: this.flag.winner,
+        scores: { ...this.flag.scores },
+        ranking,
+      });
+      this.log(`bandeira: vitória de ${this.flag.winner}`);
+    }
+
+    this.broadcastFlag();
+  }
+
+  /**
+   * Para onde este bot deve ir no rouba bandeira.
+   *
+   * Três casos, nesta ordem:
+   *
+   * • ELE carrega a bandeira → corre para a base HUMANA, que é o gol dele.
+   * • ALGUÉM DO OUTRO TIME carrega → persegue o portador. Não é "ir à
+   *   bandeira": a bandeira está andando, e mandá-lo ao ponto onde ela estava
+   *   há um décimo de segundo o faria correr sempre atrás do próprio rastro.
+   * • ninguém carrega → vai buscá-la onde ela está.
+   *
+   * Um bot em cada três fica de GUARDA na própria base em vez de ir junto.
+   * Sem isso os quatro correm em bloco para o mesmo ponto, deixam a base
+   * aberta e o modo vira uma fila indiana atrás de um objeto — e ninguém
+   * defende, que é metade do que o modo tem para oferecer. A escolha é fixa
+   * por bot (o id decide), e não sorteada por quadro: um guarda que muda de
+   * ideia dez vezes por segundo não guarda nada.
+   */
+  objetivoDoBot(bot) {
+    if (!this.flag.ativo || this.flag.over) return null;
+    const bases = this.flag.bases;
+    if (!bases) return null;
+
+    if (this.flag.carrier === bot.id) return bases.humans;
+
+    if (bot.id % 3 === 0) return bases.bots; // o guarda fica em casa
+
+    if (this.flag.carrier != null && this.flag.carrierTeam === "humans") {
+      const dono = this.playerById(this.flag.carrier);
+      const p = dono?.state
+        ? { x: dono.state.p[0], z: dono.state.p[2] }
+        : dono?.position;
+      if (p) return { x: p.x, z: p.z };
+    }
+    return this.flag.position;
+  }
+
+  broadcastFlag() {
+    if (this.mode !== "captureFlag" || !this.flag.ativo) return;
+    this.broadcastAll({ t: S2C.FLAG, time: this.now(), ...this.flag.view() });
   }
 
   /* ------------------------------------------------------------------ bots -- */
@@ -287,7 +571,31 @@ export class Room {
 
     const personagens = this.characterViews();
     const bichos = this.botPrey();
-    const tiros = this.bots.update(dt, personagens, bichos, this.mode === "teamDuel");
+    const tiros = this.bots.update(
+      dt,
+      personagens,
+      bichos,
+      /* No rouba bandeira os bots também são um time só: sem isto eles se
+         acertam entre si e o lado da CPU se elimina sozinho antes de chegar
+         perto da bandeira. É a mesma regra do duelo de times. */
+      this.mode === "teamDuel" || this.mode === "captureFlag",
+      isMeteorMode(this.mode)
+        ? {
+            soPresas: true,
+            maxElevation: CONFIG.modes.meteorRain.botMaxElevation,
+          }
+        : isSiegeMode(this.mode)
+          ? /* `soPresas` junto com `postado`, e é obrigatório.
+             *
+             * Sem ele o arqueiro de muralha escolhe o alvo MAIS PRÓXIMO — que
+             * no adarve é o companheiro humano a nove metros, não o soldado a
+             * sessenta. Medido: com o perfil só `postado`, o bot passava a
+             * partida inteira mirando no defensor ao lado e não deu um tiro na
+             * horda. Ele não é adversário aqui; é guarnição. */
+            { postado: true, soPresas: true }
+          : null,
+      this.mode === "captureFlag" ? (b) => this.objetivoDoBot(b) : null,
+    );
 
     // A pose de cada bot entra no mesmo formato dos humanos.
     for (const b of this.bots.list) {
@@ -364,7 +672,21 @@ export class Room {
     const r = simularFlechaDoBot(tiro, {
       terrain: this.terrain,
       levelId: this.level,
-      personagens: this.characterViews(),
+      /* A CAMADA QUE GARANTE.
+       *
+       * Na chuva a flecha do bot não é sequer TESTADA contra gente: ela
+       * atravessa qualquer arqueiro. A camada de mira (`soPresas`) é intenção;
+       * esta é impossibilidade — e ela é a que importa, porque um tiro mirado
+       * numa rocha a 200 m de altura cruza muito espaço, e na Lua tem gente
+       * voando de jetpack dentro desse espaço. Com a lista vazia, `r.kind`
+       * nunca pode ser "character" e o ramo do `matarPeloBot` deixa de existir. */
+      /* A CAMADA QUE GARANTE, e ela vale para os dois modos em que o bot é
+         aliado: na chuva e no cerco a flecha dele não é sequer TESTADA contra
+         gente. `soPresas` é intenção; isto é impossibilidade — e num modo em
+         que três arqueiros dividem 34 m de muro atirando na mesma direção, a
+         intenção sozinha não bastaria. */
+      personagens:
+        isMeteorMode(this.mode) || isSiegeMode(this.mode) ? [] : this.characterViews(),
       donoId: bot.id,
       bichos: this.botPrey(),
       agora: this.now(),
@@ -391,6 +713,60 @@ export class Room {
     else if (r.kind === "boar") this.abaterBichoPeloBot(bot, "boar", r.alvo.id);
     else if (r.kind === "elk") this.abaterBichoPeloBot(bot, "elk", r.alvo.id);
     else if (r.kind === "zombie") this.abaterBichoPeloBot(bot, "zombie", r.alvo.id);
+    else if (r.kind === "besieger") {
+      /* O acerto espera a flecha CHEGAR, como o da rocha logo abaixo.
+       *
+       * `simularFlechaDoBot` resolve o voo inteiro no instante do disparo, e no
+       * cerco o tiro típico é de 40 a 80 m — meio segundo de voo. Aplicar o
+       * abate agora derrubaria o soldado antes de a flecha sair do arco, na
+       * tela de todo mundo. */
+      const alvoId = r.alvo.id;
+      setTimeout(
+        () => {
+          if (!isSiegeMode(this.mode) || this.siege.over) return;
+          this.abaterBichoPeloBot(bot, "besieger", alvoId);
+        },
+        Math.max(0, r.tempo * 1000),
+      ).unref?.();
+    } else if (r.kind === "meteor") {
+      /* O ACERTO ESPERA A FLECHA CHEGAR.
+       *
+       * `simularFlechaDoBot` resolve o voo inteiro no instante do disparo — e
+       * para um javali a 40 m isso são 0,4 s, que ninguém nota. Para uma rocha
+       * a 200 m são quase dois segundos: aplicar o abate agora faria a pedra
+       * estourar bem antes de a flecha tocá-la, na tela de todo mundo.
+       *
+       * O tempo de voo já vem calculado; só falta esperá-lo. E reconferir na
+       * chegada, porque um humano pode ter estourado a rocha no meio do
+       * caminho. */
+      const alvoId = r.alvo.id;
+      setTimeout(() => {
+        if (!isMeteorMode(this.mode) || this.meteors.over) return;
+        if (!this.bots.byId(bot.id)) return;
+        this.abaterRochaPeloBot(bot, alvoId);
+      }, Math.max(0, r.tempo * 1000)).unref?.();
+    }
+  }
+
+  /**
+   * O bot acertou uma rocha.
+   *
+   * NÃO pontua, pela mesma regra de `abaterBichoPeloBot`: o bot não disputa
+   * placar, e creditar a rocha a um humano ao acaso seria mentir no ranking. O
+   * que importa é que ela morre para TODO MUNDO — e que a horda anda.
+   */
+  abaterRochaPeloBot(bot, id) {
+    const r = this.meteors.hit(id);
+    if (!r) return;
+    this.broadcastAll({
+      t: S2C.METEOR_HIT,
+      id,
+      by: bot.id,
+      left: r.left,
+      p: [round(r.meteor.x), round(r.meteor.y), round(r.meteor.z)],
+    });
+    if (r.morreu) this.burstMeteor(r.meteor, bot);
+    this.broadcastMeteorStatus();
   }
 
   /**
@@ -423,7 +799,7 @@ export class Room {
     });
     this.broadcastScores();
 
-    this.agendarRenascimento(vitima);
+    this.aoMorrer(vitima);
   }
 
   /**
@@ -458,6 +834,19 @@ export class Room {
           this.broadcastAll({ t: S2C.ZOMBIE_DEATH, id, killer: bot.id, points: 0, head: false });
         }
       }
+    } else if (tipo === "besieger") {
+      const r = this.siege.hit(id, { head: false });
+      if (!r?.killed) return;
+      this.siege.matar(r.b, bot.id, agora);
+      this.broadcastAll({
+        t: S2C.SIEGE_DEATH,
+        id,
+        kind: r.b.kind,
+        killer: bot.id,
+        killerName: bot.name,
+        killerColor: bot.color,
+        points: 0,
+      });
     }
   }
 
@@ -490,12 +879,30 @@ export class Room {
     if (!bot) return false;
     this.broadcastAll({ t: S2C.LEAVE, id: bot.id, name: bot.name });
     this.broadcastScores();
+    this.saiuDaRodada(bot);
     return true;
   }
 
   clearBots() {
     for (const bot of this.bots.clear()) {
       this.broadcastAll({ t: S2C.LEAVE, id: bot.id, name: bot.name });
+      this.saiuDaRodada(bot);
+    }
+  }
+
+  /**
+   * Alguém deixou a sala — de socket caído ou de esquadra desfeita.
+   *
+   * Sair do jogo não pode ser diferente de morrer, para os dois modos de arena:
+   * quem carregava a bandeira e fecha a aba levaria a bandeira consigo, e quem
+   * era um dos dois últimos em pé e desconecta deixaria a rodada esperando para
+   * sempre por um arqueiro que não vai atirar mais.
+   */
+  saiuDaRodada(quem) {
+    if (this.mode === "captureFlag") this.derrubarBandeira(quem);
+    if (this.mode === "lastStand" && this.standAlive.delete(quem.id)) {
+      this.broadcastStandStatus();
+      this.checarUltimoEmPe();
     }
   }
 
@@ -567,10 +974,24 @@ export class Room {
       modo === "elkHunt" ||
       modo === "zombie" ||
       modo === "zombieBoss" ||
+      // A chuva pelo mesmo raciocínio: as rochas caem na base de todo mundo, e
+      // não existe "defender sozinho o céu enquanto os outros treinam tiro".
+      modo === "meteorRain" ||
       // O duelo de times entra como os cooperativos: quem aperta liga para a
       // sala inteira. Não é convite porque não arrasta ninguém para brigar com
       // ninguém — o adversário é a máquina.
-      modo === "teamDuel"
+      modo === "teamDuel" ||
+      /* Os dois modos de arena também ligam para a sala inteira, e por um
+         motivo que o duelo não tem: eles são RODADAS. Um convite pendente
+         enquanto metade da sala já está numa rodada de vida única não descreve
+         nada — ou todo mundo entra na mesma partida, ou não é a mesma partida. */
+      modo === "lastStand" ||
+      modo === "captureFlag" ||
+      /* O cerco pelo mesmo raciocínio dos cooperativos, com uma razão a mais:
+         o portão é UM. Não existe "defender o portão sozinho enquanto os
+         outros treinam tiro no pátio" — a fila que derruba a muralha derruba
+         para todo mundo ao mesmo tempo. */
+      modo === "siege"
     ) {
       if (this.needsPreparation(modo, fase)) {
         this.prepareMode(modo, fase);
@@ -655,7 +1076,14 @@ export class Room {
    * isso decide a partida.
    */
   needsPreparation(modo, fase) {
-    return isZombieMode(modo) || fase !== this.level;
+    /* A chuva entra na lista pelo mesmo motivo da noite: ela compila malhas de
+       rocha, materiais de fogo e o halo aditivo antes da primeira queda. Num
+       modo com prazo, entrar dois segundos depois dos outros decide a partida. */
+    /* O cerco entra na lista pelos dois motivos ao mesmo tempo: ele compila
+       oito silhuetas de sitiante, o fogo do piche e a pedra em chamas antes do
+       primeiro tiro — e a partida tem prazo, então entrar dois segundos depois
+       dos outros custa caro. */
+    return isZombieMode(modo) || isMeteorMode(modo) || isSiegeMode(modo) || fase !== this.level;
   }
 
   prepareMode(modo, fase = this.level) {
@@ -709,8 +1137,9 @@ export class Room {
       this.clearBots();
       this.bots.relevel(this.terrain, this.level);
       // O campo do espaço é da FASE: sai inteiro com ela e renasce do outro
-      // lado (vazio, se o outro lado for o vale).
+      // lado (vazio, se o outro lado for o vale). A chuva idem.
       this.space.setTerrain(this.terrain);
+      this.meteors.setTerrain(this.terrain);
     }
     this.setMode(pending.mode);
 
@@ -753,7 +1182,10 @@ export class Room {
         if (!this.addBot()) break;
       }
       this.broadcastTeamScores();
-    } else if (anterior === "teamDuel") {
+    } else if (anterior === "teamDuel" || anterior === "captureFlag") {
+      /* Sair do modo desfaz a esquadra: um adversário sobrando depois que a
+         partida acabou é alguém que ninguém convidou. Vale para os dois modos
+         de time — a bandeira monta a mesma esquadra pela mesma razão. */
       this.clearBots();
     }
 
@@ -785,8 +1217,75 @@ export class Room {
       this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
       if (horda) this.broadcastAll({ t: S2C.HORDE, ...horda });
       this.broadcastZombieStatus();
+    } else if (isSiegeMode(modo)) {
+      /* SOZINHO O CERCO NÃO FECHA — e isso é medido, não achado.
+       *
+       * `scripts/bench-cerco.js` dá 0 % de vitórias com um defensor e 80 % com
+       * três. Não é curva mal ajustada: um arco mata um soldado a cada 5,1 s, e
+       * a curva termina pedindo um abate por segundo. A diferença tem de vir de
+       * mais gente na muralha, e é isso que os arqueiros de CPU são aqui — não
+       * adversários, como no duelo, mas a guarnição.
+       *
+       * Dois é o mínimo que põe a partida na faixa jogável; quem quiser mais
+       * aperta B, como em qualquer outro modo. */
+      for (const p of this.players.values()) p.zDownUntil = 0;
+      while (this.players.size + this.bots.count < 3) {
+        if (!this.addBot()) break;
+      }
+      this.repairing.clear();
+      for (const t of this.trebuchets) {
+        t.pronto = 0;
+        t.wind.clear();
+      }
+      this.lineUpForSiege();
+      this.siege.setTerrain?.(this.terrain);
+      this.siege.start(this.players.size + this.bots.count);
+      this.broadcastSiegeStatus();
+      this.broadcastTrebuchets();
+    } else if (isMeteorMode(modo)) {
+      this.lineUpForMeteorRain();
+      this.meteors.setTerrain(this.terrain);
+      this.meteors.start(this.players.size + this.bots.count);
+      this.kameCharge.clear();
+      this.broadcastMeteorStatus();
+      this.broadcastKameCharges();
     } else if (modo === "duel") {
       this.startDuel();
+    } else if (modo === "lastStand") {
+      /* Todo mundo que tem corpo em campo entra na rodada — humano e CPU. O
+         conjunto é montado AQUI e não muda mais: quem chegar depois assiste, e
+         é a coisa certa a fazer num modo de vida única. Entrar no meio seria
+         chegar inteiro numa briga em que os outros já gastaram metade da vida.
+
+         As posições são as do DUELO: bem separadas, num anel largo. Começar
+         perto de alguém, quando a primeira flecha decide tudo, é sortear o
+         vencedor antes do começo. */
+      this.standAlive = new Set();
+      this.standOver = false;
+      /* SOZINHO NÃO EXISTE "o último em pé".
+         Com um corpo só em campo a rodada nasce decidida e nunca acaba: não há
+         ninguém para eliminar, então `checarUltimoEmPe` jamais é chamado e o
+         jogador fica preso num modo que não termina. Um adversário de CPU é o
+         mínimo para a regra fazer sentido — a mesma solução do duelo de times,
+         pelo mesmo motivo. */
+      if (this.players.size + this.bots.count < 2) this.addBot();
+      this.lineUpForLastStand();
+      for (const p of this.allCharacters()) this.standAlive.add(p.id);
+      this.standTotal = this.standAlive.size;
+      this.broadcastStandStatus();
+    } else if (modo === "captureFlag") {
+      /* Um bot por humano, como no duelo de times: sem adversário do outro
+         lado, a bandeira é uma caminhada até a base vazia. */
+      const humanos = Math.max(1, this.players.size);
+      while (this.bots.count > humanos) this.removeBot();
+      while (this.bots.count < humanos) {
+        if (!this.addBot()) break;
+      }
+      this.flagOverAnunciado = false;
+      this.flag.start(this.terrain);
+      for (const p of this.allCharacters()) this.spawnNaBase(p);
+      this.broadcastTeamScores();
+      this.broadcastFlag();
     } else {
       // livre, caçada aos porcos e caça aos pássaros: renascimento no campo
       this.respawnEveryone();
@@ -837,10 +1336,29 @@ export class Room {
        para sempre, porque nenhuma amostra nova vinha corrigi-las. */
     this.birds.reset({ vazio: !levelHasFauna(this.level) });
     this.zombies.stop();
+    this.meteors.stop();
+    this.kameCharge.clear();
     // As tochas voltam acesas: a partida seguinte não herda o escuro que a
     // anterior produziu.
     this.torches = [true, true, true, true];
     this.series.stop();
+    /* Os dois modos de arena voltam à estaca zero. `setMode` os religa logo
+       depois, quando é a vez deles — aqui só se garante que sair de um deles
+       não deixa uma bandeira pendurada no mapa nem meia dúzia de eliminados
+       que a próxima partida herdaria. */
+    this.flag.stop();
+    this.flagOverAnunciado = false;
+    /* O cerco também. Sem isto, sair dele deixaria 120 sitiantes andando
+       invisíveis no servidor e o portão do modo seguinte já rachado. */
+    this.siege.stop();
+    this.repairing.clear();
+    for (const t of this.trebuchets) {
+      t.pronto = 0;
+      t.wind.clear();
+    }
+    this.standAlive = new Set();
+    this.standOver = false;
+    this.standTotal = 0;
     this.stuckArrows = [];
     for (const p of this.players.values()) p.score = emptyScore();
 
@@ -848,6 +1366,7 @@ export class Room {
     this.broadcastAll({ t: S2C.ELKS, e: [], clear: true });
     this.broadcastAll({ t: S2C.BIRDS, k: [], clear: true });
     this.broadcastAll({ t: S2C.ZOMBIES, z: [], clear: true });
+    this.broadcastAll({ t: S2C.METEORS, m: [], clear: true });
     this.broadcastAll({ t: S2C.TORCHES, t4: this.torches });
     this.broadcastAll({ t: S2C.SERIES, target: null });
     this.broadcastAll({ t: S2C.WORLD_RESET, mode: this.mode });
@@ -993,6 +1512,49 @@ export class Room {
    * revólver e apagam tudo que o jogo tem de interessante — a queda da flecha,
    * a deriva do vento, a antecipação. O anel de 46 m devolve isso.
    */
+  /**
+   * Espalha todo mundo pelo anel, para a rodada de vida única começar.
+   *
+   * Reaproveita `duelPositions` porque a pergunta é a mesma — "onde pôr N
+   * pessoas o mais longe possível umas das outras?" — e a resposta não muda por
+   * serem oito em vez de dois. O que muda é o raio, que vem de
+   * `CONFIG.modes.lastStand.ringRadius`: com oito arqueiros, o anel do duelo
+   * ficaria apertado.
+   *
+   * Os BOTS entram na conta. Eles não recebem `S2C.SPAWN` (não têm cliente que
+   * obedeça), mas precisam ser reposicionados no corpo — é o mesmo par de
+   * chamadas que `spawn` faz.
+   */
+  lineUpForLastStand() {
+    const todos = this.allCharacters();
+    if (!todos.length) return;
+
+    const pontos = duelPositions(
+      this.terrain,
+      todos.length,
+      Math.random,
+      CONFIG.modes.lastStand.ringRadius,
+    );
+
+    const invulnUntil = this.now() + CONFIG.modes.lastStand.invulnerability * 1000;
+    todos.forEach((p, i) => {
+      const ponto = pontos[i] ?? pontos[0];
+      p.alive = true;
+      p.invulnUntil = invulnUntil;
+      if (p.isBot) p.renascer(ponto.x, ponto.z);
+      this.stampSpawnState(p, ponto.x, ponto.z);
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: p.id,
+        x: round(ponto.x),
+        z: round(ponto.z),
+        y: round(ponto.y),
+        drop: this.spawnDrop(),
+        invulnUntil,
+      });
+    });
+  }
+
   startDuel() {
     /* NA LUA O DUELO NÃO TEM CONVITE.
      *
@@ -1085,6 +1647,36 @@ export class Room {
     for (const z of this.zombies.zombies) {
       if (!z.dead) lista.push({ kind: "zombie", id: z.id, x: z.x, y: z.y, z: z.z });
     }
+    /* As rochas entram como presa — com RAIO e com o ponto de mira no centro.
+       Sem os dois, a flecha do bot seria testada contra uma esfera de 80 cm no
+       lugar de uma de até 28 m, e ele erraria tudo o que a tela mostra acertar. */
+    for (const m of this.meteors.meteors) {
+      if (m.dead) continue;
+      lista.push({ kind: "meteor", id: m.id, x: m.x, y: m.y, z: m.z, r: m.raio, aimY: 0 });
+    }
+    /* Os sitiantes entram como presa, e é isso que faz o arqueiro de muralha
+       existir sem uma linha de IA nova: `botSim` já sabe escolher o alvo mais
+       próximo, calcular a elevação e soltar a corda. O que ele não sabe é que
+       aquilo é um cerco — e não precisa saber.
+
+       `aimY` sobe com a espécie: mirar no chão de um ogro de 6 m é errar por
+       baixo, e o `1,1 × escala` é o mesmo peito que a flecha do jogador acerta. */
+    for (const b of this.siege.lista) {
+      if (b.dead) continue;
+      lista.push({
+        kind: "besieger",
+        id: b.id,
+        x: b.x,
+        y: b.y,
+        z: b.z,
+        aimY: 1.1 * b.scale,
+        /* O raio do alvo, para a flecha do bot. Sem ele `botArrow` usa 0,8 m
+           para tudo — o que é generoso para um soldado e absurdamente pequeno
+           para um ogro de 6 m, que a tela mostra sendo acertado e a conta diz
+           que passou de raspão. */
+        r: 0.55 * b.scale,
+      });
+    }
     return lista;
   }
 
@@ -1102,6 +1694,10 @@ export class Room {
     // A Lua anda no mesmo relógio dos bichos: alien, nave e meteorito têm a
     // cadência de um javali, e nenhum deles precisa de mais.
     this.tickSpace(this.boarStep);
+    /* A bandeira também: ela é UM objeto que anda no passo de quem a carrega, e
+       10 Hz é a mesma cadência em que as poses dos jogadores chegam aqui — não
+       há informação nova entre duas amostras para um passo mais fino ler. */
+    this.tickFlag(this.boarStep);
 
     // Convite de duelo que ninguém aceitou expira sozinho: um aviso pendurado
     // para sempre na tela vira ruído.
@@ -1152,6 +1748,8 @@ export class Room {
     }
 
     if (isZombieMode(this.mode)) this.tickZombies(agora, jogadores);
+    if (isMeteorMode(this.mode)) this.tickMeteors(agora);
+    if (isSiegeMode(this.mode)) this.tickSiege(agora, jogadores);
 
     /* Os pássaros somem no modo zumbi e em qualquer fase SEM FAUNA. Não é
        economia — é o clima: um bando cantando e circulando sobre um cerco de
@@ -1229,7 +1827,7 @@ export class Room {
       return;
     }
 
-    this.agendarRenascimento(vitima);
+    this.aoMorrer(vitima);
   }
 
   /**
@@ -1271,7 +1869,7 @@ export class Room {
     });
     if (this.mode !== "boarHunt") this.broadcastScores();
 
-    this.agendarRenascimento(vitima);
+    this.aoMorrer(vitima);
   }
 
   /**
@@ -1538,6 +2136,685 @@ export class Room {
     this.log(`modo zumbi: game over na horda ${this.zombies.horde}`);
   }
 
+  /* ------------------------------------------------------ chuva de meteoros --
+   *
+   * O modo inteiro cabe em cinco métodos porque a regra é uma só: uma rocha no
+   * chão acaba a partida. Não há vida, não há caído, não há renascimento a
+   * negociar — o que existe é um relógio, e ele é o mesmo para todo mundo.
+   */
+
+  /**
+   * Põe todo mundo num anel em volta da base.
+   *
+   * Perto o bastante para ver a zona de queda inteira sem girar, longe o
+   * bastante para não nascerem em cima uns dos outros — o mesmo raciocínio de
+   * `centerForZombie`. Os BOTS ficam num anel mais externo: a mira deles
+   * degenera com a rocha a pino (ver `botSim.escolherAlvoDeTiro`), e afastá-los
+   * é o que mantém a maioria das rochas dentro da janela de elevação em que
+   * eles conseguem acertar.
+   */
+  lineUpForMeteorRain() {
+    const M = CONFIG.modes.meteorRain;
+    const base = CONFIG.levels.moon.base;
+    const humanos = [...this.players.values()];
+
+    humanos.forEach((p, i) => {
+      const ang = (i / Math.max(1, humanos.length)) * Math.PI * 2;
+      const raio = M.spawnRingMin + Math.random() * (M.spawnRingMax - M.spawnRingMin);
+      const x = base.x + Math.sin(ang) * raio;
+      const z = base.z + Math.cos(ang) * raio;
+      p.alive = true;
+      p.invulnUntil = this.now() + M.invulnerability * 1000;
+      this.stampSpawnState(p, x, z);
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: p.id,
+        x: round(x),
+        z: round(z),
+        y: round(this.terrain.heightAt(x, z)),
+        drop: 0,
+        invulnUntil: p.invulnUntil,
+        // De frente para a base: é para lá que tudo vai cair.
+        yaw: Math.atan2(base.x - x, base.z - z),
+      });
+    });
+
+    this.bots.list.forEach((b, i) => {
+      const ang = (i / Math.max(1, this.bots.count)) * Math.PI * 2 + 0.4;
+      const raio = M.botRingMin + Math.random() * (M.botRingMax - M.botRingMin);
+      const x = base.x + Math.sin(ang) * raio;
+      const z = base.z + Math.cos(ang) * raio;
+      b.position.x = x;
+      b.position.z = z;
+      b.position.y = this.terrain.heightAt(x, z);
+      b.alive = true;
+      b.yaw = Math.atan2(-(base.x - x), -(base.z - z));
+    });
+  }
+
+  /**
+   * Um passo da chuva.
+   *
+   * Roda no relógio dos bichos (10 Hz), que é o mesmo do resto. A rocha anda
+   * 1,75 m entre amostras na horda 10 — o cliente amortece por cima disso e a
+   * mira continua honesta.
+   */
+  tickMeteors(agora) {
+    if (this.meteors.over) return;
+    /* O TAMANHO É MEDIDO NO COMEÇO DE CADA HORDA, e não da partida — daí este
+       número ser reescrito a cada passo em vez de congelado no `start`. Assim
+       quem chegou na horda 5 engrossa a 6, e quem saiu na 7 alivia a 8, sem
+       nunca mexer numa horda em curso (cujas rochas já foram agendadas com
+       horário marcado). O zumbi congela no `start()`, e é a escolha certa lá:
+       a partida dele dura nove minutos e ninguém entra no meio. Esta dura doze,
+       e entrar no meio é o normal. */
+    this.meteors.playerCount = Math.max(1, this.players.size + this.bots.count);
+    const antes = this.meteors.horde;
+    const r = this.meteors.update(this.boarStep);
+
+    if (r.horda) {
+      this.broadcastAll({ t: S2C.HORDE, kind: "meteor", ...r.horda });
+      this.broadcastMeteorStatus();
+      this.log(`chuva ${r.horda.n}: ${r.horda.size} rochas`);
+    } else if (this.meteors.horde !== antes) {
+      this.broadcastMeteorStatus();
+    }
+
+    if (r.impacto) {
+      this.meteorImpact(r.impacto);
+      return;
+    }
+
+    if (r.venceu) {
+      const ranking = [...this.players.values()]
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          rocks: p.score.rocks ?? 0,
+          shots: p.score.shots ?? 0,
+        }))
+        .sort((a, b) => b.rocks - a.rocks);
+      this.broadcastAll({
+        t: S2C.METEOR_OVER,
+        reason: "win",
+        horde: CONFIG.modes.meteorRain.hordes,
+        ranking,
+      });
+      this.log("chuva de meteoros: dez hordas vencidas");
+    }
+
+    this.broadcastAll({ t: S2C.METEORS, time: agora, m: this.meteors.view() });
+  }
+
+  /**
+   * Uma rocha encostou no chão. Todo mundo morre, e a partida acaba.
+   *
+   * Sem raio de dano e sem "morreu quem estava perto": a regra é a que foi
+   * pedida, e ela é boa justamente por não ter exceção. É o que faz cada rocha
+   * importar.
+   */
+  meteorImpact(p) {
+    this.broadcastAll({
+      t: S2C.METEOR_IMPACT,
+      p: [round(p.x), round(p.y), round(p.z)],
+      r: round(p.raio),
+    });
+
+    for (const jogador of this.players.values()) {
+      if (!jogador.alive) continue;
+      jogador.alive = false;
+      jogador.score.deaths++;
+      this.broadcastAll({
+        t: S2C.KILL,
+        victim: jogador.id,
+        victimName: jogador.name,
+        victimColor: jogador.color,
+        killer: null,
+        killerName: "um meteoro",
+        killerColor: "#ff6a2a",
+        distance: null,
+        c: null,
+        v: null,
+        cause: "meteor",
+      });
+    }
+    for (const bot of this.bots.list) bot.alive = false;
+
+    this.meteors.gameOver("impact");
+    this.broadcastScores();
+    this.broadcastAll({ t: S2C.METEORS, m: [], clear: true });
+    this.broadcastAll({
+      t: S2C.METEOR_OVER,
+      reason: "impact",
+      horde: this.meteors.horde,
+    });
+    this.log(`chuva de meteoros: impacto na horda ${this.meteors.horde}`);
+  }
+
+  /** Uma flecha entrou numa rocha. */
+  registerMeteorHit(player, msg) {
+    if (!isMeteorMode(this.mode) || this.meteors.over) return;
+    const id = Number(msg.id);
+    if (!Number.isFinite(id)) return;
+    const r = this.meteors.hit(id);
+    if (!r) return;
+
+    const M = CONFIG.modes.meteorRain;
+    const pontos = r.morreu ? (M.points[r.meteor.maxHits] ?? M.points[1]) : M.points.tank;
+    player.score.points += pontos;
+    player.score.shots = (player.score.shots ?? 0) + 1;
+
+    /* O PISCAR nas outras telas. Em co-op esta é a mensagem mais importante do
+       modo: ela é o que diz "aquela ali já tem dono", e é o que impede duas
+       pessoas de gastarem duas flechas na mesma pedra. Quem atirou já viu
+       localmente — mesmo padrão do clarão do chefão em `ZOMBIE_HIT`. */
+    this.broadcast(
+      {
+        t: S2C.METEOR_HIT,
+        id,
+        by: player.id,
+        left: r.left,
+        p: [round(r.meteor.x), round(r.meteor.y), round(r.meteor.z)],
+      },
+      player.id,
+    );
+
+    if (r.morreu) {
+      player.score.rocks = (player.score.rocks ?? 0) + 1;
+      this.burstMeteor(r.meteor, player);
+    }
+
+    // A carga do especial: um ponto por flecha que conecta, inclusive as
+    // parciais no colosso — acertar aquilo dezesseis vezes é trabalho.
+    this.addKameCharge(player, "meteor");
+    this.broadcastScores();
+    this.broadcastMeteorStatus();
+  }
+
+  /**
+   * A rocha se parte.
+   *
+   * O servidor NÃO integra os estilhaços — manda a semente e o cliente desenha,
+   * com a mesma conta de `shared/fragments.js`. Aqui eles não matam ninguém
+   * (é um pedido, e é a coisa certa: a rocha estourada é uma VITÓRIA, e uma
+   * vitória que às vezes mata quem venceu é punição por jogar bem), então não
+   * há o que decidir do lado da sala. Custa menos que o meteorito da Lua livre.
+   */
+  burstMeteor(meteor, matador = null) {
+    this.broadcastAll({
+      t: S2C.METEOR_BURST,
+      id: meteor.id,
+      p: [round(meteor.x), round(meteor.y), round(meteor.z)],
+      r: round(meteor.raio),
+      seed: (Math.random() * 0xffffffff) >>> 0,
+      killer: matador?.id ?? null,
+      killerName: matador?.name ?? null,
+      killerColor: matador?.color ?? null,
+      tank: meteor.kind === "tank",
+    });
+  }
+
+  meteorStatus() {
+    const M = CONFIG.modes.meteorRain;
+    return {
+      horde: this.meteors.horde,
+      hordes: M.hordes,
+      rocks: this.meteors.vivos + this.meteors.pending.length,
+      tank: this.meteors.tankAtivo,
+      /* O INSTANTE ABSOLUTO, não "faltam 6 segundos".
+       *
+       * É o que faz a contagem ser a mesma em todas as telas e o retardatário
+       * simplesmente não desenhar contagem nenhuma: ele recebe um horário no
+       * passado e a subtração dá negativo, sem uma única linha escrita para o
+       * caso dele. Mesmo padrão de `invulnUntil` e `inviteExpires`. */
+      startsAt: this.meteors.countdown > 0 ? this.now() + this.meteors.countdown * 1000 : 0,
+      over: this.meteors.over,
+      reason: this.meteors.overReason,
+    };
+  }
+
+  broadcastMeteorStatus() {
+    this.broadcastAll({ t: S2C.METEOR_STATUS, ...this.meteorStatus() });
+  }
+
+  /* ------------------------------------------------------------------ cerco --
+
+     A sala é dona de três coisas do cerco, e de nenhuma outra: a vida do
+     portão, o estado dos três engenhos e quem morreu. Poses, ritmo e IA são de
+     `siegeSim.js`; a trajetória da flecha e a da pedra são de quem atirou. */
+
+  /**
+   * Todo mundo para o ADARVE.
+   *
+   * O modo inteiro acontece 11 m acima do chão, e nascer no pátio significaria
+   * subir a escada antes de a partida começar. Os postos vêm de
+   * `castleProps.walkwayPosts()`, na ordem em que ela os lista: o primeiro é o
+   * centro, sobre o portão. Quem entra sozinho fica onde a partida é decidida.
+   */
+  lineUpForSiege() {
+    const S = CONFIG.modes.siege;
+    const postos = walkwayPosts();
+    const gate = gateInfo();
+    let i = 0;
+
+    for (const p of this.players.values()) {
+      const posto = postos[i++ % postos.length];
+      p.alive = true;
+      p.invulnUntil = this.now() + S.invulnerability * 1000;
+      this.stampSpawnState(p, posto.x, posto.z);
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: p.id,
+        x: round(posto.x),
+        z: round(posto.z),
+        // A cota é a do MURO, não a do terreno: `heightAt` responderia 14 m
+        // (o pátio) e o jogador nasceria dentro da alvenaria.
+        y: round(posto.y),
+        drop: 0,
+        invulnUntil: p.invulnUntil,
+        // De frente para a rampa: é de lá que eles vêm.
+        yaw: Math.atan2(gate.x - posto.x, gate.standZ + 40 - posto.z),
+      });
+    }
+
+    for (const b of this.bots.list) {
+      const posto = postos[i++ % postos.length];
+      /* `renascer` com o piso declarado, e não três atribuições soltas: a
+         gravidade do bot precisa saber que o chão dele é o adarve, senão ela o
+         puxa para o pátio no primeiro tique. Ver `Bot.gravidade`. */
+      b.renascer(posto.x, posto.z, posto.y);
+      b.yaw = Math.atan2(gate.x - posto.x, gate.standZ + 40 - posto.z);
+    }
+  }
+
+  /**
+   * Um passo do cerco. Roda no relógio dos bichos (10 Hz).
+   *
+   * A ordem importa: o passo da simulação primeiro, os eventos dele depois, e
+   * as poses por último — quem recebe uma morte já viu o motivo dela.
+   */
+  tickSiege(agora, jogadores) {
+    if (this.siege.over) return;
+    const S = CONFIG.modes.siege;
+    const dt = this.boarStep;
+
+    /* Trabucos: içam sozinhos, ou mais rápido com alguém na manivela. Quem
+       está na manivela não está atirando — é a troca central do modo. */
+    let mudouTrabuco = false;
+    for (const t of this.trebuchets) {
+      if (t.pronto <= agora) continue;
+      const passo = dt * 1000 * (t.wind.size > 0 ? S.trebuchet.reload / S.trebuchet.windReload : 1);
+      t.pronto -= passo;
+      if (t.pronto <= agora) {
+        t.pronto = 0;
+        mudouTrabuco = true;
+      }
+    }
+    if (mudouTrabuco) this.broadcastTrebuchets();
+
+    // Reparo: some no instante em que a mão sai dele, e por isso o conjunto é
+    // limpo aqui e reconstruído pela mensagem do cliente.
+    if (this.repairing.size) this.siege.repair(dt, this.repairing.size);
+
+    const r = this.siege.update(dt, jogadores, agora);
+
+    if (r.tier) {
+      this.broadcastAll({ t: S2C.SIEGE_TIER, nome: r.tier.nome, kind: r.tier.kind });
+      this.log(`cerco: escalão "${r.tier.nome}" aos ${Math.round(r.tier.at / 60)} min`);
+    }
+    for (const tiro of r.tiros) this.broadcastAll({ t: S2C.SIEGE_SHOT, ...tiro });
+    for (const morto of r.mortos) {
+      // Morte sem matador é morte por fogo do piche — ela ainda precisa sair,
+      // senão o corpo fica de pé na tela de todo mundo.
+      this.broadcastAll({ t: S2C.SIEGE_DEATH, id: morto.id, kind: morto.kind, killer: 0 });
+    }
+    for (const ataque of r.ataques) {
+      if (ataque.playerId) this.registerSiegeAttack(ataque.playerId);
+    }
+    if (r.gateHit > 0) {
+      this.broadcastAll({
+        t: S2C.GATE_HIT,
+        f: Math.round((this.siege.gateHp / this.siege.gateMax) * 100) / 100,
+      });
+    }
+
+    /* Pedra de catapulta que venceu o prazo de voo. O dano é aplicado AQUI e
+       não no disparo: quem sai do lugar durante os 2,4 s de voo escapa, que é
+       a diferença entre uma ameaça de área e um tiro teleguiado. */
+    for (const imp of this.siege.colherImpactos(agora)) {
+      this.broadcastAll({ t: S2C.SIEGE_SHOT, kind: "rockImpact", to: [imp.x, imp.y, imp.z] });
+      for (const p of this.players.values()) {
+        if (!p.alive || !p.state) continue;
+        if (agora < p.invulnUntil) continue;
+        const d = Math.hypot(p.state.p[0] - imp.x, p.state.p[2] - imp.z);
+        if (d <= 3.2) this.registerSiegeAttack(p.id, "catapult");
+      }
+    }
+
+    this.checarQuedaDoMuro();
+
+    if (r.over) {
+      this.endSiege(r.venceu ? "dusk" : "gate");
+      return;
+    }
+
+    // O quadro binário das poses. Ver `Siege.packFrame` para a conta.
+    this.broadcastFrame(this.siege.packFrame());
+
+    // O estado vai a 2 Hz: ele é HUD, e HUD não precisa de 10 Hz.
+    this._siegeStatusTick = (this._siegeStatusTick ?? 0) + 1;
+    if (this._siegeStatusTick % 5 === 0) this.broadcastSiegeStatus();
+  }
+
+  /**
+   * Quem cai do muro morre.
+   *
+   * A queda é medida pelo DESNÍVEL, não pela cota final: são oito metros de
+   * muro, e cair deles mata dos dois lados — para fora, na fila; para dentro,
+   * no pátio. Uma regra de "morreu porque está lá embaixo" seria errada,
+   * porque o pátio é lugar legítimo (é onde se repara o portão) e a escada
+   * desce até ele o tempo todo.
+   *
+   * O pico é guardado por jogador e zerado quando ele volta a estar com os pés
+   * no chão. É a mesma informação que a pose já carrega (`a`, de airborne), e
+   * por isso não custa mensagem nova.
+   */
+  checarQuedaDoMuro() {
+    const S = CONFIG.modes.siege;
+    const agora = this.now();
+    for (const p of this.players.values()) {
+      if (!p.alive || !p.state) continue;
+      const y = p.state.p[1];
+      const noAr = p.state.a === 1;
+
+      if (!noAr) {
+        p.quedaPico = y;
+        continue;
+      }
+      if (p.quedaPico == null || y > p.quedaPico) {
+        p.quedaPico = y;
+        continue;
+      }
+      if (p.quedaPico - y < S.fatalFall) continue;
+      if (agora < p.invulnUntil) continue;
+      p.quedaPico = y;
+      this.registerSiegeAttack(p.id, "fall");
+    }
+  }
+
+  /** Alguém no adarve levou um golpe de escalador, uma pedra ou um raio. */
+  registerSiegeAttack(victimId, causa = "climber") {
+    const S = CONFIG.modes.siege;
+    const vitima = this.playerById(victimId);
+    if (!vitima || !vitima.alive) return;
+    if (this.now() < vitima.invulnUntil) return;
+
+    vitima.alive = false;
+    vitima.score.deaths++;
+    vitima.zDownUntil = this.now() + S.respawnDelay * 1000;
+
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      victimColor: vitima.color,
+      killer: 0,
+      killerName:
+        causa === "fall"
+          ? "A queda"
+          : causa === "catapult"
+            ? "Catapulta"
+            : causa === "shaman"
+              ? "Xamã"
+              : "Escalador",
+      killerColor: causa === "fall" ? "#6a6a72" : "#8a5a3a",
+      distance: null,
+      c: null,
+      v: null,
+      cause: causa,
+    });
+    this.broadcastScores();
+
+    /* Renasce na MENAGEM, e sobe a escada a pé.
+     *
+     * Os 8 s aqui mais os ~3,5 s de escada são o preço inteiro de morrer neste
+     * modo: onze segundos e meio sem um arco no muro. Não há eliminação — o
+     * cerco se perde pelo portão, e transformar a derrota coletiva numa
+     * eliminação individual seria reescrever o modo zumbi, que já existe. */
+    setTimeout(() => {
+      if (!this.players.has(vitima.conn)) return;
+      if (!isSiegeMode(this.mode) || this.siege.over) return;
+      const K = CASTLE.respawn;
+      vitima.zDownUntil = 0;
+      vitima.alive = true;
+      vitima.invulnUntil = this.now() + S.invulnerability * 1000;
+      this.stampSpawnState(vitima, K.x, K.z);
+      this.broadcastAll({
+        t: S2C.SPAWN,
+        id: vitima.id,
+        x: round(K.x),
+        z: round(K.z),
+        y: round(this.terrain.heightAt(K.x, K.z)),
+        drop: 0,
+        invulnUntil: vitima.invulnUntil,
+        yaw: 0,
+      });
+    }, S.respawnDelay * 1000).unref?.();
+  }
+
+  /** "Acertei este sitiante." */
+  registerSiegeHit(player, msg) {
+    if (!isSiegeMode(this.mode) || this.siege.over) return;
+    const id = Number(msg.id);
+    if (!Number.isFinite(id)) return;
+
+    const pose = player.state?.p;
+    const r = this.siege.hit(id, {
+      head: msg.head === true,
+      from: pose ? { x: pose[0], y: pose[1], z: pose[2] } : null,
+    });
+    if (!r) return;
+
+    /* Não há mais caminho de "aparou" AQUI: o pavês virou colisor no cliente
+       (ver `entities/besieger.js`), e a flecha que bate nele nunca vira um
+       `SIEGE_HIT`. Quem decide é o solver de contato, como no resto do jogo. */
+
+    /* O OGRO ENFURECEU. Vai para TODA a sala: o aviso é para quem estava
+       mirando noutra coisa, não para quem acabou de acertá-lo. */
+    if (r.enfureceu) {
+      this.broadcastAll({ t: S2C.SIEGE_SHOT, kind: "rage", to: [r.b.x, r.b.chestY, r.b.z] });
+    }
+    if (!r.killed) return;
+
+    this.siege.matar(r.b, player.id, this.now());
+    const pontos = this.siege.pontos(r.b.kind);
+    player.score.points += pontos;
+    player.score.kills++;
+    this.broadcastAll({
+      t: S2C.SIEGE_DEATH,
+      id,
+      kind: r.b.kind,
+      killer: player.id,
+      killerName: player.name,
+      killerColor: player.color,
+      points: pontos,
+      head: msg.head === true,
+      distance: msg.d ?? 0,
+    });
+    this.broadcastScores();
+  }
+
+  /**
+   * "Soltei o trabuco."
+   *
+   * A sala não simula a pedra — ela confere se o engenho estava carregado,
+   * arma a recarga e repassa os parâmetros de disparo. É o mesmo contrato da
+   * flecha: quem atira é dono da trajetória, porque a trajetória é função pura
+   * de (origem, direção, velocidade) e todo mundo tem a mesma conta.
+   */
+  registerTrebShot(player, msg) {
+    if (!isSiegeMode(this.mode) || this.siege.over) return;
+    const t = this.trebuchets[Number(msg.i)];
+    if (!t || t.pronto > this.now()) return;
+    t.pronto = this.now() + CONFIG.modes.siege.trebuchet.reload * 1000;
+    t.wind.clear();
+    this.broadcast(
+      { t: S2C.TREB_SHOT, owner: player.id, i: t.i, o: msg.o, d: msg.d, v: msg.v },
+      player.id,
+    );
+    this.broadcastTrebuchets();
+  }
+
+  /** "A pedra caiu aqui." Quem atirou reporta; a sala decide quem morreu. */
+  registerTrebImpact(player, msg) {
+    if (!isSiegeMode(this.mode) || this.siege.over) return;
+    const p = msg.p;
+    if (!Array.isArray(p) || p.length < 3) return;
+    const x = Number(p[0]);
+    const z = Number(p[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+
+    const r = this.siege.blast(x, z, player.id);
+    const agora = this.now();
+    for (const b of r.mortos) {
+      this.siege.matar(b, player.id, agora);
+      const pontos = this.siege.pontos(b.kind);
+      player.score.points += pontos;
+      player.score.kills++;
+      this.broadcastAll({
+        t: S2C.SIEGE_DEATH,
+        id: b.id,
+        kind: b.kind,
+        killer: player.id,
+        killerName: player.name,
+        killerColor: player.color,
+        points: pontos,
+      });
+    }
+    // O estouro e o piche vão para TODAS as telas: a poça queima por 8 s e é
+    // informação de jogo, não efeito de quem atirou.
+    this.broadcastAll({ t: S2C.TREB_IMPACT, p: [round(x), round(p[1]), round(z)], by: player.id });
+    if (r.gate > 0) {
+      this.broadcastAll({
+        t: S2C.GATE_HIT,
+        f: Math.round((this.siege.gateHp / this.siege.gateMax) * 100) / 100,
+        own: 1,
+      });
+    }
+    if (r.mortos.length) this.broadcastScores();
+  }
+
+  endSiege(reason) {
+    const ranking = [...this.players.values()]
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        kills: p.score.kills,
+        points: p.score.points,
+      }))
+      .sort((a, b) => b.points - a.points);
+    if (reason === "gate") {
+      this.broadcastAll({ t: S2C.GATE_FALL });
+    }
+    this.broadcastSiegeStatus();
+    this.broadcastAll({
+      t: S2C.SIEGE_OVER,
+      reason,
+      critical: Math.round(this.siege.criticalTime),
+      ranking,
+    });
+    this.log(`cerco: ${reason === "dusk" ? "o sol se pôs" : "o portão caiu"}`);
+  }
+
+  broadcastSiegeStatus() {
+    this.broadcastAll({ t: S2C.SIEGE_STATUS, ...this.siege.status() });
+  }
+
+  broadcastTrebuchets() {
+    const agora = this.now();
+    this.broadcastAll({
+      t: S2C.TREB_STATE,
+      e: this.trebuchets.map((t) => ({
+        i: t.i,
+        ready: t.pronto <= agora,
+        left: Math.max(0, Math.round((t.pronto - agora) / 100) / 10),
+        wind: t.wind.size,
+      })),
+    });
+  }
+
+  /* ------------------------------------------------------------- especial -- */
+
+  kameMax() {
+    return CONFIG.special.hitsToCharge;
+  }
+
+  /** Um acerto encheu um ponto da barra. A SALA é quem conta. */
+  addKameCharge(player, fonte) {
+    const S = CONFIG.special;
+    if (!S.modes.includes(this.mode)) return;
+    const passo = S.chargeSources[fonte] ?? 0;
+    if (!passo) return;
+    const atual = this.kameCharge.get(player.id) ?? 0;
+    if (atual >= this.kameMax()) return;
+    const novo = Math.min(this.kameMax(), atual + passo);
+    this.kameCharge.set(player.id, novo);
+    this.broadcastAll({
+      t: S2C.KAME_CHARGE,
+      id: player.id,
+      charge: novo,
+      max: this.kameMax(),
+    });
+  }
+
+  broadcastKameCharges() {
+    for (const p of this.players.values()) {
+      this.broadcastAll({
+        t: S2C.KAME_CHARGE,
+        id: p.id,
+        charge: this.kameCharge.get(p.id) ?? 0,
+        max: this.kameMax(),
+      });
+    }
+  }
+
+  /**
+   * Alguém soltou o especial.
+   *
+   * A sala valida (barra cheia, modo certo) e RETRANSMITE. A partir do evento,
+   * cada cliente reconstrói a vida inteira do feixe — frente, cauda, afinamento
+   * e explosão — porque ela é função pura de (origem, direção, tempo desde o
+   * disparo). É o mesmo contrato da flecha, e custa ~60 bytes.
+   *
+   * Quem decide o que morreu continua sendo quem atirou, pelos canais que já
+   * existem (`METEOR_HIT` com `kame`, `KILL` com `cause: "kame"`).
+   */
+  registerKame(player, msg) {
+    const S = CONFIG.special;
+    if (!S.modes.includes(this.mode)) return;
+    if ((this.kameCharge.get(player.id) ?? 0) < this.kameMax()) return;
+    if (!Array.isArray(msg.o) || !Array.isArray(msg.d)) return;
+
+    this.kameCharge.set(player.id, 0);
+    this.broadcastAll({
+      t: S2C.KAME_CHARGE,
+      id: player.id,
+      charge: 0,
+      max: this.kameMax(),
+    });
+    this.broadcastAll({
+      t: S2C.KAME,
+      owner: player.id,
+      ownerName: player.name,
+      o: msg.o,
+      d: msg.d,
+      w: clampTime(msg.w, this.now()),
+    });
+    this.log(`${player.name} soltou o especial`);
+  }
+
   /** Uma flecha entrou num zumbi, lobo ou chefão. */
   registerZombieHit(player, msg) {
     if (this.mode === "elkHunt" && !this.elks.over) {
@@ -1762,7 +3039,7 @@ export class Room {
     });
     this.broadcastScores();
 
-    this.agendarRenascimento(vitima);
+    this.aoMorrer(vitima);
   }
 
   registerElkWolfHit(player, msg) {
@@ -2087,6 +3364,14 @@ export class Room {
       conn,
       name: displayName(msg.name, CONFIG.net.nameMaxLength),
       color: this.colors.take(),
+      /* O corpo escolhido na tela de entrada.
+       *
+       * Saneado AQUI e não no cliente, e a razão não é segurança: é que um id
+       * desconhecido — de uma aba adiantada, de um cache velho, de alguém
+       * brincando no console — faria o boneco daquela pessoa sumir da tela de
+       * TODO MUNDO. `sanitizeSkin` troca o desconhecido pelo padrão, e a
+       * partida continua com um arqueiro a mais em vez de um buraco. */
+      skin: sanitizeSkin(msg.skin),
       score: emptyScore(),
       state: null,
       stateTime: 0,
@@ -2115,6 +3400,18 @@ export class Room {
     });
     this.broadcast({ t: S2C.JOIN, player: publicView(player) }, player.id);
     this.spawn(player);
+
+    /* CHEGOU NO MEIO DE UMA RODADA DE VIDA ÚNICA: assiste, não joga.
+     *
+     * `spawn` acabou de pôr um corpo vivo em campo, e num modo em que todo
+     * mundo tem uma vida só isso seria um arqueiro inteiro entrando numa briga
+     * em que os outros já gastaram a deles — e pior: um arqueiro que não pode
+     * ser eliminado, porque não está no conjunto da rodada. Ele entra morto e
+     * na PRÓXIMA rodada joga normalmente. O cliente descobre que está
+     * assistindo pelo `standStatus` do snapshot, onde o nome dele não aparece. */
+    if (this.mode === "lastStand" && this.standAlive.size > 0) {
+      player.alive = false;
+    }
     if (this.pendingMode) {
       send(conn, {
         t: S2C.MODE_PREPARE,
@@ -2163,9 +3460,47 @@ export class Room {
       birds:
         isZombieMode(this.mode) || !levelHasFauna(this.level) ? [] : this.birds.view(),
       zombies: this.zombies.zombies.length ? this.zombies.view() : [],
+      /* Quem chega no meio de uma chuva pega o bonde andando: a lista de rochas
+         e o estado da horda vêm na PRIMEIRA mensagem, e a contagem de entrada
+         não reinicia para ninguém (ver `meteorStatus`). */
+      meteors: isMeteorMode(this.mode) ? this.meteors.view() : [],
+      meteorStatus: isMeteorMode(this.mode) ? this.meteorStatus() : null,
+      kameCharge: isMeteorMode(this.mode)
+        ? { charge: this.kameCharge.get(exceto?.id) ?? 0, max: this.kameMax() }
+        : null,
       torches: this.torches,
       zombieStatus: isZombieMode(this.mode) ? this.zombieStatus() : null,
       elkStatus: this.mode === "elkHunt" ? this.elkStatus() : null,
+      /* Quem chega no meio de uma rodada de arena precisa das duas coisas na
+         PRIMEIRA mensagem. Sem a bandeira, o objeto que decide a partida
+         simplesmente não existiria na tela dele até alguém mexer nela; sem a
+         lista de vivos, ele não saberia que está assistindo em vez de jogando —
+         e o único jeito de descobrir seria esperar um `SPAWN` que não vem. */
+      flag: this.mode === "captureFlag" && this.flag.ativo ? this.flag.view() : null,
+      standStatus:
+        this.mode === "lastStand"
+          ? {
+              alive: this.allCharacters()
+                .filter((p) => this.standAlive.has(p.id))
+                .map((p) => ({ id: p.id, name: p.name, color: p.color })),
+              total: this.standTotal ?? 0,
+              over: this.standOver,
+            }
+          : null,
+      /* Quem chega no meio de um cerco recebe a horda em JSON, UMA vez.
+         O fluxo dela é binário (`packFrame`), mas o instantâneo não pode ser:
+         ele vai dentro do `welcome`, que é uma mensagem de texto, e abrir um
+         segundo caminho binário para um evento que acontece uma vez por
+         sessão seria pagar complexidade sem comprar nada. */
+      siege: isSiegeMode(this.mode) ? this.siege.view() : [],
+      siegeStatus: isSiegeMode(this.mode) ? this.siege.status() : null,
+      trebuchets: isSiegeMode(this.mode)
+        ? this.trebuchets.map((t) => ({
+            i: t.i,
+            ready: t.pronto <= this.now(),
+            wind: t.wind.size,
+          }))
+        : null,
       series: this.series.view(),
       mode: this.modeView(),
       scores: this.scores(),
@@ -2179,6 +3514,13 @@ export class Room {
     this.players.delete(conn);
     this.colors.release(player.color);
     this.duelInvites.delete(player.id);
+    /* Manivela e reparo são ESTADOS mantidos pela sala (ver o roteamento de
+       `TREB_WIND`), e quem cai da rede nunca manda o "soltei". Sem esta
+       limpeza, um trabuco continuaria içando sozinho na velocidade de quem já
+       não está lá, e o portão se repararia com a mão de um fantasma. */
+    this.repairing.delete(player.id);
+    for (const t of this.trebuchets) t.wind.delete(player.id);
+    this.saiuDaRodada(player);
     if (this.pendingMode) {
       this.pendingMode.ready.delete(player.id);
       if (this.pendingMode.ready.size >= this.players.size) {
@@ -2427,6 +3769,45 @@ export class Room {
         this.registerZombieHit(player, msg);
         break;
 
+      case C2S.METEOR_HIT:
+        this.registerMeteorHit(player, msg);
+        break;
+
+      case C2S.KAME:
+        this.registerKame(player, msg);
+        break;
+
+      /* ---------------------------------------------------------- cerco -- */
+      case C2S.SIEGE_HIT:
+        this.registerSiegeHit(player, msg);
+        break;
+
+      case C2S.TREB_SHOT:
+        this.registerTrebShot(player, msg);
+        break;
+
+      case C2S.TREB_IMPACT:
+        this.registerTrebImpact(player, msg);
+        break;
+
+      /* Manivela e reparo são ESTADOS, não eventos: o cliente manda quando a
+         mão entra e quando sai, e a sala guarda o conjunto. Mandar um pulso
+         por quadro seria 20 mensagens por segundo para dizer "ainda estou
+         aqui" — e um pacote perdido deixaria alguém içando para sempre. */
+      case C2S.TREB_WIND: {
+        const t = this.trebuchets[Number(msg.i)];
+        if (!t) break;
+        if (msg.on) t.wind.add(player.id);
+        else t.wind.delete(player.id);
+        this.broadcastTrebuchets();
+        break;
+      }
+
+      case C2S.GATE_REPAIR:
+        if (msg.on) this.repairing.add(player.id);
+        else this.repairing.delete(player.id);
+        break;
+
       case C2S.KNIFE_HIT:
         this.registerKnifeHit(player, msg);
         break;
@@ -2502,6 +3883,12 @@ export class Room {
       case C2S.RESPAWN: {
         const S = CONFIG.spawn;
         const agora = this.now() / 1000;
+        /* NO ÚLTIMO EM PÉ A TECLA K NÃO EXISTE. Ela é a saída de emergência de
+           quem ficou preso num canto do mapa; num modo de vida única, seria a
+           saída de emergência da própria morte. Quem já caiu continua caído; a
+           tecla também não teleporta quem ainda está vivo, porque um botão de
+           "sair daqui agora" é grátis demais quando a briga é de vida única. */
+        if (this.mode === "lastStand") break;
         // Cooldown para o renascimento manual não virar fuga de duelo.
         if (agora - player.lastManualRespawn < S.manualCooldown) break;
         player.lastManualRespawn = agora;
@@ -2534,6 +3921,11 @@ export class Room {
    */
   registerKill(killer, msg) {
     const vitima = this.playerById(msg.victim);
+    /* QUEM ATIRA TAMBÉM PRECISA ESTAR VIVO. Nunca foi um problema enquanto todo
+       mundo renascia em quatro segundos, mas no último em pé existe um estado
+       novo — morto e ainda conectado, assistindo — e sem esta linha um
+       espectador podia declarar abates de dentro da câmera livre. */
+    if (!killer?.alive) return;
     if (!vitima || vitima === killer || !vitima.alive) return;
     if (this.now() < vitima.invulnUntil) return;
 
@@ -2570,7 +3962,7 @@ export class Room {
     });
     this.broadcastScores();
 
-    this.agendarRenascimento(vitima);
+    this.aoMorrer(vitima);
   }
 
   /**
@@ -2594,13 +3986,40 @@ export class Room {
    * com invencibilidade piscando. Quem morreu e quem chegou entram igual — é o
    * que deixa explícito, para quem está vendo, que aquilo ali é um renascimento.
    */
-  spawn(player) {
+  spawn(player, forcado = null) {
+    /* QUEM CHEGA NO MEIO DE UM CERCO VAI PARA O ADARVE.
+     *
+     * `lineUpForSiege` só roda na TROCA de modo, e quem entra numa sala que já
+     * está em cerco nunca passa por ela — ele caía no sorteio comum e nascia
+     * no pátio, a onze metros abaixo do jogo, sem nada explicando por quê. O
+     * caminho de renascer depois de morrer tem o próprio destino (a menagem,
+     * em `registerSiegeAttack`); este aqui é o de ENTRAR. */
+    if (isSiegeMode(this.mode) && !this.siege.over && !forcado) {
+      this.postoLivreNoAdarve(player);
+      return;
+    }
+
     const ocupados = this.allCharacters()
       .filter((p) => p !== player && p.state)
       .map((p) => ({ x: p.state.p[0], z: p.state.p[2] }));
 
-    const ponto = pickSpawnPoint(this.terrain, ocupados);
-    const invulnUntil = this.now() + CONFIG.spawn.invulnerability * 1000;
+    /* Na chuva, volta-se para o ANEL DA BASE, não para um ponto sorteado na
+       arena inteira. Renascer a 140 m da base seria renascer fora do jogo: o
+       céu que importa é o de cima da base, e a caminhada de volta custaria mais
+       tempo do que a própria morte. */
+    const ponto = forcado
+      ? { x: forcado.x, z: forcado.z, y: this.terrain.heightAt(forcado.x, forcado.z) }
+      : isMeteorMode(this.mode)
+        ? this.meteorSpawnPoint()
+        : pickSpawnPoint(this.terrain, ocupados);
+    /* No último em pé a proteção é CURTA. Quatro segundos piscando num modo de
+       vida única dão para atravessar meia arena imune, e o modo é justamente
+       sobre não poder atravessar nada impunemente. */
+    const protecao =
+      this.mode === "lastStand"
+        ? CONFIG.modes.lastStand.invulnerability
+        : CONFIG.spawn.invulnerability;
+    const invulnUntil = this.now() + protecao * 1000;
     player.alive = true;
     player.invulnUntil = invulnUntil;
     /* O bot não recebe `S2C.SPAWN` — ele não tem cliente para obedecer a ela.
@@ -2627,6 +4046,63 @@ export class Room {
       drop: this.spawnDrop(),
       invulnUntil,
     });
+  }
+
+  /**
+   * O posto de adarve mais VAZIO, para quem entra no meio do cerco.
+   *
+   * "Mais vazio" e não "o primeiro": com sete postos e três defensores, pegar
+   * sempre o primeiro empilharia todo mundo sobre o portão e deixaria os
+   * bastiões — onde estão dois dos três trabucos — sem ninguém.
+   */
+  postoLivreNoAdarve(player) {
+    const S = CONFIG.modes.siege;
+    const outros = this.allCharacters()
+      .filter((p) => p !== player && p.state)
+      .map((p) => ({ x: p.state.p[0], z: p.state.p[2] }));
+
+    let melhor = null;
+    let melhorFolga = -Infinity;
+    for (const posto of walkwayPosts()) {
+      let folga = Infinity;
+      for (const o of outros) {
+        folga = Math.min(folga, Math.hypot(o.x - posto.x, o.z - posto.z));
+      }
+      if (folga > melhorFolga) {
+        melhorFolga = folga;
+        melhor = posto;
+      }
+    }
+
+    const gate = gateInfo();
+    const invulnUntil = this.now() + S.invulnerability * 1000;
+    player.alive = true;
+    player.invulnUntil = invulnUntil;
+    if (player.isBot) player.renascer(melhor.x, melhor.z, melhor.y);
+    this.stampSpawnState(player, melhor.x, melhor.z);
+    this.broadcastAll({
+      t: S2C.SPAWN,
+      id: player.id,
+      x: round(melhor.x),
+      z: round(melhor.z),
+      // A cota é a do MURO. `heightAt` responderia 14 m — o pátio — e o
+      // jogador nasceria dentro da alvenaria.
+      y: round(melhor.y),
+      drop: 0,
+      invulnUntil,
+      yaw: Math.atan2(gate.x - melhor.x, gate.standZ + 40 - melhor.z),
+    });
+  }
+
+  /** Um ponto do anel de defesa, para quem volta no meio de uma chuva. */
+  meteorSpawnPoint() {
+    const M = CONFIG.modes.meteorRain;
+    const base = CONFIG.levels.moon.base;
+    const ang = Math.random() * Math.PI * 2;
+    const raio = M.spawnRingMin + Math.random() * (M.spawnRingMax - M.spawnRingMin);
+    const x = base.x + Math.sin(ang) * raio;
+    const z = base.z + Math.cos(ang) * raio;
+    return { x, z, y: this.terrain.heightAt(x, z) };
   }
 
   /**
@@ -2819,6 +4295,20 @@ export class Room {
     this.broadcast(msg, null);
   }
 
+  /**
+   * Manda um quadro BINÁRIO para todo mundo.
+   *
+   * O único caminho do jogo que não passa por `JSON.stringify`, e ele existe
+   * por uma conta: 120 sitiantes em JSON a 10 Hz para quatro clientes são
+   * 380 KB/s de subida. Ver `Siege.packFrame`.
+   *
+   * A conexão é a mesma abstração de sempre (`send(dados)`) — o adaptador de
+   * WebSocket já aceita `Buffer` sem saber que isto é diferente.
+   */
+  broadcastFrame(buffer) {
+    for (const player of this.players.values()) player.conn.send(buffer);
+  }
+
   destroy() {
     clearInterval(this.stateTimer);
     clearInterval(this.sweepTimer);
@@ -2966,11 +4456,32 @@ export class RoomHost {
  * tabela até a pessoa reentrar na sala.
  */
 function emptyScore() {
-  return { kills: 0, deaths: 0, boars: 0, elks: 0, elkHits: 0, birds: 0, targets: 0, points: 0 };
+  return {
+    kills: 0, deaths: 0, boars: 0, elks: 0, elkHits: 0, birds: 0, targets: 0, points: 0,
+    // Chuva de meteoros: rochas destruídas e flechas que conectaram. As duas
+    // juntas dão a precisão, que é o placar honesto de um modo cooperativo em
+    // que a métrica é economia de flecha.
+    rocks: 0, shots: 0,
+  };
 }
 
+/**
+ * O que a sala conta sobre alguém para os outros.
+ *
+ * Passa no `WELCOME`, no `JOIN`, no `snapshot` de quem chega atrasado e no
+ * `roster` — os quatro caminhos por onde um corpo aparece na tela alheia. A
+ * skin entra aqui, junto do nome e da cor, porque é exatamente da mesma
+ * natureza: um dado por PESSOA, que não muda durante a partida e que todo mundo
+ * precisa saber para desenhá-la.
+ */
 function publicView(p) {
-  return { id: p.id, name: p.name, color: p.color, isBot: p.isBot === true };
+  return {
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    skin: sanitizeSkin(p.skin),
+    isBot: p.isBot === true,
+  };
 }
 
 function send(conn, msg) {

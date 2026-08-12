@@ -260,6 +260,160 @@ body {
   opacity: 0.4;
 }
 
+/* ------------------------------------------------------- o último em pé ----
+   Um número só, e ele fica VERMELHO quando sobram dois. A cor faz o trabalho
+   que o número sozinho não faz: chamar o olho sem ser procurada. */
+/* Abaixo da faixa do modo (que ocupa 62–93 px), e não em 56 como os chips de
+   canto: os dois modos de arena mostram a faixa o tempo todo, e sobrepor a ela
+   deixava o placar ilegível justamente no modo que mais depende dele. */
+#stand-chip {
+  top: 102px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 15px;
+  border-color: rgba(224, 194, 74, 0.45);
+}
+
+#stand-chip[hidden] {
+  display: none;
+}
+
+#stand-chip .stand-total {
+  opacity: 0.55;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+#stand-chip.critico {
+  border-color: rgba(255, 90, 74, 0.85);
+  box-shadow: 0 0 22px rgba(255, 90, 74, 0.35), var(--shadow);
+}
+
+#stand-chip.critico .value {
+  color: #ff7a68;
+}
+
+/* A faixa de quem virou espectador. Discreta e no alto: ela explica uma vez por
+   que o corpo não responde, e depois some do caminho da vista — que é
+   justamente o que a pessoa ganhou ao morrer. */
+#spectating {
+  position: absolute;
+  top: 148px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 20px;
+  border-radius: 12px;
+  background: rgba(12, 12, 16, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(6px);
+  text-align: center;
+  pointer-events: none;
+}
+
+#spectating[hidden] {
+  display: none;
+}
+
+#spectating strong {
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  color: #ff7a68;
+}
+
+#spectating span {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ------------------------------------------------------- rouba bandeira ----
+   O PLACAR é um chip como os outros. O PORTADOR não é.
+
+   Ele fica no meio da tela, grande, com a cor do time e pulsando. Não é
+   decoração: é a única informação que o modo exige a todo instante, e ela
+   decide o que cada pessoa vai fazer no segundo seguinte. Um dado que precisa
+   ser procurado num canto chega tarde para essa decisão. */
+#flag-chip {
+  top: 102px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  border-color: rgba(255, 215, 94, 0.55);
+}
+
+#flag-chip[hidden] {
+  display: none;
+}
+
+#flag-carrier {
+  position: absolute;
+  top: 148px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  border-radius: 999px;
+  background: rgba(12, 12, 16, 0.55);
+  border: 2px solid;
+  backdrop-filter: blur(6px);
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+}
+
+#flag-carrier[hidden] {
+  display: none;
+}
+
+#flag-carrier-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+#flag-carrier-tail {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.62;
+  letter-spacing: 0.02em;
+}
+
+/* As mesmas duas cores do pilar de luz no mundo (`entities/flag.js`). Ter a
+   tela e o mundo falando a mesma cor é o que permite olhar para um e entender
+   o outro sem traduzir. */
+#flag-carrier.humans {
+  color: #8ccbff;
+  border-color: rgba(74, 163, 255, 0.9);
+  box-shadow: 0 0 26px rgba(74, 163, 255, 0.4), var(--shadow);
+  animation: bandeira-pulso 1.1s ease-in-out infinite;
+}
+
+#flag-carrier.bots {
+  color: #ffa094;
+  border-color: rgba(255, 90, 74, 0.9);
+  box-shadow: 0 0 26px rgba(255, 90, 74, 0.4), var(--shadow);
+  animation: bandeira-pulso 1.1s ease-in-out infinite;
+}
+
+/* Sem dono: ouro, e SEM pulsar. O pulso significa urgência, e uma bandeira
+   parada no centro não é urgente — ligá-lo aqui gastaria o sinal. */
+#flag-carrier.livre {
+  color: #ffd75e;
+  border-color: rgba(255, 215, 94, 0.6);
+}
+
+@keyframes bandeira-pulso {
+  0%, 100% { transform: translateX(-50%) scale(1); }
+  50% { transform: translateX(-50%) scale(1.045); }
+}
+
 #zombie-chip {
   top: 200px;
   right: 18px;
@@ -326,6 +480,136 @@ body {
 
 #zombie-center.gameover {
   border-color: var(--red);
+}
+
+/* A contagem de entrada da chuva: um número só, enorme, sem moldura. Ela não é
+   um aviso — é uma largada, e largada não pede caixa. */
+#zombie-center.countdown {
+  background: none;
+  border: none;
+  box-shadow: none;
+  top: 30%;
+}
+
+#zombie-center.countdown #zombie-center-title {
+  font-size: 96px;
+  color: #ffca6a;
+  text-shadow: 0 0 40px rgba(255, 150, 40, 0.75), 0 4px 20px rgba(0, 0, 0, 0.9);
+}
+
+/* --------------------------------------------------- chuva de meteoros ----
+   A MOLDURA DE PERIGO.
+
+   Ela é uma sombra interna, não uma borda: uma linha vermelha em volta da tela
+   lê como erro de interface, enquanto um escurecimento avermelhado nas bordas
+   lê como pressão. E não ocupa pixel nenhum do centro, que é onde se mira. */
+#danger-edge {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 120px 30px rgba(226, 48, 24, 0.55);
+  transition: opacity 0.18s linear;
+}
+
+#danger-edge[hidden] {
+  display: none;
+}
+
+/* Abaixo do limiar crítico ela para de responder à altura e PULSA: é a última
+   coisa que a tela pode fazer para dizer "agora". */
+#danger-edge.critico {
+  animation: pulso-perigo 0.42s ease-in-out infinite;
+}
+
+@keyframes pulso-perigo {
+  0%, 100% { box-shadow: inset 0 0 120px 30px rgba(226, 48, 24, 0.55); }
+  50% { box-shadow: inset 0 0 190px 60px rgba(255, 70, 40, 0.85); }
+}
+
+/* A seta da rocha fora da tela. UMA, a mais urgente — três seriam ruído. */
+#meteor-arrow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+}
+
+#meteor-arrow[hidden] {
+  display: none;
+}
+
+#meteor-arrow .ma-seta {
+  font-size: 30px;
+  line-height: 1;
+  color: #ff8a2a;
+  filter: drop-shadow(0 0 10px rgba(255, 120, 30, 0.9));
+}
+
+#meteor-arrow .ma-alt {
+  font-size: 12px;
+  font-weight: 800;
+  color: #ffd9a8;
+  /* A seta gira; o número, não — ninguém lê "40 m" de cabeça para baixo. */
+  transform: rotate(var(--ma-contra, 0deg));
+}
+
+/* ------------------------------------------------------------ especial ---- */
+#special-chip {
+  position: absolute;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: rgba(8, 14, 26, 0.7);
+  border: 1px solid rgba(79, 195, 255, 0.35);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #9fd8ff;
+}
+
+#special-chip[hidden] {
+  display: none;
+}
+
+#special-chip .sp-bar {
+  width: 130px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+#special-chip .sp-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #1b4bd8, #4fc3ff, #ffffff);
+  transition: width 0.2s ease-out;
+}
+
+#special-chip .sp-ready {
+  color: #ffffff;
+}
+
+/* Cheia, ela pulsa. É a única forma de a pessoa descobrir que tem uma arma na
+   mão sem ninguém escrever um tutorial. */
+#special-chip.pronto {
+  border-color: rgba(255, 255, 255, 0.8);
+  animation: pulso-especial 1.1s ease-in-out infinite;
+}
+
+@keyframes pulso-especial {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 195, 255, 0.5); }
+  50% { box-shadow: 0 0 26px 6px rgba(79, 195, 255, 0.55); }
 }
 
 #zombie-center.gameover #zombie-center-title {
@@ -1560,6 +1844,14 @@ body {
   border-left-color: var(--red);
 }
 
+.lobby-porta.porta-meteoro {
+  border-left-color: #ff8a2a;
+}
+
+.lobby-porta.porta-cerco {
+  border-left-color: #b8863c;
+}
+
 .lobby-porta:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.09);
   filter: brightness(1.08);
@@ -1711,3 +2003,153 @@ body {
 
 #fps-meter.medio b { color: #ffc457; }
 #fps-meter.baixo b { color: #ff5f52; }
+
+/* ---------------------------------------------------------------- cerco ----
+   A INTEGRIDADE DO PORTÃO é a peça mais pesada da tela, e fica embaixo, no
+   centro. Não é hierarquia arbitrária: é a única coisa capaz de fazer a
+   partida ser perdida, e o modo se perde por uma TAXA — que é justamente o
+   tipo de informação que costuma acabar escondida num canto. */
+
+#siege-panel {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 18px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+#siege-panel[hidden] {
+  display: none;
+}
+
+#siege-gate-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 260px;
+}
+
+#siege-gate-bar {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+#siege-gate-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #8a6a3a, #d9a63b);
+  /* Sem transição de largura: a barra tem de reagir NO INSTANTE do baque.
+     Um easing de 200 ms aqui atrasaria a única leitura visual do golpe. */
+  transition: background 0.3s;
+}
+
+#siege-gate-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+#siege-panel.ferido #siege-gate-fill {
+  background: linear-gradient(90deg, #a35a26, #e08a2c);
+}
+
+#siege-panel.critico #siege-gate-fill {
+  background: linear-gradient(90deg, #a32a20, #ff5a48);
+}
+
+/* Só no crítico a peça pulsa. Pulsar sempre é ruído; pulsar aqui é a última
+   chance de o jogador olhar para baixo antes de perder. */
+#siege-panel.critico {
+  border-color: rgba(255, 90, 74, 0.85);
+  animation: siege-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes siege-pulse {
+  0%, 100% { box-shadow: var(--shadow); }
+  50% { box-shadow: 0 0 26px rgba(255, 90, 74, 0.5), var(--shadow); }
+}
+
+#siege-side {
+  display: flex;
+  gap: 16px;
+}
+
+.siege-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.siege-stat span {
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--gold);
+}
+
+.siege-stat span.alto {
+  color: #ff7a68;
+}
+
+.siege-stat small {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+#siege-trebs {
+  display: flex;
+  gap: 6px;
+  font-size: 18px;
+}
+
+#siege-trebs .treb.pronto {
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(245, 196, 81, 0.6);
+}
+
+#siege-trebs .treb.icando {
+  color: rgba(244, 241, 234, 0.3);
+}
+
+#siege-hint {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: rgba(12, 12, 16, 0.62);
+  border: 1px solid rgba(245, 196, 81, 0.4);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+
+#siege-hint[hidden] {
+  display: none;
+}
+
+#siege-hint b {
+  color: var(--gold);
+}

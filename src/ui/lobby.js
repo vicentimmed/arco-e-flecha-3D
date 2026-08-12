@@ -67,6 +67,22 @@ const PORTAS = [
     detalhe: "só ele, e ele basta",
     classe: "porta-chefao",
   },
+  {
+    id: "meteorRain",
+    level: "moon",
+    mode: "meteorRain",
+    rotulo: "Chuva de Meteoros",
+    detalhe: "dez chuvas — uma no chão e acabou",
+    classe: "porta-meteoro",
+  },
+  {
+    id: "siege",
+    level: "castle",
+    mode: "siege",
+    rotulo: "Cerco ao Castelo",
+    detalhe: "vinte minutos de muralha — só se perde se o portão cair",
+    classe: "porta-cerco",
+  },
 ];
 
 export class Lobby {

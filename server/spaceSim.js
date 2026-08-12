@@ -428,6 +428,36 @@ export class SpaceField {
     this.tNave = 6;
     this.tMeteor = 8;
     this.ativo = false;
+    /**
+     * O que o céu tem, por MODO.
+     *
+     * Na chuva de meteoros o céu é a mesa de jogo, e tudo o que passa por ela
+     * sem ser uma rocha é um falso positivo que custa o segundo que decide a
+     * partida. A nave sai (é um objeto luminoso riscando o céu — exatamente a
+     * silhueta que o jogador está treinado a caçar) e o meteorito em deriva
+     * também (é uma rocha que NÃO cai, e distinguir as duas no susto é pedir
+     * demais). O rover fica: é cenário no chão e não confunde nada.
+     */
+    this.perfil = { alien: null, naves: true, deriva: true };
+  }
+
+  /** @param {string} modo o modo da sala */
+  setPerfil(modo) {
+    if (modo === "meteorRain") {
+      this.perfil = { alien: CONFIG.modes.meteorRain.alien, naves: false, deriva: false };
+      this.naves = [];
+      this.meteors = [];
+      // Nasce o primeiro alien só lá na frente: as duas primeiras hordas são a
+      // rampa, e a rampa não precisa de uma segunda coisa para olhar.
+      this.tAlien = this.perfil.alien.spawnMin;
+    } else {
+      this.perfil = { alien: null, naves: true, deriva: true };
+    }
+  }
+
+  /** Quantas hordas já passaram — o alien só entra a partir de certa altura. */
+  setHorde(n) {
+    this.horde = n | 0;
   }
 
   /** Liga o campo — só faz sentido na Lua. */
@@ -460,10 +490,18 @@ export class SpaceField {
 
     const M = CONFIG.levels.moon;
 
-    /* ------------------------------------------------------------ aliens -- */
+    /* ------------------------------------------------------------ aliens --
+       O perfil do modo manda na frequência; o resto do bicho é o mesmo. */
+    const A = this.perfil.alien ?? M.alien;
+    const alienLiberado = !this.perfil.alien || (this.horde ?? 0) >= (A.fromHorde ?? 0);
     this.tAlien -= dt;
-    if (this.tAlien <= 0 && this.aliens.length < M.alien.maxAlive && jogadores.length) {
-      this.tAlien = faixa(M.alien.spawnMin, M.alien.spawnMax);
+    if (
+      this.tAlien <= 0 &&
+      alienLiberado &&
+      this.aliens.length < A.maxAlive &&
+      jogadores.length
+    ) {
+      this.tAlien = faixa(A.spawnMin, A.spawnMax);
       const alvo = jogadores[Math.floor(Math.random() * jogadores.length)];
       const a = Math.random() * TAU;
       const d = faixa(M.alien.spawnDistMin, M.alien.spawnDistMax);
@@ -487,7 +525,7 @@ export class SpaceField {
 
     /* ------------------------------------------------------------- naves -- */
     this.tNave -= dt;
-    if (this.tNave <= 0 && this.naves.length < M.ship.maxAlive) {
+    if (this.perfil.naves && this.tNave <= 0 && this.naves.length < M.ship.maxAlive) {
       this.tNave = faixa(M.ship.spawnMin, M.ship.spawnMax);
       this.naves.push(new Nave(this.terrain, this.base));
     }
@@ -517,7 +555,7 @@ export class SpaceField {
 
     /* -------------------------------------------------------- meteoritos -- */
     this.tMeteor -= dt;
-    if (this.tMeteor <= 0 && this.meteors.length < M.meteors.max) {
+    if (this.perfil.deriva && this.tMeteor <= 0 && this.meteors.length < M.meteors.max) {
       this.tMeteor = faixa(M.meteors.spawnMin, M.meteors.spawnMax);
       this.meteors.push(new Meteor(this.terrain, this.centro, this.terrain.radius ?? 165));
     }

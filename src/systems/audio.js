@@ -355,6 +355,85 @@ function makeAlienDeathBuffer(ctx) {
  * chiado. O grave por baixo dá o tamanho — sem ele, três metros de rocha soariam
  * como um vaso quebrando.
  */
+/**
+ * O bipe de alerta: uma senoide curta, limpa, alta.
+ *
+ * Ele é DELIBERADAMENTE sintético e sem cauda. Todo o resto do jogo soa
+ * orgânico — corda, pedra, bicho —, e é justamente isso que faz um bipe puro
+ * ser lido como INTERFACE em vez de mundo: quando ele toca, quem ouve não
+ * procura o que fez o barulho, olha para a tela.
+ */
+function makeBeepBuffer(ctx) {
+  const dur = 0.09;
+  const sr = ctx.sampleRate;
+  const n = Math.floor(sr * dur);
+  const buffer = ctx.createBuffer(1, n, sr);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    // Envelope com ataque instantâneo e queda rápida: sem cauda, sem eco.
+    const env = Math.exp(-t * 34);
+    data[i] = Math.sin(TAU * 1180 * t) * env * 0.5;
+  }
+  return buffer;
+}
+
+/**
+ * A carga do especial: zunido subindo de 90 Hz a 420 Hz em dois segundos.
+ *
+ * Duas vozes em quinta mais ruído filtrado por cima — é a quinta que dá a
+ * sensação de "energia se acumulando" em vez de "sirene". Termina num
+ * estalo grave: a energia contida um instante antes de sair.
+ */
+function makeKameChargeBuffer(ctx) {
+  const dur = 2.0; // = CONFIG.special.charge; fixo aqui para não importar config
+  const sr = ctx.sampleRate;
+  const n = Math.floor(sr * dur);
+  const buffer = ctx.createBuffer(1, n, sr);
+  const data = buffer.getChannelData(0);
+  let fase = 0;
+  let fase2 = 0;
+  let ruido = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const u = t / dur;
+    // Sobe acelerando: a subida linear soa mecânica, a quadrática soa viva.
+    const f = 90 + 330 * u * u;
+    fase += (TAU * f) / sr;
+    fase2 += (TAU * f * 1.5) / sr;
+    ruido = ruido * 0.86 + (Math.random() * 2 - 1) * 0.14;
+    const env = Math.min(1, u * 6) * (0.25 + 0.75 * u);
+    let s = (Math.sin(fase) * 0.6 + Math.sin(fase2) * 0.3 + ruido * 0.35) * env;
+    // O estalo final, nos últimos 60 ms.
+    if (u > 0.97) s += Math.sin(TAU * 55 * t) * (u - 0.97) * 30;
+    data[i] = Math.max(-1, Math.min(1, s * 0.55));
+  }
+  return buffer;
+}
+
+/**
+ * O feixe: rugido grave e sujo, feito para ser posto em LOOP.
+ *
+ * Ruído passa-baixa modulado a 30 Hz, com um sub em 48 Hz por baixo. O que
+ * vende o poder é o sub; o que vende o movimento é a modulação.
+ */
+function makeKameBeamBuffer(ctx) {
+  const dur = 1.0; // fatia curta, tocada em loop enquanto o feixe vive
+  const sr = ctx.sampleRate;
+  const n = Math.floor(sr * dur);
+  const buffer = ctx.createBuffer(1, n, sr);
+  const data = buffer.getChannelData(0);
+  let lp = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    lp = lp * 0.93 + (Math.random() * 2 - 1) * 0.07;
+    const mod = 0.75 + 0.25 * Math.sin(TAU * 30 * t);
+    const sub = Math.sin(TAU * 48 * t) * 0.45;
+    data[i] = Math.max(-1, Math.min(1, (lp * 4.2 * mod + sub) * 0.62));
+  }
+  return buffer;
+}
+
 function makeRockBurstBuffer(ctx) {
   const duration = 1.6;
   const sampleRate = ctx.sampleRate;
@@ -738,6 +817,12 @@ export class AudioSystem {
     // A rocha se parte com som de rocha, e não com o de uma nave pegando fogo.
     this.buffers.rockBurst = makeRockBurstBuffer(this.ctx);
 
+    /* Chuva de meteoros e especial. Sintetizados, como quase tudo aqui:
+       um bipe de alerta, o zunido da carga e o rugido do feixe. */
+    this.buffers.uiBeep = makeBeepBuffer(this.ctx);
+    this.buffers.kameCharge = makeKameChargeBuffer(this.ctx);
+    this.buffers.kameFire = makeKameBeamBuffer(this.ctx);
+
     // Alce: berro de peito, grave e com rosnado. O de dor é curto e sobe de
     // volta; o de morte é longo e só desce.
     this.buffers.elkPain = makeCryBuffer(this.ctx, {
@@ -981,10 +1066,25 @@ export class AudioSystem {
    */
   setAmbientNight(noite) {
     this._ambientMode = noite ? "night" : "day";
-    this._musicTrack = noite ? "zombie" : "day";
-    this.music.setVolume(noite ? MUSIC_VOLUME_ZOMBIE : MUSIC_VOLUME_DAY);
     this._ambientHowlTimer = noite ? this._nextAmbientHowlDelay() : 0;
+    this.setMusicTrack(noite ? "zombie" : "day");
     this._syncAmbient();
+  }
+
+  /**
+   * Só a TRILHA, sem mexer no ambiente.
+   *
+   * Estava dentro de `setAmbientNight` porque, até existir a Lua, "trilha
+   * pesada" e "grilos no escuro" eram a mesma coisa. A chuva de meteoros quebra
+   * isso: ela quer a faixa do chefão zumbi (`lua_de_ossos`, a única pesada que
+   * o jogo tem) e NENHUM ambiente — é vácuo, e vácuo é mudo. Separar é o que
+   * permite pedir uma sem a outra.
+   */
+  setMusicTrack(track) {
+    const alvo = track === "zombie" ? "zombie" : "day";
+    if (this._musicTrack === alvo) return;
+    this._musicTrack = alvo;
+    this.music.setVolume(alvo === "zombie" ? MUSIC_VOLUME_ZOMBIE : MUSIC_VOLUME_DAY);
     this._applyMusicTrack();
   }
 

@@ -17,6 +17,7 @@
 import { CONFIG } from "../config.js";
 import { TerrainField } from "./terrainField.js";
 import { MoonField } from "./moonField.js";
+import { CastleField } from "./castleField.js";
 
 /** A fase que o jogo monta no arranque, e o destino de qualquer id inválido. */
 export const DEFAULT_LEVEL = "valley";
@@ -41,6 +42,11 @@ export const LEVEL_INFO = {
       "free",
       "duel",
       "teamDuel",
+      /* Os dois modos de ARENA. Não pedem nada do cenário — nem porco, nem
+         copa, nem trilha —, só chão e espaço, e por isso são os únicos além do
+         livre e do duelo que existem nas DUAS fases. Ver `moon.modos`. */
+      "lastStand",
+      "captureFlag",
       "boarHunt",
       "series",
       "elkHunt",
@@ -55,10 +61,13 @@ export const LEVEL_INFO = {
   moon: {
     id: "moon",
     nome: "Lua",
-    /* Só livre e duelo. Porcos, alces, pássaros, zumbis e a série de alvos
-       dependem de bacia plana, copas de árvore e trilha de terra — coisas que
-       não existem lá, e fingir que existem seria pior que recusar. */
-    modos: ["free", "duel", "teamDuel"],
+    /* Livre, duelo — e a chuva de meteoros, que só existe aqui.
+       Porcos, alces, pássaros, zumbis e a série de alvos dependem de bacia
+       plana, copas de árvore e trilha de terra: coisas que não existem lá, e
+       fingir que existem seria pior que recusar. A chuva é o contrário: ela
+       PRECISA do céu preto sem névoa, do vácuo e da base no centro da arena,
+       e por isso é a primeira coisa que o vale não pode receber. */
+    modos: ["free", "duel", "teamDuel", "lastStand", "captureFlag", "meteorRain"],
     /* DUELO SEM CONVITE.
      *
      * No vale o duelo é convite porque arrasta gente para uma briga no meio do
@@ -90,6 +99,33 @@ export const LEVEL_INFO = {
       arrow: CONFIG.levels.moon.arrow,
     },
     campo: () => new MoonField(),
+  },
+
+  castle: {
+    id: "castle",
+    nome: "Castelo",
+    /* Livre, duelo — e o CERCO, que só existe aqui e que é a razão da fase.
+       Nada de porco, alce, pássaro, zumbi ou série: todos pedem a bacia plana,
+       as copas e a trilha do vale. E nada de arena nem bandeira: o esporão tem
+       um lado só de aproximação, e um capture-a-bandeira num mapa com uma
+       entrada é um corredor, não uma arena. */
+    modos: ["free", "duel", "siege"],
+    /* DUELO SEM CONVITE, pelo mesmo motivo da Lua: vir para cá já é decisão
+       coletiva, e ninguém sobe num castelo para ficar assistindo. */
+    duelInvites: false,
+    /* Sem bando. Não é vácuo como na Lua — é a HORA: o ambiente sonoro do dia
+       é um loop de passarinho, e ele tocando por cima de uma noite de cerco
+       diria ao jogador que não há nada de errado acontecendo. */
+    fauna: false,
+    /* Mesma Terra do vale. O objeto vazio é a declaração de que nada muda —
+       repetir os valores padrão criaria a segunda fonte que sai de sincronia
+       no primeiro ajuste de balanceamento. */
+    fisica: {},
+    /* No cerco quem nasce vai para o adarve, e o adarve tem 11 m de altura: a
+       queda de nascimento do vale poria todo mundo pendurado sobre a horda.
+       Ver `CONFIG.levels.castle.spawnDrop`. */
+    spawnDrop: CONFIG.levels.castle.spawnDrop,
+    campo: () => new CastleField(),
   },
 };
 

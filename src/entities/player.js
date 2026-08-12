@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   A arqueira.
+   O arqueiro — o RIG.
 
    O corpo é montado com primitivas e posicionado por IK de dois ossos: eu digo
    onde a mão precisa estar (o punho do arco, o nock da corda) e o cotovelo é
@@ -9,229 +9,49 @@
    Referencial: `root` fica nos pés, com -Z na direção da mira e +X à direita.
    O tronco é girado ~66° porque arqueiro atira de lado — é dessa rotação que
    nasce o enquadramento da referência (corpo à esquerda, arco no centro).
+
+   ------------------------------------------------------------- rig e fantasia
+
+   Este arquivo já foi as duas coisas ao mesmo tempo, e elas não são a mesma. O
+   RIG é o que está aqui: estado, IK, pose, marcha, ragdoll, LOD, o que a rede
+   escreve e o que a câmera lê. A FANTASIA — as primitivas e os materiais
+   pendurados nas juntas — mora em `skins/`, e o rig não sabe o nome de nenhuma
+   peça de roupa dela.
+
+   O rig conhece a fantasia por SETE handles (`head`, `detail`, `sway`, `armR`,
+   `armL`, `legR`, `legL`) e por quatro materiais que ele mesmo usa na flecha da
+   mão e na faca. É todo o contrato. Ver `skins/index.js`.
+
+   O que NÃO é da skin, de propósito: o jetpack (é equipamento da FASE, não da
+   roupa), o arco, a flecha carregada e a faca — a geometria deles é linha de
+   tiro, e a skin só pode mandar na paleta.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
 import { Bow } from "./bow.js";
-import { makeSegment, orientSegment, makeJoint } from "../utils/geometry.js";
+import { orientSegment } from "../utils/geometry.js";
 import { solveTwoBoneIK, clamp, damp, smoothstep } from "../utils/math.js";
 import { CONFIG } from "../config.js";
-
-/* Antropometria (m) — mulher de ~1,72 m. Não são constantes de simulação,
-   por isso vivem aqui e não em config.js. */
-const BODY = {
-  hipY: 0.9,
-  waistY: 1.06,
-  chestY: 1.27,
-  shoulderY: 1.42,
-  shoulderX: 0.175,
-  neckY: 1.5,
-  headY: 1.625,
-  headR: 0.107,
-  upperArm: 0.28,
-  foreArm: 0.26,
-  thigh: 0.44,
-  shin: 0.42,
-  ankleY: 0.085,
-  hipX: 0.105,
-  stanceWidth: 0.23,
-  stanceYaw: 1.16, // rad — quanto o tronco fica de lado
-  armReach: 0.505, // extensão do braço do arco
-  // Ancoragem da corda: canto da boca, do lado da mão que puxa (a esquerda).
-  // É este ponto que define a linha da flecha, e não o ombro. Medido a partir
-  // da CABEÇA e no espaço do root — deslocar no espaço do tronco não serve,
-  // porque o giro da postura converte "esquerda" em "para trás" e a âncora
-  // acabaria no meio do corpo.
-  anchorSide: 0.062, // m à esquerda da linha de tiro
-  anchorDrop: 0.09, // m abaixo do centro da cabeça (canto da boca)
-  anchorForward: 0.03, // m à frente, ao longo da mira
-};
-
-/**
- * Materiais NOVOS a cada arqueiro.
- *
- * Eram um objeto de módulo, compartilhado por todos. Com um jogador só isso é
- * economia; com vários é impossível: tingir um de azul tingiria todo mundo, e
- * piscar quem acabou de renascer faria a sala inteira piscar junto. O custo de
- * um punhado de materiais por jogador é irrelevante perto disso.
- */
-/* ESPECULAR SELETIVA E RIM LIGHT (Fases 1.5 e 5A.3 do plano).
- *
- * Cada material do corpo tem o SEU brilho, porque é a diferença entre eles que
- * conta de que coisa cada peça é feita: pele tem um brilho largo e oleoso, pano
- * quase nenhum, couro é fosco com um lustro nas dobras, metal é um ponto. Com
- * todos no mesmo `roughness` médio, a arqueira lê como um boneco de resina
- * pintado — que era exatamente o problema.
- *
- * O RIM LIGHT entra em todos eles, pelo mesmo enxerto. Ele acende só as bordas
- * do corpo, onde a normal é perpendicular ao olhar, e serve a um propósito de
- * jogo antes de ser bonito: na noite do modo zumbi e contra a serra escura, é a
- * única coisa que separa a silhueta do arqueiro do fundo. */
-function withRimLight(material, forca = 0.22, tecido = 0) {
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms.rimStrength = { value: forca };
-    shader.uniforms.fabric = { value: tecido };
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        "#include <common>",
-        `#include <common>
-         varying vec3 vLocalPos;`,
-      )
-      .replace(
-        "#include <begin_vertex>",
-        `#include <begin_vertex>
-         vLocalPos = position;`,
-      );
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        "#include <common>",
-        `#include <common>
-         uniform float rimStrength;
-         uniform float fabric;
-         varying vec3 vLocalPos;`,
-      )
-      /* ESTRUTURA DE TECIDO (Fase 5A.4 do plano).
-       *
-       * O plano pedia normal maps em braços e pernas. Um normal map de verdade
-       * exigiria UVs — e as peças do arqueiro são cápsulas e caixas geradas em
-       * código, sem UV que faça sentido. A alternativa que dá o mesmo resultado
-       * pelo mesmo custo é gerar a trama NO FRAGMENTO, a partir da posição
-       * local do vértice: duas ondas cruzadas em alta frequência, moduladas
-       * muito de leve sobre o albedo.
-       *
-       * A amplitude é minúscula (±3 %) de propósito. Tecido não tem desenho —
-       * tem GRÃO —, e o que se quer é só que a superfície pare de ser
-       * perfeitamente lisa. Acima disso vira estampa xadrez.
-       *
-       * A coordenada é a LOCAL, não a de mundo: assim a trama acompanha a peça
-       * quando o braço gira, em vez de o corpo deslizar por dentro de um padrão
-       * fixo no espaço.
-       */
-      .replace(
-        "#include <color_fragment>",
-        `#include <color_fragment>
-         if ( fabric > 0.0 ) {
-           vec3 p = vLocalPos * 220.0;
-           float trama = sin( p.x ) * sin( p.y ) + 0.6 * sin( p.z * 1.3 + p.y * 0.7 );
-           diffuseColor.rgb *= 1.0 + trama * 0.03 * fabric;
-         }`,
-      )
-      /* Entra no fim, DEPOIS da iluminação e antes da névoa: o rim é luz
-         somada, não uma propriedade da superfície. Somá-lo antes faria a névoa
-         não o cobrir, e o arqueiro a cem metros teria contorno neon. */
-      .replace(
-        "#include <opaque_fragment>",
-        `{
-           vec3 rimV = normalize( vViewPosition );
-           float rim = pow( 1.0 - abs( dot( normalize( normal ), rimV ) ), 3.0 );
-           // A cor do rim é a da luz do céu: ele representa o céu inteiro
-           // batendo de raspão na borda do corpo, e céu é azul.
-           outgoingLight += vec3( 0.62, 0.74, 1.0 ) * rim * rimStrength;
-         }
-         #include <opaque_fragment>`,
-      );
-  };
-  // Sem chave própria o Three reaproveitaria o programa de qualquer
-  // MeshStandardMaterial com as mesmas flags e o enxerto seria ignorado.
-  material.customProgramCacheKey = () => `archer-rim-${forca}-${tecido}`;
-  return material;
-}
-
-/** Preenche `color` = branco em toda geometria da subárvore que não tiver. */
-function fillNeutralVertexColors(root) {
-  root.traverse((o) => {
-    const geo = o.geometry;
-    if (!geo || geo.attributes.color) return;
-    const n = geo.attributes.position.count;
-    const brancos = new Float32Array(n * 3).fill(1);
-    geo.setAttribute("color", new THREE.BufferAttribute(brancos, 3));
-  });
-}
-
-function createMaterials() {
-  /* `vertexColors: true` liga o gradiente e o AO de junta que `makeSegment` e
-     `makeJoint` assaram na geometria (ver `utils/geometry.js`). As peças que
-     NÃO são segmento nem junta simplesmente não têm o atributo `color`, e o
-     Three trata a ausência dele como branco — então ligar a chave em todos os
-     materiais é seguro e evita ter duas famílias de material para manter. */
-  const pele = (cor, rough) =>
-    withRimLight(
-      new THREE.MeshStandardMaterial({
-        color: cor,
-        roughness: rough,
-        metalness: 0,
-        vertexColors: true,
-      }),
-      0.26,
-    );
-  // `tecido` = 1 liga a trama do fragmento; a pele e o metal ficam lisos.
-  const pano = (cor, rough, tecido = 1) =>
-    withRimLight(
-      new THREE.MeshStandardMaterial({
-        color: cor,
-        roughness: rough,
-        metalness: 0,
-        vertexColors: true,
-      }),
-      0.2,
-      tecido,
-    );
-
-  return {
-    // Pele: 0.6 é o brilho de uma pele ao ar livre — largo e fraco. Acima de
-    // 0.8 ela vira giz; abaixo de 0.5, plástico.
-    skin: pele("#e6ab7d", 0.6),
-    skinDark: pele("#d9995f", 0.64),
-    top: pano("#cc2f2b", 0.88),
-    trim: pano("#f3ede1", 0.9),
-    shorts: pano("#bb2724", 0.9),
-    // Cabelo: o único do corpo com brilho definido — é ele que dá o realce em
-    // faixa no alto da cabeça, e sem isso o cabelo é uma calota de feltro.
-    hair: pele("#392015", 0.48),
-    shoe: pano("#efe9df", 0.78),
-    shoeRed: pano("#cc2f2b", 0.78),
-    // Rosto e equipamento.
-    eyeWhite: pele("#f7f4ee", 0.28),
-    eyeDark: pele("#2a1a12", 0.18),
-    mouth: pele("#a8564d", 0.66),
-    // Couro: fosco, com um lustro de uso. Nada de metalness.
-    leather: pano("#6b4526", 0.86),
-    leatherDark: pano("#4a2f19", 0.9),
-    /* Fita do cabelo e empena da flecha: os dois HERDAM A COR DO JOGADOR
-       (Fase 5A.6). Eram castanho e vermelho fixos, e num duelo entre dois
-       arqueiros de cores diferentes as duas flechas na aljava eram idênticas.
-       São peças pequenas, e é justamente por isso que funcionam: um toque da
-       sua cor no alto da cabeça é reconhecível de longe sem chapar o corpo. */
-    tie: pano("#8a5a3c", 0.8),
-    fletch: (() => {
-      const m = pano("#d6483c", 0.85);
-      m.side = THREE.DoubleSide;
-      return m;
-    })(),
-    arrowShaft: pano("#c9b58c", 0.6),
-    metal: withRimLight(
-      new THREE.MeshStandardMaterial({
-        color: "#b9bcc2",
-        roughness: 0.28,
-        metalness: 0.85,
-      }),
-      0.18,
-    ),
-  };
-}
+import { getSkin } from "./skins/index.js";
+import { BODY, fillNeutralVertexColors, podarSombras } from "./skins/base.js";
 
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const AXIS_Z = new THREE.Vector3(0, 0, 1);
 const TAU = Math.PI * 2;
 const _color = new THREE.Color();
-/** Branco de referência para clarear a cor do jogador (ver `setColor`). */
-const WHITE = new THREE.Color(1, 1, 1);
 /** Quanto o pé pode descer abaixo da base do corpo ao acompanhar o relevo (m). */
 const MAX_STEP_DOWN = 0.45;
 
 export class Player {
-  constructor(terrain, entityId = 1) {
+  /**
+   * @param {object} terrain o chão desta fase
+   * @param {number} entityId id no `entityRegistry`
+   * @param {string} [skinId] a fantasia. Id desconhecido cai no padrão — quem
+   *   decide isso é `getSkin`, e é por isso que a rede pode entregar aqui o que
+   *   quiser sem derrubar o boneco de ninguém.
+   */
+  constructor(terrain, entityId = 1, skinId = undefined) {
     this.terrain = terrain;
     this.entityId = entityId;
     this.isLocal = true;
@@ -242,11 +62,17 @@ export class Player {
     this.root = new THREE.Group();
     this.root.name = "archer";
 
-    /** Materiais próprios deste arqueiro — ver `createMaterials()`. */
-    this.mat = createMaterials();
+    /** A fantasia deste corpo. Ver `skins/index.js`. */
+    this.skin = getSkin(skinId);
+    /** Materiais próprios deste arqueiro — ver `skin.createMaterials()`. */
+    this.mat = this.skin.createMaterials();
     /** Cor do jogador (roupa, etiqueta, traçado). null = uniforme padrão. */
     this.color = null;
     this._opacity = 1;
+    /* Estado que NÃO vive nas malhas e precisa ser vestido de novo quando o
+       corpo é reconstruído numa troca de skin. Ver `setSkin`. */
+    this._jetpackVisible = false;
+    this._headVisible = true;
     /**
      * Imune a flecha — nasceu agora e ainda está piscando.
      *
@@ -284,6 +110,8 @@ export class Player {
     this.reloadFraction = 0;
     /** 0 = sem golpe; 0..1 = animação da faca em andamento. */
     this.knifeFraction = 0;
+    /** Fração da animação do especial. Ver `setKame` e `poseKamehameha`. */
+    this.kameFraction = 0;
     this.bobPhase = 0;
     this.ponytailLag = new THREE.Vector2();
     this.prevYaw = 0;
@@ -309,6 +137,13 @@ export class Player {
     this._hipL = new THREE.Vector3();
     this._elbow = new THREE.Vector3();
     this._knee = new THREE.Vector3();
+    // Alvos do especial. Reaproveitados entre quadros: alocar quatro vetores
+    // sessenta vezes por segundo é lixo que o coletor vem cobrar no meio do
+    // efeito mais pesado do jogo.
+    this._kameCenter = new THREE.Vector3();
+    this._kameHandR = new THREE.Vector3();
+    this._kameHandL = new THREE.Vector3();
+    this._kameFoot = new THREE.Vector3();
     this._handTarget = new THREE.Vector3();
     this._pole = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
@@ -336,232 +171,51 @@ export class Player {
 
   /* ----------------------------------------------------------- montagem --- */
 
+  /**
+   * Monta o corpo: o rig arma o esqueleto, a skin veste.
+   *
+   * A ORDEM aqui carrega razões, e trocar duas linhas de lugar quebra coisas
+   * que não parecem ter relação nenhuma:
+   *
+   *   1. o `spine` primeiro — é o pai de tudo o que a skin pendura no tronco;
+   *   2. a skin, que devolve os handles que a pose lê;
+   *   3. o jetpack, filho do `spine` e que NÃO é da skin (é equipamento da
+   *      FASE: um capuz não muda a mochila);
+   *   4. a flecha carregada e a faca, que são do rig mas moram na mão da skin;
+   *   5. `fillNeutralVertexColors` depois de tudo isso e ANTES do arco. Os
+   *      materiais do corpo têm `vertexColors: true`, e o Three define
+   *      `USE_COLOR` a partir do MATERIAL, sem olhar se a geometria tem o
+   *      atributo. Numa geometria sem ele o WebGL entrega (0,0,0) e a peça sai
+   *      PRETA. Só segmentos e juntas nascem com cor (ver `utils/geometry.js`);
+   *      pescoço, nariz, cinto, aljava e o resto são primitivas cruas, e é aqui
+   *      que elas recebem o branco. O arco fica de fora porque os materiais
+   *      dele não têm `vertexColors`, e o atributo seria memória à toa;
+   *   6. `podarSombras` por último, quando já existe tudo o que ela mede.
+   */
   build() {
     // Pivô do tronco: gira em Y (postura de lado) e em X (inclinação da mira).
     this.spine = new THREE.Group();
     this.spine.position.set(0, BODY.hipY, 0);
     this.root.add(this.spine);
 
-    /* quadril e tronco --------------------------------------------------- */
-    const pelvis = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.135, 0.1, 4, 14),
-      this.mat.shorts,
-    );
-    pelvis.rotation.z = Math.PI / 2;
-    pelvis.scale.set(1, 1, 0.72);
-    pelvis.position.y = 0.02;
-    pelvis.castShadow = true;
-    this.spine.add(pelvis);
-
-    const torso = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.152, 0.128, BODY.shoulderY - BODY.hipY - 0.02, 16),
-      this.mat.top,
-    );
-    torso.scale.set(1, 1, 0.66);
-    torso.position.y = (BODY.shoulderY - BODY.hipY) / 2 + 0.02;
-    torso.castShadow = true;
-    torso.receiveShadow = true;
-    this.spine.add(torso);
-
-    const waistBand = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.134, 0.134, 0.03, 16),
-      this.mat.trim,
-    );
-    waistBand.scale.set(1, 1, 0.68);
-    waistBand.position.y = BODY.waistY - BODY.hipY - 0.09;
-    this.spine.add(waistBand);
-
-    /* Cinto de couro com fivela. Junto com a bandoleira e a aljava, é o que
-       transforma a silhueta de "boneco de primitivas" em "alguém equipada para
-       atirar": o olho lê equipamento como intenção. */
-    const cinto = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.142, 0.142, 0.055, 16),
-      this.mat.leather,
-    );
-    cinto.scale.set(1, 1, 0.7);
-    cinto.position.y = 0.055;
-    this.spine.add(cinto);
-
-    const fivela = new THREE.Mesh(
-      new THREE.BoxGeometry(0.055, 0.048, 0.02),
-      this.mat.metal,
-    );
-    fivela.position.set(0, 0.055, -0.1);
-    this.spine.add(fivela);
-
-    // Bandoleira cruzando o peito — a alça da aljava.
-    const bandoleira = new THREE.Mesh(
-      new THREE.BoxGeometry(0.052, 0.42, 0.016),
-      this.mat.leatherDark,
-    );
-    bandoleira.position.set(0.02, (BODY.shoulderY - BODY.hipY) * 0.55, -0.1);
-    bandoleira.rotation.z = 0.42;
-    this.spine.add(bandoleira);
+    const corpo = this.skin.build(this);
+    this.head = corpo.head;
+    /* As peças que somem com a distância, repartidas pela skin em dois níveis.
+       Ver `setDetailLevel` para a regra que impede que um corte abra buraco. */
+    this.detail = {
+      perto: corpo.detail?.perto ?? [],
+      medio: corpo.detail?.medio ?? [],
+    };
+    /** A ponta que balança com atraso: rabo de cavalo, rabicho do capuz… */
+    this.sway = corpo.sway ?? null;
+    this.armR = corpo.armR; // braço do arco
+    this.armL = corpo.armL; // braço da corda
+    this.legR = corpo.legR;
+    this.legL = corpo.legL;
+    this.root.add(this.armR.group, this.armL.group);
+    this.root.add(this.legR.group, this.legL.group);
 
     this.buildJetpack();
-
-    /* Aljava nas costas, com as empenas aparecendo. */
-    const aljava = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.052, 0.044, 0.34, 10),
-      this.mat.leather,
-    );
-    aljava.position.set(-0.11, (BODY.shoulderY - BODY.hipY) * 0.62, 0.13);
-    aljava.rotation.set(0.34, 0, -0.3);
-    aljava.castShadow = true;
-    this.spine.add(aljava);
-
-    for (let i = 0; i < 4; i++) {
-      const haste = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.005, 0.005, 0.26, 5),
-        this.mat.arrowShaft,
-      );
-      const dx = (i % 2 ? 1 : -1) * 0.018;
-      const dz = i < 2 ? 0.016 : -0.016;
-      haste.position.set(-0.11 + dx, (BODY.shoulderY - BODY.hipY) * 0.62 + 0.2, 0.13 + dz);
-      haste.rotation.set(0.34, 0, -0.3);
-      this.spine.add(haste);
-
-      const empena = new THREE.Mesh(new THREE.PlaneGeometry(0.02, 0.07), this.mat.fletch);
-      empena.position.copy(haste.position);
-      empena.position.y += 0.1;
-      empena.rotation.set(0.34, i * 0.8, -0.3);
-      this.spine.add(empena);
-    }
-
-    // Ombros arredondados.
-    for (const s of [-1, 1]) {
-      const sh = makeJoint(0.062, this.mat.top);
-      sh.position.set(s * BODY.shoulderX, BODY.shoulderY - BODY.hipY, 0);
-      this.spine.add(sh);
-    }
-
-    /* pescoço e cabeça ---------------------------------------------------- */
-    const neck = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.043, 0.05, 0.1, 10),
-      this.mat.skin,
-    );
-    neck.position.y = BODY.neckY - BODY.hipY - 0.03;
-    neck.castShadow = true;
-    this.spine.add(neck);
-
-    this.head = new THREE.Group();
-    this.head.position.y = BODY.headY - BODY.hipY;
-    this.spine.add(this.head);
-
-    const skull = makeJoint(BODY.headR, this.mat.skin, 18);
-    skull.scale.set(0.94, 1.06, 1.0);
-    this.head.add(skull);
-
-    /* Rosto.
-       Sem olhos, a cabeça é uma bola e o personagem não tem para onde olhar —
-       e é justamente a direção do olhar que dá leitura de "ela está mirando
-       ali". A face olha para -Z no espaço da cabeça, que já é girada pela pose.
-
-       As nove peças do rosto entram em `faceDetail` e SOMEM acima de ~12 m
-       (ver `setFaceDetail`). A essa distância a íris tem meio pixel; o que se
-       vê é a cabeça, e ela continua ali. Com doze arqueiros numa sala são
-       ~100 chamadas de desenho a menos, sem que ninguém perceba a diferença. */
-    const R = BODY.headR;
-    this.faceDetail = [];
-    for (const lado of [-1, 1]) {
-      const olho = new THREE.Mesh(
-        new THREE.SphereGeometry(R * 0.155, 10, 8),
-        this.mat.eyeWhite,
-      );
-      olho.position.set(lado * R * 0.38, R * 0.1, -R * 0.86);
-      olho.scale.set(1, 1.15, 0.62);
-      this.head.add(olho);
-      this.faceDetail.push(olho);
-
-      const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(R * 0.085, 8, 6),
-        this.mat.eyeDark,
-      );
-      iris.position.set(lado * R * 0.38, R * 0.1, -R * 0.95);
-      iris.scale.set(1, 1, 0.55);
-      this.head.add(iris);
-      this.faceDetail.push(iris);
-
-      // Sobrancelha: dá expressão e ancora o olho na testa.
-      const sobrancelha = new THREE.Mesh(
-        new THREE.BoxGeometry(R * 0.3, R * 0.07, R * 0.09),
-        this.mat.hair,
-      );
-      sobrancelha.position.set(lado * R * 0.38, R * 0.34, -R * 0.87);
-      sobrancelha.rotation.z = lado * 0.14;
-      this.head.add(sobrancelha);
-      this.faceDetail.push(sobrancelha);
-    }
-
-    const nariz = new THREE.Mesh(
-      new THREE.ConeGeometry(R * 0.11, R * 0.26, 6),
-      this.mat.skin,
-    );
-    nariz.rotation.x = -Math.PI / 2;
-    nariz.position.set(0, -R * 0.08, -R * 0.95);
-    this.head.add(nariz);
-    this.faceDetail.push(nariz);
-
-    const boca = new THREE.Mesh(
-      new THREE.BoxGeometry(R * 0.3, R * 0.055, R * 0.06),
-      this.mat.mouth,
-    );
-    boca.position.set(0, -R * 0.42, -R * 0.86);
-    this.head.add(boca);
-    this.faceDetail.push(boca);
-
-    // Orelhas: fecham a silhueta da cabeça de perfil.
-    for (const lado of [-1, 1]) {
-      const orelha = new THREE.Mesh(
-        new THREE.SphereGeometry(R * 0.2, 8, 6),
-        this.mat.skin,
-      );
-      orelha.position.set(lado * R * 0.92, -R * 0.02, 0);
-      orelha.scale.set(0.42, 1, 0.72);
-      this.head.add(orelha);
-      this.faceDetail.push(orelha);
-    }
-
-    // Cabelo: calota + franja, com a testa livre.
-    const hairCap = new THREE.Mesh(
-      new THREE.SphereGeometry(BODY.headR * 1.05, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.62),
-      this.mat.hair,
-    );
-    hairCap.scale.set(0.98, 1.12, 1.02);
-    hairCap.position.y = 0.004;
-    hairCap.castShadow = true;
-    this.head.add(hairCap);
-
-    const hairBack = new THREE.Mesh(
-      new THREE.SphereGeometry(BODY.headR * 1.02, 16, 12, 0, Math.PI, 0, Math.PI),
-      this.mat.hair,
-    );
-    hairBack.rotation.y = -Math.PI / 2;
-    hairBack.scale.set(1.0, 1.05, 0.86);
-    hairBack.position.z = 0.02;
-    this.head.add(hairBack);
-
-    // Rabo de cavalo: duas seções que balançam com atraso.
-    this.ponytailRoot = new THREE.Group();
-    this.ponytailRoot.position.set(0, 0.055, BODY.headR * 0.95);
-    this.head.add(this.ponytailRoot);
-
-    // A fita do rabo de cavalo: é ela que leva a cor do jogador na cabeça.
-    const tie = makeJoint(0.036, this.mat.tie, 10);
-    this.ponytailRoot.add(tie);
-
-    this.ponytailA = makeSegment(0.056, this.mat.hair, true, 10);
-    this.ponytailRoot.add(this.ponytailA);
-
-    this.ponytailB = new THREE.Group();
-    this.ponytailRoot.add(this.ponytailB);
-    this.ponytailTip = makeSegment(0.04, this.mat.hair, true, 10);
-    this.ponytailB.add(this.ponytailTip);
-
-    /* braços -------------------------------------------------------------- */
-    this.armR = this.buildArm(); // braço do arco
-    this.armL = this.buildArm(); // braço da corda
-    this.root.add(this.armR.group, this.armL.group);
 
     /* Flecha que a mão carrega da aljava até o nock durante o reload.
        Fica escondida fora dessa janela — a flecha encaixada no arco é outra. */
@@ -574,110 +228,110 @@ export class Player {
     this.armL.hand.add(this.knife);
     this.knife.visible = false;
 
-    /* pernas -------------------------------------------------------------- */
-    this.legR = this.buildLeg();
-    this.legL = this.buildLeg();
-    this.root.add(this.legR.group, this.legL.group);
-
-    /* Todo o resto do corpo ganha cor de vértice NEUTRA.
-     *
-     * Isto não é enfeite, é obrigatório: os materiais do arqueiro têm
-     * `vertexColors: true` por causa do gradiente e do AO de junta, e o Three
-     * define `USE_COLOR` a partir do MATERIAL, sem olhar se a geometria tem o
-     * atributo. Numa geometria sem ele o WebGL entrega (0,0,0) para o atributo
-     * desligado — e a peça sai PRETA. Só os segmentos e as juntas nascem com
-     * cor (ver `utils/geometry.js`); pescoço, nariz, cinto, aljava e o resto
-     * são primitivas cruas, e é aqui que elas recebem o branco.
-     *
-     * Roda ANTES do arco entrar no root: os materiais do arco são dele e não
-     * têm `vertexColors`, então gastar memória com um atributo que ninguém lê
-     * seria desperdício.
-     */
     fillNeutralVertexColors(this.root);
 
     /* arco ---------------------------------------------------------------- */
-    this.bow = new Bow();
+    this.bow = new Bow(this.skin.bowPalette);
     this.root.add(this.bow.group);
 
     podarSombras(this.root);
+
+    /* O que o rig pendurou no `root` e sabe desmontar.
+     *
+     * O `root` também recebe coisas de FORA — a etiqueta de nome de um jogador
+     * remoto é filha dele (ver `net/remotePlayers.js`) —, e varrer os filhos às
+     * cegas numa troca de skin levaria a etiqueta junto. */
+    this._bodyParts = [
+      this.spine,
+      this.armR.group,
+      this.armL.group,
+      this.legR.group,
+      this.legL.group,
+      this.bow.group,
+    ];
   }
 
-  buildArm() {
-    const group = new THREE.Group();
-    const upper = makeSegment(0.057, this.mat.skin, true, 12);
-    const fore = makeSegment(0.047, this.mat.skin, true, 12);
-    const elbow = makeJoint(0.052, this.mat.skin, 12);
+  /**
+   * Troca a fantasia com o corpo já de pé.
+   *
+   * É a tela de entrada que usa isto, onde nenhum laço de quadro está rodando e
+   * a troca sai de graça. Reconstruir é seguro porque NENHUM estado vive dentro
+   * das malhas: posição, mira, fase da marcha, tensionamento e o resto são
+   * campos desta classe, e a pose inteira é derivada deles a cada quadro.
+   *
+   * O que não é derivado são as cinco coisas numeradas abaixo — e é aqui que
+   * elas voltam. Esquecer qualquer uma dá um bug silencioso do pior tipo: o que
+   * só aparece na Lua, ou só em primeira pessoa, ou só depois de morrer.
+   */
+  setSkin(id) {
+    const nova = getSkin(id);
+    if (nova === this.skin) return;
 
-    /* A mão ganha dedos.
-       Uma esfera na ponta do braço some assim que a câmera chega perto — e em
-       primeira pessoa a mão do arco fica a meio metro do olho. Não é anatomia:
-       são quatro dedos e um polegar em caixas, o suficiente para o cérebro
-       parar de ver uma bola. */
-    const hand = new THREE.Group();
-    const palma = new THREE.Mesh(
-      new THREE.BoxGeometry(0.062, 0.088, 0.038),
-      this.mat.skinDark,
-    );
-    palma.castShadow = true;
-    hand.add(palma);
+    /* O que precisa sobreviver à remontagem é lido ANTES dela.
+     *
+     * `jetFlame` é o caso traiçoeiro: ele não morre com as malhas, ele é ZERADO
+     * por `buildJetpack()` — que é chamado lá dentro do `build()`. Ler depois
+     * devolveria sempre 0, e trocar de skin no meio de um voo apagaria o jato
+     * de quem está no ar. */
+    const cor = this.color;
+    const jato = this.jetFlame;
+    const mochila = this._jetpackVisible;
+    const cabeca = this._headVisible;
+    const nivel = this._detailLevel ?? 0;
 
-    for (let i = 0; i < 4; i++) {
-      const dedo = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.0105, 0.05 - Math.abs(i - 1.5) * 0.008, 3, 6),
-        this.mat.skinDark,
-      );
-      // +Y é a direção cotovelo→mão: os dedos seguem ADIANTE do punho.
-      dedo.position.set(-0.021 + i * 0.014, 0.062, 0.002);
-      dedo.rotation.x = -0.25;
-      hand.add(dedo);
+    this.disposeBody();
+    this.skin = nova;
+    this.mat = this.skin.createMaterials();
+    this.build();
+
+    /* 1. A cor. `setColor` sai fora quando a cor pedida é igual à guardada, e o
+          corpo novo nasceria sem tingir — daí zerar antes de repetir. */
+    this.color = null;
+    if (cor != null) this.setColor(cor);
+    // 2. A mochila é da FASE, e a fase não mudou porque a roupa mudou.
+    this.setJetpackVisible(mochila);
+    this.setJetFlame(jato);
+    // 3. A cabeça, que fica escondida em primeira pessoa.
+    this.setHeadVisible(cabeca);
+    // 4. O nível de detalhe, cuja memória de "já está assim" morreu com as peças.
+    this._detailLevel = null;
+    this.setDetailLevel(nivel);
+    /* 5. As duas peças que só aparecem no meio de uma animação.
+     *
+     * A FACA precisa disto: quem decide se ela existe é `setKnife`, e o corpo
+     * novo nasceu com ela escondida.
+     *
+     * A FLECHA CARREGADA não precisa, e é bom saber por quê em vez de repetir a
+     * condição aqui: quem liga e desliga a flecha da mão é `updateReloadArm`, a
+     * partir da fração, TODO QUADRO. Ela sai daqui invisível e volta ao certo no
+     * próximo `update()` — que roda antes de qualquer desenho, então não existe
+     * um quadro em que se veja a mão vazia. Repetir a janela `0,32 ≤ t < 0,7`
+     * neste método seria criar uma segunda cópia dela para sair de sincronia
+     * mais tarde. O que se chama abaixo é só o outro lado de `setReload`: com
+     * fração zero, garantir que a flecha está escondida. */
+    this.setReload(this.reloadFraction);
+    this.setKnife(this.knifeFraction);
+  }
+
+  /**
+   * Devolve à GPU o corpo inteiro, e só o corpo.
+   *
+   * O `Set` de materiais não é zelo: o mesmo couro veste quatro peças, e sem
+   * ele `dispose()` seria chamado várias vezes no mesmo material.
+   */
+  disposeBody() {
+    const materiais = new Set();
+    for (const parte of this._bodyParts ?? []) {
+      parte.traverse((o) => {
+        o.geometry?.dispose();
+        if (!o.material) return;
+        if (Array.isArray(o.material)) for (const m of o.material) materiais.add(m);
+        else materiais.add(o.material);
+      });
+      this.root.remove(parte);
     }
-    const polegar = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.012, 0.036, 3, 6),
-      this.mat.skinDark,
-    );
-    polegar.position.set(0.034, 0.022, -0.016);
-    polegar.rotation.set(-0.2, 0, 0.9);
-    hand.add(polegar);
-
-    // Bracelete de couro no antebraço (a proteção contra a corda).
-    const band = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.058, 0.055, 0.085, 12),
-      this.mat.leather,
-    );
-    band.castShadow = true;
-    const fita = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.057, 0.014, 12),
-      this.mat.leatherDark,
-    );
-    band.add(fita);
-
-    group.add(upper, fore, elbow, hand, band);
-    return { group, upper, fore, elbow, hand, band };
-  }
-
-  buildLeg() {
-    const group = new THREE.Group();
-    const thigh = makeSegment(0.092, this.mat.skin, true, 12);
-    const shin = makeSegment(0.068, this.mat.skin, true, 12);
-    const knee = makeJoint(0.072, this.mat.skin, 12);
-    // Bermuda cobrindo a parte de cima da coxa.
-    const short = makeSegment(0.105, this.mat.shorts, true, 12);
-    short.userData.isShort = true;
-
-    // Tênis montado com a ponta em -Z; o grupo é girado para a direção do pé.
-    const shoe = new THREE.Group();
-    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.104, 0.05, 0.26), this.mat.shoe);
-    sole.position.set(0, 0.025, -0.03);
-    sole.castShadow = true;
-    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.075, 0.15), this.mat.shoeRed);
-    upper.position.set(0, 0.075, 0.025);
-    upper.castShadow = true;
-    const toe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.045, 0.08), this.mat.shoe);
-    toe.position.set(0, 0.06, -0.115);
-    shoe.add(sole, upper, toe);
-
-    group.add(thigh, shin, knee, shoe, short);
-    return { group, thigh, shin, knee, shoe, short };
+    for (const m of materiais) m.dispose();
+    this._bodyParts = [];
   }
 
   /* -------------------------------------------------------------- estado --- */
@@ -703,6 +357,25 @@ export class Player {
   }
 
   /** Progresso do golpe de faca; a animação é vestida por `updateKnifeArm`. */
+  /**
+   * A fração da animação do especial — 0 a 1 ao longo dos ~7 s.
+   *
+   * Um número só carrega as cinco fases (concha no quadril, esfera crescendo,
+   * empurrão, tremor, retorno) porque o corpo é montado por PROCEDIMENTO, não
+   * por animação gravada: `poseKamehameha` lê esta fração e deriva tudo. É o
+   * mesmo desenho do `knifeFraction`, e é o que faz a pose do companheiro
+   * aparecer na sua tela sem uma única mensagem nova (ela viaja no `q` da
+   * pose, que já sai a 20 Hz).
+   */
+  setKame(fraction) {
+    this.kameFraction = clamp(fraction, 0, 1);
+    if (this.kameFraction > 0 && this.heldArrow) this.heldArrow.visible = false;
+  }
+
+  get kameActive() {
+    return (this.kameFraction ?? 0) > 0;
+  }
+
   setKnife(fraction) {
     this.knifeFraction = clamp(fraction, 0, 1);
     if (this.knife) this.knife.visible = this.knifeFraction > 0;
@@ -790,24 +463,17 @@ export class Player {
   /**
    * Cor do jogador.
    *
-   * Tinge só a ROUPA. Pele e cabelo ficam como estão de propósito: colorir o
-   * corpo inteiro apaga o volume do personagem e ele vira uma silhueta chapada,
-   * justamente quando você mais precisa reconhecer quem é à distância.
+   * QUAIS peças recebem a cor é decisão da skin — o gambeson do medieval e a
+   * camiseta da atleta não são a mesma peça, e o rig não conhece nenhuma das
+   * duas. O que o rig garante é o CRITÉRIO, e ele vale para toda skin: tinge só
+   * a roupa. Pele e cabelo ficam como estão de propósito, porque colorir o
+   * corpo inteiro apaga o volume do personagem e ele vira uma silhueta chapada
+   * — justamente quando você mais precisa reconhecer quem é à distância.
    */
   setColor(hex) {
     if (hex == null || hex === this.color) return;
     this.color = hex;
-    const c = _color.set(hex);
-    this.mat.top.color.copy(c);
-    this.mat.shoeRed.color.copy(c);
-    // Bermuda um tom mais funda que a camiseta.
-    this.mat.shorts.color.copy(c).multiplyScalar(0.8);
-    /* Fita e empena também (Fase 5A.6). Elas ficam mais CLARAS que a camiseta,
-       não iguais: são peças de poucos pixels contra o cabelo escuro e contra a
-       aljava de couro, e no mesmo tom da roupa elas desapareceriam justamente
-       nos dois fundos onde estão. */
-    this.mat.tie.color.copy(c).lerp(WHITE, 0.25);
-    this.mat.fletch.color.copy(c).lerp(WHITE, 0.18);
+    this.skin.tint(this.mat, _color.set(hex));
   }
 
   /**
@@ -1028,6 +694,10 @@ export class Player {
 
   /** A fase tem jetpack? Mostra ou esconde a mochila inteira. */
   setJetpackVisible(on) {
+    // Guardado, e não só escrito na malha: a mochila é da FASE, e a malha morre
+    // numa troca de skin. Sem esta linha, escolher outro corpo na Lua devolve
+    // um arqueiro voando sem nada nas costas.
+    this._jetpackVisible = on;
     if (this.jetpackGroup) this.jetpackGroup.visible = on;
   }
 
@@ -1186,13 +856,255 @@ export class Player {
     this.localToRoot(BODY.hipX, -0.02, 0, this._hipR);
     this.localToRoot(-BODY.hipX, -0.02, 0, this._hipL);
 
-    this.updateBow();
-    this.updateArms(dt);
-    this.updateLegs();
-    this.updatePonytail(dt);
+    if (this.kameActive) {
+      /* O ESPECIAL substitui arco, braços e pernas — não os corrige.
+       *
+       * Entra aqui, e não como um ramo dentro de `updateArms`, pelo mesmo
+       * motivo do `poseRagdoll`: a faca troca UM braço, e cabe num desvio lá
+       * dentro; isto troca os dois braços, o arco, a base das pernas e a
+       * orientação do tronco. Um ramo por peça espalharia a mesma decisão por
+       * quatro funções. */
+      this.poseKamehameha(dt);
+    } else {
+      this.updateBow();
+      this.updateArms(dt);
+      this.updateLegs();
+    }
+    this.updateSway(dt);
 
     this.prevYaw = this.yaw;
     this.root.updateMatrixWorld(true);
+  }
+
+  /* ------------------------------------------------------------- especial --
+   *
+   * A POSE INTEIRA, derivada de uma fração.
+   *
+   * O corpo do jogo não usa animação de esqueleto exportada: `poseArm` é IK de
+   * dois ossos com vetor de polo, e é ela que anima a marcha, o tensionamento,
+   * a recarga na aljava e o corpo mole. Aqui ela recebe outros alvos, e isso é
+   * a animação inteira — nenhum osso novo, nenhum arquivo.
+   *
+   * As cinco fases, em segundos (de `CONFIG.special`):
+   *
+   *   carga 2,0 → disparo 0,15 → sustentação 3,0 → dissipação 1,2 → retorno 0,8
+   *
+   * O que muda em cada uma está escrito abaixo, na ordem em que o corpo faz.
+   */
+
+  /** Em que fase estamos, e o quanto dela já passou. */
+  kamePhase() {
+    const S = CONFIG.special;
+    const total = S.charge + S.release + S.sustain + S.dissipate + S.recover;
+    const t = this.kameFraction * total;
+    if (t < S.charge) return { fase: "carga", u: t / S.charge, t };
+    if (t < S.charge + S.release) {
+      return { fase: "disparo", u: (t - S.charge) / S.release, t };
+    }
+    if (t < S.charge + S.release + S.sustain) {
+      return { fase: "feixe", u: (t - S.charge - S.release) / S.sustain, t };
+    }
+    if (t < total - S.recover) {
+      const base = S.charge + S.release + S.sustain;
+      return { fase: "dissipando", u: (t - base) / S.dissipate, t };
+    }
+    return { fase: "retorno", u: (t - (total - S.recover)) / S.recover, t };
+  }
+
+  poseKamehameha(dt) {
+    const P = CONFIG.special.pose;
+    const { fase, u } = this.kamePhase();
+
+    /* Quanto o corpo já "entrou" no especial: 0 na pose normal, 1 na pose
+       cheia. Ele sobe rápido no início da carga e desce no retorno — e é ele
+       que faz a transição não ter corte, sem uma única interpolação escrita à
+       mão entre dois estados. */
+    const entrada =
+      fase === "carga"
+        ? smoothstep(0, 0.35, u)
+        : fase === "retorno"
+          ? 1 - smoothstep(0, 1, u)
+          : 1;
+
+    /* ---------------------------------------------------------- o tronco --
+       Ele ESQUADRA para o alvo: o arqueiro deixa de estar de perfil (1,16 rad)
+       e passa a encarar o que vai destruir. É a mudança mais legível de todas,
+       e é ela que anuncia o golpe de longe, antes de qualquer luz. */
+    const yawAlvo =
+      fase === "carga" ? P.stanceYawCharge : fase === "retorno" ? P.stanceYawCharge : P.stanceYawFire;
+    const stanceYaw = BODY.stanceYaw + (yawAlvo - BODY.stanceYaw) * entrada;
+
+    // Inclina para trás na carga, para a frente empurrando o feixe.
+    let pitchTronco = -this.pitch * 0.42;
+    if (fase === "carga") pitchTronco -= 0.15 * entrada * u;
+    else if (fase === "feixe") pitchTronco += 0.08 * u;
+
+    this._q.setFromAxisAngle(AXIS_X, pitchTronco);
+    this._qb.setFromAxisAngle(AXIS_Y, stanceYaw);
+    this.spine.quaternion.copy(this._q).multiply(this._qb);
+    this.spine.updateMatrix();
+    this.head.rotation.y = -stanceYaw * 0.86;
+    this.head.rotation.x = -this.pitch * 0.35;
+
+    /* O RECUO. O root vai para trás no disparo e volta devagar — é o que vende
+       o peso, e custa uma linha porque a posição já é escrita todo quadro. */
+    if (fase === "disparo") {
+      this.root.position.addScaledVector(this._aim, -P.recoil * (1 - u));
+    } else if (fase === "feixe") {
+      this.root.position.addScaledVector(this._aim, -P.recoil * 0.45 * (1 - u));
+    }
+
+    // Ombros e quadris na pose nova (o tronco girou; eles giram junto).
+    this.localToRoot(BODY.shoulderX, BODY.shoulderY - BODY.hipY, 0, this._shoulderR);
+    this.localToRoot(-BODY.shoulderX, BODY.shoulderY - BODY.hipY, 0, this._shoulderL);
+    this.localToRoot(BODY.hipX, -0.02, 0, this._hipR);
+    this.localToRoot(-BODY.hipX, -0.02, 0, this._hipL);
+
+    this.kameBow(entrada);
+    this.kameArms(fase, u, entrada);
+    this.kameLegs(entrada, fase);
+  }
+
+  /**
+   * O arco vai para as costas.
+   *
+   * Ele é um grupo filho do root, posicionado a cada quadro — então "guardar"
+   * é escrever outra transformação, sem reparentar nada. Ao lado da aljava, na
+   * diagonal, com a troca interpolada para não teleportar.
+   */
+  kameBow(entrada) {
+    const P = CONFIG.special.pose;
+    /* A posição INTERPOLA com a entrada, não salta.
+     *
+     * Escrevendo o destino direto, o arco teleportava da mão para as costas no
+     * primeiro quadro do especial — e voltava do mesmo jeito. Meio segundo de
+     * viagem é o que transforma isso num gesto (ele guarda o arco) em vez de um
+     * corte. O ponto de partida é onde o `updateBow` normal o deixou. */
+    this.localToRoot(P.bowBack.x, P.bowBack.y, P.bowBack.z, this._tmp);
+    this.bow.group.position.lerp(this._tmp, entrada);
+    this._euler.set(0.35 * entrada, 0, P.bowBackRoll * entrada);
+    this.bow.group.quaternion.setFromEuler(this._euler);
+    this.bow.setDraw(0);
+    this.bow.setArrowVisible(false);
+  }
+
+  kameArms(fase, u, entrada) {
+    const P = CONFIG.special.pose;
+    const tremor = fase === "carga" ? P.tremorCharge * u : fase === "feixe" ? P.tremorSustain : 0;
+    const shake = tremor
+      ? Math.sin(performance.now() * 0.001 * P.tremorHz * TAU) * tremor
+      : 0;
+
+    /* A concha ao lado do quadril: as duas palmas separadas por 30 cm fechando
+       para 22 — é o gesto que a referência tem, e é o espaço onde a esfera
+       cresce. */
+    const aberto = P.handsApartStart + (P.handsApartEnd - P.handsApartStart) * u;
+
+    if (fase === "carga" || fase === "retorno") {
+      this.localToRoot(P.handsHip.x, P.handsHip.y, P.handsHip.z, this._kameCenter);
+      this._kameCenter.addScaledVector(this._aim, shake);
+      const meio = (fase === "carga" ? aberto : P.handsApartEnd) * 0.5;
+      /* Cotovelos ABERTOS, para fora e para trás. Sem este polo os braços
+         colam no corpo e a pose vira "mãos no bolso" em vez de "segurando
+         alguma coisa que quer sair". */
+      this._pole
+        .copy(this._aim)
+        .multiplyScalar(-0.5)
+        .addScaledVector(this._lateral, 0.7)
+        .addScaledVector(AXIS_Y, -0.2)
+        .normalize();
+      this._kameHandR.copy(this._kameCenter).addScaledVector(AXIS_Y, meio);
+      this._kameHandL.copy(this._kameCenter).addScaledVector(AXIS_Y, -meio);
+      this.poseArm(this.armR, this._shoulderR, this._kameHandR, this._pole, 0.0);
+      this._pole.multiplyScalar(-1).addScaledVector(AXIS_Y, -0.4).normalize();
+      this.poseArm(this.armL, this._shoulderL, this._kameHandL, this._pole, 0.0);
+      return;
+    }
+
+    /* Disparo e feixe: as mãos vão à frente do peito, palmas para fora, punhos
+       juntos. Os braços ficam a ~90 % de extensão — travado no cotovelo lê como
+       boneco de pau, e é o erro mais comum de IK. */
+    const avanco = fase === "disparo" ? P.handsFire.forward * smoothstep(0, 1, u) : P.handsFire.forward;
+    const deriva = fase === "feixe" ? 0.05 * u : 0;
+    this._kameCenter
+      .copy(this._shoulderR)
+      .lerp(this._shoulderL, 0.5)
+      .addScaledVector(this._aim, avanco + deriva + shake)
+      .addScaledVector(AXIS_Y, P.handsFire.up + (fase === "feixe" ? 0.03 * u : 0));
+
+    this._pole
+      .copy(this._aim)
+      .multiplyScalar(-0.35)
+      .addScaledVector(AXIS_Y, -0.55)
+      .addScaledVector(this._lateral, 0.5)
+      .normalize();
+    this._kameHandR.copy(this._kameCenter).addScaledVector(this._lateral, 0.075);
+    this.poseArm(this.armR, this._shoulderR, this._kameHandR, this._pole, P.straighten);
+
+    this._pole
+      .copy(this._aim)
+      .multiplyScalar(-0.35)
+      .addScaledVector(AXIS_Y, -0.55)
+      .addScaledVector(this._lateral, -0.5)
+      .normalize();
+    this._kameHandL.copy(this._kameCenter).addScaledVector(this._lateral, -0.075);
+    this.poseArm(this.armL, this._shoulderL, this._kameHandL, this._pole, P.straighten);
+  }
+
+  /** Onde a energia sai: o meio das duas mãos, no espaço do MUNDO. */
+  kameMuzzle(out) {
+    out.copy(this._kameCenter ?? this.root.position);
+    return out.applyMatrix4(this.root.matrix);
+  }
+
+  /**
+   * Base larga e joelhos dobrados — e, no disparo, um afundo.
+   *
+   * A perna da frente avança 35 cm no instante em que o feixe sai. Sem isso o
+   * corpo dispara em posição de sentido, e nenhuma quantidade de luz conserta
+   * uma pose que não tem peso.
+   */
+  kameLegs(entrada, fase) {
+    const P = CONFIG.special.pose;
+    const largura = BODY.stanceWidth + (P.stanceWidth - BODY.stanceWidth) * entrada;
+    const avanco = fase === "carga" || fase === "retorno" ? 0 : P.lunge * entrada;
+
+    this.poseKameLeg(this.legR, this._hipR, largura, avanco);
+    this.poseKameLeg(this.legL, this._hipL, -largura, -avanco * 0.4);
+  }
+
+  /**
+   * Uma perna plantada, com afundo.
+   *
+   * Reaproveita `poseLegTo` — a mesma IK que a marcha e o corpo mole usam —,
+   * então bermuda, joelho e sapato saem certos de graça. O que este método faz
+   * é só decidir ONDE o pé está: parado, largo, e a perna da frente adiantada.
+   */
+  poseKameLeg(leg, hip, side, avanco) {
+    const pe = this._kameFoot;
+    // Base larga, na orientação do tronco — a mesma conta do `footTarget` na
+    // fase parada, sem o balanço do passo.
+    const x = Math.cos(BODY.stanceYaw) * side;
+    const z = -Math.sin(BODY.stanceYaw) * side;
+    pe.set(x, 0, z).addScaledVector(this._aim, avanco);
+
+    // O chão sob o pé, na mesma convenção do ciclo de marcha (ver `footTarget`).
+    const c = Math.cos(this.yaw);
+    const s = Math.sin(this.yaw);
+    const wx = this.root.position.x + c * pe.x + s * pe.z;
+    const wz = this.root.position.z - s * pe.x + c * pe.z;
+    const groundY = Math.max(
+      -this.rootLift - MAX_STEP_DOWN,
+      this.terrain.heightAt(wx, wz) - this.position.y - this.rootLift,
+    );
+    pe.y = groundY + BODY.ankleY;
+
+    // Joelho para a frente do corpo: é o que dá o agachamento em vez de a perna
+    // dobrar para o lado.
+    this._pole
+      .set(-Math.sin(BODY.stanceYaw), 0.12, -Math.cos(BODY.stanceYaw))
+      .normalize();
+    this.poseLegTo(leg, hip, pe, this._pole);
   }
 
   localToRoot(x, y, z, out) {
@@ -1260,7 +1172,7 @@ export class Player {
     this.bow.group.position.copy(rd.handR.p);
     this.bow.group.quaternion.copy(this.armR.fore.quaternion);
 
-    this.updatePonytail(dt);
+    this.updateSway(dt);
     this.prevYaw = this.yaw;
     this.root.updateMatrixWorld(true);
   }
@@ -1601,36 +1513,55 @@ export class Player {
     leg.shoe.rotation.set(0, this.footYaw, 0);
   }
 
-  updatePonytail(dt) {
-    // Atraso proporcional à velocidade angular: o rabo de cavalo "sobra" na
-    // virada e volta amortecido.
+  /**
+   * A ponta que balança com atraso.
+   *
+   * Era o rabo de cavalo da arqueira, e a máquina não tem nada de feminino: são
+   * duas seções em cadeia com atraso proporcional à velocidade angular. No
+   * medieval ela move o RABICHO DO CAPUZ (o liripipe), e uma skin careca passa
+   * `sway: null` e não paga nada por isso.
+   *
+   * Os números vêm da skin (`tuning`), com os da arqueira como padrão — pano
+   * pesado quer ganho e amortecimento menores que cabelo.
+   */
+  updateSway(dt) {
+    const s = this.sway;
+    if (!s) return;
+    const k = s.tuning;
+
+    // O atraso: a ponta "sobra" na virada e volta amortecida.
     let dYaw = this.yaw - this.prevYaw;
     if (dYaw > Math.PI) dYaw -= Math.PI * 2;
     if (dYaw < -Math.PI) dYaw += Math.PI * 2;
     const yawRate = dt > 0 ? dYaw / dt : 0;
 
-    this.ponytailLag.x = damp(this.ponytailLag.x, clamp(yawRate * 0.09, -0.5, 0.5), 9, dt);
+    this.ponytailLag.x = damp(
+      this.ponytailLag.x,
+      clamp(yawRate * k.yawGain, -0.5, 0.5),
+      k.dampYaw,
+      dt,
+    );
     this.ponytailLag.y = damp(
       this.ponytailLag.y,
-      clamp(-this.pitch * 0.25 + Math.sin(this.bobPhase * 2) * 0.05, -0.4, 0.4),
-      7,
+      clamp(-this.pitch * k.pitchGain + Math.sin(this.bobPhase * 2) * 0.05, -0.4, 0.4),
+      k.dampPitch,
       dt,
     );
 
     const a = this._tailA.set(0, 0, 0);
     const b = this._tailB.set(
-      this.ponytailLag.x * 0.12,
-      -0.09 + this.ponytailLag.y * 0.1,
-      0.17,
+      this.ponytailLag.x * k.swingA,
+      k.dropA + this.ponytailLag.y * k.bobA,
+      k.backA,
     );
     const c = this._tailC.set(
-      b.x + this.ponytailLag.x * 0.16,
-      b.y - 0.22 + this.ponytailLag.y * 0.12,
-      b.z + 0.05,
+      b.x + this.ponytailLag.x * k.swingB,
+      b.y + k.dropB + this.ponytailLag.y * k.bobB,
+      b.z + k.backB,
     );
-    orientSegment(this.ponytailA, a, b);
-    this.ponytailB.position.copy(b);
-    orientSegment(this.ponytailTip, a, c.sub(b));
+    orientSegment(s.a, a, b);
+    s.b.position.copy(b);
+    orientSegment(s.tip, a, c.sub(b));
   }
 
   /* --------------------------------------------------------------- tiro ---- */
@@ -1673,60 +1604,59 @@ export class Player {
 
   /** Esconde a cabeça na primeira pessoa (senão a câmera fica dentro dela). */
   setHeadVisible(visible) {
+    // Guardado pelo mesmo motivo do jetpack: trocar de corpo em primeira pessoa
+    // devolveria uma cabeça nova bem no meio da câmera.
+    this._headVisible = visible;
     this.head.visible = visible;
   }
 
   /**
-   * LOD do rosto: acima de ~12 m somem íris, olho, sobrancelha, nariz, boca e
-   * orelha. São nove malhas por arqueiro que, a essa distância, ocupam menos de
-   * um pixel cada — e numa sala cheia é o item mais caro do corpo.
+   * NÍVEL DE DETALHE DO CORPO — 0 perto, 1 médio, 2 longe.
    *
-   * O corte é feito por quem CONHECE a distância (o jogador remoto, em
-   * `net/remotePlayers.js`); aqui só se veste o resultado, e só na virada,
-   * porque escrever `visible` em nove objetos por quadro por jogador seria
-   * trocar chamadas de desenho por trabalho de CPU.
+   * Era só o rosto, cortado a 12 m. Virou o corpo inteiro, em três níveis, e a
+   * razão é aritmética: com um corte só, cada arqueiro desenhava ~90 malhas a
+   * QUALQUER distância até 160 m, e doze deles custavam mais de mil chamadas de
+   * desenho — o que impedia qualquer detalhe novo de existir.
+   *
+   *   perto (≤ 12 m, e sempre o jogador local) — tudo: rosto, falanges,
+   *     costuras, fivelas, vincos de pano
+   *   médio (12–40 m) — corpo, roupa em camadas, massas musculares, bordas
+   *   longe (> 40 m) — as formas estruturais e a silhueta
+   *
+   * A REGRA QUE TORNA ISTO SEGURO: nenhuma peça de detalhe pode ser estrutural.
+   * Cada uma some POR CIMA de uma forma que continua ali — o deltoide some sobre
+   * o braço, a gola sobre a túnica, o nó sobre o dedo. Nunca aparece buraco, e a
+   * silhueta sobrevive aos três níveis. Quem garante isso é a skin, ao repartir
+   * as peças; quem confere é a chave de níveis da bancada.
+   *
+   * Quem CONHECE a distância é o jogador remoto (`net/remotePlayers.js`); aqui
+   * só se veste o resultado, e só na virada — escrever `visible` em dezenas de
+   * objetos por quadro por jogador seria trocar desenho por trabalho de CPU.
    */
-  setFaceDetail(on) {
-    if (this._faceDetailOn === on) return;
-    this._faceDetailOn = on;
-    for (const o of this.faceDetail) o.visible = on;
+  setDetailLevel(nivel) {
+    if (this._detailLevel === nivel) return;
+    this._detailLevel = nivel;
+    for (const o of this.detail.perto) o.visible = nivel <= 0;
+    for (const o of this.detail.medio) o.visible = nivel <= 1;
   }
 }
 
-/** Distância (m) acima da qual o rosto do arqueiro deixa de ser desenhado. */
-export const FACE_DETAIL_DISTANCE = 12;
-
-/* Raio (m) abaixo do qual uma peça deixa de lançar sombra. Ver `podarSombras`.
-   16 cm é a medida que separa o que TEM silhueta (cabeça, coxa, antebraço,
-   braço do arco) do que é acabamento (fivela, dedo, costura, pena da aljava). */
-const RAIO_MINIMO_DE_SOMBRA = 0.16;
-
 /**
- * Tira do passe de sombra tudo o que é pequeno demais para projetar sombra.
+ * O nível de detalhe de um corpo a esta distância.
  *
- * O passe de sombra é um SEGUNDO desenho da cena inteira, do ponto de vista do
- * Sol: cada peça marcada com `castShadow` é desenhada duas vezes por quadro. O
- * corpo nasceu com 54 dessas — e a maioria não projeta sombra nenhuma que se
- * possa ver, porque o mapa tem 2048 px cobrindo 92 m (`render.shadowRange`),
- * ou seja 4,5 cm por texel: uma fivela inteira cabe em um texel e meio.
- *
- * Medido numa partida de seis arqueiros na Lua: 174 peças saíram do passe e o
- * quadro caiu 84 chamadas de desenho (−10 %), fora o preenchimento do mapa, que
- * é custo de GPU que nenhum contador mostra.
- *
- * O critério é o TAMANHO, e não uma lista de nomes, porque uma lista sairia de
- * sincronia no primeiro acessório novo — quem acrescentar uma peça grande ao
- * corpo ganha a sombra dela sem precisar saber que esta função existe.
+ * Os cortes são onde a peça deixa de render pixel: a 12 m uma íris tem meio
+ * pixel; a 40 m uma costura de manga tem menos que isso, e o que resta a essa
+ * distância é contorno.
  */
-function podarSombras(raiz) {
-  raiz.traverse((o) => {
-    if (!o.isMesh || !o.castShadow || !o.geometry) return;
-    if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
-    const raio = o.geometry.boundingSphere?.radius ?? Infinity;
-    // O `scale` conta: a pelve é uma cápsula achatada, e o pé é uma caixa
-    // esticada. Medir só a geometria crua puniria peças que só são pequenas
-    // antes de serem redimensionadas.
-    const escala = Math.max(o.scale.x, o.scale.y, o.scale.z);
-    if (raio * escala < RAIO_MINIMO_DE_SOMBRA) o.castShadow = false;
-  });
+export function detailLevelFor(distancia) {
+  if (distancia <= DETAIL_NEAR) return 0;
+  if (distancia <= DETAIL_MID) return 1;
+  return 2;
 }
+
+/** Distância (m) até onde o corpo é desenhado inteiro. */
+export const DETAIL_NEAR = 12;
+/** Distância (m) até onde ele mantém camadas de roupa e massa muscular. */
+export const DETAIL_MID = 40;
+
+

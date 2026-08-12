@@ -592,7 +592,7 @@ class Alien extends CorpoDeRede {
  * do ÍNDICE do formato, então os três são estáveis entre sessões e iguais em
  * todas as telas.
  */
-function esculpir(raio, formato) {
+export function esculpir(raio, formato) {
   const rnd = makeRandom(7000 + formato * 131);
   const geo = new THREE.IcosahedronGeometry(raio, 2);
   const pos = geo.attributes.position;

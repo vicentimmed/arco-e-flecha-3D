@@ -40,6 +40,10 @@ const ATALHOS = [
       [["Dir.", "C"], "1ª pessoa"],
       [["F"], "câmera da flecha liga/desliga"],
       [["E"], "golpe de faca"],
+      // O especial só existe onde está ligado (ver `CONFIG.special.modes`), mas
+      // a linha fica: uma tecla que não aparece aqui é uma tecla que ninguém
+      // descobre.
+      [["Q"], "especial (com a barra cheia)"],
     ],
   },
   {
@@ -65,6 +69,8 @@ const ATALHOS = [
       [["6"], "noite dos zumbis"],
       [["7"], "zumbi (só chefão)"],
       [["8"], "caça aos pássaros"],
+      [["U"], "o último em pé (uma vida)"],
+      [["Shift", "G"], "rouba bandeira (humanos × CPU)"],
     ],
   },
   {
@@ -72,6 +78,9 @@ const ATALHOS = [
     itens: [
       // A mesma tecla leva e traz — ver `askLevelChange`.
       [["9"], "Lua (ir e voltar)"],
+      // O 0 é o placar e os dígitos acabaram: Shift+9 lê como "a Lua, chovendo",
+      // que é literalmente o que ela faz.
+      [["Shift", "9"], "chuva de meteoros (Lua)"],
       [["B"], "adicionar bot"],
       [["Shift", "B"], "remover bot"],
       [["N"], "dificuldade do bot"],
@@ -247,10 +256,73 @@ export class HUD {
         </span>
       </div>
 
-      <div class="chip" id="zombie-chip" hidden>
-        <span class="label">Horda</span><span class="value" id="zombie-horde">1</span>
-        <span class="label">Zumbis</span><span class="value" id="zombie-left">0</span>
+      <!-- ÚLTIMO EM PÉ: quantos ainda estão de pé. É o único número do modo, e
+           ver esse número cair de oito para três é a partida inteira contada. -->
+      <div class="chip" id="stand-chip" hidden>
+        <span class="label">De pé</span><span class="value" id="stand-alive">0</span>
+        <span class="stand-total" id="stand-total"></span>
       </div>
+
+      <!-- ROUBA BANDEIRA: o placar, e QUEM ESTÁ COM ELA.
+           O nome do portador tem chip próprio, grande e colorido pelo time,
+           porque é a única informação que o modo exige a todo instante — e uma
+           informação que se procura num canto é uma informação que chega tarde
+           demais para mudar o que se faz com ela. -->
+      <div class="chip" id="flag-chip" hidden>
+        <span class="team-lado"><span class="label">Humanos</span><span class="value" id="flag-humans">0</span></span>
+        <span class="team-x">×</span>
+        <span class="team-lado"><span class="value" id="flag-bots">0</span><span class="label">CPU</span></span>
+      </div>
+
+      <div id="flag-carrier" hidden>
+        <span id="flag-carrier-icon">⚑</span>
+        <span id="flag-carrier-name"></span>
+        <span id="flag-carrier-tail"></span>
+      </div>
+
+      <!-- Espectador: a faixa que explica por que o corpo não responde mais. -->
+      <div id="spectating" hidden>
+        <strong>VOCÊ CAIU</strong>
+        <span>câmera livre · WASD para voar · Espaço sobe · C desce · Shift acelera</span>
+      </div>
+
+      <div class="chip" id="zombie-chip" hidden>
+        <span class="label" id="zombie-horde-label">Horda</span><span class="value" id="zombie-horde">1</span>
+        <!-- O substantivo muda com o modo: o chip é o mesmo, o que ele conta
+             não é. Ver setZombie e setMeteor. (Sem crases aqui: isto está
+             dentro de um template literal, e uma crase fecharia a string.) -->
+        <span class="label" id="zombie-left-label">Zumbis</span><span class="value" id="zombie-left">0</span>
+      </div>
+
+      <!-- ----------------------------------------------------------- cerco --
+           A INTEGRIDADE DO PORTÃO fica embaixo, no centro, e é a peça mais
+           pesada da tela inteira. Não é hierarquia visual arbitrária: é a
+           única coisa capaz de fazer a partida ser perdida, e o modo se perde
+           por uma TAXA — que é justamente o tipo de informação que HUD costuma
+           esconder num canto.
+
+           A FILA fica ao lado dela porque é a única variável que o jogador
+           controla diretamente. Sem mostrá-la, o jogo pede que ele adivinhe o
+           que otimizar — e ele otimiza abates, que não é o que decide nada.
+
+           Nenhum contador de abates aqui. Ele vai para a tela de fim, junto do
+           número que importa de verdade: quanto tempo o portão passou em
+           risco. -->
+      <div id="siege-panel" hidden>
+        <div id="siege-gate-wrap">
+          <div id="siege-gate-bar"><div id="siege-gate-fill"></div></div>
+          <div id="siege-gate-label">PORTÃO</div>
+        </div>
+        <div id="siege-side">
+          <div class="siege-stat"><span id="siege-queue">0</span><small>no portão</small></div>
+          <div class="siege-stat"><span id="siege-clock">20:00</span><small>até o pôr do sol</small></div>
+        </div>
+        <div id="siege-trebs"></div>
+      </div>
+
+      <!-- A dica da tecla F. Aparece só quando há o que fazer, e diz O QUE —
+           uma tecla com três significados precisa dizer qual está valendo. -->
+      <div id="siege-hint" hidden></div>
 
       <!-- Renascimento e game over. Este SIM no meio da tela: o jogador está
            morto, não tem o que mirar, e a única coisa que importa é o número. -->
@@ -285,6 +357,24 @@ export class HUD {
           <div class="hv-others"></div>
           <div class="hv-hint"><kbd>Enter</kbd><span>fecha esta tela</span></div>
         </div>
+      </div>
+
+      <!-- ALERTA DA CHUVA DE METEOROS.
+           Sem isto o modo é injusto: a rocha que mata é sempre a que estava
+           fora da tela. São duas peças — a moldura que pulsa vermelho, e UMA
+           seta (a mais urgente; três ao mesmo tempo seriam ruído). -->
+      <div id="danger-edge" hidden></div>
+      <div id="meteor-arrow" hidden>
+        <div class="ma-seta">▲</div>
+        <div class="ma-alt"></div>
+      </div>
+
+      <!-- Barra do ESPECIAL. Cheia, ela pulsa e anuncia a tecla: ninguém
+           adivinha sozinho que tem uma arma na mão. -->
+      <div id="special-chip" hidden>
+        <span class="sp-label">ESPECIAL</span>
+        <div class="sp-bar"><div class="sp-fill" id="special-fill"></div></div>
+        <span class="sp-ready" id="special-ready">PRONTO · Q</span>
       </div>
 
       <div id="toasts"></div>
@@ -326,9 +416,28 @@ export class HUD {
       teamBots: root.querySelector("#team-bots"),
       teamHumansV: root.querySelector("#team-humans-v"),
       teamBotsV: root.querySelector("#team-bots-v"),
+      standChip: root.querySelector("#stand-chip"),
+      standAlive: root.querySelector("#stand-alive"),
+      standTotal: root.querySelector("#stand-total"),
+      flagChip: root.querySelector("#flag-chip"),
+      flagHumans: root.querySelector("#flag-humans"),
+      flagBots: root.querySelector("#flag-bots"),
+      flagCarrier: root.querySelector("#flag-carrier"),
+      flagCarrierName: root.querySelector("#flag-carrier-name"),
+      flagCarrierTail: root.querySelector("#flag-carrier-tail"),
+      spectating: root.querySelector("#spectating"),
       zombieChip: root.querySelector("#zombie-chip"),
+      siegePanel: root.querySelector("#siege-panel"),
+      siegeGateFill: root.querySelector("#siege-gate-fill"),
+      siegeGateLabel: root.querySelector("#siege-gate-label"),
+      siegeQueue: root.querySelector("#siege-queue"),
+      siegeClock: root.querySelector("#siege-clock"),
+      siegeTrebs: root.querySelector("#siege-trebs"),
+      siegeHint: root.querySelector("#siege-hint"),
       zombieHorde: root.querySelector("#zombie-horde"),
       zombieLeft: root.querySelector("#zombie-left"),
+      zombieHordeLabel: root.querySelector("#zombie-horde-label"),
+      zombieLeftLabel: root.querySelector("#zombie-left-label"),
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
@@ -354,6 +463,12 @@ export class HUD {
       help: root.querySelector("#help"),
       helpHint: root.querySelector("#help-hint"),
       lockHint: root.querySelector("#lock-hint"),
+      dangerEdge: root.querySelector("#danger-edge"),
+      meteorArrow: root.querySelector("#meteor-arrow"),
+      meteorArrowAlt: root.querySelector("#meteor-arrow .ma-alt"),
+      specialChip: root.querySelector("#special-chip"),
+      specialFill: root.querySelector("#special-fill"),
+      specialReady: root.querySelector("#special-ready"),
     };
 
     this.el.help.appendChild(montarAtalhos());
@@ -563,15 +678,24 @@ export class HUD {
           elkHunt: "CAÇADA AO ALCE",
           zombie: "NOITE DOS ZUMBIS",
           zombieBoss: "CHEFÃO ZUMBI",
+          meteorRain: "CHUVA DE METEOROS",
+          lastStand: "O ÚLTIMO EM PÉ",
+          captureFlag: "ROUBA BANDEIRA",
         }[mode] ?? mode.toUpperCase(),
         "forte",
       ),
       texto(
-        foraDoVale
-          ? "   9 para voltar"
-          : mode === "birdHunt"
-            ? "   5 aves ou a rara · 1 para sair"
-            : "   1 para sair",
+        mode === "lastStand"
+          ? "   uma vida só · quem sobrar ganha · 1 para sair"
+          : mode === "captureFlag"
+          ? "   leve a bandeira à base inimiga · 1 para sair"
+          : mode === "meteorRain"
+          ? "   nenhuma pode encostar no chão · 1 para sair"
+          : foraDoVale
+            ? "   9 para voltar"
+            : mode === "birdHunt"
+              ? "   5 aves ou a rara · 1 para sair"
+              : "   1 para sair",
       ),
     );
   }
@@ -596,6 +720,148 @@ export class HUD {
     this.el.teamBots.classList.toggle("liderando", b);
   }
 
+  /* --------------------------------------------------- o último em pé ------ */
+
+  /**
+   * Quantos ainda estão de pé.
+   *
+   * Um número, e não a lista de nomes. A lista foi a primeira ideia e é pior:
+   * com oito arqueiros ela ocupa um bloco de tela inteiro, e a pergunta que se
+   * faz no meio de uma rodada nunca é "quem exatamente ainda vive?" — é
+   * "quantos faltam para eu ganhar?". O nome de quem sobrou só importa quando
+   * sobram dois, e aí ele cabe no lugar do total.
+   *
+   * @param {object|null} estado `S2C.STAND_STATUS`; null esconde o chip
+   */
+  setStand(estado, selfId = null) {
+    const chip = this.el.standChip;
+    if (!estado) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+
+    const vivos = estado.alive ?? [];
+    this.el.standAlive.textContent = String(vivos.length);
+
+    /* Sobraram dois: o total dá lugar ao NOME do outro. É a informação que
+       passa a valer — a partir daqui a rodada é um duelo, e saber contra quem
+       muda o que se faz. */
+    if (vivos.length === 2 && selfId != null && vivos.some((p) => p.id === selfId)) {
+      const outro = vivos.find((p) => p.id !== selfId);
+      this.el.standTotal.textContent = outro ? `vs ${outro.name}` : "";
+    } else {
+      this.el.standTotal.textContent = estado.total ? `de ${estado.total}` : "";
+    }
+
+    // Vermelho quando é a reta final: a cor faz o trabalho que o número sozinho
+    // não faz, que é chamar o olho sem ser procurada.
+    chip.classList.toggle("critico", vivos.length > 0 && vivos.length <= 2);
+  }
+
+  /** A faixa de quem virou espectador. */
+  setSpectating(on) {
+    this.el.spectating.hidden = !on;
+  }
+
+  /**
+   * O fim da rodada.
+   *
+   * Duas informações separadas, e é de propósito: o VENCEDOR é quem sobrou, e o
+   * ranking é por abates. São coisas diferentes — dá para vencer sem ter
+   * atirado, escondido atrás de uma pedra enquanto os outros se acabavam, e
+   * essa é uma vitória legítima do modo. Mostrar só o ranking de abates
+   * esconderia o vencedor; mostrar só o vencedor esconderia o que aconteceu.
+   */
+  showStandVictory(msg, selfId = null) {
+    const ranking = msg.ranking ?? [];
+    if (!ranking.length) return;
+    const rotulo = (p) => {
+      const k = p.kills ?? 0;
+      const abates = `${k} ${k === 1 ? "abate" : "abates"}`;
+      return p.survived ? `sobreviveu · ${abates}` : abates;
+    };
+    this.showHuntVictory(ranking, selfId, {
+      title: msg.winner == null ? "NINGUÉM SOBROU" : "O ÚLTIMO EM PÉ",
+      winnerLabel: "Sobreviveu",
+      statLabel: rotulo,
+    });
+  }
+
+  /* --------------------------------------------------- rouba bandeira ------ */
+
+  /**
+   * O placar e — a parte que importa — QUEM ESTÁ COM A BANDEIRA.
+   *
+   * O nome do portador fica no MEIO da tela, alto e colorido pelo time, e não
+   * num chip de canto junto dos outros. É a informação que decide o que cada
+   * pessoa faz no segundo seguinte: quem está com ela corre, quem não está
+   * persegue ou defende. Uma informação que precisa ser procurada chega tarde
+   * demais para servir a essa decisão — e "tarde demais" aqui são os dois
+   * segundos entre alguém pegar a bandeira e já estar longe.
+   *
+   * @param {object|null} estado `S2C.FLAG`; null esconde tudo
+   * @param {string|null} nome quem carrega, resolvido pelo `main`
+   */
+  setFlag(estado, nome = null, selfId = null) {
+    const chip = this.el.flagChip;
+    const faixa = this.el.flagCarrier;
+    if (!estado) {
+      chip.hidden = true;
+      faixa.hidden = true;
+      return;
+    }
+
+    chip.hidden = false;
+    this.el.flagHumans.textContent = String(estado.scores?.humans ?? 0);
+    this.el.flagBots.textContent = String(estado.scores?.bots ?? 0);
+
+    if (estado.carrier == null) {
+      /* Sem portador, a faixa continua — dizendo o OUTRO estado. "A bandeira
+         está no centro" e "a bandeira caiu, volta em 12 s" são duas situações
+         completamente diferentes de jogo, e a segunda é um cronômetro que muda
+         o que vale a pena fazer agora. */
+      faixa.hidden = false;
+      faixa.className = "livre";
+      this.el.flagCarrierName.textContent =
+        estado.atBase === "center" ? "BANDEIRA LIVRE" : "BANDEIRA CAÍDA";
+      this.el.flagCarrierTail.textContent =
+        estado.returnIn != null ? `volta ao centro em ${Math.ceil(estado.returnIn)}s` : "no centro";
+      return;
+    }
+
+    const meu = estado.carrierTeam === "humans";
+    const euMesmo = selfId != null && estado.carrier === selfId;
+    faixa.hidden = false;
+    faixa.className = meu ? "humans" : "bots";
+    this.el.flagCarrierName.textContent = euMesmo
+      ? "VOCÊ ESTÁ COM A BANDEIRA"
+      : `${nome ?? "alguém"} está com a bandeira`;
+    this.el.flagCarrierTail.textContent = euMesmo
+      ? "corra para a base inimiga"
+      : meu
+        ? "cubra!"
+        : "derrube!";
+  }
+
+  /** O fim da partida de bandeira: qual time levou, e quem matou mais. */
+  showFlagVictory(msg, selfId = null) {
+    const ranking = msg.ranking ?? [];
+    if (!ranking.length) return;
+    const time = msg.winner === "humans" ? "HUMANOS" : "CPU";
+    const p = msg.scores ?? {};
+    const rotulo = (r) => {
+      const k = r.kills ?? 0;
+      const lado = r.team === "humans" ? "humanos" : "CPU";
+      return `${lado} · ${k} ${k === 1 ? "abate" : "abates"}`;
+    };
+    this.showHuntVictory(ranking, selfId, {
+      title: `${time} LEVARAM  ${p.humans ?? 0} × ${p.bots ?? 0}`,
+      winnerLabel: "Mais abates",
+      statLabel: rotulo,
+    });
+  }
+
   /* --------------------------------------------------------------- zumbis -- */
 
   /**
@@ -609,6 +875,8 @@ export class HUD {
       return;
     }
     chip.hidden = false;
+    this.el.zombieHordeLabel.textContent = "Horda";
+    this.el.zombieLeftLabel.textContent = "Zumbis";
     this.el.zombieHorde.textContent = `${estado.horde} / ${estado.hordes}`;
     this.el.zombieLeft.textContent = String(estado.remaining);
   }
@@ -659,13 +927,249 @@ export class HUD {
     this.el.modeLoading.hidden = true;
   }
 
-  /** Faixa de horda nova — mesma mecânica da onda da caçada. */
-  announceHorde(n, size, boss = false) {
+  /* ------------------------------------------------------ chuva de meteoros --
+   *
+   * O chip e a faixa REAPROVEITAM os elementos do modo zumbi: é a mesma
+   * informação na mesma posição, com outro substantivo. Dois conjuntos de
+   * elementos para isso seriam duas coisas para manter em sincronia — e a
+   * segunda sairia da sincronia na primeira mudança de estilo.
+   */
+
+  /** Painel da chuva: horda e quantas rochas faltam. */
+  setMeteor(estado) {
+    const chip = this.el.zombieChip;
+    if (!estado) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    this.el.zombieHordeLabel.textContent = "Chuva";
+    this.el.zombieLeftLabel.textContent = estado.tank ? "Alvo" : "Rochas";
+    this.el.zombieHorde.textContent = `${estado.horde} / ${estado.hordes}`;
+    this.el.zombieLeft.textContent = estado.tank ? "COLOSSO" : String(estado.rocks ?? 0);
+  }
+
+  /* ------------------------------------------------------------------ cerco -- */
+
+  /**
+   * O painel do cerco: integridade do portão, fila e relógio.
+   *
+   * @param {object|null} estado o `Siege.status()` da sala, ou null ao sair
+   */
+  setSiege(estado) {
+    const p = this.el.siegePanel;
+    if (!estado) {
+      p.hidden = true;
+      this.el.siegeHint.hidden = true;
+      return;
+    }
+    p.hidden = false;
+
+    const f = Math.max(0, Math.min(1, estado.gate ?? 1));
+    this.el.siegeGateFill.style.width = `${(f * 100).toFixed(1)}%`;
+    /* Três faixas de cor, e a última PULSA. A barra é a última linha de
+       defesa da leitura: quem está mirando não olha para ela, e quando olha
+       precisa saber em que estado está sem ler número nenhum. */
+    const critico = f < 0.3;
+    p.classList.toggle("critico", critico);
+    p.classList.toggle("ferido", !critico && f < 0.62);
+    this.el.siegeGateLabel.textContent = estado.gateAlive
+      ? `PORTÃO ${Math.round(f * 100)}%`
+      : "PORTÃO CAÍDO";
+
+    const fila = estado.fila ?? 0;
+    this.el.siegeQueue.textContent = String(fila);
+    this.el.siegeQueue.classList.toggle("alto", fila >= 4);
+
+    const s = Math.max(0, estado.restante ?? 0);
+    this.el.siegeClock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+    // A contagem de entrada ocupa o mesmo lugar do relógio: antes da primeira
+    // chegada não existe "quanto falta para o pôr do sol", existe "prepare-se".
+    if (estado.espera > 0) {
+      this.el.siegeClock.textContent = String(estado.espera);
+      this.el.siegeClock.nextElementSibling.textContent = "eles vêm aí";
+    } else {
+      this.el.siegeClock.nextElementSibling.textContent = "até o pôr do sol";
+    }
+  }
+
+  /** Os três engenhos: carregado, içando ou pronto. */
+  setTrebuchets(lista) {
+    const el = this.el.siegeTrebs;
+    if (!Array.isArray(lista)) {
+      el.textContent = "";
+      return;
+    }
+    // Reconstruído por mensagem (2 a 3 por partida por engenho), não por
+    // quadro: não vale um diff.
+    el.innerHTML = lista
+      .map(
+        (t) =>
+          `<span class="treb ${t.ready ? "pronto" : "icando"}">${
+            t.ready ? "◆" : "◇"
+          }</span>`,
+      )
+      .join("");
+  }
+
+  /** A dica da tecla `F` — só aparece quando há o que fazer, e diz o quê. */
+  setSiegeHint(acao) {
+    const el = this.el.siegeHint;
+    if (!acao) {
+      el.hidden = true;
+      return;
+    }
+    const texto = {
+      atirar: "<b>F</b> para mirar o trabuco",
+      içar: "<b>F</b> segure para içar o contrapeso",
+      reparar: "<b>F</b> segure para reforçar o portão",
+      mirando: "<b>mouse</b> move a marca · <b>clique</b> solta a pedra · <b>F</b> desiste",
+    };
+    el.innerHTML = texto[acao] ?? "";
+    el.hidden = false;
+  }
+
+  /** A faixa do escalão novo. Reaproveita a faixa de onda — mesmo desenho. */
+  announceTier(nome) {
     const faixa = this.el.waveBanner;
-    this.el.waveN.textContent = boss ? "CHEFÃO" : `HORDA ${n}`;
+    this.el.waveN.textContent = String(nome).toUpperCase();
+    this.el.waveSize.textContent = "estão chegando";
+    faixa.hidden = false;
+    faixa.classList.remove("entra");
+    void faixa.offsetWidth;
+    faixa.classList.add("entra");
+    clearTimeout(this._waveTimer);
+    this._waveTimer = setTimeout(() => {
+      faixa.hidden = true;
+      faixa.classList.remove("entra");
+    }, 2600);
+  }
+
+  /**
+   * O fim do cerco.
+   *
+   * O ranking é por PONTOS, e o rótulo de cada linha traz os abates — mas o
+   * número que o título mostra é outro: quanto tempo o portão passou em risco.
+   * É a medida do que o modo realmente pediu.
+   */
+  showSiegeOver(msg) {
+    const rotulo = (p) => {
+      const k = p.kills ?? 0;
+      return `${k} ${k === 1 ? "abate" : "abates"} · ${p.points ?? 0} pts`;
+    };
+    const risco = msg.critical ?? 0;
+    this.showHuntVictory(msg.ranking ?? [], null, {
+      title: msg.reason === "dusk" ? "O SOL SE PÔS" : "O PORTÃO CAIU",
+      /* O rótulo do primeiro colocado carrega o número que MEDE a partida:
+         quanto tempo o portão passou abaixo de 30 %. Abates estão nas linhas,
+         onde são contabilidade; aqui em cima fica o que o modo pediu. */
+      winnerLabel:
+        msg.reason === "dusk"
+          ? `eles recuaram ao anoitecer · portão em risco por ${risco} s`
+          : `a muralha foi tomada · ${risco} s de portão em risco`,
+      statLabel: rotulo,
+    });
+  }
+
+  /**
+   * A moldura de perigo.
+   *
+   * @param {number} força 0 a 1
+   * @param {boolean} continuo abaixo do limiar crítico ela para de piscar e FICA
+   */
+  setDanger(forca, continuo = false) {
+    const el = this.el.dangerEdge;
+    el.hidden = false;
+    el.style.opacity = String(Math.max(0, Math.min(1, forca)));
+    el.classList.toggle("critico", continuo);
+  }
+
+  clearDanger() {
+    this.el.dangerEdge.hidden = true;
+    this.el.dangerEdge.classList.remove("critico");
+    this.el.meteorArrow.hidden = true;
+  }
+
+  /** Clarão vermelho de tela cheia — o impacto que encerra a partida. */
+  flashDanger(forca = 1) {
+    this.setDanger(forca, true);
+    clearTimeout(this._dangerTimer);
+    this._dangerTimer = setTimeout(() => this.clearDanger(), 1600);
+  }
+
+  /**
+   * A seta que aponta a rocha mais urgente fora da tela.
+   * @param {number|null} angulo radianos em NDC, ou null para esconder
+   */
+  setMeteorArrow(angulo, altitude = 0) {
+    const el = this.el.meteorArrow;
+    if (angulo == null) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    // Elipse inscrita na tela: a seta encosta na borda mais próxima daquele
+    // rumo em vez de andar num círculo que sobra nos cantos.
+    const x = Math.cos(angulo) * 42;
+    const y = -Math.sin(angulo) * 38;
+    el.style.transform = `translate(-50%, -50%) translate(${x}vw, ${y}vh) rotate(${
+      90 - (angulo * 180) / Math.PI
+    }deg)`;
+    this.el.meteorArrowAlt.textContent = `${altitude} m`;
+  }
+
+  /** Barra do especial. `null` esconde. */
+  setSpecial(estado) {
+    const chip = this.el.specialChip;
+    if (!estado) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    const f = estado.max > 0 ? Math.min(1, estado.charge / estado.max) : 0;
+    this.el.specialFill.style.width = `${f * 100}%`;
+    const pronto = f >= 1;
+    chip.classList.toggle("pronto", pronto);
+    this.el.specialReady.hidden = !pronto;
+  }
+
+  /**
+   * A tela final da chuva.
+   *
+   * Ranking por ROCHA DESTRUÍDA, com a precisão ao lado. Num modo cooperativo
+   * em que a métrica é economia de flecha, a precisão é o placar honesto: quem
+   * destruiu oito rochas com nove flechas fez mais pelo grupo do que quem
+   * destruiu dez com vinte e cinco.
+   */
+  showMeteorVictory(ranking, selfId = null) {
+    const rotulo = (p) => {
+      const r = p.rocks ?? 0;
+      const s = p.shots ?? 0;
+      const pct = s > 0 ? Math.round((r / s) * 100) : 0;
+      return `${r} ${r === 1 ? "rocha" : "rochas"} · ${pct}% de aproveitamento`;
+    };
+    this.showHuntVictory(ranking, selfId, {
+      title: "O CÉU AGUENTOU",
+      statLabel: rotulo,
+      winnerLabel: "Melhor artilheiro",
+    });
+  }
+
+  /** Faixa de horda nova — mesma mecânica da onda da caçada. */
+  announceHorde(n, size, boss = false, kind = "zombie") {
+    const faixa = this.el.waveBanner;
+    const rocha = kind === "meteor";
+    this.el.waveN.textContent = boss
+      ? "CHEFÃO"
+      : rocha
+        ? `CHUVA ${n}`
+        : `HORDA ${n}`;
     this.el.waveSize.textContent = boss
       ? "horda final"
-      : `${size} ${size === 1 ? "zumbi" : "zumbis"}`;
+      : rocha
+        ? `${size} ${size === 1 ? "rocha" : "rochas"}`
+        : `${size} ${size === 1 ? "zumbi" : "zumbis"}`;
     faixa.hidden = false;
     faixa.classList.remove("entra");
     void faixa.offsetWidth;

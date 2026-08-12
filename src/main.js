@@ -10,7 +10,13 @@
 import "./style.css";
 import * as THREE from "three";
 
-import { CONFIG, drawSpeed, drawFraction, applyQuality, savedQuality } from "./config.js";
+import {
+  CONFIG,
+  drawSpeed,
+  drawFraction,
+  applyQuality,
+  savedQuality,
+} from "./config.js";
 import { clamp } from "./utils/math.js";
 import { initPhysics, PhysicsWorld } from "./core/physics.js";
 import { BodySync } from "./core/sync.js";
@@ -41,6 +47,9 @@ import { BoarManager } from "./systems/boarManager.js";
 import { ElkManager } from "./systems/elkManager.js";
 import { BirdManager } from "./systems/birdManager.js";
 import { ZombieManager } from "./systems/zombieManager.js";
+import { MeteorRainManager } from "./systems/meteorRain.js";
+import { SiegeSystem } from "./systems/siege.js";
+import { SpecialSystem } from "./systems/special.js";
 import { TorchRing } from "./systems/torches.js";
 import { StormSystem } from "./systems/storm.js";
 import { HUD } from "./ui/hud.js";
@@ -49,6 +58,8 @@ import { Lobby } from "./ui/lobby.js";
 import { NetClient } from "./net/client.js";
 import { RemotePlayers } from "./net/remotePlayers.js";
 import { RemoteArrows } from "./net/remoteArrows.js";
+import { Spectator } from "./systems/spectator.js";
+import { FlagEntity } from "./entities/flag.js";
 import { Respawn } from "./game/respawn.js";
 import { Death } from "./game/death.js";
 import { TargetSeriesView } from "./game/targetSeries.js";
@@ -57,6 +68,7 @@ import { Scoreboard, KillFeed } from "./ui/scoreboard.js";
 import {
   C2S,
   S2C,
+  FRAME,
   packState,
   playerEntity,
   playerIdFrom,
@@ -72,6 +84,10 @@ function isZombieMode(mode) {
 }
 
 /** Nomes legíveis para o diálogo de confirmação ao trocar de modo. */
+/* Rascunhos da câmera de mira: `updateCamera` roda todo quadro. */
+const _miraPos = new THREE.Vector3();
+const _miraAlvo = new THREE.Vector3();
+
 const MODE_LABELS = {
   free: "modo livre",
   teamDuel: "duelo de times",
@@ -81,10 +97,20 @@ const MODE_LABELS = {
   elkHunt: "caçada ao alce",
   zombie: "noite dos zumbis",
   zombieBoss: "chefão zumbi",
+  meteorRain: "chuva de meteoros",
+  siege: "cerco ao castelo",
+  lastStand: "último em pé",
+  captureFlag: "rouba bandeira",
 };
 
 /** Milímetro de precisão: de sobra para a rede e metade dos bytes. */
 const mm = (v) => Math.round(v * 1000) / 1000;
+
+/** Suavização em 0..1, com as pontas planas. */
+function smoothstep01(t) {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
 
 /**
  * Espera o próximo quadro — ou 100 ms, o que vier primeiro.
@@ -168,6 +194,9 @@ class Game {
     this.wind = new Wind();
 
     const playerEntityId = entityRegistry.createId();
+    /* Sem terceiro argumento: o corpo nasce na skin padrão do jogo (o arqueiro
+       medieval — ver `shared/skins.js`). Não há mais escolha na tela de
+       entrada, então não há preferência nenhuma para ler aqui. */
     this.player = new Player(this.terrain, playerEntityId);
     this.playerPhysics = new PlayerPhysics(physics, this.player, playerEntityId);
     this.player.physicsBody = this.playerPhysics;
@@ -193,6 +222,10 @@ class Game {
       this.environment?.nearestPerch?.(x, z) ?? null,
     );
     this.zombies = new ZombieManager(this.scene, physics, this.terrain, this.arrows);
+    /* A chuva de meteoros. Vazia fora do modo, e o custo disso é um `if`. */
+    this.meteors = new MeteorRainManager(this.scene, physics, this.terrain, this.arrows);
+    /** Estado do modo vindo da sala: horda, rochas, e o instante da largada. */
+    this.meteorState = null;
     this.torches = new TorchRing(this.scene, physics, this.terrain);
     /** Tempestade cosmética do chefão — ver `systems/storm.js`. */
     this.storm = new StormSystem(this.scene, this.renderer, {
@@ -265,6 +298,11 @@ class Game {
     /* --------------------------------------------------------------- rede -- */
     this.net = new NetClient();
     this.debug.ctx.net = this.net;
+    /* O cerco. Nasce AQUI, e não junto dos outros gerentes lá em cima, porque
+       ele é o único que precisa da rede no construtor: a pedra do trabuco é um
+       evento de quem atira, e é ele quem reporta o impacto. Vazio fora do modo;
+       o que fica ligado desde o arranque é o gancho de arrasto no passo fixo. */
+    this.siege = new SiegeSystem(this.scene, physics, this.net, this.arrows);
     this.remotes = new RemotePlayers(this.scene, physics, this.terrain);
     this.remoteArrows = new RemoteArrows(this.arrows, () => this.targets);
     this.series = new TargetSeriesView(this.scene, physics, this.terrain, this.arrows);
@@ -278,6 +316,36 @@ class Game {
     this.respawn = new Respawn(this.player, this.playerPhysics);
     this.death = new Death(this.player, this.terrain);
     this.lastStateSent = -Infinity;
+
+    /* ------------------------------------------------ os modos de arena --- */
+    /** A câmera de quem já morreu no último em pé. Ver `systems/spectator.js`. */
+    this.spectator = new Spectator(this.renderer.camera);
+    /** Estado da rodada de vida única, como a sala o descreve. */
+    this.standState = null;
+    /** Instante (relógio da sala) em que a câmera solta e o voo começa. */
+    this.spectateAt = 0;
+    /* A bandeira. UM objeto que sobrevive à troca de modo — ele nasce
+       escondido e é a primeira amostra da sala que o acende. Ver
+       `entities/flag.js`, que é onde mora a resposta para "quem está com ela?". */
+    this.flag = new FlagEntity(this.scene);
+    this.flagState = null;
+
+    /* O ESPECIAL. Ele não conhece modo nenhum — quem diz onde ele existe é
+       `CONFIG.special.modes`, e quem diz o que enche a barra é a sala. Ver
+       `docs/plano-kamehameha.md`. */
+    this.special = new SpecialSystem({
+      scene: this.scene,
+      player: this.player,
+      remotes: this.remotes,
+      meteors: this.meteors,
+      getTerrain: () => this.terrain,
+      // A direção da mira NO INSTANTE do disparo. Depois disso ela não é mais
+      // consultada: o feixe está travado.
+      getAim: () => this._forward,
+      net: this.net,
+      hud: this.hud,
+      audio: this.audio,
+    });
 
     const ui = document.getElementById("ui");
     this.confirm = new ConfirmDialog(ui);
@@ -375,12 +443,52 @@ class Game {
       this.net.send(C2S.SPACE_HIT, { kind: e.spaceKind, id: e.spaceId });
     });
 
+    /* Acertei uma rocha da chuva. A rocha já PISCOU localmente, no quadro do
+       impacto (ver `hitResolver.resolveFallingMeteorHit`) — isto aqui é só o
+       aviso para a sala, que é quem tira a vida e quem faz as outras telas
+       piscarem junto. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (e.targetKind !== "fallingMeteor" || e.meteorId == null) return;
+      this.net.send(C2S.METEOR_HIT, {
+        id: e.meteorId,
+        d: Math.round((e.distance ?? 0) * 100) / 100,
+      });
+    });
+
     // Alvo da série: quem acertar primeiro leva. O servidor arbitra, porque
     // dois tiros quase juntos precisam de um desempate único para todos.
     gameEvents.on(EventType.ARROW_IMPACT, (e) => {
       if (e.ownerId !== this.player.entityId) return;
       if (e.targetKind !== "seriesTarget") return;
       this.net.send(C2S.SERIES_HIT, { seq: e.targetId });
+    });
+
+    /* O PAVÊS aparou. Nasce do impacto local, não de uma resposta da sala: a
+       flecha já cravou na tábua neste quadro, e esperar meio ping para ouvir a
+       pancada desmentiria o que os olhos viram. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId || e.targetKind !== "pavise") return;
+      this.hud.toast("o pavês aparou — por cima, ou pelo lado", "miss");
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "arrowHitWood",
+        position: vec3Payload(this.player.position),
+        volume: 1.0,
+        pitch: 1.35,
+      });
+    });
+
+    /* Acertei um sitiante. Mesmo contrato do zumbi: a flecha já cravou aqui, e
+       isto é o aviso para a sala — que é quem tira a vida e quem conta o
+       ponto. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (e.targetKind !== "besieger" || e.besiegerId == null) return;
+      this.net.send(C2S.SIEGE_HIT, {
+        id: e.besiegerId,
+        head: e.head === true,
+        d: Math.round((e.distance ?? 0) * 100) / 100,
+      });
     });
 
     // Porco abatido: o servidor confirma, calcula os pontos pela distância e
@@ -516,9 +624,48 @@ class Game {
       this.zombies.clear();
       this.applyZombieMode(isZombieMode(msg.snapshot.mode?.mode));
       if (msg.snapshot.zombies?.length) this.zombies.applyNetwork(msg.snapshot.zombies);
+      /* Quem chega no meio de uma chuva pega o bonde andando: as rochas que já
+         estão no ar e o estado da horda vêm na PRIMEIRA mensagem, e a contagem
+         de entrada não reinicia para ninguém (o `startsAt` dele já é passado). */
+      this.applyMeteorMode(msg.snapshot.mode?.mode === "meteorRain");
+      if (msg.snapshot.meteors?.length) this.meteors.applyNetwork(msg.snapshot.meteors);
+      this.meteorState = msg.snapshot.meteorStatus ?? null;
+      /* Quem chega no meio de um cerco recebe a horda inteira de uma vez, em
+         JSON — o único pacote de sitiantes que não é binário. Sem ele o
+         retardatário veria a rampa VAZIA até o próximo quadro de 10 Hz, e a
+         barra do portão já pela metade sem nada explicando por quê. */
+      this.applySiegeMode(msg.snapshot.mode?.mode === "siege");
+      if (msg.snapshot.siege?.length) this.siege.applySnapshot(msg.snapshot.siege);
+      if (msg.snapshot.siegeStatus) {
+        this.siegeState = msg.snapshot.siegeStatus;
+        this.siege.setStatus(msg.snapshot.siegeStatus);
+        this.hud.setSiege(msg.snapshot.siegeStatus);
+      }
+      if (msg.snapshot.trebuchets) {
+        this.siege.onTrebState({ e: msg.snapshot.trebuchets });
+        this.hud.setTrebuchets(msg.snapshot.trebuchets);
+      }
+      if (msg.snapshot.kameCharge) {
+        this.special?.setCharge(
+          msg.snapshot.kameCharge.charge,
+          msg.snapshot.kameCharge.max,
+        );
+      }
       this.torches.setStates(msg.snapshot.torches);
       this.zombieState = msg.snapshot.zombieStatus ?? null;
       this.elkState = msg.snapshot.elkStatus ?? null;
+      /* Quem chega no meio de uma rodada de arena recebe as duas coisas aqui —
+         é a única mensagem que ele tem antes de a partida continuar sem se
+         explicar. Sem a bandeira, o objeto que decide o modo não existiria na
+         tela dele; sem a lista de vivos, ele não saberia que está assistindo. */
+      if (msg.snapshot.flag) {
+        this.flagState = msg.snapshot.flag;
+        this.flag.applyNetwork(msg.snapshot.flag, this.terrain);
+      } else {
+        this.flag.esconder();
+        this.flagState = null;
+      }
+      if (msg.snapshot.standStatus) this.applyStandStatus(msg.snapshot.standStatus);
       this.series.setTarget(msg.snapshot.series ?? null);
       this.applyMode(msg.snapshot.mode);
       if (msg.snapshot.mode?.preparing) {
@@ -843,12 +990,167 @@ class Game {
     });
 
     net.on(S2C.HORDE, (msg) => {
-      this.hud.announceHorde(msg.n, msg.size, msg.boss === true);
+      this.hud.announceHorde(msg.n, msg.size, msg.boss === true, msg.kind ?? "zombie");
       gameEvents.emit(EventType.AUDIO_PLAY, {
         sound: "waveHorn",
         position: vec3Payload(this.player.position),
         volume: 0.8,
       });
+    });
+
+    /* ------------------------------------------------------------- cerco --- */
+
+    /* As poses da horda chegam em BINÁRIO — o único canal do jogo que não é
+       JSON. O evento se chama `frame:1` e o cliente de rede o emite como
+       qualquer outro, então daqui isto é indistinguível do resto. Ver
+       `Siege.packFrame` para a conta que obrigou a mudar de transporte. */
+    net.on(`frame:${FRAME.SIEGE}`, (buffer) => this.siege.applyFrame(buffer));
+
+    net.on(S2C.SIEGE_STATUS, (msg) => {
+      this.siegeState = msg;
+      this.siege.setStatus(msg);
+      this.hud.setSiege(msg);
+    });
+
+    net.on(S2C.SIEGE_TIER, (msg) => {
+      /* A trompa e a faixa: o único resquício da mecânica de onda. Ela existe
+         porque a primeira aparição de uma espécie precisa ser VISTA antes de
+         ser um problema — é o momento em que o modo pausa a leitura do jogador,
+         e o único. */
+      this.hud.announceTier(msg.nome);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "waveHorn",
+        position: vec3Payload(this.player.position),
+        volume: 0.9,
+      });
+    });
+
+    net.on(S2C.SIEGE_DEATH, (msg) => {
+      this.siege.onDeath(msg);
+      if (!msg.killerName) return;
+      this.killFeed.push([
+        { text: msg.killerName, color: msg.killerColor, forte: true },
+        { text: msg.head ? "  🏹  " : "  ⚔️  " },
+        { text: msg.kind === "ogre" ? "OGRO" : msg.kind, forte: msg.kind === "ogre" },
+        ...(msg.points ? [{ text: `  +${msg.points}` }] : []),
+      ]);
+    });
+
+    net.on(S2C.SIEGE_SHOT, (msg) => this.siege.onShot(msg));
+    net.on(S2C.TREB_STATE, (msg) => {
+      this.siege.onTrebState(msg);
+      this.hud.setTrebuchets(msg.e);
+    });
+    net.on(S2C.TREB_SHOT, (msg) => {
+      if (msg.owner === this.net.me?.id) return;
+      this.siege.onRemoteShot(msg);
+    });
+    net.on(S2C.TREB_IMPACT, (msg) => this.siege.onTrebImpact(msg));
+
+    /* O BAQUE. A frequência dele é a leitura da fila, e é o único canal que
+       informa sem exigir que se tire os olhos da mira — ver §7.1 do plano. */
+    net.on(S2C.GATE_HIT, (msg) => {
+      const g = this.levels.current?.gate;
+      g?.setHealth(msg.f);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "arrowHitWood",
+        position: vec3Payload(g?.group?.position ?? this.player.position),
+        volume: msg.own ? 1.4 : 1.15,
+        pitch: 0.42,
+      });
+      if (msg.own) this.hud.toast("a sua pedra acertou o próprio portão");
+    });
+
+    net.on(S2C.GATE_FALL, () => {
+      this.levels.current?.gate?.fall();
+      this.hud.flashDanger(1.0);
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "explosion",
+        position: vec3Payload(this.player.position),
+        volume: 1.5,
+      });
+    });
+
+    net.on(S2C.SIEGE_OVER, (msg) => {
+      this.hud.showSiegeOver(msg);
+    });
+
+    /* ----------------------------------------------------- chuva de meteoros */
+
+    net.on(S2C.METEORS, (msg) => {
+      if (msg.clear) this.meteors.clear();
+      else this.meteors.applyNetwork(msg.m);
+    });
+
+    /* O PISCAR nas telas de quem NÃO atirou. Quem atirou já viu no quadro do
+       impacto — este pacote é para o resto da sala, e é o que impede duas
+       pessoas de gastarem duas flechas na mesma pedra. */
+    net.on(S2C.METEOR_HIT, (msg) => {
+      if (msg.by === this.net.me?.id) return;
+      this.meteors.hit(msg.id);
+    });
+
+    net.on(S2C.METEOR_BURST, (msg) => {
+      this.meteors.burst(msg);
+      if (msg.killerName) {
+        this.killFeed.push([
+          { text: msg.killerName, color: msg.killerColor, forte: true },
+          { text: msg.tank ? "  \u{1F30B}  " : "  ☄️  " },
+          { text: msg.tank ? "COLOSSO" : "rocha", forte: msg.tank === true },
+        ]);
+      }
+    });
+
+    /* Uma rocha encostou no chão. O game over vem colado, pelo `METEOR_OVER`;
+       aqui é só o estrondo — e ele precisa ser grande, porque é a última coisa
+       que a partida mostra. */
+    net.on(S2C.METEOR_IMPACT, (msg) => {
+      const p = { x: msg.p[0], y: msg.p[1], z: msg.p[2] };
+      const raio = msg.r ?? 4;
+      gameEvents.emit(EventType.PARTICLES, {
+        position: p, count: 200, color: 0xffd070, speed: 34, spread: 1,
+        size: raio * 0.6, grow: 3.4, life: 2.6, gravity: -1.62, drag: 0.35, alpha: 1,
+      });
+      gameEvents.emit(EventType.PARTICLES, {
+        position: p, count: 140, color: 0x6a5a4a, speed: 16, spread: 1,
+        size: raio, grow: 4.0, life: 4.5, gravity: -0.3, drag: 0.7, alpha: 0.7,
+      });
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "explosion", position: p, volume: 1.4,
+      });
+      this.hud.flashDanger(1.0);
+    });
+
+    net.on(S2C.METEOR_STATUS, (msg) => {
+      this.meteorState = msg;
+    });
+
+    net.on(S2C.METEOR_OVER, (msg) => {
+      this.meteorState = { ...(this.meteorState ?? {}), over: true, reason: msg.reason };
+      if (msg.reason === "win") {
+        this.huntVictoryOpen = true;
+        this.hud.showMeteorVictory(msg.ranking ?? [], this.net.me?.id);
+        gameEvents.emit(EventType.AUDIO_PLAY, {
+          sound: "victoryFanfare",
+          position: vec3Payload(this.player.position),
+          volume: 1.0,
+        });
+      } else {
+        this.hud.showZombieCenter(
+          "GAME OVER",
+          `uma rocha encostou na horda ${msg.horde}`,
+          "gameover",
+        );
+      }
+    });
+
+    net.on(S2C.KAME_CHARGE, (msg) => {
+      if (msg.id !== this.net.me?.id) return;
+      this.special?.setCharge(msg.charge, msg.max);
+    });
+
+    net.on(S2C.KAME, (msg) => {
+      this.special?.onRemoteFire(msg);
     });
 
     net.on(S2C.TORCHES, (msg) => {
@@ -882,6 +1184,22 @@ class Game {
     net.on(S2C.MODE_PREPARE, (msg) => this.beginModePreparation(msg));
     net.on(S2C.MODE_PREPARE_CANCEL, () => this.cancelModePreparation());
     net.on(S2C.MODE, (msg) => this.applyMode(msg));
+
+    /* -------------------------------------------------- o último em pé --- */
+    net.on(S2C.STAND_STATUS, (msg) => this.applyStandStatus(msg));
+    net.on(S2C.STAND_OVER, (msg) => {
+      this.standState = { ...(this.standState ?? {}), over: true };
+      this.hud.showStandVictory(msg, this.net.me?.id);
+    });
+
+    /* --------------------------------------------------- rouba bandeira -- */
+    net.on(S2C.FLAG, (msg) => {
+      this.flagState = msg;
+      this.flag.applyNetwork(msg, this.terrain);
+      this.hud.setFlag(msg, this.nomeDe(msg.carrier), this.net.me?.id);
+    });
+    net.on(S2C.FLAG_EVENT, (msg) => this.onFlagEvent(msg));
+    net.on(S2C.FLAG_OVER, (msg) => this.hud.showFlagVictory(msg, this.net.me?.id));
 
     /* A dificuldade dos bots é da SALA, e o aviso vem dela: os bots vivem todos
        no servidor, então quem apertou a tecla e quem só estava jogando veem a
@@ -919,6 +1237,127 @@ class Game {
 
     net.on("disconnected", () => this.hud.setConnection(false));
     net.on("reconnecting", () => this.hud.setConnection(false));
+  }
+
+  /* ------------------------------------------------------ o último em pé -- */
+
+  /**
+   * A sala disse quem ainda está de pé.
+   *
+   * E é DAQUI que sai a decisão de virar espectador — não do `KILL`. A
+   * diferença importa: `KILL` significa "você caiu", e em nove modos dos onze
+   * isso quer dizer "volta em quatro segundos". Sumir da lista de vivos é a
+   * única coisa que significa "acabou para você", e é por isso que ela tem
+   * mensagem própria (ver `S2C.STAND_STATUS`).
+   *
+   * A câmera não solta na hora: `spectateAt` dá ao corpo o tempo de tombar. O
+   * tombo é a única coisa que a morte tem a comunicar, e cortá-lo no meio para
+   * subir aos céus tiraria dela justamente isso.
+   */
+  applyStandStatus(msg) {
+    this.standState = msg;
+    this.hud.setStand(msg, this.net.me?.id);
+
+    const euSobrevivi = msg.alive?.some((p) => p.id === this.net.me?.id);
+    if (euSobrevivi) {
+      this.sairDoEspectador();
+      return;
+    }
+    if (this.mode !== "lastStand") return;
+    if (this.spectator.ativo || this.spectateAt) return;
+    this.spectateAt =
+      this.net.serverTime + CONFIG.modes.lastStand.spectateDelay * 1000;
+  }
+
+  /**
+   * O corpo assentou: a câmera larga o cadáver e sai voando.
+   *
+   * O cadáver FICA. Não é economia de código — é informação: o corpo caído no
+   * chão diz aos que continuam vivos onde alguém foi pego, e um mapa com quatro
+   * corpos espalhados conta a história da rodada melhor que qualquer placar.
+   */
+  entrarNoEspectador() {
+    this.spectateAt = 0;
+    if (this.spectator.ativo) return;
+    this.spectator.entrar(this.renderer.camera.position);
+    /* A câmera da flecha é liberada à força: ela é a única outra coisa que
+       disputa o controle da câmera, e uma flecha em voo no instante da morte
+       deixaria as duas brigando.
+
+       A PREFERÊNCIA DO JOGADOR é guardada e devolvida na saída. Desligar e
+       religar no fim apagava a escolha de quem tinha desligado o
+       acompanhamento na tecla F: a pessoa morria uma vez e a câmera da flecha
+       voltava a ligar sozinha para o resto da sessão. */
+    this._seguiaFlecha = this.rig.followArrowEnabled;
+    this.rig.returnToArcher();
+    this.rig.setFollowArrow(false);
+    this.hud.setSpectating(true);
+    this.hud.toast("você caiu — câmera livre (WASD, espaço/C, shift)", "miss");
+  }
+
+  sairDoEspectador() {
+    this.spectateAt = 0;
+    if (!this.spectator.ativo) return;
+    this.spectator.sair();
+    this.rig.setFollowArrow(this._seguiaFlecha ?? true);
+    this.hud.setSpectating(false);
+  }
+
+  /** Estou assistindo em vez de jogando? */
+  get espectando() {
+    return this.spectator.ativo;
+  }
+
+  /* ------------------------------------------------------- rouba bandeira -- */
+
+  /** O nome de quem tem este id — meu, de um remoto ou de ninguém. */
+  nomeDe(id) {
+    if (id == null) return null;
+    if (id === this.net.me?.id) return this.net.me?.name ?? "você";
+    return this.remotes.get(id)?.name ?? null;
+  }
+
+  /**
+   * Onde o portador está NESTA tela.
+   *
+   * Do boneco interpolado, e não da amostra de 10 Hz que veio junto com a
+   * bandeira: a 8 m/s, 100 ms são 80 cm, e uma bandeira flutuando 80 cm atrás
+   * de quem corre é exatamente o defeito que todo mundo vê, porque é durante a
+   * corrida que todo mundo está olhando para ela.
+   */
+  posicaoDoPortador(id) {
+    if (id == null) return null;
+    if (id === this.net.me?.id) return this.player.position;
+    return this.remotes.get(id)?.player.position ?? null;
+  }
+
+  /** Pegou, caiu, entregou, voltou — o que vira faixa na tela e som. */
+  onFlagEvent(msg) {
+    const eu = msg.by != null && msg.by === this.net.me?.id;
+    const nome = eu ? "Você" : (msg.byName ?? "alguém");
+    const meuTime = msg.team === "humans";
+
+    if (msg.kind === "pickup") {
+      this.hud.toast(`${nome} pegou a BANDEIRA`, meuTime ? "hit" : "miss");
+    } else if (msg.kind === "drop") {
+      this.hud.toast(`${nome} derrubou a bandeira`, "miss");
+    } else if (msg.kind === "capture") {
+      const p = msg.scores ?? {};
+      this.hud.toast(
+        `${nome} ENTREGOU!  ${p.humans ?? 0} × ${p.bots ?? 0}`,
+        meuTime ? "hit" : "miss",
+      );
+    } else if (msg.kind === "return") {
+      this.hud.toast("a bandeira voltou ao centro", "miss");
+    }
+
+    if (msg.p) {
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: msg.kind === "capture" ? "victoryFanfare" : "uiBeep",
+        position: { x: msg.p[0], y: msg.p[1], z: msg.p[2] },
+        volume: msg.kind === "capture" ? 0.8 : 0.6,
+      });
+    }
   }
 
   /**
@@ -1045,6 +1484,14 @@ class Game {
     const actions = this.input.consume();
     this.handleActions(actions);
 
+    /* O corpo já tombou: a câmera solta e o voo de espectador começa. Testado
+       aqui, no laço, e não num `setTimeout` da mensagem — o relógio que vale é
+       o da SALA, e um temporizador local acordaria fora de fase com o tombo que
+       todo mundo está vendo. */
+    if (this.spectateAt && this.net.serverTime >= this.spectateAt) {
+      this.entrarNoEspectador();
+    }
+
     // A ORDEM importa: a câmera define a mira (systems/aim.js), então ela é
     // posicionada ANTES do raycast, e o raycast antes do disparo.
     this.syncCameraMode();
@@ -1054,11 +1501,16 @@ class Game {
     this.updateFootDust();
     this.updateJetFlame(dt);
     this.updateCamera(dt);
-    this.solveAim();
+    /* Espectador não tem mira: `solveAim` lança um raio por quadro a partir de
+       um ponto de vista que a câmera livre já abandonou, e o resultado não é
+       lido por ninguém — o retículo está escondido e o arco, bloqueado. */
+    if (!this.spectator.ativo) this.solveAim();
     if (
       actions.release &&
       !this.modePreparing &&
       !this.death.dying &&
+      // Espectador não atira. Ele é uma câmera, não um arqueiro.
+      !this.spectator.ativo &&
       !this.player.isReloading &&
       !this.player.isKnifeAttacking
     ) {
@@ -1081,8 +1533,16 @@ class Game {
     this.elks.update(dt, this.renderer.camera);
     this.birds.update(dt, this.renderer.camera);
     this.zombies.update(dt, this.renderer.camera);
+    this.meteors.update(dt, this.renderer.camera);
+    this.updateSiege(dt);
+    this.special?.update(dt);
+    this.updateMeteorHud(dt);
     this.torches.update(dt);
     this.updateNight(dt);
+    /* DEPOIS da noite, sempre. `setNight` também escreve hemisférica, névoa e
+       intensidade do Sol; se o entardecer viesse antes, a volta da noite ao dia
+       (sair do modo zumbi) apagaria o pôr do sol do castelo no mesmo quadro. */
+    this.updateDusk();
     this.updateBossStorm(dt);
     if (this._zombieOn) this.audio.tickAmbient(dt, this.renderer.camera.position);
     this.trails.update(dt);
@@ -1096,6 +1556,8 @@ class Game {
       this.wind.vector,
       this.livePlayers(),
       this.net.serverTime,
+      // O castelo usa: é por ele que os braseiros sabem quanta luz ainda há.
+      this.dusk ?? 0,
     );
     this.updateRideables();
     this.death.update(this.net.serverTime);
@@ -1104,6 +1566,15 @@ class Game {
     // da etiqueta de nome.
     this.series.update(dt, this.renderer.camera);
     this.remotes.update(dt, this.net.serverTime, this.renderer.camera);
+    /* A bandeira DEPOIS dos remotos: ela gruda no boneco interpolado de quem a
+       carrega, e o boneco acabou de ser movido neste quadro. Um quadro atrás
+       seria um quadro de bandeira flutuando fora da mão. */
+    this.flag.update(
+      dt,
+      this.posicaoDoPortador(this.flagState?.carrier),
+      this.flagState?.carrier != null && this.flagState.carrier === this.net.me?.id,
+      this.renderer.camera,
+    );
     this.pushState();
 
     this.updateHud();
@@ -1146,7 +1617,15 @@ class Game {
       // todo mundo (ver S2C.WIND). Sem isso, cada um teria uma física diferente.
       this.net.send(C2S.WIND, { on: !this.arrows.options.windInfluence });
     }
-    if (a.toggleArrowCam) {
+    /* NO CERCO, `F` NÃO É A CÂMERA DA FLECHA — é a mão: trabuco, manivela e
+       reparo (ver `systems/siege.js`). O modo já entra com a câmera da flecha
+       desligada de propósito, então a tecla não estaria fazendo falta; o que
+       ela faria é atirar uma pedra e ligar a câmera no mesmo toque.
+
+       A guarda mora AQUI e não em `input.js` porque o input não conhece modo —
+       ele traduz tecla em intenção, e é este arquivo que sabe o que a intenção
+       significa agora. */
+    if (a.toggleArrowCam && !this._siegeOn) {
       const on = !this.rig.followArrowEnabled;
       this.rig.setFollowArrow(on);
       this.hud.toast(
@@ -1183,6 +1662,19 @@ class Game {
       const on = this.audio.toggleMusic();
       this.hud.toast(on ? "música ligada" : "música desligada", "miss");
     }
+    if (a.special) {
+      if (this.special.pronto) {
+        /* Sai do tensionamento antes: não dá para segurar a corda e juntar as
+           mãos ao mesmo tempo, e a flecha encaixada some junto (`setKame`). */
+        this.input.drawing = false;
+        this.drawTime = 0;
+        this.cancelKnifeAttack();
+        this.special.fire();
+      } else if (this.special.habilitado && !this.special.ativo) {
+        const falta = this.special.max - this.special.charge;
+        this.hud.toast(`especial: faltam ${falta} acertos`, "miss");
+      }
+    }
     if (a.toggleDebug) this.debug.toggle();
     if (a.toggleHelp) this.hud.toggleHelp();
 
@@ -1210,7 +1702,20 @@ class Game {
        duas custam centenas de milissegundos e as duas precisam que a sala
        espere todo mundo — o que muda é só o que se faz durante a espera. */
     const trocaDeFase = msg.level != null && msg.level !== this.levels.id;
-    if (!isZombieMode(msg.mode) && !trocaDeFase) return;
+    /* Três coisas passam por aqui: a noite dos zumbis, que compila shaders, a
+       CHUVA, que compila malhas de rocha e materiais de fogo, e a TROCA DE
+       FASE, que destrói um mundo e constrói outro. As três custam centenas de
+       milissegundos, e as três precisam que a sala espere todo mundo — num modo
+       com prazo, entrar dois segundos depois dos outros decide a partida. */
+    const chuva = msg.mode === "meteorRain";
+    /* E o CERCO, pelo mesmo motivo dos outros dois: ele compila oito silhuetas
+       de sitiante, o disco de piche aditivo e a pedra em chamas. Sem entrar
+       nesta lista o cliente simplesmente NÃO RESPONDE ao preparo — e o sintoma
+       é o pior possível: a sala espera, o prazo estoura, a troca é cancelada e
+       o jogador fica no modo livre dentro de um castelo, sem nenhum erro em
+       lugar nenhum. Foi exatamente o que aconteceu na primeira execução. */
+    const cerco = msg.mode === "siege";
+    if (!isZombieMode(msg.mode) && !chuva && !cerco && !trocaDeFase) return;
 
     if (this.modePreparing && this.modePrepareToken === msg.token) {
       this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "aguardando os outros jogadores…");
@@ -1225,19 +1730,29 @@ class Game {
 
     const titulo = trocaDeFase
       ? `viajando para ${levelInfo(msg.level).nome.toLowerCase()}…`
-      : msg.mode === "zombieBoss"
-        ? "preparando o chefão…"
-        : "preparando a noite…";
+      : cerco
+        ? "eles estão subindo a rampa…"
+        : chuva
+          ? "o céu vai desabar…"
+          : msg.mode === "zombieBoss"
+          ? "preparando o chefão…"
+          : "preparando a noite…";
     this.hud.showModeLoading(titulo);
     this.hud.updateModeLoading(msg.ready ?? 0, msg.total ?? 1, "preparando…");
     this.playerPhysics.setHorizontalMove(0, 0);
 
     if (!trocaDeFase) {
-      // Aquecimento da noite. Numa troca de fase isto não faz sentido: o mundo
-      // que seria aquecido está prestes a deixar de existir.
+      // Aquecimento. Numa troca de fase isto não faz sentido: o mundo que seria
+      // aquecido está prestes a deixar de existir.
       this.birds.clear();
-      this.torches.build({ dormant: true });
-      this.zombies.prepare();
+      if (cerco) {
+        this.siege.prepare();
+      } else if (chuva) {
+        this.meteors.prepare();
+      } else {
+        this.torches.build({ dormant: true });
+        this.zombies.prepare();
+      }
     }
 
     const token = msg.token;
@@ -1261,9 +1776,25 @@ class Game {
       return;
     }
 
-    this.zombies.setWarmupVisible(true);
-    this.torches.setWarmupVisible(true);
-    this.hud.updateModeLoading(0, 1, "aquecendo iluminação e shaders…");
+    const chuva = this.modePrepareTarget === "meteorRain";
+    const cerco = this.modePrepareTarget === "siege";
+    if (cerco) {
+      this.siege.setWarmupVisible(true);
+    } else if (chuva) {
+      this.meteors.setWarmupVisible(true);
+    } else {
+      this.zombies.setWarmupVisible(true);
+      this.torches.setWarmupVisible(true);
+    }
+    this.hud.updateModeLoading(
+      0,
+      1,
+      cerco
+        ? "afiando as flechas…"
+        : chuva
+          ? "acendendo as rochas…"
+          : "aquecendo iluminação e shaders…",
+    );
 
     // Dá ao navegador um frame para pintar o overlay antes de compilar.
     await nextFrame();
@@ -1280,6 +1811,8 @@ class Game {
     if (this.modePrepareToken !== token || !this.modePreparing) return;
     this.zombies.setWarmupVisible(false);
     this.torches.setWarmupVisible(false);
+    this.meteors.setWarmupVisible(false);
+    this.siege.setWarmupVisible(false);
     this.hud.updateModeLoading(1, 1, "sincronizando a entrada…");
     this.net.send(C2S.MODE_READY, { mode: this.modePrepareTarget, token });
   }
@@ -1291,8 +1824,10 @@ class Game {
     this.modePrepareTarget = null;
     this.modePrepareLevel = null;
     this.modePreparePromise = null;
+    this.siege.setWarmupVisible(false);
     this.zombies.setWarmupVisible(false);
     this.torches.setWarmupVisible(false);
+    this.meteors.setWarmupVisible(false);
     this.hud.hideModeLoading();
   }
 
@@ -1368,7 +1903,8 @@ class Game {
        e ainda por cima uma flecha perdida cravaria num alvo velho. */
     /* Os alvos fixos somem na série (um alvo por vez é o modo) e na noite dos
        zumbis — lá o pedido é campo limpo: nem mira, nem madeira, nem bicho. */
-    const escondeFixos = msg.mode === "series" || isZombieMode(msg.mode);
+    const escondeFixos =
+      msg.mode === "series" || isZombieMode(msg.mode) || msg.mode === "meteorRain";
     for (const alvo of this.targets) alvo.setActive(!escondeFixos);
     this.marker.visible = !escondeFixos;
     this.hud.setMode(
@@ -1392,10 +1928,121 @@ class Game {
     }
 
     this.applyZombieMode(isZombieMode(msg.mode));
+    this.applyMeteorMode(msg.mode === "meteorRain");
+    this.applySiegeMode(msg.mode === "siege");
+    this.applyArenaModes(msg.mode);
+    this.special?.setMode(msg.mode);
     if (mudouModo) this.applyArrowCameraMode(msg.mode);
     if (msg.mode !== "elkHunt") {
       this.elkState = null;
       this._elkHudCountdown = false;
+    }
+  }
+
+  /**
+   * O passo do cerco, e a tecla dele.
+   *
+   * `F` é lida como ESTADO (segurando ou não), não como evento, porque as três
+   * ações que ela dispara são as três de segurar: tensionar o contrapeso, içar
+   * a manivela e reforçar o portão. Soltar É atirar — a mesma regra do arco, e
+   * o jogador não precisa aprender uma segunda.
+   */
+  updateSiege(dt) {
+    if (!this._siegeOn) return;
+    const pos = this.player.position;
+    const segurando = this.input.keys.has("KeyF");
+
+    /* NA MIRA, `F` e o mouse mudam de significado.
+     *
+     * O mouse deixa de girar o arqueiro e passa a arrastar a marca no chão; o
+     * clique deixa de tensionar o arco e passa a soltar a pedra; `F` e `Esc`
+     * desistem. O corpo do jogador fica parado onde estava — ele está operando
+     * uma máquina, não andando. */
+    if (this.siege.mira) {
+      const dx = this.input.yaw - (this._miraYaw ?? this.input.yaw);
+      const dy = this.input.pitch - (this._miraPitch ?? this.input.pitch);
+      this.siege.moverMira(dx, dy);
+      /* O rumo do JOGADOR é devolvido no mesmo quadro: sem isto ele sai da
+         mira olhando para onde a marca foi parar, tonto. */
+      this.input.yaw = this._miraYaw;
+      this.input.pitch = this._miraPitch;
+      this.playerPhysics.setHorizontalMove(0, 0);
+
+      if (this.input.primaryDown && !this._miraClique) this.siege.dispararMira();
+      this._miraClique = this.input.primaryDown;
+      if (segurando && !this._siegeF) this.siege.sairDaMira();
+      this._siegeF = segurando;
+      this.hud.setSiegeHint("mirando");
+      this.siege.update(dt, this.renderer.camera, null, pos);
+      return;
+    }
+    this._miraYaw = this.input.yaw;
+    this._miraPitch = this.input.pitch;
+    this._miraClique = this.input.primaryDown;
+
+    if (segurando && !this._siegeF) this.siege.usar(pos);
+    else if (!segurando && this._siegeF) this.siege.soltar();
+    this._siegeF = segurando;
+
+    this.siege.update(dt, this.renderer.camera, this.player.yaw, pos);
+
+    /* A dica só aparece quando há o que fazer, e diz O QUÊ. Uma tecla com três
+       significados sem dizer qual está valendo é pior que três teclas. */
+    this.hud.setSiegeHint(segurando ? null : this.siege.acaoDisponivel(pos)?.tipo ?? null);
+  }
+
+  /**
+   * Liga e desliga o cerco.
+   *
+   * A NOITE vem da FASE, não do modo — o castelo é noturno em partida livre
+   * também, e é `onLevelReady` quem cuida disso. O que entra e sai aqui é só o
+   * que pertence ao cerco: a horda, os engenhos, o painel e o portão com vida.
+   *
+   * Sair é a parte que precisa ser exaustiva, como nos modos de arena: uma
+   * horda que ficou, um engenho pendurado no muro ou um painel de portão numa
+   * partida livre são todos o mesmo defeito — um pedaço de um modo que acabou.
+   */
+  applySiegeMode(ligado) {
+    if (this._siegeOn === ligado) return;
+    this._siegeOn = ligado;
+
+    // A flecha incendiária faz sentido de novo: é noite, e o alvo é madeira e
+    // osso. Mesmo interruptor do modo zumbi.
+    this.arrows.fireArrows = ligado;
+
+    if (ligado) {
+      this.siege.terrain = this.terrain;
+      this.siege.start(this.levels.current?.gate ?? null, this.wind);
+      /* A câmera da flecha sai, como no zumbi e pelo mesmo motivo: ela tira o
+         olho do resto da rampa exatamente quando a fila está crescendo. */
+      this.rig.setFollowArrow(false);
+      this.rig.returnToArcher();
+    } else {
+      this.siege.stop();
+      this.siegeState = null;
+      this.hud.setSiege(null);
+      this.hud.setSiegeHint(null);
+    }
+  }
+
+  /**
+   * Liga e desliga os dois modos de arena.
+   *
+   * Um lugar só para as duas saídas, porque sair deles é o que precisa ser
+   * exaustivo: a bandeira tem de desaparecer do mapa e o espectador tem de
+   * voltar a ter corpo. Deixar qualquer um dos dois para trás dá o mesmo tipo
+   * de defeito — um objeto de um modo que acabou, no meio de outro que começou.
+   */
+  applyArenaModes(mode) {
+    if (mode !== "captureFlag") {
+      this.flag.esconder();
+      this.flagState = null;
+      this.hud.setFlag(null);
+    }
+    if (mode !== "lastStand") {
+      this.sairDoEspectador();
+      this.standState = null;
+      this.hud.setStand(null);
     }
   }
 
@@ -1408,6 +2055,29 @@ class Game {
     const bloqueadaAoEntrar = isZombieMode(mode) || mode === "elkHunt";
     this.rig.setFollowArrow(!bloqueadaAoEntrar);
     if (bloqueadaAoEntrar) this.rig.returnToArcher();
+  }
+
+  /**
+   * Quanto do enquadramento lateral do especial vale agora (0 a 1).
+   *
+   * Sobe na carga e desce no retorno, com a mesma curva da pose — e continua
+   * valendo enquanto o feixe do PRÓPRIO jogador estiver vivo, mesmo depois de
+   * a pose acabar: a dissipação dura mais que ela, e a câmera voltando para
+   * trás do ombro no meio do feixe o enfiaria na tela outra vez.
+   */
+  enquadramentoEspecial() {
+    const s = this.special;
+    if (!s) return 0;
+    if (s.meuFeixe && !s.meuFeixe.morto) return 1;
+    if (!s.ativo) return 0;
+    const S = CONFIG.special;
+    const t = s.t;
+    if (t < S.charge) return smoothstep01(t / Math.max(0.001, S.charge * 0.6));
+    const inicioRetorno = s.total - S.recover;
+    if (t > inicioRetorno) {
+      return 1 - smoothstep01((t - inicioRetorno) / Math.max(0.001, S.recover));
+    }
+    return 1;
   }
 
   /** Aplica o vento na flecha localmente (já decidido pela sala). */
@@ -1535,6 +2205,8 @@ class Game {
     this.elks.clear();
     this.birds.clear();
     this.zombies.clear();
+    this.meteors.dispose();
+    this.special?.cancel();
     this.torches.clear();
     this.series.clear();
     this.arrows.clearAll();
@@ -1630,12 +2302,20 @@ class Game {
     const terrain = fase.terrain;
     this.applyLevelPhysics(this.levels.id);
 
+    /* A NOITE DO CASTELO É DA FASE, não do modo.
+     *
+     * No vale a noite é o modo zumbi ligando um interruptor; aqui ela é a hora
+     * do lugar, e vale em partida livre e em duelo também. Pôr isso em
+     * `applySiegeMode` faria o castelo amanhecer ao apertar 1 — com braseiros
+     * acesos, céu preto no material do céu e sol a pino ao mesmo tempo. */
+    this.refreshNightTarget();
+
     if (this.player) this.player.terrain = terrain;
     if (this.death) {
       this.death.terrain = terrain;
       this.death.ragdoll.terrain = terrain;
     }
-    for (const sistema of [this.boars, this.elks, this.birds, this.zombies, this.torches, this.series]) {
+    for (const sistema of [this.boars, this.elks, this.birds, this.zombies, this.meteors, this.torches, this.series, this.siege]) {
       if (sistema) sistema.terrain = terrain;
     }
 
@@ -1658,6 +2338,18 @@ class Game {
     /* Os bots vêm no mesmo balaio dos remotos: quem religa o terreno deles é
        `setTerrain`, e quem os reposiciona é o servidor. Nada a fazer aqui. */
     if (this.remotes) this.remotes.setTerrain(terrain);
+
+    /* O PORTÃO é da fase, e a fase acabou de nascer.
+     *
+     * Quem entra numa sala que já está em cerco liga o modo no `welcome` — e
+     * naquele instante o castelo ainda não existe deste lado (o cliente
+     * arranca no vale e troca depois). O cerco começava, portanto, apontando
+     * para um portão nulo, e a barra do HUD nunca casava com a folha de
+     * madeira na tela. Aqui é onde os dois se encontram. */
+    if (this._siegeOn && fase.gate) {
+      this.siege.gate = fase.gate;
+      if (this.siegeState) fase.gate.setHealth(this.siegeState.gate ?? 1);
+    }
   }
 
   /**
@@ -1673,7 +2365,7 @@ class Game {
     if (this._zombieOn === ligado) return;
     this._zombieOn = ligado;
 
-    this.nightTarget = ligado ? 1 : 0;
+    this.refreshNightTarget();
     this.arrows.fireArrows = ligado;
     this.audio.setAmbientNight(ligado);
 
@@ -1705,6 +2397,137 @@ class Game {
     // As bandeirolas de vento somem: são madeira e pano espalhados pelo vale, e
     // o pedido do modo é campo limpo.
     for (const f of this.environment.flags) f.group.visible = !ligado;
+  }
+
+  /**
+   * Entrar e sair da chuva de meteoros.
+   *
+   * O modo não escurece nada (a Lua já é preta) e não muda a física; o que ele
+   * troca é a TRILHA e o que se espera do céu. A música é a mesma do chefão
+   * zumbi — `lua_de_ossos`, a única faixa pesada que o jogo tem —, e ela entra
+   * por um método próprio (`setMusicTrack`) em vez de `setAmbientNight`, porque
+   * aqui não há grilo nenhum para tocar junto: é vácuo, e o vácuo é mudo.
+   */
+  applyMeteorMode(ligado) {
+    if (this._meteorOn === ligado) return;
+    this._meteorOn = ligado;
+
+    this.audio.setMusicTrack(ligado ? "zombie" : "day");
+    // Flecha em chamas: a mesma da noite. Contra o preto do céu, o traço quente
+    // é o que diz para onde o tiro foi.
+    this.arrows.fireArrows = ligado || this._zombieOn === true;
+    this.rig.setFollowArrow(!ligado);
+
+    if (!ligado) {
+      this.meteors.clear();
+      this.meteorState = null;
+      this.special?.cancel();
+      this.hud.setMeteor(null);
+      this.hud.setSpecial(null);
+      this.hud.hideZombieCenter();
+      this.hud.clearDanger();
+    }
+  }
+
+  /**
+   * O alerta da tela — o que impede a morte "não vi".
+   *
+   * Sem isto o modo é injusto, porque a rocha que mata é sempre a que estava
+   * fora do campo de visão. Uma seta só (a mais urgente; três seriam ruído) e
+   * um pulso vermelho na borda que fica contínuo quando o perigo é real.
+   */
+  updateMeteorHud(dt) {
+    if (!this._meteorOn) return;
+    const M = CONFIG.modes.meteorRain;
+    const st = this.meteorState;
+
+    /* A contagem de entrada. O que chegou pela rede foi o INSTANTE, não os
+       segundos — então o retardatário recebe um horário no passado, a
+       subtração dá negativo e ele simplesmente não vê contagem nenhuma.
+
+       O `_contando` existe porque esconder a faixa não pode depender de a
+       contagem ter sido MOSTRADA: o `startsAt` some do estado assim que a
+       horda 1 começa, e sem esta memória o caminho de esconder nunca rodava —
+       o número ficava pendurado na tela pela partida inteira. */
+    const falta = st?.startsAt ? (st.startsAt - this.net.serverTime) / 1000 : 0;
+    if (falta > 0) {
+      this._contando = true;
+      const n = Math.ceil(falta);
+      this.hud.showZombieCenter(`${n}`, "a primeira chuva está vindo", "countdown");
+      if (n <= 3 && n !== this._lastCountBeep) {
+        this._lastCountBeep = n;
+        gameEvents.emit(EventType.AUDIO_PLAY, {
+          sound: "uiBeep",
+          position: vec3Payload(this.player.position),
+          volume: 0.55,
+        });
+      }
+      this.hud.setMeteor(st);
+      return;
+    }
+    if (this._contando) {
+      this._contando = false;
+      this._lastCountBeep = null;
+      this.hud.hideZombieCenter();
+    }
+
+    this.hud.setMeteor(st);
+    if (st?.over) {
+      this.hud.clearDanger();
+      return;
+    }
+
+    const alvo = this.meteors.maisPerigosa();
+    if (!alvo) {
+      this.hud.clearDanger();
+      return;
+    }
+
+    const alt = alvo.altitude;
+    if (alt > M.warnAltitude) {
+      this.hud.clearDanger();
+      this.hud.setMeteorArrow(null);
+      return;
+    }
+
+    // Quanto mais baixa, mais forte — e abaixo do limiar de perigo, contínuo.
+    const t = 1 - Math.max(0, alt - M.dangerAltitude) / (M.warnAltitude - M.dangerAltitude);
+    const perigo = alt <= M.dangerAltitude;
+    this.hud.setDanger(perigo ? 1 : Math.min(1, t), perigo);
+
+    this._beepTimer = (this._beepTimer ?? 0) - dt;
+    if (perigo && this._beepTimer <= 0) {
+      this._beepTimer = 0.45;
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: "uiBeep",
+        position: vec3Payload(this.player.position),
+        volume: 0.5,
+      });
+    }
+
+    this.hud.setMeteorArrow(
+      this.screenDirection(alvo.group.position),
+      Math.round(alt),
+    );
+  }
+
+  /**
+   * Onde este ponto está em relação à tela: `null` se visível, ou o ângulo da
+   * borda para onde a seta aponta.
+   */
+  screenDirection(pos) {
+    const camera = this.renderer.camera;
+    const v = (this._ndc ??= new THREE.Vector3());
+    v.copy(pos).project(camera);
+    const atras = v.z > 1;
+    if (!atras && Math.abs(v.x) <= 0.95 && Math.abs(v.y) <= 0.95) return null;
+    let x = v.x;
+    let y = v.y;
+    if (atras) {
+      x = -x;
+      y = -y;
+    }
+    return Math.atan2(y, x);
   }
 
   /* --------------------------------------------------------- confirmações -- */
@@ -1877,9 +2700,18 @@ class Game {
       this.knifeTimer = Math.max(0, this.knifeTimer - dt);
     }
 
-    const atacando = this.knifeTimer > 0;
+    /* O ESPECIAL PRENDE O CORPO.
+     *
+     * Sete segundos plantado, sem andar e sem tensionar. Não é limitação
+     * técnica: é o preço do golpe — durante eles você não atira flecha, não
+     * desvia de alien e não cobre o resto do céu. Numa horda em que uma rocha
+     * no chão encerra a partida, escolher a hora de gastar isso é a decisão
+     * mais interessante que o modo oferece. */
+    const especial = this.special?.travado === true;
+
+    const atacando = this.knifeTimer > 0 || especial;
     const knifeDuration = CONFIG.knife.duration;
-    const knifeFraction = atacando
+    const knifeFraction = atacando && this.knifeTimer > 0
       ? 1 - this.knifeTimer / Math.max(0.001, knifeDuration)
       : 0;
     this.player.setKnife(knifeFraction);
@@ -1888,7 +2720,11 @@ class Game {
     const dur = CONFIG.bow.reloadTime;
     this.player.setReload(recarregando && dur > 0 ? 1 - this.reloadTimer / dur : 0);
 
-    this.input.blockDraw = this.rig.isArrowCam || morto || recarregando || atacando;
+    /* NA MIRA DO TRABUCO o arco não tensiona. O clique ali solta a pedra, e
+       sem este bloqueio ele soltaria a pedra E começaria a puxar a corda — o
+       jogador sairia da mira com uma flecha armada que não pediu. */
+    this.input.blockDraw =
+      this.rig.isArrowCam || morto || recarregando || atacando || !!this.siege?.mira;
     this.input.blockDrawReason = preparando
       ? "modePrepare"
       : this.death.dying
@@ -1947,7 +2783,7 @@ class Game {
     this.player.setAim(yaw, pitch);
     this.player.setDraw(atacando ? 0 : drawFraction(this.drawTime));
     this.player.update(dt, moving);
-    if (atacando && knifeFraction >= CONFIG.knife.hitStart && knifeFraction <= CONFIG.knife.hitEnd) {
+    if (this.knifeTimer > 0 && knifeFraction >= CONFIG.knife.hitStart && knifeFraction <= CONFIG.knife.hitEnd) {
       this.resolveKnifeHits();
     }
     this.player.getMuzzle(this._muzzle);
@@ -2123,9 +2959,20 @@ class Game {
        ancorado no rosto, e com o corpo mole rolando no chão a câmera rolaria
        junto — enjoativo e, pior, sem mostrar o que a pessoa quer ver, que é o
        próprio corpo caindo. */
+    /* O especial é em TERCEIRA PESSOA, à força. O golpe é o corpo inteiro — a
+       postura, as mãos, o afundo — e em primeira pessoa nada disso existe:
+       o jogador veria duas mãos e um clarão, que é a versão sem graça da
+       mesma coisa. */
     this.rig.setFirstPerson(
-      this.input.firstPerson && !this.death.dying && !this.player.isKnifeAttacking,
+      this.input.firstPerson &&
+        !this.death.dying &&
+        !this.player.isKnifeAttacking &&
+        !this.special?.travado,
     );
+    /* A câmera acompanha a POSE, não um cronômetro próprio: a mesma fração que
+       move os braços move o enquadramento, então a viagem para o lado começa e
+       termina junto com o golpe. */
+    this.rig.setSpecialFrame(this.enquadramentoEspecial());
     if (this.rig.wantFirstPerson === before || !this.aim.hasFocus) return;
 
     const p = CONFIG.player;
@@ -2250,12 +3097,54 @@ class Game {
   }
 
   updateCamera(dt) {
+    const camera = this.renderer.camera;
+
+    /* MIRA DO TRABUCO: a câmera sobe e olha o castelo de cima.
+     *
+     * Sai do `rig` pelo mesmo motivo do espectador — o rig é "a pose da câmera
+     * em função da mira e da posição da arqueira", e aqui a câmera não tem nada
+     * a ver com nenhuma das duas: ela pertence ao ENGENHO. Ver
+     * `SiegeSystem.entrarNaMira` para por que o trabuco precisou de uma vista
+     * própria. */
+    if (this.siege?.mira) {
+      this.siege.camaraDaMira(_miraPos, _miraAlvo);
+      camera.position.lerp(_miraPos, Math.min(1, dt * 7));
+      camera.lookAt(_miraAlvo);
+      camera.updateMatrixWorld();
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      this.hud.setReticleVisible(false);
+      this.player.setVisible?.(true);
+      return;
+    }
+
+    /* ESPECTADOR: a câmera deixa de pertencer ao arqueiro.
+     *
+     * Ela sai INTEIRA do `rig` em vez de virar um quarto modo dele. O rig é,
+     * por definição, "a pose da câmera em função da mira e da posição da
+     * arqueira" — é a regra de ouro escrita no cabeçalho dele —, e um
+     * espectador não tem arqueira nem mira. Enfiá-lo ali dentro obrigaria a
+     * pôr um `if` em cada uma daquelas contas. */
+    if (this.spectator.ativo) {
+      this.spectator.update(
+        dt,
+        this.input,
+        this.input.keys.has("Space"),
+        this.input.keys.has("KeyC") || this.input.keys.has("ControlLeft"),
+      );
+      camera.updateMatrixWorld();
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      this.hud.setReticleVisible(false);
+      // O próprio corpo volta a ser visível: você está olhando de fora agora, e
+      // o seu cadáver é parte do que há para ver.
+      this.player.setHeadVisible(true);
+      return;
+    }
+
     // O modo já foi resolvido em `syncCameraMode`, antes da pose.
     this.rig.update(dt, this._forward, this._eye, this._cameraPivot);
 
     this.player.setHeadVisible(!this.rig.isFirstPerson);
 
-    const camera = this.renderer.camera;
     camera.updateMatrixWorld();
     camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
 
@@ -2270,6 +3159,59 @@ class Game {
    * de escurecimento, ao contrário, é o próprio anúncio do modo — dá tempo de
    * ver as tochas acendendo antes de a primeira horda aparecer.
    */
+  /**
+   * De quem é a hora: da FASE, do MODO, ou dos dois.
+   *
+   * Um lugar só decide, e é o que conserta o defeito que apareceu na primeira
+   * execução: `applyZombieMode(false)` escrevia o alvo da luz ao entrar em
+   * QUALQUER modo que não fosse zumbi, e rodava depois de `onLevelReady` — a
+   * fase mandava, e meio segundo depois o modo desmandava, sem nada no código
+   * dizendo isso.
+   *
+   * São DOIS relógios, e eles não são o mesmo:
+   *
+   * • `nightTarget` é a NOITE (`setNight`) — o dial do modo zumbi, que apaga o
+   *   Sol e acende estrelas. Só o vale usa.
+   * • `duskTarget` é o ENTARDECER (`setDusk`) — o Sol descendo, sem nunca se
+   *   apagar. Só o castelo usa, e quem o move é o relógio da partida
+   *   (`updateDusk`).
+   *
+   * Misturar os dois foi a primeira tentativa: o castelo entrava por
+   * `nightTarget = 1` e escurecia até o breu. Uma tarde não é meia-noite pela
+   * metade — ver o bloco de constantes de `setDusk` em `core/renderer.js`.
+   */
+  refreshNightTarget() {
+    this.nightTarget = this._zombieOn === true ? 1 : 0;
+    if (this.levels?.id !== "castle") this.duskTarget = 0;
+  }
+
+  /**
+   * O Sol do castelo, descendo.
+   *
+   * NO CERCO ele acompanha o relógio da partida: o modo dura vinte minutos e
+   * termina exatamente quando o Sol toca o horizonte. Não é decoração
+   * sincronizada por acaso — é o cronômetro do modo, dito pela única coisa que
+   * o jogador não precisa procurar na tela. Quem está sob pressão não lê o
+   * relógio do HUD; olha para fora e vê que a luz está acabando.
+   *
+   * FORA DO CERCO (livre, duelo) não há relógio, então o castelo fica numa
+   * tarde fixa — inclinada o bastante para a muralha ter sombra e o cenário ter
+   * a cor que a fase pede.
+   */
+  updateDusk() {
+    if (this.levels?.id === "castle") {
+      const s = this.siegeState;
+      this.duskTarget = s
+        ? clamp((s.w ?? 0) / CONFIG.modes.siege.duration, 0, 1)
+        : CONFIG.levels.castle.idleDusk;
+    }
+    /* Sem amortecimento: o alvo já se move a 1/1200 por segundo, que é lento
+       demais para o olho perceber degrau. O único salto possível é a TROCA DE
+       FASE, e ela acontece atrás da tela de carregamento. */
+    this.dusk = this.duskTarget ?? 0;
+    this.renderer.setDusk(this.dusk);
+  }
+
   updateNight(dt) {
     if (this.night !== this.nightTarget) {
       const passo = dt / 1.2;

@@ -78,15 +78,49 @@
  * nenhum e cairia sempre no vale — inclusive a de quem esperava a horda. Junto,
  * a nave de transporte saiu de cena e o `mode` passou a carregar o `roster` da
  * sala, que é o que conserta o bot que ficava parado após uma troca de fase.
+ *
+ * 15 — entrou a CHUVA DE METEOROS, com um sétimo valor para `mode`, rochas que
+ * caem em canal próprio e um fim de partida por impacto no chão. Junto veio o
+ * ESPECIAL: a pose passou a carregar `q`, a fração da animação do Kamehameha,
+ * e o feixe viaja como um evento do qual cada cliente reconstrói a vida
+ * inteira. Uma aba antiga veria a sala anunciar um modo que ela não desenha —
+ * céu vazio, ninguém entendendo por que a partida acabou — e um arqueiro
+ * parado em pose de tiro soltando um raio invisível que mata.
+ *
+ * 16 — entraram os dois modos de ARENA. O ÚLTIMO EM PÉ quebra a regra mais
+ * antiga do jogo: quem morre não renasce, e passa a assistir em câmera livre.
+ * Uma aba antiga esperaria o `SPAWN` que nunca vem e ficaria com o corpo caído
+ * para sempre, sem entender que a partida continua sem ela. O ROUBA BANDEIRA
+ * trouxe um objeto que se pega, se carrega e se entrega — e uma aba antiga não
+ * desenharia a bandeira nem saberia dizer quem está com ela, que é a única
+ * informação que o modo pede para ser jogável.
+ *
+ * 17 — o arqueiro ganhou SKINS. O `hello` passou a carregar o corpo escolhido e
+ * a visão pública de um jogador passou a incluí-lo, ao lado do nome e da cor.
+ *
+ * Este é o único item da lista que NÃO quebraria nada se ficasse calado: campo
+ * ausente cai no padrão, e uma aba antiga jogaria vendo todo mundo de atleta. É
+ * justamente por isso que a versão subiu — o sintoma seria uma sala em que cada
+ * pessoa vê um jogo diferente, sem nenhum aviso, e "recarregue a página" é uma
+ * resposta muito melhor do que um mistério silencioso.
+ *
+ * 18 — entrou o CERCO AO CASTELO, e com ele a primeira mensagem BINÁRIA do
+ * jogo. Uma aba antiga receberia um `ArrayBuffer` onde espera texto, falharia
+ * calada no `JSON.parse` (o `catch` engole) e jogaria um cerco sem sitiante
+ * nenhum: muralha, portão rachando sozinho e a partida terminando sem que nada
+ * tenha aparecido na tela. É o pior tipo de incompatibilidade — a que não
+ * levanta erro — e é exatamente o que a versão existe para evitar.
  */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 18;
 
 /* --------------------------------------------------------- cliente → servidor */
 
 export const C2S = {
-  /** Entrada na sala: `{ name, version, level, mode }`.
+  /** Entrada na sala: `{ name, version, level, mode, skin }`.
    *  `level` e `mode` são a ESCOLHA DA PORTA (ver `ui/lobby.js`): eles decidem
-   *  em que sala esta conexão entra, e não mudam nada dentro dela. */
+   *  em que sala esta conexão entra, e não mudam nada dentro dela.
+   *  `skin` é o corpo, e viaja SÓ aqui — a sala o guarda e o repassa na visão
+   *  pública do jogador, como o nome e a cor. */
   HELLO: "hello",
   /** Pose própria, 20 Hz: `{ s: packState(), w: quandoFoiCapturada }`. */
   STATE: "state",
@@ -140,6 +174,32 @@ export const C2S = {
    *  Quem atira continua sendo a autoridade sobre o próprio acerto; quem decide
    *  se o alvo caiu é a sala, que é uma só para todo mundo. */
   SPACE_HIT: "spaceHit",
+  /** "Acertei esta rocha": `{ id, d, kame? }`. Quem atira é a autoridade sobre
+   *  o próprio acerto; quem decide se ela estourou é a sala. */
+  METEOR_HIT: "meteorHit",
+  /** "Disparei o especial": `{ o:[x,y,z], d:[x,y,z], w }`.
+   *  A direção é TRAVADA aqui — girar depois não entorta o feixe. */
+  KAME: "kame",
+
+  /* ------------------------------------------------------------------ cerco -- */
+  /** "Acertei este sitiante": `{ id, head, d }`. Mesmo contrato da flecha em
+   *  todo o resto do jogo — quem atira é a autoridade sobre o próprio acerto,
+   *  e a sala decide o que é compartilhado (se caiu, quanto vale, se o pavês
+   *  aparou). Ver `Siege.hit`. */
+  SIEGE_HIT: "siegeHit",
+  /** "Soltei o trabuco": `{ i, o:[x,y,z], d:[x,y,z], v }`.
+   *
+   *  A pedra é um EVENTO DE UM JOGADOR, como a flecha, e por isso viaja como
+   *  parâmetro de disparo em vez de pose a 10 Hz: os outros clientes replantam
+   *  a mesma parábola localmente. Custo de rede por quadro: zero. */
+  TREB_SHOT: "trebShot",
+  /** "A pedra caiu aqui": `{ i, p:[x,y,z] }`. Separado do disparo porque é a
+   *  sala que decide quem morreu no estouro — isso é placar. */
+  TREB_IMPACT: "trebImpact",
+  /** "Estou na manivela do trabuco i": `{ i, on }`. */
+  TREB_WIND: "trebWind",
+  /** "Estou reparando o portão": `{ on }`. */
+  GATE_REPAIR: "gateRepair",
 };
 
 /* --------------------------------------------------------- servidor → cliente */
@@ -261,8 +321,115 @@ export const S2C = {
    *  vencida — só a vitória carrega `ranking` (abates e mortes de cada um),
    *  para a tela final. */
   ZOMBIE_OVER: "zombieOver",
+  /* ------------------------------------------------------ chuva de meteoros --
+     Canal PRÓPRIO, e não o `SPACE` da Lua livre: lá o meteorito é uma rocha em
+     deriva horizontal a 1,2 m/s que vai a 5 Hz (ver `SpaceField.view`). Esta
+     cai a 17 m/s e anda 1,75 m entre amostras a 10 Hz — a 5 Hz seriam 3,5 m, e
+     3,5 m é mais que o raio da maior rocha comum: a interpolação começaria a
+     mentir sobre onde mirar. */
+  /** Rochas em queda, 10 Hz: `{ time, m: [{ i, p, r, k, hp, f }] }`. */
+  METEORS: "meteors",
+  /** Rocha levou flecha: `{ id, by, left, p }`. É o PISCAR nas outras telas —
+   *  em co-op, a mensagem mais importante do modo: *aquela ali já tem dono*. */
+  METEOR_HIT: "meteorHit",
+  /** Estourou no ar: `{ id, p, seed, r }`. Os estilhaços deste modo NÃO matam;
+   *  o servidor nem os integra, só manda a semente. */
+  METEOR_BURST: "meteorBurst",
+  /** Encostou no chão: `{ p, r }`. Vem colado com o `METEOR_OVER`. */
+  METEOR_IMPACT: "meteorImpact",
+  /** Estado do modo: `{ horde, hordes, rocks, tank, startsAt }`.
+   *  `startsAt` é o INSTANTE ABSOLUTO no relógio da sala em que a horda 1
+   *  começa, não uma contagem regressiva — é o que faz o relógio ser o mesmo em
+   *  todas as telas e o retardatário não ver contagem nenhuma, sem uma linha
+   *  escrita para o caso dele. */
+  METEOR_STATUS: "meteorStatus",
+  /** Acabou: `{ reason: "win"|"impact", horde, ranking? }`. */
+  METEOR_OVER: "meteorOver",
+
+  /* ---------------------------------------------------------------- especial --
+     O feixe viaja como UM evento, e cada cliente reconstrói frente, cauda,
+     afinamento e explosão a partir dele — porque tudo isso é função pura de
+     (origem, direção, tempo desde o disparo). É o mesmo contrato da flecha. */
+  /** Alguém soltou o especial: `{ owner, o, d, w }`. ~60 bytes. */
+  KAME: "kame",
+  /** A barra de alguém mudou: `{ id, charge, max }`. Saber que o companheiro
+   *  está carregado é informação de verdade num modo cooperativo. */
+  KAME_CHARGE: "kameCharge",
+
+  /* --------------------------------------------------------- o último em pé --
+     A morte é definitiva, e por isso ela precisa de canal próprio: `KILL` diz
+     que alguém caiu, e só. Quem ainda está de pé — e quando sobrou um — é uma
+     conta que a SALA faz, e mandá-la pronta evita que doze abas cheguem a doze
+     respostas ligeiramente diferentes sobre quem ganhou. */
+  /** Quem ainda está vivo: `{ alive: [{id,name,color}], eliminated, total }`. */
+  STAND_STATUS: "standStatus",
+  /** Acabou: `{ winner, winnerName, winnerColor, ranking }`. `winner: null`
+   *  quando ninguém sobrou (o último caiu para o cenário, não para alguém). */
+  STAND_OVER: "standOver",
+
+  /* ---------------------------------------------------------- rouba bandeira --
+     A bandeira vai em canal próprio, a 10 Hz, junto do estado dos times.
+     Ela é UM objeto: uma mensagem pequena, e nela cabe tudo o que o cliente
+     precisa para desenhar o objeto E para dizer, em letras grandes, quem está
+     com ele. Ver `entities/flag.js`. */
+  /** Estado da bandeira e do placar: ver `Room.flagView()`. */
+  FLAG: "flag",
+  /** Acontecimento da bandeira: `{ kind: "pickup"|"drop"|"capture"|"return",
+   *  by?, byName?, team?, p? }`. É o que vira faixa na tela e som. */
+  FLAG_EVENT: "flagEvent",
+  /** Acabou: `{ winner: "humans"|"bots", scores, ranking }`. */
+  FLAG_OVER: "flagOver",
+
+  /* ------------------------------------------------------------------ cerco --
+     O ÚNICO canal binário do jogo, e a razão dele está em `Siege.packFrame`:
+     120 sitiantes em JSON a 10 Hz para quatro clientes são 380 KB/s de subida.
+     O quadro binário são 10 B por bicho — 12 KB/s por cliente.
+
+     Ele não tem campo `t` como todas as outras mensagens: o tipo é o primeiro
+     BYTE do quadro, e é assim que o cliente separa um `ArrayBuffer` de cerco de
+     qualquer outro que venha a existir. Ver `FRAME` abaixo. */
+  /** Estado da partida, 2 Hz, em JSON: ver `Siege.status()`. */
+  SIEGE_STATUS: "siegeStatus",
+  /** Escalão novo: `{ nome, kind }`. Vira trompa e faixa na tela — é o único
+   *  resquício da mecânica de onda, e ele existe porque a primeira aparição de
+   *  uma espécie precisa ser vista ANTES de ser um problema. */
+  SIEGE_TIER: "siegeTier",
+  /** Sitiante derrubado: `{ id, killer, points, kind, head }`. */
+  SIEGE_DEATH: "siegeDeath",
+  /** O pavês aparou: `{ id }`. Vira o "clang" e nenhum dano — a informação de
+   *  que o ângulo estava errado, que é o que ensina o §6.4 do plano. */
+  SIEGE_BLOCK: "siegeBlock",
+  /** Tiro de xamã ou catapulta: `{ kind, from, to, speed?, flight? }`. */
+  SIEGE_SHOT: "siegeShot",
+  /** O portão levou pancada: `{ f }` — fração de vida. Vira o baque e o
+   *  tranco. A FREQUÊNCIA dos baques é a leitura da fila, e é o único canal
+   *  que informa sem exigir que se tire os olhos da mira. */
+  GATE_HIT: "gateHit",
+  /** O portão caiu. Fim de partida, e vem colado com `SIEGE_OVER`. */
+  GATE_FALL: "gateFall",
+  /** A pedra caiu: `{ p, seed }`. Estouro, piche em chamas e estilhaços. */
+  TREB_IMPACT: "trebImpact",
+  /** Estado dos três engenhos: `{ e: [{ i, ready, wind }] }`. */
+  TREB_STATE: "trebState",
+  /** Acabou: `{ reason: "dusk"|"gate", ranking }`.
+   *  `dusk` é a VITÓRIA — o Sol tocou o horizonte e eles recuaram. O cerco é
+   *  uma tarde, não uma noite: ver `Game.updateDusk`. */
+  SIEGE_OVER: "siegeOver",
+
   /** Resposta do sincronismo: `{ c, s }`. */
   PONG: "pong",
+};
+
+/**
+ * Os quadros BINÁRIOS, por primeiro byte.
+ *
+ * Um número e não uma string porque o quadro inteiro existe para caber em dez
+ * bytes por bicho; um campo de texto no cabeçalho seria mais caro que a metade
+ * de um sitiante.
+ */
+export const FRAME = {
+  /** As poses do cerco. Ver `Siege.packFrame` e `systems/siege.js`. */
+  SIEGE: 1,
 };
 
 export const RejectReason = {
@@ -296,6 +463,14 @@ export function packState(player) {
     a: player.airborne ? 1 : 0,
     // Jato aceso. Um bit, e é o que faz a chama do amigo existir na sua tela.
     j: player.jetFlame > 0.01 ? 1 : 0,
+    /* A ANIMAÇÃO INTEIRA DO ESPECIAL, num número.
+     *
+     * Sete segundos de pose — concha no quadril, esfera crescendo, empurrão,
+     * tremor, retorno — cabem numa fração de 0 a 1 porque o corpo do jogo é
+     * montado por procedimento (`poseKamehameha`), não por animação gravada.
+     * É o mesmo truque do `k` da faca, e é o que faz todo mundo ver a carga do
+     * companheiro sem uma única mensagem nova. */
+    q: r3(player.kameFraction ?? 0),
   };
 }
 
@@ -318,6 +493,7 @@ export function unpackState(state, out) {
   // `?? 0` porque a pose pode vir de um cliente que ainda não tem jetpack
   // nenhum: fora da Lua o campo não significa nada.
   out.jetFlame = state.j ?? 0;
+  out.kameFraction = state.q ?? 0;
   return out;
 }
 
@@ -374,6 +550,8 @@ export const elkEntity = (id) => `e${id}`;
 export const birdEntity = (id) => `v${id}`; // v de "voador": o `b` já é do porco
 export const zombieEntity = (id) => `z${id}`;
 export const torchEntity = (id) => `t${id}`;
+// `m` de meteoro. Livre: p, b, e, v, z e t já estavam tomados.
+export const meteorEntity = (id) => `m${id}`;
 
 /** O caminho de volta: `"p3"` → `3`. Devolve null se não for de jogador. */
 export function playerIdFrom(entityId) {
@@ -403,6 +581,11 @@ export function zombieIdFrom(entityId) {
 /** `"t2"` → `2`. */
 export function torchIdFrom(entityId) {
   return idFrom(entityId, "t");
+}
+
+/** `"m5"` → `5`. */
+export function meteorIdFrom(entityId) {
+  return idFrom(entityId, "m");
 }
 
 function idFrom(entityId, prefixo) {

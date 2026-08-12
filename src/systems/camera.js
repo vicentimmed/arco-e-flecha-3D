@@ -93,6 +93,17 @@ export class CameraRig {
   }
 
   /** Terceira pessoa é o padrão; botão direito/C segura a primeira pessoa. */
+  /**
+   * Quanto do enquadramento do especial está aplicado (0 a 1).
+   *
+   * Recebe a própria fração da pose, então a câmera viaja junto com a carga e
+   * volta junto com o retorno — sem uma segunda interpolação para manter em
+   * sincronia com a animação.
+   */
+  setSpecialFrame(k) {
+    this.specialFrame = Math.max(0, Math.min(1, k));
+  }
+
   setFirstPerson(on) {
     // O pedido é registrado mesmo durante a câmera da flecha: é ele que decide
     // para onde voltar quando o voo acaba.
@@ -184,11 +195,27 @@ export class CameraRig {
 
     this._right.crossVectors(this._tmp, this._up).normalize();
 
+    /* ENQUADRAMENTO DO ESPECIAL.
+     *
+     * A câmera sai de trás do ombro e vai para o LADO. Não é gosto: um feixe
+     * de catorze metros de diâmetro e quatrocentos de comprimento, visto de
+     * quatro metros atrás da boca, é um tubo em que a câmera está OLHANDO POR
+     * DENTRO — e aditivo, isso é uma parede branca que apaga o personagem, o
+     * céu e as rochas. Medido, e foi exatamente o que aconteceu.
+     *
+     * De lado o feixe vira o que a referência mostra: um traço atravessando o
+     * quadro, com o arqueiro plantado no canto. `t` sobe e desce com a pose,
+     * então a viagem da câmera acompanha a carga em vez de cortar. */
+    const k = this.specialFrame ?? 0;
+    const dist = c.distance + (c.specialDistance ?? 9.0 - c.distance) * k;
+    const right = c.right + ((c.specialRight ?? 7.5) - c.right) * k;
+    const up = c.up + ((c.specialUp ?? 2.4) - c.up) * k;
+
     this.aimOrigin
       .copy(pivot)
-      .addScaledVector(this._tmp, -c.distance)
-      .addScaledVector(this._right, c.right)
-      .addScaledVector(this._up, c.up);
+      .addScaledVector(this._tmp, -dist)
+      .addScaledVector(this._right, right)
+      .addScaledVector(this._up, up);
 
     // Toe-in: a câmera aponta para um ponto FIXO da linha de tiro. É o que
     // preserva o enquadramento e o que deixa a flecha sair quase alinhada com o

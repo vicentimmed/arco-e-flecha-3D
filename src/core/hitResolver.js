@@ -43,6 +43,12 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "zombie") {
     return resolveZombieHit(ctx);
   }
+  if (other.kind === "besieger") {
+    return resolveBesiegerHit(ctx);
+  }
+  if (other.kind === "besiegerShield") {
+    return resolvePaviseHit(ctx);
+  }
   if (other.kind === "wolf") {
     return resolveWolfHit(ctx);
   }
@@ -52,7 +58,32 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "ship" || other.kind === "alien" || other.kind === "meteor") {
     return resolveSpaceHit(ctx);
   }
+  if (other.kind === "fallingMeteor") {
+    return resolveFallingMeteorHit(ctx);
+  }
   return resolveSceneryHit(ctx);
+}
+
+/**
+ * Rocha da chuva: a flecha ATRAVESSA, e a rocha PISCA.
+ *
+ * O piscar é local e imediato — quem atirou vê no mesmo quadro em que a flecha
+ * toca, e não meio ping depois. Os outros recebem o `S2C.METEOR_HIT` da sala,
+ * que é quem decide se ela estourou. É o mesmo desenho do clarão do chefão.
+ *
+ * Não crava, como não crava em nave nem em alien: a rocha explode, e uma flecha
+ * espetada em algo que vai virar cascalho é um enfeite pendurado no nada.
+ */
+function resolveFallingMeteorHit({ arrow, other, impact, deps }) {
+  other.meteor?.piscar();
+  emitImpact(arrow, "fallingMeteor", other.netId ?? other.entityId, impact, null, {
+    label: "meteoro",
+    meteorId: other.netId ?? null,
+    hit: true,
+  });
+  deps.spawnPuff?.(impact, null);
+  deps.removeArrow?.(arrow);
+  return { kind: "fallingMeteor", netId: other.netId ?? null };
 }
 
 /**
@@ -277,6 +308,66 @@ function resolveZombieHit({ arrow, other, impact, deps }) {
     boss: zombie.isBoss === true,
     speed: arrow.launchSpeed ?? 0,
   };
+}
+
+/**
+ * O PAVÊS aparou.
+ *
+ * A flecha crava na madeira e para. Nenhuma mensagem sai para a sala: não há
+ * dano a decidir, e é justamente a AUSÊNCIA de dano que ensina a regra.
+ *
+ * Quem decide isto é o solver de contato, não uma conta de ângulo no servidor.
+ * A versão anterior perguntava "veio de frente e com pouca elevação?" — o que
+ * acerta na média e mente no caso: aparava flechas que passavam pela cabeça e
+ * deixava passar flechas que batiam na tábua. Num jogo cujo cabeçalho promete
+ * que nada da trajetória é simulado de mentira, a proteção também não pode ser.
+ */
+function resolvePaviseHit({ arrow, other, impact, deps }) {
+  const b = other.besieger;
+  if (!b || b.dead) return null;
+
+  emitImpact(arrow, "pavise", b.entityId, impact, null, { label: "pavês", hit: false });
+  deps.spawnPuff?.(impact, null);
+  /* Crava no CORPO do escudo, não no do bicho: o pavês gira com o dono, e uma
+     flecha presa ao tronco atravessaria a tábua na primeira curva. */
+  arrow.stick(b.shieldBody, true, b);
+  deps.retireArrow?.(arrow);
+  return { kind: "pavise", entityId: b.entityId };
+}
+
+/**
+ * Sitiante: a flecha crava, e quem decide se ele caiu é a sala.
+ *
+ * O acerto na CABEÇA mata de primeira (ver `Siege.hit`), e o limiar sai da
+ * ALTURA DA ESPÉCIE, não de uma constante: um ogro tem 6,5 m e um mastim 1,0 m,
+ * e um número fixo faria toda flecha num ogro contar como corpo e toda flecha
+ * num mastim contar como cabeça.
+ *
+ * 0,86 da altura é onde o pescoço começa em todas as fichas — as cabeças estão
+ * desenhadas entre 0,79 e 0,94 da altura de cada espécie.
+ */
+function resolveBesiegerHit({ arrow, other, impact, deps }) {
+  const b = other.besieger;
+  if (!b || b.dead) return null;
+
+  const head = impact.y - b.position.y >= b.altura * 0.86;
+  emitImpact(arrow, "besieger", b.entityId, impact, null, {
+    label: head ? `${b.kind} (cabeça)` : b.kind,
+    besiegerId: idDoSitiante(b.entityId),
+    head,
+    hit: true,
+  });
+  deps.spawnPuff?.(impact, null);
+
+  arrow.stick(b.body, true, b);
+  deps.retireArrow?.(arrow);
+  return { kind: "besieger", entityId: b.entityId, id: idDoSitiante(b.entityId), head };
+}
+
+/** `"s42"` → `42`. O prefixo separa o espaço de nomes; ver `protocol.js`. */
+function idDoSitiante(entityId) {
+  const n = Number(String(entityId).slice(1));
+  return Number.isFinite(n) ? n : null;
 }
 
 /** Lobo: uma flecha em qualquer lugar. */

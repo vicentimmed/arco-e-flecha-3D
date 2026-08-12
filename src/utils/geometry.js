@@ -26,7 +26,7 @@ const _mid = new THREE.Vector3();
  * que permite tingir o arqueiro inteiro pela cor do jogador sem perder o
  * modelado.
  */
-function shadeSegment(geo, claro = 1.06, escuro = 0.72, aoJunta = 0.18) {
+export function shadeSegment(geo, claro = 1.06, escuro = 0.72, aoJunta = 0.18) {
   const pos = geo.attributes.position;
   const cores = new Float32Array(pos.count * 3);
   let minY = Infinity;

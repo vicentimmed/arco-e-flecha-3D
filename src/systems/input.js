@@ -285,6 +285,11 @@ export class Input {
         case "KeyE":
           this.actions.knifeAttack = true;
           break;
+        case "KeyQ":
+          // Q de especial. Das letras livres (Q, X, Z, I, J, U) é a única com
+          // convenção a favor.
+          this.actions.special = true;
+          break;
         case "KeyY":
           this.actions.askResetScores = true;
           break;
@@ -314,8 +319,14 @@ export class Input {
           break;
         case "Digit9":
           /* A Lua não é um modo: é uma FASE, e ela leva a sala inteira junto.
-             Ver `levels/` e `docs/plano-lua.md`. */
-          this.actions.setLevel = "moon";
+             Ver `levels/` e `docs/plano-lua.md`.
+
+             Com Shift, a MESMA tecla pede o modo que só existe lá — e a leitura
+             sai sozinha: 9 é a Lua, Shift+9 é a Lua chovendo. Não sobrou dígito
+             para ele (1–8 são modos, 9 é a fase, 0 é o placar), e Shift como
+             "o segundo sentido da mesma tecla" já é o padrão do B e do N. */
+          if (e.shiftKey) this.actions.setMode = "meteorRain";
+          else this.actions.setLevel = "moon";
           break;
         case "KeyB":
           // B de bot. Shift+B tira o último — a mesma tecla nos dois sentidos,
@@ -323,14 +334,27 @@ export class Input {
           this.actions.toggleBot = e.shiftKey ? "remove" : "add";
           break;
         case "KeyG":
-          // G de grupo: humanos contra a máquina. Não cabe em dígito — 1–8 já
-          // são dos outros modos e o 9 é da fase.
-          this.actions.setMode = "teamDuel";
+          /* G de grupo: humanos contra a máquina. Não cabe em dígito — 1–8 já
+             são dos outros modos e o 9 é da fase.
+
+             Shift+G é o MESMO grupo disputando a bandeira, e é a mesma
+             convenção do Shift+9 (a Lua, chovendo) e do Shift+B (o bot, ao
+             contrário): a tecla nomeia o assunto e o Shift escolhe a variante.
+             A primeira versão usava H, que já era a AJUDA — e como o `case`
+             novo vinha antes no mesmo `switch`, ele engolia a tecla em
+             silêncio: apertar H deixava de abrir o painel de atalhos. */
+          this.actions.setMode = e.shiftKey ? "captureFlag" : "teamDuel";
           break;
         case "KeyN":
           // N de nível. Shift+N volta — a mesma tecla nos dois sentidos, como o
           // B faz com os bots e o 9 com a fase.
           this.actions.cycleBotDifficulty = e.shiftKey ? -1 : 1;
+          break;
+        case "KeyU":
+          // U de ÚLTIMO em pé. Os dígitos acabaram (1–8 são modos, 9 é a fase,
+          // 0 é o placar), então ele entra por letra — como o G do duelo de
+          // times já entrava. U estava livre e tem o mnemônico a favor.
+          this.actions.setMode = "lastStand";
           break;
         case "KeyC":
           this.firstPerson = true;
@@ -431,6 +455,14 @@ export class Input {
     const snapshot = { ...a };
     a.release = false;
     a.knifeAttack = false;
+    /* TODA AÇÃO DE UM TOQUE PRECISA SER ZERADA AQUI.
+     *
+     * Esta lista é escrita à mão, e esquecer uma linha não quebra nada na hora:
+     * a ação simplesmente fica `true` para sempre e passa a disparar em todo
+     * quadro. Foi o que aconteceu com o especial — o `Q` apertado uma vez com a
+     * barra vazia ficava pendurado, e no instante em que ela enchia o golpe
+     * saía sozinho, sem ninguém tocar em nada. */
+    a.special = false;
     a.dismissArrowCam = false;
     a.cycleTarget = false;
     a.clearArrows = false;

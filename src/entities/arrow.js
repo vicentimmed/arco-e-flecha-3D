@@ -519,6 +519,8 @@ export class ArrowManager {
 
     this.live = [];
     this.stuck = [];
+    /** Cravadas que estão APAGANDO. Ver `fadeOut`. */
+    this.fading = [];
     this.options = {
       dragEnabled: true,
       aeroStabilization: true,
@@ -644,16 +646,51 @@ export class ArrowManager {
     const { maxStuckPerPlayer, maxStuckTotal } = CONFIG.arrow;
     const owner = arrow.ownerEntityId;
 
+    /* A MAIS VELHA DESAPARECE, e desaparece APAGANDO.
+     *
+     * Antes ela sumia num quadro só, e num modo em que se atira sem parar isso
+     * aparece como flechas piscando fora de cena no canto do olho. `fadeOut`
+     * marca a flecha para encolher e sumir em `updateFade` — ela sai da cota
+     * na hora (a contagem é do que ainda conta como cravado) e da cena um
+     * segundo depois. */
     let mine = 0;
     for (const a of this.stuck) if (a.ownerEntityId === owner) mine++;
     for (let k = 0; k < this.stuck.length && mine > maxStuckPerPlayer; k++) {
       if (this.stuck[k].ownerEntityId !== owner) continue;
-      this.stuck.splice(k, 1)[0].dispose();
+      this.fadeOut(this.stuck.splice(k, 1)[0]);
       k--;
       mine--;
     }
 
-    while (this.stuck.length > maxStuckTotal) this.stuck.shift().dispose();
+    while (this.stuck.length > maxStuckTotal) this.fadeOut(this.stuck.shift());
+  }
+
+  /**
+   * Põe uma flecha cravada para APAGAR em vez de sumir num quadro.
+   *
+   * O material é compartilhado entre flechas (é o mesmo `MeshStandardMaterial`
+   * para todas), então não dá para baixar a opacidade dele sem apagar as
+   * outras junto. O que encolhe é a ESCALA — de graça, sem material novo, e a
+   * leitura é a mesma: a flecha se apaga em vez de piscar para fora da cena.
+   */
+  fadeOut(arrow) {
+    if (!arrow || arrow.fading) return;
+    arrow.fading = 0;
+    this.fading.push(arrow);
+  }
+
+  updateFade(dt) {
+    if (!this.fading.length) return;
+    for (let i = this.fading.length - 1; i >= 0; i--) {
+      const a = this.fading[i];
+      a.fading += dt;
+      const f = 1 - Math.min(1, a.fading / 0.8);
+      a.group?.scale.setScalar(f);
+      if (f > 0) continue;
+      this.fading.splice(i, 1);
+      if (this.lastArrow === a) this.lastArrow = null;
+      a.dispose();
+    }
   }
 
   /**
@@ -681,7 +718,7 @@ export class ArrowManager {
    */
   removeAttachedTo(target) {
     if (!target) return;
-    for (const lista of [this.stuck, this.live]) {
+    for (const lista of [this.stuck, this.live, this.fading]) {
       for (let i = lista.length - 1; i >= 0; i--) {
         if (lista[i].attachedTo !== target) continue;
         const arrow = lista.splice(i, 1)[0];
@@ -692,6 +729,7 @@ export class ArrowManager {
   }
 
   update(dt) {
+    this.updateFade(dt);
     for (let i = this.live.length - 1; i >= 0; i--) {
       const arrow = this.live[i];
       arrow.age += dt;
@@ -799,6 +837,11 @@ export class ArrowManager {
     }
     for (let i = this.live.length - 1; i >= 0; i--) {
       if (mine(this.live[i])) this.live.splice(i, 1)[0].dispose();
+    }
+    // As que estavam apagando somem junto: uma flecha meio transparente
+    // sobrevivendo a um "limpar tudo" é a definição de sobra.
+    for (let i = this.fading.length - 1; i >= 0; i--) {
+      if (mine(this.fading[i])) this.fading.splice(i, 1)[0].dispose();
     }
     if (this.lastArrow?.dead) this.lastArrow = null;
     if (this.trails) this.trails.clear(ownerId);

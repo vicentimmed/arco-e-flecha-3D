@@ -34,9 +34,11 @@
    --------------------------------------------------------------------------- */
 
 import { CONFIG, drawSpeed } from "../src/config.js";
+import { DEFAULT_SKIN } from "../src/shared/skins.js";
 import { levelPhysics } from "../src/shared/levels.js";
 import { valleyBlockers } from "../src/shared/valleyProps.js";
 import { moonBlockers } from "../src/shared/moonProps.js";
+import { castleBlockers } from "../src/shared/castleProps.js";
 import { bloqueado } from "../src/shared/blockers.js";
 
 /* Os obstáculos do vale, calculados uma vez por campo de altura.
@@ -50,16 +52,30 @@ export function obstaculosDe(terrain, levelId) {
      existe para alcançar, e enquanto o servidor não o conhecia a flecha do bot
      atravessava o piso da plataforma e matava quem estava de pé em cima dela —
      de dentro do casco, inclusive. Ver `shared/moonProps.js`. */
-  if (levelId !== "valley" && levelId !== "moon") return [];
+  /* E o CASTELO tem 34 m de muro e uma fileira de merlões.
+     Aqui o buraco seria maior que o do foguete lunar: sem esta lista, a flecha
+     de um arqueiro de muralha sai do adarve, atravessa o próprio merlão à
+     frente dele e ainda passa pelo portão que os dois lados estão disputando —
+     e o xamã lá embaixo acerta quem está agachado atrás da pedra. A cobertura
+     do modo É esta lista. Ver `shared/castleProps.js`. */
+  if (levelId !== "valley" && levelId !== "moon" && levelId !== "castle") return [];
   let lista = blockersPorTerreno.get(terrain);
   if (!lista) {
-    lista = levelId === "moon" ? moonBlockers(terrain) : valleyBlockers(terrain);
+    lista =
+      levelId === "moon"
+        ? moonBlockers(terrain)
+        : levelId === "castle"
+          ? castleBlockers()
+          : valleyBlockers(terrain);
     blockersPorTerreno.set(terrain, lista);
   }
   return lista;
 }
 
 const TAU = Math.PI * 2;
+
+/** Reaproveitado por `Bot.pedraNaFrente`: ele roda por candidato, por quadro. */
+const _alvoTmp = { x: 0, y: 0, z: 0 };
 
 /**
  * Perícia padrão, caso `CONFIG.bot.difficulty` aponte para algo fora da tabela.
@@ -88,8 +104,11 @@ function periciaAtual() {
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-/** Paleta dos bots — a mesma que o cliente usava, para nada mudar de cor. */
-const CORES = ["#e0554a", "#4a9ee0", "#8ee04a", "#e0c24a", "#b44ae0", "#4ae0c2"];
+/* Paleta dos bots. Sem rosa, lilás ou magenta — mesmo critério de
+   `server/colors.js`, que tem a explicação completa. Um roxo/violeta legítimo
+   (como o `roxo` da paleta principal) ainda entraria; o que saiu foi a cor
+   antiga daqui, um tom bem mais para o lado do magenta. */
+const CORES = ["#e0554a", "#4a9ee0", "#8ee04a", "#e0c24a", "#4ad97a", "#4ae0c2"];
 
 export class Bot {
   /**
@@ -105,6 +124,10 @@ export class Bot {
     this.nome = `CPU ${indice}`;
     this.name = this.nome;
     this.color = CORES[(indice - 1) % CORES.length];
+    /* O corpo do bot é o mesmo de todo mundo. `publicView` (em `room.js`) manda
+       este campo para os clientes como manda o de qualquer jogador — bot não
+       tem caminho próprio. */
+    this.skin = DEFAULT_SKIN;
     this.terrain = terrain;
     this.levelId = levelId;
     this.pericia = { ...periciaAtual() };
@@ -182,11 +205,12 @@ export class Bot {
 
   /* ---------------------------------------------------------------- vida -- */
 
-  renascer(x, z) {
+  renascer(x, z, floorY = null) {
     this.alive = true;
+    this.floorY = floorY;
     this.position.x = x;
     this.position.z = z;
-    this.position.y = this.terrain.heightAt(x, z);
+    this.position.y = floorY ?? this.terrain.heightAt(x, z);
     this.velY = 0;
     this.noChao = true;
     this.drawTime = 0;
@@ -198,6 +222,9 @@ export class Bot {
   }
 
   relevel(terrain, levelId) {
+    /* O piso declarado é do ADARVE de uma fase específica. Levá-lo para outra
+       deixaria o bot pairando a onze metros do vale. */
+    this.floorY = null;
     this.terrain = terrain;
     this.levelId = levelId;
   }
@@ -211,11 +238,24 @@ export class Bot {
    * @param {Array<object>} bichos porcos, alces e zumbis vivos — ver `Room.botPrey`
    * @returns {object|null} um tiro a disparar, ou null
    */
-  update(dt, alvos, bichos = []) {
+  /**
+   * @param {{x:number,z:number}|null} [objetivo] um ponto que vale MAIS que o
+   *   duelo: hoje só a bandeira e a base inimiga (`captureFlag`). Sem ele o bot
+   *   faz o que sempre fez — orbitar o adversário mais próximo.
+   */
+  update(dt, alvos, bichos = [], objetivo = null) {
     if (!this.alive) return null;
 
+    this.objetivo = objetivo;
     const alvo = this.escolherAlvo(alvos);
-    this.mover(dt, alvo);
+    /* POSTADO: o arqueiro de muralha não anda.
+     *
+     * Ele não tem para onde ir — o adarve tem 2,6 m de largura útil e um passo
+     * para o lado errado é uma queda de onze metros dentro da fila. E o modo
+     * não pede deslocamento nenhum dele: pede uma flecha a cada dois segundos
+     * no que estiver mais perto do portão. É a mesma economia de `soPresas`,
+     * que já desliga a outra metade da IA na chuva de meteoros. */
+    if (!this.postado) this.mover(dt, alvo);
     this.gravidade(dt);
 
     const alvoTiro = this.escolherAlvoDeTiro(alvos, bichos);
@@ -237,6 +277,15 @@ export class Bot {
    * numa sala vazia uma demonstração da IA.
    */
   escolherAlvo(alvos) {
+    /* SÓ PRESAS: o bot é artilharia antiaérea e mais nada.
+     *
+     * Devolver null aqui tira o alvo das DUAS perguntas de uma vez — para onde
+     * andar e em quem atirar —, e é isso que o modo pede: ele não persegue
+     * ninguém, fica no posto e olha para cima. É a primeira das três camadas
+     * que impedem um bot de matar um jogador (ver `Room.dispararDoBot` para a
+     * segunda, que é a que realmente garante). */
+    if (this.soPresas) return null;
+
     let melhor = null;
     let melhorD = Infinity;
     for (const e of alvos) {
@@ -268,15 +317,101 @@ export class Bot {
     let melhor = this.escolherAlvo(alvos);
     let melhorD = melhor ? dist2(melhor.position, this.position) : Infinity;
 
-    const penal = (CONFIG.bot?.creaturePenalty ?? 1.8) ** 2;
+    /* A penalidade de distração existe para o bot não largar o duelo por causa
+       de um javali. Onde a distração É o trabalho (a chuva), ela não faz
+       sentido: sem alvo humano nenhum, penalizar a presa só a afastaria de si
+       mesma. */
+    const penal = this.soPresas ? 1 : (CONFIG.bot?.creaturePenalty ?? 1.8) ** 2;
     for (const c of bichos) {
-      const d = dist2(c, this.position) * penal;
+      if (!this.podeEngajar(c)) continue;
+      /* A FRENTE DELE, e não o mais perto do mundo.
+       *
+       * Um arqueiro POSTADO não pode se deslocar, e atirar 45° para o lado ao
+       * longo de uma muralha ameiada é atirar no próximo merlão — é o que a
+       * geometria diz e é o que `temVisada` recusa, corretamente. Sem esta
+       * preferência ele escolhia o alvo mais próximo em linha reta, que quase
+       * sempre estava atrás de pedra, e passava a partida inteira de arco
+       * tensionado sem soltar uma flecha.
+       *
+       * A penalidade é suave (cresce com o cosseno) em vez de um corte seco:
+       * assim ele ainda cobre o flanco quando não há nada à frente, que é o
+       * que um jogador faria. */
+      /* Alvo atrás de pedra nem entra no páreo.
+       *
+       * Só o teste de CAIXA (`bloqueado`), não o `temVisada` inteiro: este roda
+       * uma vez por candidato por quadro, e a amostragem de relevo dele custa
+       * até 48 consultas de altura. A pedra é o que decide aqui — o relevo
+       * fica para a checagem final, antes de soltar a corda.
+       *
+       * Sem isto o arqueiro postado escolhia o aglomerado do portão, que para
+       * ele estava atrás do próprio merlão, e ficava travado: 26 tiros em três
+       * minutos, quando o ciclo dele é de dois segundos. */
+      if (this.postado && this.pedraNaFrente(c)) continue;
+      const d = dist2(c, this.position) * penal * this.penalidadeDeSetor(c);
       if (d < melhorD) {
         melhorD = d;
-        melhor = { position: c, isCreature: true, kind: c.kind, id: c.id, alive: true };
+        melhor = {
+          position: c,
+          isCreature: true,
+          kind: c.kind,
+          id: c.id,
+          alive: true,
+          // Onde mirar no corpo. Um porco tem a posição na pata e pede 0,55 m
+          // acima; uma rocha TEM a posição no centro e pede zero.
+          aimY: c.aimY,
+          raio: c.r,
+        };
       }
     }
     return melhor;
+  }
+
+  /** Tem alvenaria entre o arco e este ponto? Só o teste de caixa. */
+  pedraNaFrente(c) {
+    this.atualizarMuzzle();
+    _alvoTmp.x = c.x;
+    _alvoTmp.y = c.y + (c.aimY ?? 0);
+    _alvoTmp.z = c.z;
+    return bloqueado(obstaculosDe(this.terrain, this.levelId), this._muzzle, _alvoTmp);
+  }
+
+  /**
+   * Quanto este alvo está fora da frente de tiro deste posto.
+   *
+   * Devolve 1 para quem está bem à frente e cresce até 9 na perpendicular. Só
+   * vale para o bot POSTADO — quem pode andar resolve o ângulo andando.
+   */
+  penalidadeDeSetor(c) {
+    if (!this.postado) return 1;
+    const dx = c.x - this.position.x;
+    const dz = c.z - this.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-3) return 1;
+    /* A frente do posto é +Z: é para lá que a rampa desce e de lá que eles
+       vêm. O castelo inteiro é orientado assim — ver `shared/castleProps.js`. */
+    const cos = dz / d;
+    return cos <= 0 ? 40 : 1 / (cos * cos * cos);
+  }
+
+  /**
+   * Este alvo está num ângulo que a balística do bot resolve?
+   *
+   * `elevacaoPara` itera o tempo de voo sobre a distância HORIZONTAL. Com o
+   * alvo quase a pino ela tende a zero, a queda estimada some junto, e a função
+   * devolve ~90° — que o `pitchMax` de 86° corta. O erro em 200 m passa de dez
+   * metros: **o bot não erra por perícia, erra por álgebra**.
+   *
+   * O filtro é a correção barata e sem risco: ele guarda o tiro, como já faz
+   * quando `temVisada` reprova. Consertar o solver resolveria o caso geral e
+   * mexeria em código que o duelo usa — fica para depois.
+   */
+  podeEngajar(c) {
+    const teto = this.maxElevation;
+    if (!teto) return true;
+    const dy = c.y - this.position.y;
+    if (dy <= 0) return true;
+    const distH = Math.hypot(c.x - this.position.x, c.z - this.position.z);
+    return Math.atan2(dy, Math.max(0.01, distH)) <= teto;
   }
 
   /* --------------------------------------------------------- locomoção --- */
@@ -337,6 +472,39 @@ export class Bot {
       this._andando = true;
       this.gaitBlend = 1;
       this.gaitPhase = (this.gaitPhase + (passo0 / CONFIG.gait.strideLength) * TAU) % TAU;
+      return;
+    }
+
+    /* O OBJETIVO GANHA DA ÓRBITA.
+     *
+     * A IA de duelo persegue uma FAIXA de distância do adversário — 34 a 62 m —
+     * e circunda dentro dela. É o comportamento certo quando o que está em jogo
+     * é acertar e não ser acertado, e é exatamente o comportamento errado num
+     * modo com um objeto a buscar: sem isto, o time da CPU no rouba bandeira
+     * orbitava os humanos a cinquenta metros da bandeira e NUNCA pontuava — o
+     * modo tinha um só lado jogando, e os humanos ganhavam por caminhar.
+     *
+     * Com objetivo o bot anda reto para ele e continua atirando no caminho:
+     * quem escolhe o alvo de tiro é `escolherAlvoDeTiro`, que não passa por
+     * aqui. Andar e atirar ao mesmo tempo é justamente o que um jogador faz
+     * carregando a bandeira. */
+    if (this.objetivo) {
+      const ox = this.objetivo.x - p.x;
+      const oz = this.objetivo.z - p.z;
+      const om = Math.hypot(ox, oz);
+      if (om > 1.2) {
+        const passoO = CONFIG.player.walkSpeed * dt;
+        const nxO = p.x + (ox / om) * passoO;
+        const nzO = p.z + (oz / om) * passoO;
+        if (this.podeAndar(nxO, nzO)) {
+          p.x = nxO;
+          p.z = nzO;
+          this._andando = true;
+          this.gaitBlend = 1;
+          this.gaitPhase =
+            (this.gaitPhase + (passoO / CONFIG.gait.strideLength) * TAU) % TAU;
+        }
+      }
       return;
     }
 
@@ -407,7 +575,17 @@ export class Bot {
 
   gravidade(dt) {
     const p = this.position;
-    const chao = this.terrain.heightAt(p.x, p.z);
+    /* O PISO PODE SER DECLARADO.
+     *
+     * `terrain.heightAt` responde a cota do CHÃO, e o chão não sabe que existe
+     * um adarve onze metros acima dele. Um bot posto na muralha do cerco era
+     * puxado para o pátio no primeiro tique — de pé no lugar certo em x e z, e
+     * onze metros abaixo do jogo.
+     *
+     * `floorY` é a saída mais barata que continua correta: quem põe o bot num
+     * piso construído diz qual é a cota dele, e a gravidade passa a cair
+     * naquele piso. Fora disso (que é todo o resto do jogo) nada muda. */
+    const chao = this.floorY ?? this.terrain.heightAt(p.x, p.z);
     if (!this.noChao) {
       this.velY += this.fisica.gravity * dt;
       p.y += this.velY * dt;
@@ -436,7 +614,7 @@ export class Bot {
        ali manda a flecha para a base da cápsula, onde ela crava no chão a um
        passo do alvo. Bicho é mais baixo que gente — mirar no peito de um humano
        passa por cima de um porco. */
-    const altura = alvo.isCreature ? 0.55 : 1.15;
+    const altura = alvo.aimY ?? (alvo.isCreature ? 0.55 : 1.15);
     let t = 0;
     for (let i = 0; i < 3; i++) {
       out.x = alvo.position.x + this._velAlvo.x * t * this.pericia.precisaoLead;
@@ -749,11 +927,22 @@ export class BotSquad {
    * @param {boolean} semFogoAmigo no duelo de times os bots são um time só
    * @returns {Array<{bot: Bot, tiro: object}>} os tiros deste passo
    */
-  update(dt, alvos, bichos, semFogoAmigo = false) {
+  /**
+   * @param {boolean} semFogoAmigo no duelo de times os bots são um time só
+   * @param {{soPresas?:boolean, maxElevation?:number}} [perfil] o modo manda
+   */
+  /**
+   * @param {(bot: Bot) => ({x:number,z:number}|null)} [objetivoDe] para onde
+   *   cada bot deve ir, quando o modo tem um objetivo. Ver `Bot.update`.
+   */
+  update(dt, alvos, bichos, semFogoAmigo = false, perfil = null, objetivoDe = null) {
     const tiros = [];
     for (const b of this.list) {
       b.semFogoAmigo = semFogoAmigo;
-      const tiro = b.update(dt, alvos, bichos);
+      b.soPresas = perfil?.soPresas === true;
+      b.postado = perfil?.postado === true;
+      b.maxElevation = perfil?.maxElevation ?? 0;
+      const tiro = b.update(dt, alvos, bichos, objetivoDe ? objetivoDe(b) : null);
       if (tiro) tiros.push({ bot: b, tiro });
     }
     return tiros;

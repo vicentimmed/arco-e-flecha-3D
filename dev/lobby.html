@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tela de entrada — bancada</title>
+    <link rel="stylesheet" href="../src/style.css" />
+  </head>
+  <body>
+    <!-- A tela de entrada de verdade, sozinha.
+
+         Existe porque a página do jogo constrói o mundo inteiro para mostrá-la,
+         e olhar um seletor de duas linhas não devia custar um vale. Ela monta a
+         `Lobby` real com o CSS real — o que se vê aqui é o que se vê lá. -->
+    <div id="lobby"></div>
+    <script type="module">
+      import { Lobby } from "../src/ui/lobby.js";
+
+      const lobby = new Lobby(document.getElementById("lobby"));
+      lobby.onSkin = (id) => console.log("skin escolhida:", id);
+      lobby.onEnter = async (nome, entrada) => {
+        console.log("entrada:", nome, entrada);
+        throw new Error("bancada: não há servidor aqui");
+      };
+      // O mundo "fica pronto" na hora: aqui não há terreno para esculpir.
+      lobby.setReady();
+      window.lobby = lobby;
+    </script>
+  </body>
+</html>

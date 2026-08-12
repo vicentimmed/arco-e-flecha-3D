@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bancada de skins — Arco &amp; Flecha</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ui: #f5c451;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #10131a;
+        color: #e8e6e1;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+      canvas { display: block; }
+      #painel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: 246px;
+        padding: 12px 14px 14px;
+        background: rgba(10, 13, 20, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        backdrop-filter: blur(8px);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ui);
+      }
+      .linha { margin-bottom: 9px; }
+      .linha > label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #a7a49d;
+        margin-bottom: 3px;
+      }
+      input[type="range"] { width: 100%; }
+      .botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+      button {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.3);
+        color: #cfccc5;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.on {
+        border-color: var(--ui);
+        background: rgba(245, 196, 81, 0.16);
+        color: var(--ui);
+      }
+      #conta {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 11px;
+        color: #a7a49d;
+        white-space: pre-line;
+      }
+      #conta b { color: #e8e6e1; font-weight: 700; }
+      /* A RÉGUA DE VALOR. Fonte monoespaçada porque as barras precisam alinhar:
+         é a coluna de barras, e não os números, que denuncia a papa marrom. */
+      #regua {
+        margin-top: 9px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 9.5px;
+        line-height: 1.45;
+        white-space: pre;
+        color: #8f8c86;
+      }
+      #regua .ok { color: #7bd88f; }
+      #regua .ruim { color: #ff7a68; }
+      /* A CHAVE DO CINZA é do CANVAS, não da cena: assim ela não toca material
+         nenhum e não corre o risco de "consertar" o que está julgando. */
+      body.cinza canvas { filter: grayscale(1); }
+    </style>
+  </head>
+  <body>
+    <div id="painel">
+      <h1>Bancada de skins</h1>
+
+      <div class="linha">
+        <label>skin da esquerda</label>
+        <div class="botoes" id="skinA"></div>
+      </div>
+      <div class="linha">
+        <label>skin da direita</label>
+        <div class="botoes" id="skinB"></div>
+      </div>
+
+      <div class="linha">
+        <label>tensionamento <span data-eco="draw">0</span></label>
+        <input id="draw" type="range" min="0" max="1" step="0.01" value="0" />
+      </div>
+      <div class="linha">
+        <label>mira (pitch) <span data-eco="pitch">0</span></label>
+        <input id="pitch" type="range" min="-0.6" max="0.9" step="0.01" value="0" />
+      </div>
+      <div class="linha">
+        <label>câmera — distância <span data-eco="dist">3.2</span></label>
+        <input id="dist" type="range" min="0.4" max="9" step="0.05" value="3.2" />
+      </div>
+      <div class="linha">
+        <label>câmera — altura <span data-eco="alt">1.15</span></label>
+        <input id="alt" type="range" min="0.1" max="2.4" step="0.02" value="1.15" />
+      </div>
+
+      <div class="linha botoes">
+        <button id="andar">andar</button>
+        <button id="correr">correr</button>
+        <button id="girar" class="on">girar</button>
+      </div>
+      <div class="linha botoes">
+        <button id="recarregar">recarregar</button>
+        <button id="faca">faca</button>
+        <button id="cor" class="on">cor</button>
+        <button id="morrer">morrer</button>
+      </div>
+
+      <div class="linha">
+        <label>como julgar</label>
+        <div class="botoes">
+          <button id="cinza">cinza</button>
+          <button id="chapado">silhueta</button>
+          <button id="primeira">1ª pessoa</button>
+        </div>
+      </div>
+
+      <div class="linha">
+        <label>nível de detalhe <span data-eco="nivel">automático</span></label>
+        <div class="botoes">
+          <button id="nivel-auto" class="on">auto</button>
+          <button id="nivel-0">perto</button>
+          <button id="nivel-1">médio</button>
+          <button id="nivel-2">longe</button>
+        </div>
+      </div>
+
+      <div id="conta"></div>
+      <div id="regua"></div>
+    </div>
+    <script type="module" src="./skins.js"></script>
+  </body>
+</html>

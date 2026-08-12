@@ -26,8 +26,23 @@ const LIMB_PROFILE = [
   [0.6, 0.096],
 ];
 
+/**
+ * De que o arco é feito. É a única coisa que uma skin pode mudar nele.
+ *
+ * A GEOMETRIA fica de fora de propósito: `BRACE_HEIGHT`, `DRAW_LENGTH`,
+ * `LIMB_PROFILE` e o ponto devolvido por `getMuzzleWorld` são a linha de tiro, e
+ * uma skin que os mudasse faria a flecha sair de outro lugar — o que deixaria de
+ * ser fantasia e passaria a ser regra de jogo.
+ */
+const PALETA_PADRAO = {
+  limb: { color: "#17181c", roughness: 0.3, metalness: 0.7 },
+  grip: { color: "#2a2117", roughness: 0.92, metalness: 0.0 },
+  string: { color: "#d8d2c0", roughness: 0.62, metalness: 0.0 },
+};
+
 export class Bow {
-  constructor() {
+  /** @param {object} [paleta] cores da skin; null/ausente = o recurvo preto. */
+  constructor(paleta = null) {
     this.group = new THREE.Group();
     this.group.name = "bow";
     this.draw = 0;
@@ -41,22 +56,15 @@ export class Bow {
      * O braço do arco é metal usinado: reflexo estreito e forte. O punho é
      * couro trabalhado à mão: quase nada. A corda é fibra torcida: um brilho
      * largo e fraco, que é o que faz a corda aparecer contra a paisagem sem
-     * virar um fio branco. */
-    const black = new THREE.MeshStandardMaterial({
-      color: "#17181c",
-      roughness: 0.3,
-      metalness: 0.7,
-    });
-    const grip = new THREE.MeshStandardMaterial({
-      color: "#2a2117",
-      roughness: 0.92,
-      metalness: 0.0,
-    });
-    const stringMat = new THREE.MeshStandardMaterial({
-      color: "#d8d2c0",
-      roughness: 0.62,
-      metalness: 0.0,
-    });
+     * virar um fio branco.
+     *
+     * A paleta da skin troca as três, e é por isso que ela vem em `color` +
+     * `roughness` + `metalness` em vez de só a cor: um arco de teixo com o
+     * `metalness` do recurvo continuaria parecendo metal pintado de madeira. */
+    const p = { ...PALETA_PADRAO, ...(paleta ?? {}) };
+    const black = new THREE.MeshStandardMaterial(p.limb);
+    const grip = new THREE.MeshStandardMaterial(p.grip);
+    const stringMat = new THREE.MeshStandardMaterial(p.string);
     /* Exposto para o dono: cada arqueiro tem o SEU arco, e o piscar da
        invencibilidade precisa apagar o arco junto com o corpo — senão sobra um
        arco sólido flutuando sobre um corpo semitransparente. */

@@ -115,14 +115,20 @@ export function simularFlechaDoBot(tiro, ctx) {
       }
     }
 
-    /* ------------------------------------------------------------ bichos -- */
+    /* ------------------------------------------------------------ bichos --
+       O raio vem da PRESA quando ela tem um: uma rocha da chuva tem de 2,5 a
+       14 m, e testá-la contra os 0,8 m de um javali seria mirar num alvo
+       quatro vezes menor do que o que está desenhado na tela. O deslocamento
+       em `y` só vale para quem tem a posição no pé (bicho); a rocha tem a
+       posição no CENTRO, e somar 0,8 lá seria errar por baixo de propósito. */
     for (const b of bichos) {
+      const raio = b.r ?? RAIO_BICHO;
       const d = distanciaSegmentoPonto(anterior, p, {
         x: b.x,
-        y: b.y + RAIO_BICHO,
+        y: b.y + (b.r ? 0 : RAIO_BICHO),
         z: b.z,
       });
-      if (d <= RAIO_BICHO) {
+      if (d <= raio) {
         return { kind: b.kind, alvo: b, ponto: { ...p }, velocidade: { ...v }, tempo: t };
       }
     }

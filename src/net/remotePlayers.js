@@ -21,7 +21,7 @@
 import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
-import { Player, FACE_DETAIL_DISTANCE } from "../entities/player.js";
+import { Player, detailLevelFor } from "../entities/player.js";
 import { entityRegistry } from "../core/entityRegistry.js";
 import { playerEntity, unpackState } from "../shared/protocol.js";
 import { gameEvents, EventType, vec3Payload } from "../core/events.js";
@@ -55,7 +55,12 @@ class RemotePlayer {
     this.color = info.color;
     this.entityId = playerEntity(info.id);
 
-    this.player = new Player(terrain, this.entityId);
+    /* A skin vem do SERVIDOR, já saneada por ele (ver `publicView`), e chega
+       pelos quatro caminhos em que um corpo alheio aparece: `JOIN`, o
+       `snapshot` de quem entra atrasado, o `roster` e o `WELCOME`. Um id que
+       ainda assim não exista aqui cai no padrão dentro do `Player` — nenhum
+       caminho consegue produzir um arqueiro invisível. */
+    this.player = new Player(terrain, this.entityId, info.skin);
     this.player.isLocal = false;
     this.player.displayName = info.name;
     this.player.setColor(info.color);
@@ -132,6 +137,9 @@ class RemotePlayer {
     this.player.setDraw(0);
     this.player.setReload(0);
     this.player.setKnife(0);
+    // Renascer cancela o especial: um corpo que volta em pose de Kamehameha
+    // ficaria travado nela até a próxima pose chegar.
+    this.player.setKame(0);
     this.lastKnifeFraction = 0;
   }
 
@@ -183,6 +191,8 @@ class RemotePlayer {
       p.setDraw(0);
       p.setReload(0);
       p.setKnife(0);
+      // Morrendo, quem manda na pose é o corpo mole — não o especial.
+      p.setKame(0);
     }
 
     p.bobPhase += dt * 1.3; // respiração: é local, não trafega
@@ -208,9 +218,11 @@ class RemotePlayer {
      * sala cheia de gente voando de estourar o pool. Ver `systems/jetSmoke.js`. */
     this.jetSmoke.step(dt, p.jetFlame > 0.01, p.position, p.yaw, distancia);
 
-    // Rosto só de perto: acima de 12 m as nove peças da face não desenham nada
-    // que a cabeça já não desenhe. Ver `Player.setFaceDetail`.
-    p.setFaceDetail(distancia <= FACE_DETAIL_DISTANCE);
+    /* Detalhe pela distância: rosto e falanges só de perto, camadas de roupa e
+       massa muscular até 40 m, silhueta sempre. É o item que mais rende numa
+       sala cheia — e é ele que permite que o corpo de perto seja caro.
+       Ver `Player.setDetailLevel`. */
+    p.setDetailLevel(detailLevelFor(distancia));
 
     // Sombra só de perto. Cada arqueiro são ~45 malhas com `castShadow`, e a
     // sombra de quem está a 40 m não é vista por ninguém.
@@ -292,6 +304,7 @@ class RemotePlayer {
       p.setDraw(a.drawFraction);
       p.setReload(a.reloadFraction ?? 0);
       p.setKnife(a.knifeFraction ?? 0);
+      p.setKame(a.kameFraction ?? 0);
       p.setJetFlame(a.jetFlame ?? 0);
       this.body.verticalVelocity = 0;
       return;
@@ -311,6 +324,7 @@ class RemotePlayer {
     p.setDraw(lerp(a.drawFraction, b.drawFraction, t));
     p.setReload(lerp(a.reloadFraction ?? 0, b.reloadFraction ?? 0, t));
     p.setKnife(lerp(a.knifeFraction ?? 0, b.knifeFraction ?? 0, t));
+    p.setKame(lerp(a.kameFraction ?? 0, b.kameFraction ?? 0, t));
     /* O jato NÃO é interpolado: é um bit, e meio jato não existe (o mesmo
        critério de `extrapolate`, e o mesmo do `airborne` logo acima). Ele
        faltava aqui — e como este é o caminho NORMAL, o de interpolar entre duas
@@ -359,6 +373,7 @@ class RemotePlayer {
     p.setDraw(b.drawFraction);
     p.setReload(b.reloadFraction ?? 0);
     p.setKnife(b.knifeFraction ?? 0);
+    p.setKame(b.kameFraction ?? 0);
     /* O jato NÃO é interpolado entre amostras: é um bit, e meio jato não
        existe. Interpolar produziria uma chama que cresce e encolhe a 20 Hz
        enquanto o dono a liga e desliga em pulsos. */

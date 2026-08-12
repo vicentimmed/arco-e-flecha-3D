@@ -78,16 +78,28 @@ export function pickSpawnPoint(terrain, ocupados = [], random = Math.random) {
  * jogo de arco precisa dessa distância — colar dois duelistas a 10 m transforma
  * o arco num revólver.
  */
-export function duelPositions(terrain, count, random = Math.random) {
+/**
+ * @param {number} [anel] raio do anel, em metros, quando quem chama tem um
+ *   próprio. O último em pé usa um mais largo que o do duelo: com oito
+ *   arqueiros em vez de dois, o anel do duelo fica apertado e a vantagem passa
+ *   a ser de quem calhou de nascer olhando para a direção certa.
+ */
+export function duelPositions(terrain, count, random = Math.random, anel = null) {
   /* O ANEL DA LUA É O DOBRO DO DO VALE, e não é capricho.
    *
    * Sem arrasto e com 1/6 de g, um tiro tenso de 120 m/s cai 12 cm em 46 m: o
    * anel do vale transformaria o arco no revólver que o duelo existe para
    * evitar. A 95 m a flecha volta a cair meio metro, e a queda volta a ser
    * leitura em vez de detalhe. */
-  const D = terrain.spawnCenter
-    ? CONFIG.levels.moon.duel
-    : CONFIG.modes.duel;
+  /* A fase pode DECLARAR o anel dela (`terrain.duel`); quem não declara cai na
+     heurística antiga, que lê "tem spawnCenter" como "é a Lua".
+
+     Essa heurística era verdadeira enquanto existiam duas fases, e deixou de
+     ser na terceira: o campo do castelo também declara `spawnCenter` (o pátio)
+     e herdaria um anel de 95 m dentro de um pátio de 11 m — os dois duelistas
+     nasceriam no mesmo canto, ou fora da alvenaria, dependendo do sorteio. */
+  const D = terrain.duel ??
+    (terrain.spawnCenter ? CONFIG.levels.moon.duel : CONFIG.modes.duel);
   const S = { ...CONFIG.spawn, ...areaDeNascimento(terrain) };
   const giro = random() * Math.PI * 2; // a arena não começa sempre igual
   const saida = [];
@@ -98,7 +110,7 @@ export function duelPositions(terrain, count, random = Math.random) {
 
     // Do anel para dentro: o primeiro raio que der chão plano vence, então
     // todos ficam o mais longe possível uns dos outros.
-    for (let r = D.ringRadius; r >= S.minRadius && !ponto; r -= 4) {
+    for (let r = anel ?? D.ringRadius; r >= S.minRadius && !ponto; r -= 4) {
       const x = S.centerX + Math.cos(ang) * r;
       const z = S.centerZ + Math.sin(ang) * r;
       if (terrain.isFlatGround(x, z)) ponto = { x, z };

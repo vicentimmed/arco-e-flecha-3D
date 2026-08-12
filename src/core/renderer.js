@@ -234,6 +234,54 @@ const HEMI_NIGHT = 0.055;
 const FILL_DAY = 0.2;
 const SUN_DAY = 3.1;
 
+/* ------------------------------------------------------------ entardecer ----
+
+   O FIM DA TARDE NÃO É "meia noite".
+
+   `setNight` é um dial dia↔noite: ele apaga o sol, desliga a sombra projetada,
+   acende estrelas e fecha a névoa em preto. Interpolá-lo pela metade não dá
+   entardecer — dá um dia escuro, sem sombra e com estrelas no céu às cinco da
+   tarde. São dois fenômenos diferentes, e por isso são dois dials.
+
+   O que MUDA no fim de tarde, e é só isto:
+
+   • o Sol DESCE (41° → 7°), e é daí que vem a sombra comprida, que é o efeito
+     inteiro — a muralha passa a projetar trinta metros de sombra sobre a rampa;
+   • ele AVERMELHA, porque a luz atravessa mais ar;
+   • o céu inverte o gradiente: zênite fundo, horizonte em brasa;
+   • a névoa esquenta junto (ela É o ar que avermelhou o Sol);
+   • a hemisférica cai um terço.
+
+   O que NÃO muda: a intensidade do Sol cai só 42 %, a sombra continua LIGADA e
+   não existe estrela nenhuma. É o que garante o pedido — entardece, não
+   escurece. */
+const DUSK_DIR = new THREE.Vector3(-0.86, 0.13, 0.49).normalize();
+/* O Sol de cima vai para o LADO, e não para trás da rampa.
+   Pôr o poente em +Z (à frente da muralha) daria a imagem bonita da horda
+   saindo do sol — e contra a luz o defensor não distingue um esqueleto de um
+   ogro a sessenta metros. De lado, a mesma sombra comprida atravessa a rampa e
+   torna cada silhueta MAIS legível, não menos. */
+const SUN_COLOR_DAY = new THREE.Color(0xfff0d2);
+const SUN_COLOR_DUSK = new THREE.Color(0xff9c4a);
+const SKY_TINT_DUSK = new THREE.Color(0x8fa8d8);
+const GROUND_TINT_DUSK = new THREE.Color(0x5c4a34);
+/* A névoa esquenta MENOS que o Sol, e é de propósito.
+   Levada até o mesmo laranja da luz, ela lavava a serra e a rampa no mesmo tom
+   do céu: a 90 m tudo virava uma mancha âmbar só, e a leitura da fila — que é o
+   modo inteiro — ia junto. Um tom mais fechado e menos saturado mantém a hora
+   do dia e devolve a distância. */
+const FOG_DUSK = new THREE.Color(0xb98e6d);
+const FILL_COLOR_DAY = new THREE.Color(0xbcd8ff);
+const FILL_COLOR_DUSK = new THREE.Color(0x9fb0e0);
+const ZENITH_DAY = new THREE.Color("#2c78cc");
+const ZENITH_DUSK = new THREE.Color("#1d3f80");
+const HORIZON_DAY = new THREE.Color("#d0e2ee");
+const HORIZON_DUSK = new THREE.Color("#ffb268");
+const SKYGROUND_DAY = new THREE.Color("#b3c3c6");
+const SKYGROUND_DUSK = new THREE.Color("#7a6247");
+const SUNDISC_DAY = new THREE.Color("#ffe6b0");
+const SUNDISC_DUSK = new THREE.Color("#ff8f3c");
+
 /**
  * A textura da Terra, carregada uma vez.
  *
@@ -332,6 +380,8 @@ export class Renderer {
     this.earthDirection = new THREE.Vector3(-0.42, 0.62, -0.66).normalize();
     /** 0 = dia, 1 = noite fechada. Ver `setNight`. */
     this._night = 0;
+    /** 0 = Sol alto, 1 = Sol na linha do horizonte. Ver `setDusk`. */
+    this._dusk = 0;
     /** 0 = há atmosfera, 1 = vácuo lunar. Ver `setSpace`. */
     this._space = 0;
     /** 0 = céu limpo, 1 = tempestade do chefão. Ver `setStorm`. */
@@ -536,6 +586,63 @@ export class Renderer {
     this.stars.visible = n > 0.15;
     const starBase = Math.max(0, (n - 0.15) / 0.85);
     this.stars.material.opacity = starBase * (1 - this._storm * 0.9);
+  }
+
+  /**
+   * Desce o Sol para o fim da tarde (0 → 1). Ver o bloco de constantes acima.
+   *
+   * Mesma disciplina de `setNight`: tudo o que o entardecer muda passa por
+   * aqui, e é isso que garante que voltar ao vale desfaça exatamente o que a
+   * ida ao castelo fez.
+   *
+   * Convive com `setNight` sem brigar por uma razão simples: onde este dial
+   * vale, a noite fica em zero, e `setNight` sai na primeira linha quando o
+   * valor não muda. As duas fases nunca pedem os dois ao mesmo tempo — o vale
+   * anoitece, o castelo entardece.
+   */
+  setDusk(t) {
+    const d = Math.max(0, Math.min(1, t));
+    if (d === this._dusk) return;
+    this._dusk = d;
+
+    /* O SOL DESCE. É a única linha com consequência de verdade: a direção da
+       luz alimenta a câmera de sombra (ver `updateShadowFocus`), o halo do céu
+       e a névoa direcional. Uma sombra de muralha com trinta metros sai daqui,
+       de graça, sem nenhum código de sombra novo. */
+    this.sunDirection.copy(SUN_DIR).lerp(DUSK_DIR, d).normalize();
+    this.skyMaterial.uniforms.sunDir.value.copy(this.sunDirection);
+
+    this.sun.color.lerpColors(SUN_COLOR_DAY, SUN_COLOR_DUSK, d);
+    // Cai 42 % e para aí: abaixo disso a rampa deixaria de ser legível a 90 m,
+    // que é a distância em que o modo inteiro acontece.
+    this.sun.intensity = SUN_DAY * (1 - 0.42 * d);
+    // A sombra continua LIGADA — ela é o efeito, não uma vítima dele.
+    this.sun.castShadow = true;
+    this.sun.visible = true;
+
+    this.hemi.intensity = HEMI_DAY * (1 - 0.34 * d);
+    this.hemi.color.lerpColors(SKY_TINT_DAY, SKY_TINT_DUSK, d);
+    this.hemi.groundColor.lerpColors(GROUND_TINT_DAY, GROUND_TINT_DUSK, d);
+
+    this.fill.intensity = FILL_DAY * (1 - 0.25 * d);
+    this.fill.color.lerpColors(FILL_COLOR_DAY, FILL_COLOR_DUSK, d);
+
+    const u = this.skyMaterial.uniforms;
+    u.zenith.value.lerpColors(ZENITH_DAY, ZENITH_DUSK, d);
+    /* O CÉU pode ser dramático — ele não tem nada em cima para esconder. É a
+       névoa que precisa de contenção, porque é ela que cobre o campo de tiro. */
+    u.horizon.value.lerpColors(HORIZON_DAY, HORIZON_DUSK, d);
+    u.ground.value.lerpColors(SKYGROUND_DAY, SKYGROUND_DUSK, d);
+    u.sunColor.value.lerpColors(SUNDISC_DAY, SUNDISC_DUSK, d);
+
+    /* A névoa esquenta junto, e não é enfeite: ela É o ar que avermelhou o Sol.
+       Uma névoa azul-clara sob um sol laranja seria a única coisa da cena
+       dizendo que ainda é meio-dia. */
+    this.scene.fog.color.lerpColors(FOG_DAY, FOG_DUSK, d * 0.78);
+
+    // Nuvem de fim de tarde é metade do céu. Fica.
+    this.clouds.visible = true;
+    this.stars.visible = false;
   }
 
   /**

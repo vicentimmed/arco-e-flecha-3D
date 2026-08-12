@@ -70,13 +70,17 @@ export class CastleLevel {
    * `levels/index.js` existe para evitar.
    *
    * @param {number} dt
-   * @param {object} _wind o vale usa; aqui não há bandeirola nem copa
+   * @param {object} wind os estandartes das torres o leem — ver `Castle.updateBanners`
    * @param {Array} _jogadores a Lua usa (os aliens perseguem)
    * @param {number} _tempoSala a Lua usa (baliza e cadentes em fase)
    * @param {number} dusk quanto o Sol já desceu (0 a 1). Ver `Game.updateDusk`.
    */
-  update(dt, _wind, _jogadores, _tempoSala, dusk = 0) {
-    this.castle?.update(dt, dusk);
+  update(dt, wind, _jogadores, _tempoSala, dusk = 0) {
+    /* O VENTO CHEGA AQUI, e não é enfeite: é o mesmo número que entorta a
+       flecha e desloca a pedra do trabuco. Um estandarte que ondula com força
+       fixa seria a única coisa da fase mentindo sobre a condição que mais
+       decide um tiro longo. */
+    this.castle?.update(dt, dusk, wind?.speed ?? 0);
     this.gate?.update(dt);
   }
 

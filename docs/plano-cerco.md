@@ -107,6 +107,88 @@
 >
 > ---
 >
+> ---
+>
+> **Terceira rodada — o trabuco que não atirava, e o castelo que não parecia um.**
+>
+> O relato tinha duas frases e as duas estavam certas: *"o trabuco parece estar
+> invertido"* e *"ao apertar o botão do mouse não atira"*.
+>
+> * **O CLIQUE NUNCA CHEGAVA.** Na mira, `blockDraw` fica ligado para o arco não
+>   tensionar por baixo da câmera — mas `blockDrawReason` ficava `null`, e o
+>   `input` trata todo motivo sem nome como "câmera da flecha": ele APAGA
+>   `primaryDown` e sai. A borda de subida que `updateSiege` procura para soltar
+>   a pedra não chegava a existir. O bloqueio ganhou nome (`"trebuchet"`), e com
+>   ele o clique passa a ser registrado sem virar um puxão de corda.
+> * **A ARMAÇÃO ESTAVA DE CABEÇA PARA BAIXO.** Armado, o contrapeso ficava
+>   EMBAIXO e a funda no alto; ao soltar, o peso SUBIA. Um trabuco carregado se
+>   reconhece de longe pelo peso pendurado lá em cima — os três engenhos do muro
+>   mentiam sobre o próprio estado a vinte metros, que é a única distância de que
+>   se olha para eles. Junto vieram a armação de verdade (dois cavaletes em A, o
+>   sarilho com a corda que puxa o braço, a calha em que a pedra descansa) e a
+>   descoberta de que `fireAt` não zerava o içamento: o braço só se mexia quando
+>   o `TREB_STATE` seguinte chegava do servidor.
+> * **A RECARGA CORRIA AO DOBRO.** `pronto` é um PRAZO no relógio da sala, e o
+>   tique descontava o passo cheio dele enquanto `agora` avançava o mesmo tanto:
+>   o tempo era gasto duas vezes. Sozinho, o engenho recarregava em 7 s e não em
+>   14; com alguém na manivela, em 3,4 s e não em 4,5. A troca central do modo —
+>   largar o arco para içar o engenho de outro — pagava metade do preço, e o
+>   banco de provas (que sempre modelou a regra certa) media um jogo que a sala
+>   não jogava. Corrigido, o banco e a sala voltam a falar do mesmo jogo:
+>   **71,7 %** de vitórias com três defensores, derrota sempre no último minuto,
+>   trabuco valendo 28 pontos de taxa de vitória.
+> * **NASCIA-SE DE COSTAS PARA A RAMPA.** `faceYaw` já existia no `room.js` com
+>   a conta certa; os três pontos de nascimento do cerco e da chuva de meteoros
+>   tinham a fórmula escrita à mão, com o sinal trocado. O primeiro segundo de
+>   toda partida e de todo renascimento era um giro de mouse às cegas.
+> * **A CÂMERA JOGAVA DE DENTRO DO ENGENHO.** Os postos de tiro ficavam no mesmo
+>   x do seu trabuco, e a terceira pessoa fica quatro metros atrás do arqueiro:
+>   a partida inteira era vista através de um cavalete. Os postos saíram do eixo
+>   das máquinas; os braseiros do adarve saíram junto, da hourd para a faixa de
+>   dentro, pelo mesmo motivo.
+> * **O MURO NÃO TINHA UMA LINHA VERTICAL.** Visto de fora era uma laje de 34 m
+>   com o topo perfeitamente reto. O que destravou a correção foi perceber que a
+>   HOURD já tinha resolvido o problema: o arqueiro fica em z = 8,3 e a face
+>   externa em z = 8,0, então tudo o que se erga sobre o adarve nasce ATRÁS dele
+>   e não pode entrar na linha de tiro nem em princípio. Entraram duas torres de
+>   portão, ameias no fundo, nos flancos e nos cantos de trás dos bastiões,
+>   guaritas de canto, embasamento e pilastras na face externa, frestas e coroa
+>   na menagem, estandartes que leem o vento e um pátio com poço, depósito e
+>   carroça quebrada. **Tudo no mesmo lote de fusão: ~180 caixas a mais e
+>   nenhuma chamada de desenho a mais.**
+> * **E a pedra do calcário era cinza-azulada** porque a face que importa passa a
+>   partida em luz rasante ou em sombra própria, iluminada só pelo hemisférico,
+>   que é azul. A correção é na TINTA: subir o hemisférico clarearia junto a
+>   horda, a rampa e o pátio, que estão certos.
+>
+> **Desempenho, medido contra o Vale Verde** (a régua que o pedido nomeou):
+>
+> ```
+>   Vale Verde                    289 chamadas · 267 k triângulos · 217 geometrias
+>   Cerco (3 arqueiros, 23 sitiantes)
+>     antes                       789 chamadas
+>     depois                      609 chamadas
+> ```
+>
+> Os dois cortes que pagaram isso não são do castelo — são de TODO modo:
+>
+> * **a flecha caiu de 6 malhas para 2.** Haste, ponta e nó eram três `Mesh` com
+>   três materiais; viraram uma geometria só com COR POR VÉRTICE. As empenas
+>   ficam de fora do lote porque levam a cor de quem atirou, e passaram a buscar
+>   o material num cache por cor em vez de clonar um por disparo — com 120
+>   cravadas em cena eram 120 materiais para seis cores. O custo do corte é
+>   honesto: um material só significa um acabamento só, e o brilho de aço da
+>   ponta virou contraste de cor em vez de expoente especular;
+> * **o ferro dos sete braseiros virou uma malha.** Cesto e tripé não se mexem;
+>   quem respira é a chama.
+>
+> A malha da FASE castelo ficou em 35 objetos visíveis, contra 79 do vale. O que
+> sobra de diferença é o que o modo é: três arqueiros a sete metros um do outro
+> (todos no nível de detalhe de perto, 119 malhas cada) e a horda. Nenhum dos
+> dois é gordura.
+>
+> ---
+>
 > **Números atuais medidos** (arqueiro médio: 0,5 tiro/s, 78 % de acerto,
 > 18 % dos acertos na cabeça):
 > três defensores **75 %** de vitórias, com a derrota sempre no último minuto;

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bancada do trabuco — Arco &amp; Flecha</title>
+    <style>
+      :root { color-scheme: dark; --ui: #f5c451; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #10131a;
+        color: #e8e6e1;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+      canvas { display: block; }
+      #painel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: 250px;
+        padding: 12px 14px 14px;
+        background: rgba(10, 13, 20, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        backdrop-filter: blur(8px);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ui);
+      }
+      .linha { margin-bottom: 9px; }
+      .linha > label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #a7a49d;
+        margin-bottom: 3px;
+      }
+      input[type="range"] { width: 100%; }
+      .botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+      button {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.3);
+        color: #cfccc5;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.on { border-color: var(--ui); background: rgba(245, 196, 81, 0.16); color: var(--ui); }
+      #conta {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 11px;
+        color: #a7a49d;
+        white-space: pre-line;
+      }
+      #conta b { color: #e8e6e1; font-weight: 700; }
+      body.cinza canvas { filter: grayscale(1); }
+    </style>
+  </head>
+  <body>
+    <div id="painel">
+      <h1>Bancada do trabuco</h1>
+
+      <div class="linha botoes">
+        <button id="atirar">atirar</button>
+        <button id="ciclo" class="on">ciclo automático</button>
+      </div>
+
+      <div class="linha">
+        <label>içamento <span data-eco="reload">1.00</span></label>
+        <input id="reload" type="range" min="0" max="1" step="0.01" value="1" />
+      </div>
+      <div class="linha">
+        <label>azimute <span data-eco="yaw">0.00</span></label>
+        <input id="yaw" type="range" min="-0.7" max="0.7" step="0.01" value="0" />
+      </div>
+      <div class="linha">
+        <label>câmera — órbita <span data-eco="orbita">0.9</span></label>
+        <input id="orbita" type="range" min="-3.14" max="3.14" step="0.01" value="0.9" />
+      </div>
+      <div class="linha">
+        <label>câmera — altura <span data-eco="alt">2.2</span></label>
+        <input id="alt" type="range" min="-0.5" max="9" step="0.05" value="2.2" />
+      </div>
+      <div class="linha">
+        <label>câmera — distância <span data-eco="dist">7.5</span></label>
+        <input id="dist" type="range" min="2.5" max="26" step="0.1" value="7.5" />
+      </div>
+
+      <div class="linha botoes">
+        <button id="girar">girar câmera</button>
+        <button id="cinza">cinza</button>
+        <button id="grade" class="on">grade</button>
+      </div>
+
+      <div id="conta"></div>
+    </div>
+    <script type="module" src="./trabuco.js"></script>
+  </body>
+</html>

@@ -199,6 +199,31 @@ export const CASTLE = {
      adarve passa a flecha por cima, e o tiro rasante do xamã lá de baixo bate
      na pedra. Ver `MERLON_TOP` e §6.4 do plano. */
   parapetThick: 0.5,
+
+  /* -------------------------------------------------- casa do portão --
+     DUAS TORRES, e a descoberta que as tornou possíveis.
+
+     O muro não tinha uma linha vertical sequer: visto de fora era uma laje de
+     34 m com o topo perfeitamente reto, que é a única coisa que um castelo
+     nunca é. Toda tentativa anterior de erguer alguma coisa ali esbarrava na
+     mesma regra — não se põe pedra na frente de quem atira.
+
+     Só que a HOURD já tinha resolvido isso. O arqueiro fica em z = 8,3 e a
+     face externa do muro está em z = 8,0: ele está À FRENTE da alvenaria
+     inteira. Tudo o que se construir sobre o adarve, em z < 8, nasce ATRÁS
+     dele — e não pode entrar na linha de tiro nem em princípio. É o mesmo
+     raciocínio que o comentário de `CASTLE.hoardOut` faz para a flecha,
+     usado agora para a silhueta.
+
+     As torres ocupam a metade de DENTRO do adarve e deixam livres os três
+     metros do bordo mais a hourd, que é por onde se anda e de onde se atira.
+     Ficam a 5,6 m do eixo, encostadas no vão — como numa casa de portão de
+     verdade. */
+  gateTowerX: 5.6,
+  gateTowerHalfX: 1.55,
+  /** Meia-espessura em z, medida a partir da face INTERNA do muro. */
+  gateTowerHalfZ: 1.3,
+  gateTowerRise: 4.4, // m acima do piso do adarve
 };
 
 /** Centro do muro frontal em z — derivado, para ninguém recalcular errado. */
@@ -268,14 +293,34 @@ export function walkwayPosts() {
   /* NA HOURD, encostado no parapeito. É a posição que dá o tiro no pé do muro
      (ver `CASTLE.hoardOut`), e é onde um arqueiro de cerco de verdade ficava. */
   const zc = CASTLE.wallZOut + CASTLE.hoardOut - CASTLE.parapetThick - 0.4;
+
+  /* NENHUM POSTO NO EIXO DE UM TRABUCO — e a razão é a CÂMERA, não o corpo.
+   *
+   * A terceira pessoa fica cerca de quatro metros atrás do arqueiro, e o
+   * engenho tem quatro metros e meio de comprimento: um posto alinhado com ele
+   * põe a câmera DENTRO da armação, e a partida inteira é jogada através de um
+   * cavalete. Era o que acontecia nos três — o posto central e os dois
+   * bastiões nasciam no mesmo x do seu engenho.
+   *
+   * Deslocar de lado resolve sem mover as máquinas, que estão onde estão por
+   * geometria (`trebuchetPosts`): a três metros e meio do eixo, o engenho vai
+   * para a borda do quadro e vira o que deve ser — a coisa grande ao lado, que
+   * se vê pelo canto do olho e à qual se vai quando o arco não basta.
+   *
+   * A ORDEM continua sendo a da distribuição: os dois primeiros ladeiam o
+   * portão, que é onde a partida é decidida. */
+  const tx = CASTLE.towerX;
   return [
-    { x: 0, y: WALL_TOP, z: zc },
-    { x: -9, y: WALL_TOP, z: zc },
-    { x: 9, y: WALL_TOP, z: zc },
-    { x: -CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4 },
-    { x: CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4 },
-    { x: -14.5, y: WALL_TOP, z: zc },
-    { x: 14.5, y: WALL_TOP, z: zc },
+    { x: -3.5, y: WALL_TOP, z: zc },
+    { x: 3.5, y: WALL_TOP, z: zc },
+    { x: -10.5, y: WALL_TOP, z: zc },
+    { x: 10.5, y: WALL_TOP, z: zc },
+    /* Nos bastiões, ATRÁS e ao lado do engenho: ele fica adiante e à direita
+       (ou à esquerda), enquadrando a rampa em vez de tapá-la. */
+    { x: -(tx - 2.4), y: WALL_TOP, z: CASTLE.towerZ - 1.2 },
+    { x: tx - 2.4, y: WALL_TOP, z: CASTLE.towerZ - 1.2 },
+    { x: -15.2, y: WALL_TOP, z: zc },
+    { x: 15.2, y: WALL_TOP, z: zc },
   ];
 }
 
@@ -287,9 +332,17 @@ export function walkwayPosts() {
  * Ver §5.1 do plano.
  */
 export function trebuchetPosts() {
+  /* O ENGENHO OCUPA z ∈ [−2,2, +2,2] em torno do posto (ver `G` em
+     `entities/trebuchet.js`), e ele tem de caber no piso em que está.
+     O adarve vai de z = 2,6 (face interna) a 8,0 (face externa): com o posto
+     em `WALL_ZC − 1,4` = 3,9 a armação passava 0,9 m para dentro do pátio e o
+     sarilho ficava pendurado sobre o vazio.
+     Encostado na face INTERNA, ele fecha em [2,8, 7,2] e deixa livres os dois
+     metros do bordo e a hourd — que é justamente a faixa de onde se atira. */
+  const zAdarve = CASTLE.wallZOut - CASTLE.wallThick + 2.4;
   return [
     { id: 0, x: -CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4, yaw: 0 },
-    { id: 1, x: 0, y: WALL_TOP, z: WALL_ZC - 1.4, yaw: 0 },
+    { id: 1, x: 0, y: WALL_TOP, z: zAdarve, yaw: 0 },
     { id: 2, x: CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4, yaw: 0 },
   ];
 }
@@ -402,6 +455,120 @@ export function castleRocks() {
       achatamento: 0.4 + rnd() * 0.5,
     });
   }
+  return out;
+}
+
+/**
+ * OS DESTROÇOS DA RAMPA — e por que noventa metros de terra precisavam deles.
+ *
+ * O corredor é o centro da tela do primeiro ao último minuto, e ele era uma
+ * faixa de terra lisa de 26 m de largura por 90 de comprimento. Vazio assim ele
+ * cobra dois preços, e o segundo é de jogo e não de gosto:
+ *
+ * • **não dá distância.** O olho mede noventa metros por OBJETOS, não por cor.
+ *   Sem nada no meio do caminho, um soldado a 40 m e um a 70 m são o mesmo
+ *   boneco pequeno — e escolher em quem atirar primeiro é a decisão que o modo
+ *   pede o tempo todo;
+ * • **não conta nada.** Uma fortaleza sitiada há semanas com o caminho de
+ *   acesso impecável é a única coisa que a fase afirma e não mostra.
+ *
+ * Eles ficam nos OMBROS do corredor, nunca dentro. A faixa por onde a horda
+ * anda e por onde a pedra do trabuco cai continua limpa — uma estaca no meio
+ * dela seria a pedra na frente da mira que o parapeito deixou de ser.
+ *
+ * Não bloqueiam flecha e não entram em `castleBlockers()`: são estacas de 12 cm
+ * e escudos caídos, e recusar um tiro por causa deles a sessenta metros seria
+ * pior do que não os ter.
+ */
+export function rampDebris() {
+  const out = [];
+  let seed = 31415926;
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+
+  /* A FAIXA LIVRE, e ela existe por construção.
+   *
+   * O corredor da rampa tem meia-largura 19 m no alto e 24 m no pé (a MESMA
+   * conta de `castleWoods` — duas fórmulas divergentes marcariam duas bordas
+   * diferentes). A horda nasce dentro de `spawnHalfX`, que são 15 m. Sobram
+   * portanto de 4 a 9 metros de cada lado por onde ninguém anda e para onde
+   * ninguém atira: é aí que os destroços moram.
+   *
+   * A primeira tentativa os pôs no ombro EXTERNO, em `meia(z)`, e eles
+   * simplesmente não apareciam — a 60 m, vinte e quatro metros fora do eixo
+   * caem na borda do quadro, atrás do próprio corpo do arqueiro. Encostados na
+   * faixa da horda eles ficam onde o olho já está olhando, que é o único lugar
+   * onde uma referência de distância serve para alguma coisa. */
+  const dentro = (z) => 15.5 + Math.max(0, Math.min(1, (z - 9) / 90)) * 2.5;
+  const meia = (z) => 19 + Math.max(0, Math.min(1, (z - 9) / 90)) * 5;
+
+  /* AS ESTACAS: duas fileiras irregulares nos ombros, com falhas. As falhas
+     importam mais que as estacas — uma paliçada contínua leria como cerca de
+     jardim, e o que se quer dizer é "isto foi arrancado aos pedaços". */
+  for (let z = 18; z < 96; z += 2.8 + rnd() * 2.4) {
+    for (const s of [-1, 1]) {
+      if (rnd() < 0.24) continue;
+      const borda = dentro(z) + rnd() * 2.4;
+      out.push({
+        tipo: "estaca",
+        x: s * borda,
+        z: z + (rnd() - 0.5) * 1.6,
+        h: 1.2 + rnd() * 1.3,
+        r: 0.1 + rnd() * 0.06,
+        // Tombadas para fora, como quem foi empurrado por quem subia.
+        inclina: (0.1 + rnd() * 0.5) * s,
+        giro: rnd() * Math.PI,
+      });
+    }
+  }
+
+  /* OS ESCUDOS E AS LANÇAS caídos, mais adentro do ombro. São as peças planas:
+     elas pegam a luz rasante do poente e piscam quando a câmera se move, que é
+     o que faz o olho registrar a distância delas. */
+  for (let i = 0; i < 30; i++) {
+    const z = 20 + rnd() * 72;
+    const s = rnd() < 0.5 ? -1 : 1;
+    out.push({
+      tipo: rnd() < 0.55 ? "escudo" : "lanca",
+      x: s * (dentro(z) - 1.2 - rnd() * 2.6),
+      z,
+      giro: rnd() * Math.PI * 2,
+      inclina: rnd() * 0.35,
+      escala: 0.9 + rnd() * 0.5,
+    });
+  }
+
+  /* QUATRO CARROÇAS QUEBRADAS, espalhadas pelo comprimento. São as peças
+     GRANDES, e por isso as que mais dão escala — uma a cada vinte metros dá ao
+     olho quatro marcos no percurso, que é o que uma faixa lisa não tinha. */
+  for (const [z, s] of [[26, -1], [45, 1], [64, -1], [84, 1]]) {
+    out.push({
+      tipo: "carroca",
+      x: s * (dentro(z) + 1.4),
+      z,
+      giro: (rnd() - 0.5) * 1.2 + (s > 0 ? 0.4 : -0.4),
+      tomba: 0.3 + rnd() * 0.5,
+    });
+  }
+
+  /* E o que o corredor larga fora dele: pedras da catapulta que erraram, no
+     ombro externo. Elas ficam em `meia(z)` de propósito — são o que passou
+     voando por cima da fila, não o que a fila derrubou. */
+  for (let i = 0; i < 14; i++) {
+    const z = 24 + rnd() * 66;
+    const s = rnd() < 0.5 ? -1 : 1;
+    out.push({
+      tipo: "escudo",
+      x: s * (meia(z) + rnd() * 3),
+      z,
+      giro: rnd() * Math.PI * 2,
+      inclina: rnd() * 0.5,
+      escala: 0.7 + rnd() * 0.4,
+    });
+  }
+
   return out;
 }
 
@@ -577,6 +744,25 @@ export function castleBlockers() {
   /* --------------------------------------------------------- torres -- */
   for (const sx of [-C.towerX, C.towerX]) {
     box(sx, wallCy, C.towerZ, C.towerHalf, wallH, C.towerHalfZ, "torre");
+  }
+
+  /* ------------------------------------------------ casa do portão --
+     As DUAS únicas peças novas que os dois lados precisam conhecer.
+
+     Elas entram aqui — e não na decoração de `entities/castle.js` — porque são
+     alvenaria de dois metros e meio de largura sobre o adarve: uma flecha que
+     as atravessasse no servidor e parasse nelas no cliente seria a divergência
+     clássica que este arquivo inteiro existe para evitar.
+
+     Que elas NÃO atrapalham ninguém está demonstrado na geometria, não suposto:
+     ficam em z ≤ 5,2 e o arqueiro em z = 8,3. Ver `CASTLE.gateTowerX`. */
+  {
+    const hz = C.gateTowerHalfZ;
+    const zc = C.wallZOut - C.wallThick + hz;
+    const alt = C.gateTowerRise / 2;
+    for (const sx of [-C.gateTowerX, C.gateTowerX]) {
+      box(sx, WALL_TOP + alt, zc, C.gateTowerHalfX, alt, hz, "casa-do-portão");
+    }
   }
 
   /* -------------------------------------------------- muros de flanco -- */

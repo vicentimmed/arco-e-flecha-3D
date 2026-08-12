@@ -34,13 +34,27 @@ import {
   trebuchetPosts,
 } from "../shared/castleProps.js";
 
-/* Calcário à noite. Dois tons e não um: uma parede de 34 m numa cor só lê como
-   textura de placeholder, e a variação por fiada é o que dá escala à pedra. */
+/* Calcário ao entardecer. Três tons e não um: uma parede de 34 m numa cor só lê
+   como textura de espaço reservado, e a variação por fiada é o que dá escala à
+   pedra.
+
+   E eles são QUENTES, o que não era o caso. A face que interessa é a de FORA, e
+   ela olha para +Z: com o Sol do cerco baixo e a −X, ela passa a partida
+   inteira em luz rasante ou em sombra própria, iluminada só pelo hemisférico —
+   que é azul. Um cinza neutro sob luz azul é uma laje azul, e era exatamente
+   isso que se via. A correção é na TINTA e não na luz: subir o hemisférico
+   clarearia junto a horda, a rampa e o pátio, que estão certos. */
 const TINTAS = {
-  pedra: { color: "#6a655c", roughness: 0.94, metalness: 0.02 },
-  pedraEscura: { color: "#4b4740", roughness: 0.97, metalness: 0.02 },
-  madeira: { color: "#4a3627", roughness: 0.9, metalness: 0.0 },
+  pedra: { color: "#8c8272", roughness: 0.94, metalness: 0.02 },
+  pedraEscura: { color: "#6d6455", roughness: 0.96, metalness: 0.02 },
+  /** A terceira fiada: o calcário mais tostado, para os cordões e as ameias. */
+  pedraQuente: { color: "#9c8e77", roughness: 0.92, metalness: 0.02 },
+  madeira: { color: "#5a4230", roughness: 0.9, metalness: 0.0 },
   ferro: { color: "#2b2b2e", roughness: 0.55, metalness: 0.7 },
+  /** As frestas e os vãos: pretos de propósito, é o que dá profundidade. */
+  vao: { color: "#14120f", roughness: 1, metalness: 0 },
+  /** Os estandartes. Vermelho porque é a única cor quente do castelo. */
+  pano: { color: "#a8342e", roughness: 0.95, metalness: 0, side: THREE.DoubleSide },
 };
 
 /** Acumula geometrias por material e entrega tudo em poucas malhas. */
@@ -107,6 +121,7 @@ export class Castle {
     this.drawCalls = lote.flush(this.group);
 
     this.buildBraziers();
+    this.buildBanners();
     return this;
   }
 
@@ -263,22 +278,64 @@ export class Castle {
     }
   }
 
-  /** Detalhes que não têm colisor: cordões, arco do portão, coruchéu. */
+  /**
+   * A DECORAÇÃO, e a regra que decide onde ela pode existir.
+   *
+   * Nada aqui tem colisor, e por isso nada aqui pode ficar na frente de uma
+   * flecha: o servidor não conhece estas peças, e uma flecha que parasse numa
+   * ameia local e passasse na sala seria a divergência que este arquivo
+   * inteiro existe para evitar.
+   *
+   * A regra é geométrica e vale peça por peça — **atrás do arqueiro, ou acima
+   * de onde ninguém atira**:
+   *
+   * • o arqueiro do muro está na hourd, em z = 8,3, à frente de toda a
+   *   alvenaria (a face externa é z = 8,0). Cordões, pilastras e o embasamento
+   *   ficam em z ≤ 8,7 e rentes à pedra — a linha de tiro sai por cima deles;
+   * • a menagem, o muro de fundo e os flancos ficam ATRÁS de quem atira, no
+   *   pátio, e nenhum tiro do modo passa por ali;
+   * • as ameias dos bastiões ficam nos CANTOS DE TRÁS. O bastião é um posto de
+   *   tiro; o canto de trás dele não é linha de tiro de ninguém.
+   *
+   * O que sustenta o resto é o orçamento: tudo isto entra no mesmo `Lote` da
+   * alvenaria, funde por material e sai nas MESMAS ~6 chamadas de desenho. São
+   * ~180 caixas a mais e nenhuma chamada a mais — é triângulo, que é o recurso
+   * de que esta fase sobra, e não chamada, que é o que falta.
+   */
   buildDetail(lote) {
     const C = CASTLE;
 
+    /* ------------------------------------------------------ o muro de fora --
+       EMBASAMENTO, PILASTRAS E CORDÃO.
+       A face externa é o fundo de tela da partida inteira, e ela era um plano
+       liso de 34 × 8 m. Estas três coisas são o mínimo que faz a luz rasante do
+       poente desenhar alguma coisa nela: uma sombra horizontal embaixo, sombras
+       verticais ritmadas no meio, e uma linha contínua no alto. */
+    const zOut = C.wallZOut;
+    // O embasamento, alargado e chanfrado — a pedra sempre engrossa no pé.
+    lote.box("pedraEscura", C.wallHalfX + 0.35, 0.9, C.wallThick / 2 + 0.42, 0, GROUND_Y + 0.9, WALL_ZC);
+    lote.box("pedra", C.wallHalfX + 0.2, 0.3, C.wallThick / 2 + 0.24, 0, GROUND_Y + 1.95, WALL_ZC);
+
+    // Pilastras: uma a cada 4,25 m, saltando o vão do portão.
+    for (let i = -4; i <= 4; i++) {
+      const x = i * 4.25;
+      if (Math.abs(x) < C.gateHalfX + 1.2) continue;
+      lote.box("pedraQuente", 0.55, (WALL_TOP - GROUND_Y - 2.2) / 2, 0.28,
+        x, GROUND_Y + 2.2 + (WALL_TOP - GROUND_Y - 2.2) / 2, zOut + 0.24);
+    }
+
     // Cordão de pedra no pé do adarve — a linha que dá altura ao muro.
-    lote.box("pedraEscura", C.wallHalfX + 0.4, 0.22, C.wallThick / 2 + 0.25, 0, WALL_TOP - 1.5, WALL_ZC);
+    lote.box("pedraQuente", C.wallHalfX + 0.4, 0.22, C.wallThick / 2 + 0.32, 0, WALL_TOP - 1.5, WALL_ZC);
 
     // Aduela do portão: um arco grosseiro em cinco pedras.
     for (let k = 0; k < 5; k++) {
       const a = (-0.55 + (k / 4) * 1.1) * Math.PI * 0.5;
       const r = C.gateHalfX + 0.55;
       lote.box(
-        "pedra",
+        "pedraQuente",
         0.5,
         0.42,
-        C.wallThick / 2 + 0.3,
+        C.wallThick / 2 + 0.34,
         Math.sin(a) * r,
         CASTLE.gateTopY - 0.3 + Math.cos(a) * 0.9,
         WALL_ZC,
@@ -286,14 +343,353 @@ export class Castle {
       );
     }
 
-    // Coruchéu da menagem: um tronco de pirâmide barato feito de três caixas.
-    const K = C.keep;
-    for (let k = 0; k < 3; k++) {
-      const h = K.half * (1 - k * 0.3);
-      lote.box("pedraEscura", h, 0.5, h, K.x, GROUND_Y + K.height + 0.5 + k, K.z);
+    this.buildGateHouse(lote);
+    this.buildCrenels(lote);
+    this.buildKeep(lote);
+    this.buildCourtyard(lote);
+  }
+
+  /**
+   * O PÁTIO, que era um retângulo de 38 × 30 m com uma torre no meio.
+   *
+   * Ele não é paisagem: é onde se renasce, é onde se repara o portão sob
+   * pressão e é o primeiro lugar que a horda vê quando o portão cai. Vazio, as
+   * três coisas acontecem no mesmo chão liso e nenhuma delas tem um ponto de
+   * referência — "vou ao portão" e "vou à menagem" eram a mesma travessia sem
+   * nada no caminho.
+   *
+   * Tudo aqui é MALHA SEM COLISOR, e por isso nada disto pode estorvar quem
+   * corre para o portão com o relógio de reparo correndo. As peças ficam
+   * ENCOSTADAS nos muros, deixando limpo o eixo menagem → portão, que é o
+   * trajeto que o modo cobra.
+   */
+  buildCourtyard(lote) {
+    const C = CASTLE;
+    const G = GROUND_Y;
+    const dentro = C.sideX - C.sideThick / 2;
+
+    // O POÇO, no canto: cilindro de pedra, dois montantes e a travessa.
+    const px = -12.5;
+    const pz = -8;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      lote.box("pedraEscura", 0.36, 0.55, 0.22,
+        px + Math.cos(a) * 1.05, G + 0.55, pz + Math.sin(a) * 1.05, 0, 0);
     }
+    for (const s of [-1, 1]) {
+      lote.box("madeira", 0.09, 0.85, 0.09, px + s * 0.95, G + 1.85, pz);
+    }
+    lote.box("madeira", 1.15, 0.08, 0.09, px, G + 2.6, pz);
+    lote.box("madeira", 0.32, 0.26, 0.28, px, G + 2.3, pz);
+
+    /* O DEPÓSITO DO CERCO, encostado no muro de fundo: barris, caixas e uma
+       pilha de lenha. É a explicação silenciosa de onde saem as pedras que o
+       trabuco cospe e o piche que arde na rampa. */
+    for (let i = 0; i < 7; i++) {
+      const x = -8 + i * 2.6;
+      const z = C.sideZBack + 2.0 + (i % 2) * 1.1;
+      lote.box("madeira", 0.42, 0.55, 0.42, x, G + 0.55, z);
+      if (i % 3 === 0) lote.box("madeira", 0.36, 0.45, 0.36, x + 0.3, G + 1.45, z + 0.2);
+    }
+    // Pilha de pedras de trabuco: quatro fiadas piramidais.
+    for (let f = 0; f < 3; f++) {
+      const n = 3 - f;
+      for (let i = 0; i < n; i++) {
+        lote.box("pedraQuente", 0.3, 0.28, 0.3,
+          13.0 + (i - (n - 1) / 2) * 0.68, G + 0.28 + f * 0.56, -6.5);
+      }
+    }
+    // A lenha, deitada em toras: só o muro de flanco a vê, e é o que basta.
+    for (let i = 0; i < 6; i++) {
+      lote.box("madeira", 1.5, 0.16, 0.16,
+        dentro - 1.9, G + 0.16 + Math.floor(i / 3) * 0.34,
+        -16 + (i % 3) * 0.36, 0, Math.PI / 2);
+    }
+
+    /* A CARROÇA quebrada junto ao portão, virada de lado. Ela conta o que já
+       aconteceu ali — e dá uma referência de escala no meio do vão, que é o
+       lugar em que o jogador mais precisa de uma. */
+    const cx = -6.4;
+    const cz = C.courtZFront - 1.6;
+    lote.box("madeira", 1.15, 0.12, 0.7, cx, G + 0.72, cz, 0, 0.22);
+    for (const s of [-1, 1]) {
+      lote.box("madeira", 1.15, 0.28, 0.08, cx, G + 0.95, cz + s * 0.62, 0, 0.22);
+    }
+    for (const s of [-1, 1]) {
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        lote.box("madeira", 0.1, 0.28, 0.09,
+          cx + 0.8, G + 0.6 + Math.sin(a) * 0.55, cz + s * 0.72 + Math.cos(a) * 0.55, 0, a);
+      }
+    }
+  }
+
+  /**
+   * As duas torres do portão — a única coisa vertical que o muro tem.
+   *
+   * Elas só cabem porque a hourd empurrou o arqueiro para fora da alvenaria;
+   * o porquê inteiro está em `CASTLE.gateTowerX`. A alvenaria delas está em
+   * `castleBlockers()` (o servidor precisa saber); aqui ficam a coroa, as
+   * frestas e o estandarte, que são só imagem.
+   */
+  buildGateHouse(lote) {
+    const C = CASTLE;
+    const hz = C.gateTowerHalfZ;
+    const zc = C.wallZOut - C.wallThick + hz;
+    const topo = WALL_TOP + C.gateTowerRise;
+
+    for (const sx of [-C.gateTowerX, C.gateTowerX]) {
+      // Cordão sob a coroa.
+      lote.box("pedraQuente", C.gateTowerHalfX + 0.18, 0.16, hz + 0.18, sx, topo - 0.55, zc);
+      // A coroa, ameada: cinco merlões em cada face longa.
+      this.ameias(lote, sx, topo, zc, C.gateTowerHalfX, hz, 0.62);
+      // Frestas de flecha: duas por torre, na face de fora.
+      for (const dy of [1.4, 3.0]) {
+        lote.box("vao", 0.09, 0.42, 0.06, sx, WALL_TOP + dy, zc - hz - 0.02);
+      }
+    }
+  }
+
+  /**
+   * As AMEIAS, e o único lugar em que elas não atrapalham.
+   *
+   * Merlões alternados são o que faz uma silhueta ler como castelo, e são
+   * também o que o §6.4 do plano proibiu no muro frontal: lá eles cortam o
+   * campo de tiro em fatias de noventa centímetros, na altura do olho. A
+   * proibição vale para o muro frontal — e só para ele. Aqui elas coroam o que
+   * está atrás de quem atira: o fundo, os flancos, os cantos de trás dos
+   * bastiões e as torres do portão.
+   */
+  buildCrenels(lote) {
+    const C = CASTLE;
+    const topoFlanco = GROUND_Y + C.sideHeight;
+
+    // Os dois muros de flanco, na face de FORA de cada um.
+    for (const sx of [-C.sideX, C.sideX]) {
+      const x = sx + Math.sign(sx) * (C.sideThick / 2 - 0.22);
+      for (let z = C.sideZBack + 1.2; z < C.wallZOut - 1.2; z += 1.55) {
+        lote.box("pedraEscura", 0.22, 0.5, 0.42, x, topoFlanco + 0.5, z);
+      }
+    }
+    // O muro de fundo, que é o que se vê do pátio e de trás.
+    for (let x = -C.sideX + 1.0; x <= C.sideX - 1.0; x += 1.55) {
+      lote.box("pedraEscura", 0.42, 0.5, 0.22,
+        x, topoFlanco + 0.5, C.sideZBack - C.sideThick / 2 + 0.22);
+    }
+
+    /* Os BASTIÕES: ameias só no terço de trás, e guaritas nos dois cantos de
+       trás. O terço da frente é posto de tiro e continua chão limpo — a mesma
+       regra do muro, aplicada dentro de uma peça só. */
+    for (const sx of [-C.towerX, C.towerX]) {
+      const zFundo = C.towerZ - C.towerHalfZ;
+      for (let x = sx - C.towerHalf + 0.5; x <= sx + C.towerHalf - 0.4; x += 1.5) {
+        lote.box("pedraEscura", 0.4, 0.5, 0.22, x, WALL_TOP + 0.5, zFundo + 0.22);
+      }
+      for (const lado of [-1, 1]) {
+        for (let z = zFundo + 0.8; z < C.towerZ - 1.0; z += 1.5) {
+          lote.box("pedraEscura", 0.22, 0.5, 0.4,
+            sx + lado * (C.towerHalf - 0.22), WALL_TOP + 0.5, z);
+        }
+        // A guarita do canto de trás: um cilindro em balanço, com cobertura.
+        const gx = sx + lado * (C.towerHalf - 0.1);
+        this.guarita(lote, gx, WALL_TOP, zFundo + 0.3);
+      }
+    }
+  }
+
+  /** Uma guarita: fuste, coroa e um cone de quatro caixas. Pura silhueta. */
+  guarita(lote, x, base, z) {
+    lote.box("pedra", 0.52, 1.15, 0.52, x, base + 1.15, z);
+    lote.box("pedraQuente", 0.62, 0.14, 0.62, x, base + 2.38, z);
+    for (let k = 0; k < 3; k++) {
+      const h = 0.55 * (1 - k * 0.3);
+      lote.box("pedraEscura", h, 0.22, h, x, base + 2.62 + k * 0.42, z);
+    }
+  }
+
+  /**
+   * A MENAGEM, que era uma laje de 22 m sem uma única aresta.
+   *
+   * Ela é o ponto mais alto da fase e aparece em todo enquadramento que inclua
+   * o pátio — e não tinha nem coroa, nem fresta, nem porta que se lesse. Ganhou
+   * as quatro coisas que fazem uma torre de menagem: o embasamento, os cordões
+   * que dividem os andares, as frestas em três alturas e a coroa ameada com
+   * guaritas nos quatro cantos.
+   */
+  buildKeep(lote) {
+    const K = CASTLE.keep;
+    const topo = GROUND_Y + K.height;
+
+    // Embasamento e dois cordões de andar.
+    lote.box("pedraEscura", K.half + 0.3, 1.0, K.half + 0.3, K.x, GROUND_Y + 1.0, K.z);
+    for (const dy of [7.5, 14.5]) {
+      lote.box("pedraQuente", K.half + 0.16, 0.16, K.half + 0.16, K.x, GROUND_Y + dy, K.z);
+    }
+
+    /* As FRESTAS. Quatro faces × três andares, e é a coisa mais barata que
+       existe para dizer "isto é habitado": um retângulo preto de 12 cm de
+       largura, rebaixado dois centímetros na pedra. */
+    for (const dy of [4.2, 11.0, 17.8]) {
+      for (const s of [-1, 1]) {
+        lote.box("vao", 0.09, 0.55, 0.05, K.x + s * 1.7, GROUND_Y + dy, K.z + s * (K.half + 0.02));
+        lote.box("vao", 0.05, 0.55, 0.09, K.x + s * (K.half + 0.02), GROUND_Y + dy, K.z - s * 1.7);
+      }
+    }
+
+    // A coroa ameada e as quatro guaritas de canto.
+    lote.box("pedraQuente", K.half + 0.42, 0.2, K.half + 0.42, K.x, topo + 0.2, K.z);
+    this.ameias(lote, K.x, topo + 0.4, K.z, K.half + 0.34, K.half + 0.34, 0.62);
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        this.guarita(lote, K.x + sx * (K.half + 0.3), topo + 0.4, K.z + sz * (K.half + 0.3));
+      }
+    }
+    // Coruchéu: o telhado do torreão central, acima da coroa.
+    for (let k = 0; k < 4; k++) {
+      const h = (K.half - 1.2) * (1 - k * 0.24);
+      lote.box("pedraEscura", h, 0.42, h, K.x, topo + 1.6 + k * 0.8, K.z);
+    }
+
     // Porta da menagem, virada para o portão: é dela que se sai ao renascer.
-    lote.box("madeira", 1.1, 1.5, 0.2, K.x, GROUND_Y + 1.5, K.z + K.half + 0.05);
+    lote.box("vao", 1.22, 1.62, 0.12, K.x, GROUND_Y + 1.62, K.z + K.half + 0.03);
+    lote.box("madeira", 1.1, 1.5, 0.2, K.x, GROUND_Y + 1.5, K.z + K.half + 0.09);
+    for (const dy of [0.7, 2.2]) {
+      lote.box("ferro", 1.12, 0.09, 0.05, K.x, GROUND_Y + dy, K.z + K.half + 0.21);
+    }
+  }
+
+  /**
+   * Um anel de merlões alternados em torno de um retângulo.
+   *
+   * `passo` é o vão entre dois merlões, e ele é o número que faz a coisa ler:
+   * grande demais e vira uma cerca, pequeno demais e vira uma serra. 0,62 m é
+   * pouco menos que a largura do merlão, que é a proporção medieval.
+   */
+  ameias(lote, cx, base, cz, hx, hz, passo) {
+    const larg = 0.42;
+    const alt = 0.52;
+    for (let x = -hx + larg; x <= hx - larg + 0.01; x += larg * 2 + passo) {
+      for (const s of [-1, 1]) {
+        lote.box("pedraEscura", larg, alt, 0.24, cx + x, base + alt, cz + s * (hz - 0.2));
+      }
+    }
+    for (let z = -hz + larg; z <= hz - larg + 0.01; z += larg * 2 + passo) {
+      for (const s of [-1, 1]) {
+        lote.box("pedraEscura", 0.24, alt, larg, cx + s * (hx - 0.2), base + alt, cz + z);
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------ estandartes -
+
+     A ÚNICA COISA DO CASTELO QUE SE MEXE — e por isso a que mais trabalha.
+
+     Uma fortaleza inteira de pedra parada, com a horda andando lá embaixo, lê
+     como maquete: o olho separa o que é cenário do que é jogo pelo movimento, e
+     do lado de cá não havia nenhum. Duas bandeiras ondulando no alto das torres
+     custam o que se lê abaixo e devolvem a cena inteira à categoria "lugar".
+
+     ORÇAMENTO: uma malha para TODAS. Os quatro panos vivem numa geometria só,
+     com uma tira de 6 × 4 vértices cada — 96 vértices ao todo, animados num
+     laço de CPU por quadro. Uma malha por bandeira seriam quatro chamadas de
+     desenho num modo que já paga 120 sitiantes; um shader próprio seria um
+     programa a mais para compilar no meio do carregamento.
+
+     E elas dizem o vento: a amplitude sai do MESMO `wind` que entorta a flecha,
+     então o estandarte é um instrumento e não um enfeite. Ver `update`. */
+
+  buildBanners() {
+    const C = CASTLE;
+    const K = C.keep;
+    /** [x, y, z do mastro, largura, altura, giro em torno de Y] */
+    this.bannerSpots = [
+      [-C.gateTowerX, WALL_TOP + C.gateTowerRise - 0.3, C.wallZOut - C.wallThick + 0.5, 1.0, 1.9, 0],
+      [C.gateTowerX, WALL_TOP + C.gateTowerRise - 0.3, C.wallZOut - C.wallThick + 0.5, 1.0, 1.9, 0],
+      [K.x - 1.9, GROUND_Y + K.height - 1.2, K.z + K.half + 0.15, 1.15, 2.5, 0],
+      [K.x + 1.9, GROUND_Y + K.height - 1.2, K.z + K.half + 0.15, 1.15, 2.5, 0],
+    ];
+
+    const COLS = 5;
+    const LINHAS = 4;
+    const nVerts = COLS * LINHAS;
+    const total = this.bannerSpots.length * nVerts;
+    const pos = new Float32Array(total * 3);
+    const idx = [];
+    /** Fração horizontal de cada vértice: 0 no mastro, 1 na ponta solta. */
+    this._bannerU = new Float32Array(total);
+    this._bannerBase = new Float32Array(total * 3);
+
+    this.bannerSpots.forEach((b, n) => {
+      const [bx, by, bz, larg, alt] = b;
+      const off = n * nVerts;
+      for (let j = 0; j < LINHAS; j++) {
+        for (let i = 0; i < COLS; i++) {
+          const k = off + j * COLS + i;
+          const u = i / (COLS - 1);
+          this._bannerU[k] = u;
+          this._bannerBase[k * 3] = bx + (u - 0.5) * 0 + u * 0; // preenchido abaixo
+          // O pano pende do mastro: x anda com `u`, y desce com `j`.
+          this._bannerBase[k * 3] = bx + u * larg;
+          this._bannerBase[k * 3 + 1] = by - (j / (LINHAS - 1)) * alt;
+          this._bannerBase[k * 3 + 2] = bz;
+        }
+      }
+      for (let j = 0; j < LINHAS - 1; j++) {
+        for (let i = 0; i < COLS - 1; i++) {
+          const a = off + j * COLS + i;
+          idx.push(a, a + COLS, a + 1, a + 1, a + COLS, a + COLS + 1);
+        }
+      }
+    });
+    pos.set(this._bannerBase);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    this.bannerGeo = geo;
+    this.banners = new THREE.Mesh(geo, new THREE.MeshStandardMaterial(TINTAS.pano));
+    this.banners.castShadow = false;
+    this.banners.frustumCulled = false;
+    this.banners.name = "castelo-estandartes";
+    this.group.add(this.banners);
+
+    // Os mastros, estes sim parados: entram no lote da pedra... mas o lote já
+    // foi esvaziado, então saem numa malha própria e barata de ferro.
+    const lote = new Lote();
+    for (const [bx, by, bz, larg] of this.bannerSpots) {
+      lote.box("ferro", 0.04, 0.06, 0.04, bx + larg * 0.5, by + 0.1, bz);
+      lote.box("ferro", larg * 0.55, 0.035, 0.035, bx + larg * 0.5, by + 0.14, bz);
+    }
+    lote.flush(this.group);
+    this._bannerFase = 0;
+  }
+
+  /**
+   * O pano ondula, e a onda cresce da tralha para a ponta solta.
+   *
+   * `u²` e não `u`: perto do mastro o tecido está preso e quase não se move; na
+   * ponta ele chicoteia. Uma amplitude constante daria uma bandeira de borracha
+   * balançando inteira, que é o erro clássico e se reconhece na hora.
+   */
+  updateBanners(dt, vento = 0) {
+    if (!this.banners) return;
+    this._bannerFase += dt * (2.2 + vento * 0.5);
+    const amp = 0.1 + Math.min(0.34, vento * 0.035);
+    const pos = this.bannerGeo.attributes.position;
+    const base = this._bannerBase;
+    const t = this._bannerFase;
+    for (let k = 0; k < this._bannerU.length; k++) {
+      const u = this._bannerU[k];
+      const peso = u * u;
+      const y = base[k * 3 + 1];
+      const onda = Math.sin(t + u * 5.2 + y * 1.7) * amp * peso;
+      pos.array[k * 3] = base[k * 3] - peso * amp * 0.5;
+      pos.array[k * 3 + 1] = y + onda * 0.35;
+      pos.array[k * 3 + 2] = base[k * 3 + 2] + onda;
+    }
+    pos.needsUpdate = true;
+    this.bannerGeo.computeVertexNormals();
   }
 
   /* ------------------------------------------------------------ braseiros -- */
@@ -324,32 +720,54 @@ export class Castle {
       opacity: 1,
     });
 
-    for (const [i, p] of L.braziers.entries()) {
-      const y = (p.z > CASTLE.courtZBack + 2 ? WALL_TOP : GROUND_Y) + L.brazierHeight;
-      const g = new THREE.Group();
-      g.position.set(p.x, y, p.z);
+    /* O FERRO DOS SETE BRASEIROS SAI NUMA MALHA SÓ.
+     *
+     * Cesto e tripé não se mexem — quem respira é a chama. Um `Mesh` por peça
+     * dariam catorze chamadas de desenho para desenhar catorze cilindros
+     * imóveis, num modo que ainda tem 120 sitiantes e uma horda de flechas para
+     * pagar. Fundidos, é uma. As chamas continuam soltas porque cada uma tem a
+     * própria fase de tremor, e sete `MeshBasicMaterial` sem luz são o pedaço
+     * mais barato do quadro.
+     *
+     * O piso vem DECLARADO em `adarve`, e não inferido do z — ver o comentário
+     * da lista em `CONFIG.levels.castle.braziers`. */
+    const geoPe = new THREE.CylinderGeometry(0.07, 0.09, L.brazierHeight, 6);
+    const ferros = [];
+    const m4 = new THREE.Matrix4();
 
-      const cesto = new THREE.Mesh(geoCesto, matCesto);
-      cesto.castShadow = true;
-      g.add(cesto);
+    for (const p of L.braziers) {
+      const y = (p.adarve ? WALL_TOP : GROUND_Y) + L.brazierHeight;
+
+      ferros.push(geoCesto.clone().applyMatrix4(m4.makeTranslation(p.x, y, p.z)));
+      // O tripé: sem ele o cesto flutua, e no pátio isso fica à altura do olho.
+      ferros.push(
+        geoPe.clone().applyMatrix4(
+          m4.makeTranslation(p.x, y - L.brazierHeight / 2 - 0.16, p.z),
+        ),
+      );
 
       const chama = new THREE.Mesh(geoChama, matChama);
-      chama.position.y = 0.3;
+      chama.position.set(p.x, y + 0.3, p.z);
       chama.renderOrder = 5;
       chama.frustumCulled = false;
-      g.add(chama);
+      this.group.add(chama);
+      this.braziers.push({ chama, fase: Math.random() * Math.PI * 2 });
 
-      this.group.add(g);
-      this.braziers.push({ group: g, chama, fase: Math.random() * Math.PI * 2 });
-
-      if (i === Math.floor(L.braziers.length / 2)) {
+      if (p.luz) {
         const luz = new THREE.PointLight(L.brazierColor, L.brazierIntensity, L.brazierRange, 2);
-        luz.position.copy(g.position);
-        luz.position.y += 0.4;
+        luz.position.set(p.x, y + 0.4, p.z);
         this.group.add(luz);
         this.lights.push(luz);
       }
     }
+
+    const ferro = new THREE.Mesh(mergeGeometries(ferros, false), matCesto);
+    for (const g of ferros) g.dispose();
+    ferro.castShadow = true;
+    ferro.name = "castelo-braseiros";
+    this.group.add(ferro);
+    geoCesto.dispose();
+    geoPe.dispose();
   }
 
   /** Onde os trabucos ficam. Repassa `castleProps` para quem monta os engenhos. */
@@ -360,8 +778,14 @@ export class Castle {
   /**
    * @param {number} dt
    * @param {number} dusk 0 = Sol alto, 1 = Sol no horizonte. Ver `setDusk`.
+   * @param {number} vento m/s — a MESMA velocidade que entorta a flecha
    */
-  update(dt, dusk = 0) {
+  update(dt, dusk = 0, vento = 0) {
+    this.updateBanners(dt, vento);
+    this.updateFogo(dt, dusk);
+  }
+
+  updateFogo(dt, dusk) {
     // A chama respira. Custa uma escala por braseiro e é o que impede o muro
     // de parecer congelado num modo que é todo movimento lá embaixo.
     for (const b of this.braziers) {
@@ -376,7 +800,8 @@ export class Castle {
      * no segundo. Com o Sol alto ela quase some (é fogo sob luz forte, que é
      * como fogo se comporta); ao entardecer ela assume. */
     const f = 0.28 + 0.72 * Math.min(1, dusk);
-    for (const b of this.braziers) b.chama.material.opacity = f;
+    // UMA atribuição: as sete chamas dividem o mesmo material.
+    if (this.braziers.length) this.braziers[0].chama.material.opacity = f;
     for (const luz of this.lights) {
       luz.intensity = CONFIG.levels.castle.brazierIntensity * (0.15 + 0.85 * f);
     }
@@ -388,6 +813,8 @@ export class Castle {
     this.colliders = [];
     this.lights = [];
     this.braziers = [];
+    this.banners = null;
+    this.bannerGeo = null;
     this.group = null;
     this.physics = null;
   }

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bancada do cerco — Arco &amp; Flecha</title>
+    <style>
+      :root { color-scheme: dark; --ui: #f5c451; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #10131a;
+        color: #e8e6e1;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+      canvas { display: block; }
+      #painel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: 252px;
+        padding: 12px 14px 14px;
+        background: rgba(10, 13, 20, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        backdrop-filter: blur(8px);
+        max-height: calc(100vh - 24px);
+        overflow-y: auto;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ui);
+      }
+      .linha { margin-bottom: 9px; }
+      .linha > label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #a7a49d;
+        margin-bottom: 3px;
+      }
+      input[type="range"] { width: 100%; }
+      .botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+      button {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.3);
+        color: #cfccc5;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.on { border-color: var(--ui); background: rgba(245, 196, 81, 0.16); color: var(--ui); }
+      #conta {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 11px;
+        color: #a7a49d;
+        white-space: pre-line;
+      }
+      #conta b { color: #e8e6e1; font-weight: 700; }
+      body.cinza canvas { filter: grayscale(1); }
+    </style>
+  </head>
+  <body>
+    <div id="painel">
+      <h1>Bancada do cerco</h1>
+
+      <div class="linha">
+        <label>ponto de vista</label>
+        <div class="botoes" id="vistas"></div>
+      </div>
+
+      <div class="linha">
+        <label>hora do dia (dusk) <span data-eco="dusk">0.30</span></label>
+        <input id="dusk" type="range" min="0" max="1" step="0.01" value="0.3" />
+      </div>
+      <div class="linha">
+        <label>órbita <span data-eco="orbita">0.00</span></label>
+        <input id="orbita" type="range" min="-3.15" max="3.15" step="0.01" value="0" />
+      </div>
+      <div class="linha">
+        <label>altura <span data-eco="alt">28</span></label>
+        <input id="alt" type="range" min="1" max="90" step="0.5" value="28" />
+      </div>
+      <div class="linha">
+        <label>distância <span data-eco="dist">70</span></label>
+        <input id="dist" type="range" min="6" max="260" step="1" value="70" />
+      </div>
+      <div class="linha">
+        <label>alvo z <span data-eco="alvoZ">10</span></label>
+        <input id="alvoZ" type="range" min="-40" max="110" step="1" value="10" />
+      </div>
+
+      <div class="linha botoes">
+        <button id="girar">girar</button>
+        <button id="cinza">cinza</button>
+        <button id="horda" class="on">horda</button>
+      </div>
+
+      <div id="conta"></div>
+    </div>
+    <script type="module" src="./cerco.js"></script>
+  </body>
+</html>

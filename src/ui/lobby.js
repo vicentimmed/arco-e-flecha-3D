@@ -80,7 +80,7 @@ const PORTAS = [
     level: "castle",
     mode: "siege",
     rotulo: "Cerco ao Castelo",
-    detalhe: "vinte minutos de muralha — só se perde se o portão cair",
+    detalhe: "dez minutos de muralha — só se perde se o portão cair",
     classe: "porta-cerco",
   },
 ];

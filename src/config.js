@@ -1850,11 +1850,33 @@ export const CONFIG = {
          o mesmo papel das tochas do modo zumbi com uma diferença de intenção:
          lá a luz é o objetivo a defender, aqui ela marca o adarve para quem
          está embaixo — e marca o jogador para a catapulta, o que é justo. */
+      /* `luz: true` marca quem carrega uma `PointLight` de verdade; o resto é
+         cesto emissivo. A escolha é DECLARADA e não derivada ("o do meio"),
+         porque ela decide onde se enxerga: o pátio ficava sem uma única luz
+         dinâmica, e é lá que se renasce e que se repara o portão com o relógio
+         correndo. A face interna do muro olha para longe do Sol do poente — no
+         escuro, o jogador atravessava um breu de trinta metros para chegar a um
+         portão que não via. */
+      /* `adarve: true` põe o braseiro no piso do MURO; sem ele, no pátio. A
+         escolha é declarada porque a regra que a inferia do z (`z > courtZBack
+         + 2`) mandava para cima do muro qualquer coisa que não estivesse colada
+         no fundo — e os braseiros novos do portão nasciam boiando a onze metros.
+
+         E os do adarve estão na faixa de DENTRO (z = 3,2), não na hourd: a
+         câmera de terceira pessoa fica quatro metros atrás do arqueiro, que
+         está em z = 8,3, então tudo o que estiver adiante de z ≈ 4,3 entra no
+         quadro. Em 6,4 um cesto de fogo de meio metro ocupava um sexto da tela.
+         Em 3,2 eles ficam atrás da câmera e continuam desenhando a linha do
+         muro para quem olha de baixo, que é o trabalho deles. */
       braziers: [
-        { x: -17, z: 6.4 },
-        { x: -6, z: 6.4 },
-        { x: 6, z: 6.4 },
-        { x: 17, z: 6.4 },
+        { x: -14, z: 3.2, adarve: true },
+        { x: -8.2, z: 3.2, adarve: true },
+        { x: 8.2, z: 3.2, adarve: true, luz: true },
+        { x: 14, z: 3.2, adarve: true },
+        // Os dois do PÁTIO, ladeando o vão do portão pelo lado de dentro: eles
+        // marcam o raio de reparo sem precisar de um círculo no chão.
+        { x: -4.6, z: 1.4, luz: true },
+        { x: 4.6, z: 1.4 },
         { x: 0, z: -13 },
       ],
       brazierRange: 15, // m

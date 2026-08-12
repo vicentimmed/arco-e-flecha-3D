@@ -664,8 +664,13 @@ export class HUD {
       return;
     }
 
+    /* O LUGAR VEM DA FASE, e não de um `if` que só conhecia duas.
+       Enquanto a Lua era a única fase fora do vale, escrever "LUA" à mão dava
+       certo por acidente; com o castelo, quem entrava no cerco lia
+       "LUA · SIEGE" na faixa. */
+    const lugar = { moon: "LUA", castle: "CASTELO" }[level] ?? null;
     banner.className = foraDoVale ? `${mode} lua` : mode;
-    if (foraDoVale) banner.append(texto("LUA", "forte"), texto("   ·   "));
+    if (lugar) banner.append(texto(lugar, "forte"), texto("   ·   "));
     banner.append(
       texto(
         {
@@ -679,6 +684,7 @@ export class HUD {
           zombie: "NOITE DOS ZUMBIS",
           zombieBoss: "CHEFÃO ZUMBI",
           meteorRain: "CHUVA DE METEOROS",
+          siege: "CERCO AO CASTELO",
           lastStand: "O ÚLTIMO EM PÉ",
           captureFlag: "ROUBA BANDEIRA",
         }[mode] ?? mode.toUpperCase(),

@@ -2174,8 +2174,10 @@ export class Room {
         y: round(this.terrain.heightAt(x, z)),
         drop: 0,
         invulnUntil: p.invulnUntil,
-        // De frente para a base: é para lá que tudo vai cair.
-        yaw: Math.atan2(base.x - x, base.z - z),
+        // De frente para a base: é para lá que tudo vai cair. Por `faceYaw` —
+        // a conta à mão que estava aqui tinha o mesmo sinal trocado do cerco, e
+        // punha o jogador de costas para a única coisa que ele precisa vigiar.
+        yaw: faceYaw({ x, z }, base),
       });
     });
 
@@ -2413,8 +2415,15 @@ export class Room {
         y: round(posto.y),
         drop: 0,
         invulnUntil: p.invulnUntil,
-        // De frente para a rampa: é de lá que eles vêm.
-        yaw: Math.atan2(gate.x - posto.x, gate.standZ + 40 - posto.z),
+        /* De frente para a rampa: é de lá que eles vêm.
+         *
+         * Por `faceYaw`, e não pela conta à mão que estava aqui. A convenção do
+         * corpo é yaw 0 olhando para −Z, então encarar um ponto pede
+         * `atan2(−dx, −dz)`: escrito com os sinais trocados, o jogador nascia
+         * de costas para a rampa e de cara para a menagem. O primeiro segundo
+         * de toda partida — e de todo renascimento — era um giro de mouse às
+         * cegas para achar o lado de onde vem a horda. */
+        yaw: faceYaw(posto, { x: gate.x, z: gate.standZ + 40 }),
       });
     }
 
@@ -2440,12 +2449,28 @@ export class Room {
     const dt = this.boarStep;
 
     /* Trabucos: içam sozinhos, ou mais rápido com alguém na manivela. Quem
-       está na manivela não está atirando — é a troca central do modo. */
+       está na manivela não está atirando — é a troca central do modo.
+     *
+     * `pronto` é um PRAZO no relógio da sala, e por isso o tempo real já o
+     * consome sozinho: `agora` anda cem milissegundos a cada tique e o prazo
+     * fica onde está. O que este laço adianta é só o EXCEDENTE da manivela.
+     *
+     * Descontar o passo cheio — que era o que se fazia — descontava o tempo
+     * DUAS VEZES: o prazo recuava cem milissegundos enquanto o relógio avançava
+     * outros cem. Sem ninguém na manivela o engenho recarregava em 7 s no lugar
+     * de 14, e com alguém nela em 3,4 s no lugar de 4,5. A troca central do
+     * modo — deixar de atirar para içar o de outro — pagava metade do preço que
+     * o plano calculou, e o `reload` de `CONFIG` não descrevia partida nenhuma. */
     let mudouTrabuco = false;
+    const excedente = S.trebuchet.reload / S.trebuchet.windReload - 1;
     for (const t of this.trebuchets) {
-      if (t.pronto <= agora) continue;
-      const passo = dt * 1000 * (t.wind.size > 0 ? S.trebuchet.reload / S.trebuchet.windReload : 1);
-      t.pronto -= passo;
+      /* O corte é `pronto === 0`, e não `pronto <= agora`: zero significa
+         "pronto E já anunciado". Com o corte pelo relógio, o tique em que o
+         prazo é finalmente alcançado sai pelo `continue` antes de zerar e de
+         marcar `mudouTrabuco` — e o `TREB_STATE` que diz "este carregou" nunca
+         seria enviado a ninguém. */
+      if (t.pronto === 0) continue;
+      if (t.wind.size > 0) t.pronto -= dt * 1000 * excedente;
       if (t.pronto <= agora) {
         t.pronto = 0;
         mudouTrabuco = true;
@@ -4090,7 +4115,10 @@ export class Room {
       y: round(melhor.y),
       drop: 0,
       invulnUntil,
-      yaw: Math.atan2(gate.x - melhor.x, gate.standZ + 40 - melhor.z),
+      // Ver `lineUpForSiege`: `faceYaw` e não a conta à mão, que apontava ao
+      // contrário. Quem renasce sob pressão é quem menos pode perder um segundo
+      // procurando a rampa.
+      yaw: faceYaw(melhor, { x: gate.x, z: gate.standZ + 40 }),
     });
   }
 

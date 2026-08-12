@@ -23,7 +23,7 @@
 import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
 import { CastleField, CASTLE_WORLD } from "../shared/castleField.js";
-import { GROUND_Y, castleWoods, castleRocks } from "../shared/castleProps.js";
+import { GROUND_Y, castleWoods, castleRocks, rampDebris } from "../shared/castleProps.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { focusWarp, applyTerrainDetail } from "./environment.js";
 import { smoothstep } from "../utils/math.js";
@@ -170,6 +170,79 @@ export class CastleTerrain extends CastleField {
     geoConifera.dispose();
     geoCopa.dispose();
     geoPedra.dispose();
+
+    this.buildDebris(parent, juntar);
+  }
+
+  /**
+   * Os destroços dos ombros da rampa.
+   *
+   * O porquê está em `castleProps.rampDebris()`: sem eles, noventa metros de
+   * terra lisa não dão distância nenhuma ao olho, e escolher em quem atirar
+   * primeiro é a decisão que o modo pede o tempo todo.
+   *
+   * DUAS malhas para tudo — madeira e ferro —, fundidas como o bosque e pelo
+   * mesmo motivo. São ~90 peças; soltas seriam noventa chamadas de desenho num
+   * modo que já paga 120 sitiantes.
+   */
+  buildDebris(parent, juntar) {
+    const madeira = [];
+    const ferro = [];
+    const m4 = new THREE.Matrix4();
+    const e = new THREE.Euler();
+    const q = new THREE.Quaternion();
+    const um = new THREE.Vector3(1, 1, 1);
+    const pos = new THREE.Vector3();
+
+    const geoPau = new THREE.CylinderGeometry(0.6, 1, 1, 5);
+    const geoCaixa = new THREE.BoxGeometry(1, 1, 1);
+    const geoDisco = new THREE.CylinderGeometry(1, 1, 1, 9);
+
+    const por = (lista, geo, x, y, z, sx, sy, sz, rx, ry, rz) => {
+      pos.set(x, y, z);
+      q.setFromEuler(e.set(rx, ry, rz));
+      m4.compose(pos, q, um.set(sx, sy, sz));
+      lista.push(geo.clone().applyMatrix4(m4));
+    };
+
+    for (const d of rampDebris()) {
+      const y = this.heightAt(d.x, d.z);
+      if (d.tipo === "estaca") {
+        // Uma estaca fincada e tombada: o pé afunda, a ponta é lascada.
+        por(madeira, geoPau, d.x, y + Math.cos(d.inclina) * d.h * 0.45, d.z,
+          d.r, d.h, d.r, 0, d.giro, d.inclina);
+      } else if (d.tipo === "escudo") {
+        por(madeira, geoDisco, d.x, y + 0.06, d.z,
+          0.38 * d.escala, 0.09, 0.38 * d.escala, Math.PI / 2 - d.inclina, d.giro, 0);
+        por(ferro, geoDisco, d.x, y + 0.11, d.z,
+          0.1 * d.escala, 0.1, 0.1 * d.escala, Math.PI / 2 - d.inclina, d.giro, 0);
+      } else if (d.tipo === "lanca") {
+        por(madeira, geoPau, d.x, y + 0.07, d.z,
+          0.045, 2.1 * d.escala, 0.045, Math.PI / 2 - d.inclina * 0.4, d.giro, 0);
+        por(ferro, geoCaixa, d.x + Math.sin(d.giro) * 1.05 * d.escala, y + 0.1,
+          d.z + Math.cos(d.giro) * 1.05 * d.escala, 0.05, 0.05, 0.26, 0, d.giro, 0);
+      } else {
+        /* A CARROÇA: caixa tombada, dois eixos e uma roda de pé. Ela é a peça
+           grande, e é dela que sai a escala do trecho em que está. */
+        const t = d.tomba;
+        por(madeira, geoCaixa, d.x, y + 0.55, d.z, 1.25, 0.42, 0.75, t, d.giro, 0);
+        for (const s of [-1, 1]) {
+          por(madeira, geoCaixa, d.x, y + 0.9, d.z + s * 0.7,
+            1.25, 0.3, 0.08, t, d.giro, 0);
+        }
+        por(madeira, geoDisco, d.x + Math.cos(d.giro) * 1.0, y + 0.62,
+          d.z - Math.sin(d.giro) * 1.0, 0.62, 0.11, 0.62, 0, 0, Math.PI / 2 + d.giro);
+        por(madeira, geoPau, d.x - Math.cos(d.giro) * 1.5, y + 0.3,
+          d.z + Math.sin(d.giro) * 1.5, 0.07, 1.9, 0.07, 1.35, d.giro, 0);
+      }
+    }
+
+    juntar(madeira, new THREE.MeshStandardMaterial({ color: "#4a3a2a", roughness: 0.96 }), "castle-destrocos");
+    juntar(ferro, new THREE.MeshStandardMaterial({ color: "#5a5a60", roughness: 0.6, metalness: 0.55 }), "castle-ferragem");
+
+    geoPau.dispose();
+    geoCaixa.dispose();
+    geoDisco.dispose();
   }
 
   buildArena(parent, physics) {

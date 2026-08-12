@@ -18,6 +18,7 @@
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { resolveArrowHit } from "../core/hitResolver.js";
@@ -26,9 +27,66 @@ import { ARROW_COLLISION_GROUPS } from "../core/collisionGroups.js";
 
 const UP = new THREE.Vector3(0, 1, 0);
 
-/* ------------------------------------------------------------- geometria -- */
+/* ------------------------------------------------------------- geometria --
+
+   UMA FLECHA SÃO DUAS MALHAS, e antes eram seis.
+
+   Haste, ponta, nó e três empenas: cada uma era um `Mesh` com material próprio,
+   porque cada uma tem cor e acabamento próprios. Seis chamadas de desenho por
+   flecha é barato quando há três no ar — e é a maior conta da tela quando há
+   cento e quinze. No cerco, com dois arqueiros de CPU no muro e cravadas se
+   acumulando, foi medido: **666 chamadas por quadro, e mais de quinhentas eram
+   flecha**. No vale o efeito é o mesmo, só chega mais tarde.
+
+   A fusão é possível porque as peças são RÍGIDAS entre si — a flecha não
+   articula. O que impedia era a cor: `mergeGeometries` exige um material só, e
+   as quatro peças têm quatro. A saída é a que o Three já oferece e ninguém
+   estava usando aqui: COR POR VÉRTICE. A haste, a ponta e o nó viram uma
+   geometria só com um atributo `color`, e um único `MeshStandardMaterial` com
+   `vertexColors` desenha as três.
+
+   As empenas ficam de fora do lote, e não por descuido: elas levam a cor de
+   QUEM ATIROU (§5A.6 do plano), que muda por flecha. Assá-la no vértice
+   obrigaria a clonar a geometria por dono — trocaria chamada de desenho por
+   memória, que é o negócio errado. Elas viram uma segunda malha, com as três
+   empenas fundidas e o material buscado num cache por cor.
+
+   O ACABAMENTO É O CUSTO. Um material só significa um `roughness` e um
+   `metalness` só, e a ponta era o brilho mais forte do jogo (aço quase espelho,
+   contra a madeira fosca da haste). O meio-termo mantém a haste fosca e devolve
+   o lampejo por outro caminho: a ponta fica bem mais CLARA na cor por vértice.
+   O que se lê a oitenta metros é o contraste, não o expoente especular.
+   6 → 2 chamadas por flecha. */
 
 let sharedArrowGeometry = null;
+
+/** Materiais de empena por cor do dono. Numa sala de seis são seis, não sessenta. */
+const FLETCH_MATS = new Map();
+
+function fletchMaterialFor(color, base) {
+  if (color == null) return base;
+  let m = FLETCH_MATS.get(color);
+  if (!m) {
+    m = base.clone();
+    m.color.set(color).lerp(WHITE_REF, 0.18);
+    FLETCH_MATS.set(color, m);
+  }
+  return m;
+}
+
+/** Pinta uma geometria inteira de uma cor, no atributo `color`. */
+function tingir(geo, hex) {
+  const c = new THREE.Color(hex);
+  const n = geo.attributes.position.count;
+  const cores = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    cores[i * 3] = c.r;
+    cores[i * 3 + 1] = c.g;
+    cores[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(cores, 3));
+  return geo;
+}
 
 /** @param {number|null} color cor do dono; null = uniforme padrão da flecha */
 function buildArrowMesh(color = null) {
@@ -36,81 +94,68 @@ function buildArrowMesh(color = null) {
     const L = CONFIG.arrow.length;
     const r = CONFIG.arrow.shaftRadius;
 
-    /* Especular seletiva (Fase 1.5). A PONTA é o brilho mais forte do jogo
-       inteiro: aço polido, quase espelho. É ela que faz a flecha em voo piscar
-       quando cruza o sol, e é esse lampejo que deixa a trajetória legível a
-       oitenta metros — antes, com metalness 0.75 e o mesmo `roughness` da
-       haste, ponta e madeira brilhavam igual e a flecha era um palito. */
-    const shaftMat = new THREE.MeshStandardMaterial({
-      color: "#c9b58c",
-      roughness: 0.62,
-      metalness: 0.0,
-    });
-    const tipMat = new THREE.MeshStandardMaterial({
-      color: "#9aa0a6",
-      roughness: 0.22,
-      metalness: 0.85,
-    });
-    const fletchMat = new THREE.MeshStandardMaterial({
-      color: "#d6483c",
-      roughness: 0.85,
-      side: THREE.DoubleSide,
-    });
-    const nockMat = new THREE.MeshStandardMaterial({
-      color: "#2b2b30",
-      roughness: 0.7,
-    });
+    const m4 = new THREE.Matrix4();
+    /* A HASTE, a PONTA e o NÓ, já posicionados e fundidos. As posições saem de
+       onde estavam os `position` dos `Mesh` antigos — assar a transformação na
+       geometria é o que permite compartilhá-la entre todas as flechas. */
+    const haste = tingir(new THREE.CylinderGeometry(r, r, L, 7), "#c9b58c");
+    const ponta = tingir(new THREE.ConeGeometry(r * 2.1, 0.055, 7), "#d8dde3")
+      .applyMatrix4(m4.makeTranslation(0, L / 2 + 0.027, 0));
+    const no = tingir(new THREE.CylinderGeometry(r * 1.7, r * 1.7, 0.02, 6), "#2b2b30")
+      .applyMatrix4(m4.makeTranslation(0, -L / 2 + 0.01, 0));
+    const corpo = mergeGeometries([haste, ponta, no], false);
+    haste.dispose();
+    ponta.dispose();
+    no.dispose();
+
+    /* As TRÊS EMPENAS, fundidas entre si. A cor vem do material, não do
+       vértice — ver o cabeçalho. */
+    const penas = [];
+    for (let i = 0; i < 3; i++) {
+      const p = new THREE.PlaneGeometry(0.021, 0.08);
+      p.applyMatrix4(m4.makeTranslation(0, -L / 2 + 0.075, 0.012));
+      p.applyMatrix4(m4.makeRotationY((i * Math.PI * 2) / 3));
+      penas.push(p);
+    }
+    const empena = mergeGeometries(penas, false);
+    for (const p of penas) p.dispose();
+
     sharedArrowGeometry = {
-      shaft: new THREE.CylinderGeometry(r, r, L, 7),
-      tip: new THREE.ConeGeometry(r * 2.1, 0.055, 7),
-      fletch: new THREE.PlaneGeometry(0.021, 0.08),
-      nock: new THREE.CylinderGeometry(r * 1.7, r * 1.7, 0.02, 6),
-      shaftMat,
-      tipMat,
-      fletchMat,
-      nockMat,
+      corpo,
+      empena,
+      corpoMat: new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.5,
+        metalness: 0.25,
+      }),
+      fletchMat: new THREE.MeshStandardMaterial({
+        color: "#d6483c",
+        roughness: 0.85,
+        side: THREE.DoubleSide,
+      }),
     };
   }
   const g = sharedArrowGeometry;
-  const L = CONFIG.arrow.length;
-
   // Eixo local +Y = da empena para a ponta. O colisor cápsula usa o mesmo eixo,
   // então visual e física nunca divergem.
   const group = new THREE.Group();
 
-  const shaft = new THREE.Mesh(g.shaft, g.shaftMat);
-  shaft.castShadow = true;
-  group.add(shaft);
+  const corpo = new THREE.Mesh(g.corpo, g.corpoMat);
+  corpo.castShadow = true;
+  group.add(corpo);
 
-  const tip = new THREE.Mesh(g.tip, g.tipMat);
-  tip.position.y = L / 2 + 0.027;
-  tip.castShadow = true;
-  group.add(tip);
-
-  const nock = new THREE.Mesh(g.nock, g.nockMat);
-  nock.position.y = -L / 2 + 0.01;
-  group.add(nock);
-
-  /* A EMPENA LEVA A COR DE QUEM ATIROU (Fase 5A.6 do plano).
+  /* A EMPENA LEVA A COR DE QUEM ATIROU (Fase 5A.6 do plano) — e é a única
+   * peça que precisa variar: numa flecha cravada no alvo, a três centímetros
+   * de outra, é a cor dela que diz de quem foi o tiro.
    *
-   * O material é clonado por flecha só para as três empenas — o resto continua
-   * compartilhado. É a diferença entre um material por flecha e vinte, e a
-   * empena é a única peça que precisa variar: numa flecha cravada no alvo, a
-   * três centímetros de outra, é a cor dela que diz de quem foi o tiro.
-   *
-   * Sem dono (jogo local) fica a cor de fábrica e nada é clonado. */
-  const fletchMat = color != null ? g.fletchMat.clone() : g.fletchMat;
-  if (color != null) fletchMat.color.set(color).lerp(WHITE_REF, 0.18);
-  group.userData.fletchMat = color != null ? fletchMat : null;
-
-  for (let i = 0; i < 3; i++) {
-    const fletch = new THREE.Mesh(g.fletch, fletchMat);
-    fletch.position.set(0, -L / 2 + 0.075, 0.012);
-    const holder = new THREE.Group();
-    holder.rotation.y = (i * Math.PI * 2) / 3;
-    holder.add(fletch);
-    group.add(holder);
-  }
+   * O material vem do CACHE POR COR e não de um `clone()` por flecha. Clonar
+   * por flecha dava um material por projétil — com cento e quinze em cena são
+   * cento e quinze programas de sombreamento a validar por quadro, para seis
+   * cores diferentes. `userData.fletchMat` fica nulo justamente porque o
+   * material não pertence mais à flecha: destruí-lo com ela apagaria a empena
+   * de todas as outras do mesmo dono. */
+  group.add(new THREE.Mesh(g.empena, fletchMaterialFor(color, g.fletchMat)));
+  group.userData.fletchMat = null;
   return group;
 }
 
@@ -498,12 +543,11 @@ export class Arrow {
     this.sync.remove(this.body);
     this.physics.removeBody(this.body);
     this.scene.remove(this.mesh);
-    /* Geometrias e materiais da flecha são compartilhados entre todas as
-       instâncias — com UMA exceção: quando a flecha tem dono, o material da
-       empena é um clone tingido com a cor dele (ver `buildArrowMesh`). Esse é
-       desta flecha e morre com ela; sem isto, uma partida longa deixaria um
-       material vazando por disparo. */
-    this.mesh.userData.fletchMat?.dispose();
+    /* NADA A DEVOLVER. Geometrias e materiais da flecha são todos
+       compartilhados — inclusive o da empena, que antes era um clone por
+       disparo e hoje vem do cache por cor de `fletchMaterialFor`. Destruí-lo
+       aqui apagaria a empena de todas as outras flechas do mesmo dono. O cache
+       tem o tamanho da sala, não o do histórico de tiros. */
   }
 }
 

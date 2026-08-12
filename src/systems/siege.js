@@ -498,7 +498,7 @@ export class SiegeSystem {
 
   entrarNaMira(treb) {
     const T = CONFIG.modes.siege.trebuchet;
-    const alturaSaida = treb.base.y + 2.6 - GROUND_Y;
+    const alturaSaida = treb.base.y + treb.muzzleHeight - GROUND_Y;
     this.mira = {
       treb,
       /* Distância no plano a partir do engenho. Começa no meio do alcance:
@@ -556,10 +556,37 @@ export class SiegeSystem {
   resolverMira() {
     const m = this.mira;
     if (!m) return;
+    const T = CONFIG.modes.siege.trebuchet;
     const alvo = this.pontoDaMira();
-    const alvoY = this.terrain?.heightAt(alvo.x, alvo.z) ?? GROUND_Y;
+    let alvoY = this.terrain?.heightAt(alvo.x, alvo.z) ?? GROUND_Y;
+    const saida = m.treb.base.y + m.treb.muzzleHeight;
+
+    /* O ALCANCE É RECALCULADO CONTRA O CHÃO DE VERDADE, e não contra a cota do
+     * pátio.
+     *
+     * `dMin`/`dMax` nascem em `entrarNaMira` com a altura de solta medida a
+     * partir de `GROUND_Y` — mas a rampa DESCE catorze metros até o pé, e uma
+     * pedra que cai mais longe vai mais longe. No fim curto isso passava do
+     * engano estético para o defeito: a marca ficava presa a uma distância que
+     * `velocidadePara` já considerava fora de alcance, devolvia `null`, e o
+     * clique não fazia nada — com o anel vermelho como única explicação.
+     *
+     * Uma passada de correção basta: empurrar a marca para dentro do alcance
+     * baixa o alvo, o que só AUMENTA o alcance, então não há oscilação. */
+    let vMin = voar(T.speedMin, saida - alvoY, 0).d;
+    let vMax = voar(T.speedMax, saida - alvoY, 0).d;
+    if (m.d < vMin || m.d > vMax) {
+      m.d = Math.max(vMin, Math.min(vMax, m.d));
+      this.pontoDaMira(alvo);
+      alvoY = this.terrain?.heightAt(alvo.x, alvo.z) ?? GROUND_Y;
+      vMin = voar(T.speedMin, saida - alvoY, 0).d;
+      vMax = voar(T.speedMax, saida - alvoY, 0).d;
+      m.d = Math.max(vMin, Math.min(vMax, m.d));
+      this.pontoDaMira(alvo);
+      alvoY = this.terrain?.heightAt(alvo.x, alvo.z) ?? GROUND_Y;
+    }
     alvo.y = alvoY;
-    const saida = m.treb.base.y + 2.6;
+
     const v = velocidadePara(m.d, saida - alvoY, 0);
     m.v = v ?? 0;
     m.pronto = v != null && m.treb.ready;
@@ -674,11 +701,26 @@ export class SiegeSystem {
 
     /* A armação acompanha a MARCA, não o corpo do jogador. Quem decide o rumo
        é onde a pedra vai cair — ver `entrarNaMira`. */
+    if (camera) camera.getWorldPosition(_cam);
     for (const e of this.engenhos) {
       if (this.mira?.treb === e) {
         e.yaw += (this.mira.yaw - e.yaw) * Math.min(1, dt * 10);
       }
+      /* A ferragem do engenho só existe de perto. 16 m é escolhido contra a
+         GEOMETRIA e não contra um gosto: os bastiões estão a 18 m do posto
+         central, então quem opera um engenho vê o detalhe do seu e a silhueta
+         dos outros dois — que é exatamente a informação que ele precisa dos
+         outros dois. Ver `Trebuchet.setDetalhe`. */
+      if (camera) e.setDetalhe(_cam.distanceToSquared(e.base) < 256);
       e.update(dt, false);
+    }
+
+    /* O ENGENHO FICOU PRONTO ENQUANTO SE MIRAVA. `pronto` só era recalculado
+       ao mexer o mouse: quem entrava na mira de um trabuco vazio e esperava o
+       içamento acabar continuava com a marca vermelha e o clique morto até
+       arrastar a mira um pixel. */
+    if (this.mira && this.mira.pronto !== (this.mira.v > 0 && this.mira.treb.ready)) {
+      this.resolverMira();
     }
 
     this.atualizarPedras(dt);

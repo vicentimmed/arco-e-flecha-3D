@@ -1972,6 +1972,14 @@ class Game {
       this._miraClique = this.input.primaryDown;
       if (segurando && !this._siegeF) this.siege.sairDaMira();
       this._siegeF = segurando;
+      /* SAIU DA MIRA COM O BOTÃO AINDA APERTADO — pela pedra ou por `F`.
+         O bloqueio do arco cai no mesmo quadro, e um `primaryDown` sobrevivente
+         viraria um draw que ninguém pediu. Zerá-lo custa um clique a mais para
+         voltar a atirar de arco, que é exatamente o que se quer. */
+      if (!this.siege.mira) {
+        this.input.primaryDown = false;
+        this._miraClique = false;
+      }
       this.hud.setSiegeHint("mirando");
       this.siege.update(dt, this.renderer.camera, null, pos);
       return;
@@ -2722,9 +2730,16 @@ class Game {
 
     /* NA MIRA DO TRABUCO o arco não tensiona. O clique ali solta a pedra, e
        sem este bloqueio ele soltaria a pedra E começaria a puxar a corda — o
-       jogador sairia da mira com uma flecha armada que não pediu. */
+       jogador sairia da mira com uma flecha armada que não pediu.
+
+       O bloqueio tem NOME PRÓPRIO (`"trebuchet"`), e não é detalhe: o `input`
+       decide pelo motivo o que fazer com o clique, e todo motivo sem nome cai
+       no ramo da câmera da flecha — que APAGA `primaryDown`. Era por isso que
+       o botão do mouse não soltava a pedra: a borda de subida que
+       `updateSiege` procura nunca chegava a existir. */
+    const mirandoTrabuco = !!this.siege?.mira;
     this.input.blockDraw =
-      this.rig.isArrowCam || morto || recarregando || atacando || !!this.siege?.mira;
+      this.rig.isArrowCam || morto || recarregando || atacando || mirandoTrabuco;
     this.input.blockDrawReason = preparando
       ? "modePrepare"
       : this.death.dying
@@ -2733,10 +2748,18 @@ class Game {
         ? "knife"
         : this.rig.isArrowCam
           ? "arrowCam"
-          : recarregando
-            ? "reload"
-            : null;
+          : mirandoTrabuco
+            ? "trebuchet"
+            : recarregando
+              ? "reload"
+              : null;
     if (atacando) {
+      this.drawTime = 0;
+      this.input.drawing = false;
+    } else if (mirandoTrabuco) {
+      /* O clique é do engenho, não da corda. Sem este ramo o `primaryDown` que
+         acabamos de deixar passar entraria no `else if` abaixo e começaria um
+         draw por baixo da câmera de mira. */
       this.drawTime = 0;
       this.input.drawing = false;
     } else if (recarregando) {
@@ -3188,7 +3211,7 @@ class Game {
   /**
    * O Sol do castelo, descendo.
    *
-   * NO CERCO ele acompanha o relógio da partida: o modo dura vinte minutos e
+   * NO CERCO ele acompanha o relógio da partida: o modo dura dez minutos e
    * termina exatamente quando o Sol toca o horizonte. Não é decoração
    * sincronizada por acaso — é o cronômetro do modo, dito pela única coisa que
    * o jogador não precisa procurar na tela. Quem está sob pressão não lê o

@@ -54,7 +54,7 @@ export class Input {
     /** Quando true, o clique não tensiona o arco — ele só encerra a câmera da
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
     this.blockDraw = false;
-    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | `"knife"` | `"modePrepare"` | null */
+    /** Por que o draw está bloqueado: `"reload"` | `"arrowCam"` | `"dead"` | `"knife"` | `"modePrepare"` | `"trebuchet"` | null */
     this.blockDrawReason = null;
 
     /**
@@ -208,10 +208,16 @@ export class Input {
       }
       if (e.button !== 0) return;
       if (this.blockDraw) {
-        // Câmera da flecha: clique traz a visão de volta. Durante o reload o
-        // clique é guardado em `primaryDown` — o main inicia o draw quando a
-        // animação terminar, se o botão ainda estiver pressionado.
-        if (this.blockDrawReason !== "reload") {
+        /* Câmera da flecha: clique traz a visão de volta. Durante o reload — e
+           na MIRA DO TRABUCO — o clique é guardado em `primaryDown`: o main
+           inicia o draw quando a animação terminar, e o cerco lê a borda de
+           subida para soltar a pedra.
+
+           Sem o ramo do trabuco, o `primaryDown = false` abaixo apagava o
+           clique ANTES de `updateSiege` poder vê-lo: entrar na mira e apertar o
+           botão não fazia nada, porque o único caminho até `dispararMira` era
+           uma borda que nunca chegava a existir. */
+        if (this.blockDrawReason !== "reload" && this.blockDrawReason !== "trebuchet") {
           // O clique que fecha a câmera não pode virar um novo draw quando o
           // main processar `dismissArrowCam` e liberar o bloqueio no frame.
           this.primaryDown = false;

@@ -34,7 +34,7 @@ export class Input {
     this.strafe = 0;
     /** Shift segurado: corre em vez de andar. */
     this.run = false;
-    /** Terceira pessoa por padrão; botão direito (ou C) segurado: primeira pessoa. */
+    /** Terceira pessoa por padrão; botão direito segurado: primeira pessoa. */
     this.firstPerson = false;
     this.drawing = false;
     /** Botão esquerdo fisicamente pressionado — distinto de `drawing`, que pode
@@ -50,6 +50,9 @@ export class Input {
     this.hadLock = false;
 
     this.keys = new Set();
+
+    /** Menu de comandos aberto: o ponteiro é solto e o jogo fica em espera. */
+    this.menuOpen = false;
 
     /** Quando true, o clique não tensiona o arco — ele só encerra a câmera da
      *  flecha. Quem decide é o main, olhando o estado da câmera. */
@@ -102,6 +105,13 @@ export class Input {
       setLevel: null, // "valley" | "moon" — a FASE, não o modo
       toggleBot: null, // "add" | "remove" — adversário de CPU
       cycleBotDifficulty: 0, // N: +1 avança, Shift+N volta, 0 = nada
+      siegeSkip: null, // J: "next" | "climber" — atalho de teste do cerco
+      toggleCommandMenu: false, // três toques na crase — ver `Input.crase`
+      /* A intenção nasceu de um CLIQUE no menu, e não de uma tecla. Quem lê é
+         `Game.handleActions`, e o único efeito é pular a pergunta de
+         confirmação: um botão que a pessoa foi procurar num menu já É a
+         confirmação. Ver `Hud.onCommand`. */
+      doMenu: false,
       /* O espaço tem DOIS eventos, e o jetpack precisa dos dois. `jump` é a
          BORDA (pular, e acender o jato no segundo toque); `jumpReleased` é o
          soltar, que apaga o jato guardando o combustível que sobrou. */
@@ -111,8 +121,76 @@ export class Input {
     this.bind();
   }
 
+  /**
+   * A CRASE: TRÊS TOQUES, e uma coisa só — o menu de comandos.
+   *
+   * Ela alternava o painel de depuração, e não alterna mais: a telemetria
+   * passou a ser um BOTÃO dentro do menu, e mais nada. O motivo é o mesmo que
+   * justifica o menu inteiro — o jogo tem trinta atalhos e nenhum deles é
+   * descobrível; tirar um da lista é uma coisa a menos para decorar, e o painel
+   * de depuração é justamente o mais raro de todos.
+   *
+   * Os três toques ficaram. Um toque só abriria o menu por acidente com a
+   * frequência de uma tecla vizinha da `1` (que é o modo livre); três é um
+   * gesto que ninguém faz sem querer. A janela é de 600 ms entre toques —
+   * larga o bastante para uma rajada feita sem pressa.
+   */
+  crase() {
+    const agora = performance.now();
+    if (agora - (this._craseEm ?? -Infinity) > 600) this._craseN = 0;
+    this._craseEm = agora;
+    this._craseN = (this._craseN ?? 0) + 1;
+
+    if (this._craseN < 3) return;
+    this._craseN = 0;
+    this.actions.toggleCommandMenu = true;
+  }
+
+  /**
+   * O menu de comandos abriu ou fechou.
+   *
+   * ELE PRECISA DO PONTEIRO. O jogo roda com Pointer Lock — o cursor não
+   * existe — e um menu de botões sem cursor é um menu impossível de usar. Aqui
+   * o lock é solto na abertura e pedido de volta no fechamento.
+   *
+   * O detalhe que faz isso funcionar é `menuOpen` sendo consultado no
+   * `pointerlockchange`: sair do lock normalmente significa "o jogador apertou
+   * Esc, devolva-o à tela inicial" (`disengage`), e sem a bandeira o menu
+   * abriria já cobrindo o aviso de "clique para mirar".
+   */
+  setMenuOpen(aberto) {
+    if (this.menuOpen === aberto) return;
+    this.menuOpen = aberto;
+
+    if (aberto) {
+      /* O corpo PARA. As teclas de movimento seguradas no instante da abertura
+         não recebem `keyup` (o `keydown` deixa de ser processado), e sem isto o
+         personagem sairia andando sozinho enquanto o menu estivesse aberto. */
+      this.keys.clear();
+      this.forward = 0;
+      this.strafe = 0;
+      this.run = false;
+      this.drawing = false;
+      this.primaryDown = false;
+      this.firstPerson = false;
+      if (document.pointerLockElement === this.canvas) document.exitPointerLock?.();
+      return;
+    }
+    if (!this.active || !this.canvas.requestPointerLock) return;
+    try {
+      const r = this.canvas.requestPointerLock();
+      r?.catch?.(() => {});
+    } catch {
+      /* Sem Pointer Lock a mira livre continua funcionando — ver o cabeçalho. */
+    }
+  }
+
   /** Engata a mira: some com o aviso e tenta o Pointer Lock em segundo plano. */
   engage() {
+    /* Com o menu aberto o clique é do MENU. Sem esta linha, um clique que
+       passasse ao lado de um botão cairia no canvas, reengataria a mira e
+       recapturaria o ponteiro com o menu ainda na tela. */
+    if (this.menuOpen) return;
     if (this.active) return;
     this.active = true;
     this.firstPerson = false;
@@ -164,9 +242,13 @@ export class Input {
       this.locked = isLocked;
       if (isLocked) {
         this.hadLock = true;
-      } else if (this.hadLock) {
-        // Tínhamos o Pointer Lock de verdade e o perdemos (Esc nativo do
-        // navegador): volta para a tela inicial, como um jogo de verdade.
+      } else if (this.hadLock && !this.menuOpen) {
+        /* Tínhamos o Pointer Lock de verdade e o perdemos (Esc nativo do
+           navegador): volta para a tela inicial, como um jogo de verdade.
+
+           MENOS quando o menu de comandos está aberto: ali o lock foi solto de
+           propósito, por `setMenuOpen`, e tratar isso como desistência cobriria
+           o menu com o aviso de "clique para mirar". */
         this.disengage();
       }
       // Se nunca tivemos lock, este evento não deveria disparar para nós; se
@@ -181,7 +263,7 @@ export class Input {
     });
 
     document.addEventListener("mousemove", (e) => {
-      if (!this.active) return;
+      if (!this.active || this.menuOpen) return;
       const s = CONFIG.player.mouseSensitivity;
       // movementX/Y são preenchidos pelo navegador em QUALQUER mousemove,
       // com ou sem Pointer Lock — só a captura/ocultação do cursor depende
@@ -198,7 +280,7 @@ export class Input {
     });
 
     document.addEventListener("mousedown", (e) => {
-      if (!this.active) return;
+      if (!this.active || this.menuOpen) return;
       if (e.button === 2) {
         // Mira em primeira pessoa também fica bloqueada durante reload /
         // câmera da flecha / morte — o `blockDraw` cobre os três.
@@ -233,6 +315,7 @@ export class Input {
     });
 
     document.addEventListener("mouseup", (e) => {
+      if (this.menuOpen) return;
       if (e.button === 2) this.firstPerson = false;
       if (e.button !== 0) return;
       this.primaryDown = false;
@@ -255,6 +338,21 @@ export class Input {
       ) {
         e.preventDefault();
         this.onDialogKey?.(e.code === "Enter");
+        return;
+      }
+
+      /* MENU DE COMANDOS ABERTO: o teclado é dele, e só ele.
+       *
+       * Não é preciosismo de foco — é o propósito do menu. Ele existe para que
+       * ninguém precise decorar trinta atalhos, e deixar as trinta teclas vivas
+       * por baixo dele significaria que um toque distraído troca o modo de jogo
+       * enquanto a pessoa procura o botão. Ficam de pé duas saídas: `Esc`, que
+       * é o que todo mundo tenta primeiro, e a própria crase. */
+      if (this.menuOpen) {
+        if (e.code === "Escape" || e.code === "Backquote" || e.code === "IntlBackslash") {
+          e.preventDefault();
+          this.actions.toggleCommandMenu = true;
+        }
         return;
       }
 
@@ -351,6 +449,13 @@ export class Input {
              silêncio: apertar H deixava de abrir o painel de atalhos. */
           this.actions.setMode = e.shiftKey ? "captureFlag" : "teamDuel";
           break;
+        case "KeyJ":
+          /* ATALHO DE TESTE do cerco: J adianta para o escalão seguinte,
+             Shift+J vai direto ao dos escaladores — que entram aos 105 s e são
+             a coisa mais cara de esperar a cada verificação. Fora do cerco a
+             tecla não faz nada; quem sabe disso é `main.js`. */
+          this.actions.siegeSkip = e.shiftKey ? "climber" : "next";
+          break;
         case "KeyN":
           // N de nível. Shift+N volta — a mesma tecla nos dois sentidos, como o
           // B faz com os bots e o 9 com a fase.
@@ -363,9 +468,18 @@ export class Input {
           this.actions.setMode = "lastStand";
           break;
         case "KeyC":
-          this.firstPerson = true;
-          break;
-        case "KeyF":
+          /* C É A CÂMERA DA FLECHA, e mais nada.
+           *
+           * Ela segurava a primeira pessoa — que é exatamente o que o BOTÃO
+           * DIREITO já faz, e faz melhor: a mão que segura o botão direito é a
+           * mesma que mira. Duas teclas para o mesmo efeito não é redundância
+           * útil, é uma tecla desperdiçada num teclado em que as letras
+           * acabaram (ver os comentários do G e do U).
+           *
+           * A câmera da flecha estava no F, que no CERCO já tinha dono: lá o F
+           * é a mão — trabuco, manivela e reparo. Com o F ocupado, o único modo
+           * em que a câmera da flecha não tinha tecla era justamente o mais
+           * novo. No C ela vale em todos, sem exceção escrita em lugar nenhum. */
           this.actions.toggleArrowCam = true;
           break;
         case "Enter":
@@ -409,7 +523,7 @@ export class Input {
           break;
         case "Backquote":
         case "IntlBackslash":
-          this.actions.toggleDebug = true;
+          this.crase();
           break;
       }
       this.updateMovement(e);
@@ -417,7 +531,6 @@ export class Input {
 
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.code);
-      if (e.code === "KeyC") this.firstPerson = false;
       if (e.code === "Digit0" || e.code === "Numpad0") this.scoreboard = false;
       if (e.code === "Space") this.actions.jumpReleased = true;
       this.updateMovement(e);
@@ -488,6 +601,9 @@ export class Input {
     a.setLevel = null;
     a.toggleBot = null;
     a.cycleBotDifficulty = 0;
+    a.siegeSkip = null;
+    a.toggleCommandMenu = false;
+    a.doMenu = false;
     a.jumpReleased = false;
     a.setMode = null;
     return snapshot;

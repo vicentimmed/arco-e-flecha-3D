@@ -48,6 +48,7 @@ import { ElkManager } from "./systems/elkManager.js";
 import { BirdManager } from "./systems/birdManager.js";
 import { ZombieManager } from "./systems/zombieManager.js";
 import { MeteorRainManager } from "./systems/meteorRain.js";
+import { BatSwarmManager } from "./systems/batSwarm.js";
 import { SiegeSystem } from "./systems/siege.js";
 import { SpecialSystem } from "./systems/special.js";
 import { TorchRing } from "./systems/torches.js";
@@ -224,6 +225,9 @@ class Game {
     this.zombies = new ZombieManager(this.scene, physics, this.terrain, this.arrows);
     /* A chuva de meteoros. Vazia fora do modo, e o custo disso é um `if`. */
     this.meteors = new MeteorRainManager(this.scene, physics, this.terrain, this.arrows);
+    /* Os morcegos do cerco. Vazio fora do modo, e o custo disso é um `if` —
+       mesma economia da chuva, logo acima. */
+    this.morcegos = new BatSwarmManager(this.scene, physics, this.arrows);
     /** Estado do modo vindo da sala: horda, rochas, e o instante da largada. */
     this.meteorState = null;
     this.torches = new TorchRing(this.scene, physics, this.terrain);
@@ -247,8 +251,15 @@ class Game {
     this.zombieState = null;
     this.elkState = null;
     this._elkHudCountdown = false;
-    /** A tela de vitória da caçada está na tela, esperando o Enter que a fecha. */
+    /** A tela de vitória de algum modo (caçada, série, zumbi, alce, último em
+     *  pé, bandeira...) está na tela, esperando o Enter que a fecha E
+     *  recomeça a partida do mesmo modo — ver `confirmOverlay` abaixo. */
     this.huntVictoryOpen = false;
+    /** GAME OVER em texto simples (sem ranking) na tela — chuva, alce ou
+     *  zumbis quando o resultado é derrota — esperando o Enter que recomeça. */
+    this.gameOverRestartOpen = false;
+    /** Fim do cerco na tela, esperando o Enter que recomeça a partida. */
+    this.siegeRestartOpen = false;
     /** Troca de fase em curso: o mundo não existe e o laço fica congelado. */
     this.swappingLevel = false;
     /** Preparação coordenada da noite — bloqueia a entrada até o aquecimento. */
@@ -275,6 +286,30 @@ class Game {
       document.getElementById("scene"),
       this.hud.el.lockHint,
     );
+
+    /* O MENU DE COMANDOS, ligado ao input por dois fios e nenhum mais.
+     *
+     * O botão escreve a MESMA intenção que a tecla escreveria, e o laço de
+     * `bindActions` consome no quadro seguinte sem saber de onde veio. Não há
+     * um segundo caminho para "trocar de modo" ou "pôr um bot": há um só, e o
+     * menu é outra forma de chegar nele. É o que garante que a confirmação, o
+     * aviso na tela e a mensagem de rede saiam idênticos nos dois casos.
+     *
+     * O segundo fio é o PONTEIRO: o jogo roda com o cursor capturado, e um
+     * menu de botões sem cursor não se usa. Ver `Input.setMenuOpen`. */
+    this.hud.onCommand = ([campo, valor]) => {
+      this.input.actions[campo] = valor;
+      /* A MARCA DE ORIGEM. Ela diz a `handleActions` que a intenção veio de um
+         clique, e o único efeito é pular a pergunta de confirmação — um botão
+         que a pessoa foi procurar num menu já é a confirmação. Ver
+         `Game.askModeChange`. */
+      this.input.actions.doMenu = true;
+      /* O menu FECHA ANTES de a ação ser aplicada: o quadro seguinte é que a
+         consome, e nele o ponteiro já voltou para o jogo. Fechar depois deixava
+         a troca de fase acontecer com o menu ainda por cima. */
+      if (this.hud.comandosQueFecham.has(campo)) this.hud.closeCommandMenu();
+    };
+    this.hud.onCommandMenuToggle = (aberto) => this.input.setMenuOpen(aberto);
     this.input.onEngage = () => this.audio.unlock();
 
     this.debug = new DebugPanel(document.getElementById("ui"), {
@@ -345,6 +380,13 @@ class Game {
       net: this.net,
       hud: this.hud,
       audio: this.audio,
+      // Só para a câmera ir para a frente do feixe no disparo e voltar no
+      // impacto. Ver `CameraRig.onKame`.
+      rig: this.rig,
+      /* O céu. A Terra é um disco desenhado dentro do shader dele, sem corpo e
+         sem colisor — então quem sabe dizer "o feixe está apontado para o
+         planeta" e quem sabe explodi-lo é o renderer. Ver `aimingAtEarth`. */
+      renderer: this.renderer,
     });
 
     const ui = document.getElementById("ui");
@@ -454,6 +496,14 @@ class Game {
         id: e.meteorId,
         d: Math.round((e.distance ?? 0) * 100) / 100,
       });
+    });
+
+    /* Acertei um morcego. Mesmo contrato da rocha: quem atira é a autoridade
+       sobre o próprio acerto e a sala decide se ele caiu — aqui só se anuncia. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (e.targetKind !== "bat" || e.batId == null) return;
+      this.net.send(C2S.BAT_HIT, { id: e.batId });
     });
 
     // Alvo da série: quem acertar primeiro leva. O servidor arbitra, porque
@@ -636,6 +686,7 @@ class Game {
          barra do portão já pela metade sem nada explicando por quê. */
       this.applySiegeMode(msg.snapshot.mode?.mode === "siege");
       if (msg.snapshot.siege?.length) this.siege.applySnapshot(msg.snapshot.siege);
+      if (msg.snapshot.bats?.length) this.morcegos.applyNetwork(msg.snapshot.bats);
       if (msg.snapshot.siegeStatus) {
         this.siegeState = msg.snapshot.siegeStatus;
         this.siege.setStatus(msg.snapshot.siegeStatus);
@@ -860,7 +911,13 @@ class Game {
           volume: 1.0,
         });
       } else {
-        this.hud.showZombieCenter("GAME OVER", "o alce derrubou a caçada", "gameover");
+        this.hud.showZombieCenter(
+          "GAME OVER",
+          "o alce derrubou a caçada",
+          "gameover",
+          "para jogar de novo",
+        );
+        this.gameOverRestartOpen = true;
       }
     });
 
@@ -901,7 +958,14 @@ class Game {
       this.series.clear();
       this.hud.resetStats();
       this.hud.hideZombieCenter();
+      /* As TRÊS bandeiras de "Enter recomeça", zeradas juntas — não importa
+         qual modo as ergueu, um mundo novo já invalida qualquer uma delas. Sem
+         isto um Enter perdido depois de trocar de modo por outro caminho (o
+         menu, por exemplo) reenviaria um pedido de recomeço para um modo que
+         a pessoa já deixou para trás. */
       this.huntVictoryOpen = false;
+      this.gameOverRestartOpen = false;
+      this.siegeRestartOpen = false;
       this.hud.hideHuntVictory();
       this.zombieState = null;
       this.elkState = null;
@@ -1006,10 +1070,28 @@ class Game {
        `Siege.packFrame` para a conta que obrigou a mudar de transporte. */
     net.on(`frame:${FRAME.SIEGE}`, (buffer) => this.siege.applyFrame(buffer));
 
+    net.on(S2C.BATS, (msg) => this.morcegos.applyNetwork(msg.b));
+
+    net.on(S2C.BAT_DEATH, (msg) => {
+      this.morcegos.morrer(msg);
+      if (msg.killerName) {
+        this.hud.toast(`${msg.killerName} derrubou um morcego`, "hit");
+      }
+    });
+
     net.on(S2C.SIEGE_STATUS, (msg) => {
       this.siegeState = msg;
       this.siege.setStatus(msg);
       this.hud.setSiege(msg);
+      /* Partida em andamento: a tela de fim sai e o Enter de recomeçar não
+         vale mais. Aqui, e não no handler do modo, porque é este estado — e
+         não a mensagem de troca — que diz que o cerco voltou a rodar: quando
+         OUTRA pessoa aperta o Enter, o modo não muda e nada mais avisaria esta
+         tela. Mesmo desenho do `gameOverRestartOpen`. */
+      if (!msg.over && this.siegeRestartOpen) {
+        this.siegeRestartOpen = false;
+        this.hud.hideSiegeOver();
+      }
     });
 
     net.on(S2C.SIEGE_TIER, (msg) => {
@@ -1067,12 +1149,22 @@ class Game {
       gameEvents.emit(EventType.AUDIO_PLAY, {
         sound: "explosion",
         position: vec3Payload(this.player.position),
-        volume: 1.5,
+        /* 0,55 e não 1,5. O estouro tocava NA POSIÇÃO DO JOGADOR — é o fim da
+           partida, e o baque é para todos, esteja quem estiver onde estiver —
+           e a 1,5 isso vira um som sem atenuação nenhuma tocado dentro do
+           ouvido. Continua sendo o som mais alto do modo; deixou de ser o mais
+           alto do jogo. */
+        volume: 0.55,
       });
     });
 
     net.on(S2C.SIEGE_OVER, (msg) => {
       this.hud.showSiegeOver(msg);
+      /* E o Enter recomeça, como no fim da chuva. Sem esta linha o cerco
+         terminava numa tela de resultado sem saída: o jogo continuava
+         respondendo e a única forma de jogar de novo era lembrar do atalho do
+         modo. Ver o `confirmOverlay` em `bindActions`. */
+      this.siegeRestartOpen = true;
     });
 
     /* ----------------------------------------------------- chuva de meteoros */
@@ -1136,11 +1228,18 @@ class Game {
           volume: 1.0,
         });
       } else {
+        /* A tela de fim diz COMO RECOMEÇAR. Sem essa linha a partida termina
+           num texto vermelho e nada mais acontece — o jogo continua respondendo
+           e a pessoa não tem como saber. O `Enter` reentra no modo, que no
+           servidor é um `setMode` para o mesmo modo, ou seja: chuva nova, horda
+           1, barra do especial zerada. */
         this.hud.showZombieCenter(
           "GAME OVER",
           `uma rocha encostou na horda ${msg.horde}`,
           "gameover",
+          "para jogar de novo",
         );
+        this.gameOverRestartOpen = true;
       }
     });
 
@@ -1177,7 +1276,13 @@ class Game {
           volume: 1.0,
         });
       } else {
-        this.hud.showZombieCenter("GAME OVER", `caíram na horda ${msg.horde}`, "gameover");
+        this.hud.showZombieCenter(
+          "GAME OVER",
+          `caíram na horda ${msg.horde}`,
+          "gameover",
+          "para jogar de novo",
+        );
+        this.gameOverRestartOpen = true;
       }
     });
 
@@ -1189,6 +1294,7 @@ class Game {
     net.on(S2C.STAND_STATUS, (msg) => this.applyStandStatus(msg));
     net.on(S2C.STAND_OVER, (msg) => {
       this.standState = { ...(this.standState ?? {}), over: true };
+      this.huntVictoryOpen = true;
       this.hud.showStandVictory(msg, this.net.me?.id);
     });
 
@@ -1199,7 +1305,10 @@ class Game {
       this.hud.setFlag(msg, this.nomeDe(msg.carrier), this.net.me?.id);
     });
     net.on(S2C.FLAG_EVENT, (msg) => this.onFlagEvent(msg));
-    net.on(S2C.FLAG_OVER, (msg) => this.hud.showFlagVictory(msg, this.net.me?.id));
+    net.on(S2C.FLAG_OVER, (msg) => {
+      this.huntVictoryOpen = true;
+      this.hud.showFlagVictory(msg, this.net.me?.id);
+    });
 
     /* A dificuldade dos bots é da SALA, e o aviso vem dela: os bots vivem todos
        no servidor, então quem apertou a tecla e quem só estava jogando veem a
@@ -1455,7 +1564,41 @@ class Game {
 
   /* ------------------------------------------------------------- laço ----- */
 
+  /**
+   * UM QUADRO — e a rede de segurança que impede o jogo de morrer num deles.
+   *
+   * O laço se sustenta pedindo o próximo `requestAnimationFrame` NO FIM do
+   * quadro. Isso tem uma consequência que só aparece no pior dia: uma exceção
+   * em qualquer lugar do caminho — um sistema novo, uma mensagem malformada,
+   * um `null` que ninguém previu — pula o pedido e a CORRENTE ARREBENTA. O
+   * navegador não avisa, a tela congela na última imagem desenhada, o contador
+   * de FPS fica parado no último valor e o jogo simplesmente não responde mais.
+   * De dentro do jogo é indistinguível de um travamento de máquina, e foi
+   * exatamente assim que apareceu num relato: "o jogo travou".
+   *
+   * Este invólucro separa as duas coisas. O quadro pode falhar; o laço, não.
+   * A exceção é registrada uma vez (com o quadro em que aconteceu, para ela ser
+   * encontrável) e o próximo quadro é pedido de qualquer forma — um engasgo
+   * visível de um quadro em vez de um jogo morto. Nada é engolido em silêncio:
+   * o `console.error` continua lá, e o aviso na tela diz que algo falhou.
+   */
   frame(now) {
+    try {
+      this.frameInterno(now);
+    } catch (err) {
+      this._framesRuins = (this._framesRuins ?? 0) + 1;
+      /* Um aviso por sessão, e não um por quadro: um erro que se repete a 60 Hz
+         encheria o console com sessenta cópias por segundo e esconderia a
+         primeira — que é a única que interessa. */
+      if (this._framesRuins === 1) {
+        console.error("erro no quadro (o laço continua):", err);
+        this.hud?.toast?.("algo falhou neste quadro — veja o console", "miss");
+      }
+      requestAnimationFrame(this.frame.bind(this));
+    }
+  }
+
+  frameInterno(now) {
     const rawDt = (now - this.lastTime) / 1000;
     this.lastTime = now;
     const dt = Math.min(rawDt, 0.1);
@@ -1479,6 +1622,21 @@ class Game {
       this.renderer.render(0, this.wind.vector);
       requestAnimationFrame(this.frame.bind(this));
       return;
+    }
+
+    /* O ESTADO DO MENU É DERIVADO, e não confiado.
+     *
+     * `input.menuOpen` congela o jogo de propósito: sem ele o corpo anda e o
+     * arco atira por baixo do menu. O risco é o espelho ficar preso — o painel
+     * some da tela e a bandeira continua de pé, e aí o jogo fica sem responder
+     * a nada, com o cursor solto e nenhuma explicação. É exatamente a cara de
+     * um travamento, e nenhum caminho de erro avisaria.
+     *
+     * Conferir contra a verdade (o painel está visível?) uma vez por quadro
+     * custa uma leitura de propriedade e torna esse estado impossível de
+     * emperrar, venha o descompasso de onde vier. */
+    if (this.input.menuOpen !== this.hud.commandMenuOpen) {
+      this.input.setMenuOpen(this.hud.commandMenuOpen);
     }
 
     const actions = this.input.consume();
@@ -1534,6 +1692,7 @@ class Game {
     this.birds.update(dt, this.renderer.camera);
     this.zombies.update(dt, this.renderer.camera);
     this.meteors.update(dt, this.renderer.camera);
+    this.morcegos.update(dt);
     this.updateSiege(dt);
     this.special?.update(dt);
     this.updateMeteorHud(dt);
@@ -1617,15 +1776,15 @@ class Game {
       // todo mundo (ver S2C.WIND). Sem isso, cada um teria uma física diferente.
       this.net.send(C2S.WIND, { on: !this.arrows.options.windInfluence });
     }
-    /* NO CERCO, `F` NÃO É A CÂMERA DA FLECHA — é a mão: trabuco, manivela e
-       reparo (ver `systems/siege.js`). O modo já entra com a câmera da flecha
-       desligada de propósito, então a tecla não estaria fazendo falta; o que
-       ela faria é atirar uma pedra e ligar a câmera no mesmo toque.
-
-       A guarda mora AQUI e não em `input.js` porque o input não conhece modo —
-       ele traduz tecla em intenção, e é este arquivo que sabe o que a intenção
-       significa agora. */
-    if (a.toggleArrowCam && !this._siegeOn) {
+    /* A CÂMERA DA FLECHA VALE EM TODOS OS MODOS, e a tecla é o C.
+     *
+     * A guarda de cerco que morava aqui existia porque a tecla era o F, e no
+     * cerco o F é a MÃO — trabuco, manivela e reparo (ver `systems/siege.js`).
+     * Com a câmera da flecha no C (ver `input.js`) os dois deixaram de disputar
+     * a mesma tecla, e a exceção some junto: acompanhar a própria flecha caindo
+     * dentro da fila do portão é justamente o tipo de coisa que este modo
+     * ganha em mostrar. */
+    if (a.toggleArrowCam) {
       const on = !this.rig.followArrowEnabled;
       this.rig.setFollowArrow(on);
       this.hud.toast(
@@ -1634,8 +1793,34 @@ class Game {
       );
     }
     if (a.confirmOverlay && this.huntVictoryOpen) {
+      /* Fecha E recomeça — como o cerco e a chuva sempre fizeram. Pedir de
+         novo o MESMO modo que acabou de terminar é o caminho mais curto: o
+         servidor já sabe recriar bicho, horda e posições do zero (é o que
+         `setMode` faz para QUALQUER entrada no modo, nova ou repetida). Sem
+         isto a tela de vitória era um beco sem saída — fechava, e a única
+         forma de jogar de novo era lembrar o atalho do modo escondido no
+         menu. */
       this.huntVictoryOpen = false;
       this.hud.hideHuntVictory();
+      this.net.send(C2S.MODE, { mode: this.mode });
+    } else if (a.confirmOverlay && this.gameOverRestartOpen) {
+      /* `else if`, e não um segundo `if`: se as duas telas estivessem abertas,
+         um Enter fecharia a de vitória E recomeçaria a partida no mesmo toque.
+         Aqui a de cima sempre ganha, e o segundo Enter faz a outra coisa. */
+      this.gameOverRestartOpen = false;
+      this.hud.hideZombieCenter();
+      this.net.send(C2S.MODE, { mode: this.mode });
+    } else if (a.confirmOverlay && this.siegeRestartOpen) {
+      /* O MESMO Enter do fim da chuva, no fim do cerco.
+       *
+       * O modo termina de duas maneiras (o portão caiu, ou o Sol se pôs) e as
+       * duas deixavam a pessoa olhando uma tela de resultado sem saída: a
+       * única forma de jogar de novo era lembrar do atalho do modo. Recomeçar
+       * é pedir o modo de novo à sala — `setMode` já refaz portão, horda,
+       * engenhos e posições. */
+      this.siegeRestartOpen = false;
+      this.hud.hideSiegeOver();
+      this.net.send(C2S.MODE, { mode: "siege" });
     }
     // Qualquer um pode soltar um porco e todos veem. Não vale ponto: quem
     // solta escolheria a distância, e a caçada pontua justamente por distância.
@@ -1646,8 +1831,10 @@ class Game {
       this.net.send(C2S.SPAWN_ELK_WOLVES);
     }
 
-    if (a.setMode) this.askModeChange(a.setMode);
-    if (a.setLevel) this.askLevelChange(a.setLevel);
+    /* `doMenu` diz que a intenção nasceu de um CLIQUE, e não de uma tecla —
+       ver `Hud.onCommand`. É só isso que decide se há pergunta de confirmação. */
+    if (a.setMode) this.askModeChange(a.setMode, a.doMenu === true);
+    if (a.setLevel) this.askLevelChange(a.setLevel, a.doMenu === true);
     /* Pôr e tirar bot é PEDIDO À SALA. O aviso na tela não sai daqui: ele vem
        do `S2C.JOIN`/`S2C.LEAVE` que o servidor manda para todo mundo, porque um
        adversário novo em campo é notícia para a sala inteira, não só para quem
@@ -1657,6 +1844,13 @@ class Game {
     }
     if (a.cycleBotDifficulty) {
       this.net.send(C2S.BOT_DIFFICULTY, { step: a.cycleBotDifficulty });
+    }
+    /* O atalho de teste do cerco. Só no cerco: o relógio que ele adianta é o
+       da partida do modo, e fora dele não existe. */
+    if (a.siegeSkip && this._siegeOn) {
+      this.net.send(C2S.SIEGE_SKIP, {
+        to: a.siegeSkip === "climber" ? "climber" : null,
+      });
     }
     if (a.toggleMusic) {
       const on = this.audio.toggleMusic();
@@ -1676,6 +1870,7 @@ class Game {
       }
     }
     if (a.toggleDebug) this.debug.toggle();
+    if (a.toggleCommandMenu) this.hud.toggleCommandMenu();
     if (a.toggleHelp) this.hud.toggleHelp();
 
     if (a.askRespawn) this.askRespawn();
@@ -2018,6 +2213,13 @@ class Game {
     // osso. Mesmo interruptor do modo zumbi.
     this.arrows.fireArrows = ligado;
 
+    /* A BEIRA DO ADARVE. Este é o único modo com dano de queda, e é por isso
+       que é o único com a trava — ver `PlayerPhysics.ledgeGuard`. A faixa de
+       tiro tem 90 cm e termina em oito metros; a geometria não deixa pôr
+       parapeito ali (o tiro no portão passa a 5 cm do deque), então quem
+       segura o passo é o corpo. Pular para fora continua sendo escolha. */
+    this.playerPhysics.ledgeGuard = ligado;
+
     if (ligado) {
       this.siege.terrain = this.terrain;
       this.siege.start(this.levels.current?.gate ?? null, this.wind);
@@ -2027,9 +2229,13 @@ class Game {
       this.rig.returnToArcher();
     } else {
       this.siege.stop();
+      this.morcegos.clear();
       this.siegeState = null;
       this.hud.setSiege(null);
       this.hud.setSiegeHint(null);
+      // Saiu do modo: um Enter perdido não pode arrastar a sala de volta para o
+      // cerco depois de alguém já ter escolhido outra coisa.
+      this.siegeRestartOpen = false;
     }
   }
 
@@ -2136,7 +2342,7 @@ class Game {
    * A troca em si ainda é LOCAL: a sincronia pela sala é a etapa seguinte
    * (`docs/plano-fases.md`, F0.4). Jogando sozinho, funciona por inteiro.
    */
-  askLevelChange(id) {
+  askLevelChange(id, semPergunta = false) {
     if (this.swappingLevel) return;
 
     /* A MESMA TECLA leva e traz. Sem isso, quem foi para a Lua não teria como
@@ -2146,7 +2352,10 @@ class Game {
     const nome = levelInfo(alvo).nome;
     const artigo = alvo === "moon" ? "a Lua" : `o ${nome}`;
 
-    this.ask(`Ir para ${artigo}?`, () => {
+    /* Ver `askModeChange`: um botão de menu não precisa ser confirmado, e a
+       confirmação por cima do menu recém-fechado deixava a pergunta na tela
+       sem cursor para respondê-la. */
+    const viajar = () => {
       /* A FASE É DA SALA. Quem confirma pede ao servidor, que prepara todo
          mundo junto e só então confirma a troca — trocar localmente deixaria
          cada um numa fase, com as poses dos outros chegando em coordenadas de
@@ -2154,7 +2363,9 @@ class Game {
          ainda funciona e é melhor que uma tecla que não faz nada. */
       if (this.net.connected) this.net.send(C2S.LEVEL, { level: alvo });
       else this.changeLevel(alvo, { titulo: `viajando para ${nome.toLowerCase()}…` });
-    });
+    };
+    if (semPergunta) viajar();
+    else this.ask(`Ir para ${artigo}?`, viajar);
   }
 
   /**
@@ -2214,6 +2425,7 @@ class Game {
     this.birds.clear();
     this.zombies.clear();
     this.meteors.dispose();
+    this.morcegos.dispose();
     this.special?.cancel();
     this.torches.clear();
     this.series.clear();
@@ -2276,6 +2488,12 @@ class Game {
        dia. Uma condição só decide as duas metades do cenário — não há como o
        céu dizer "Lua" enquanto a física diz "vale". */
     this.renderer.setSpace(f.airDensity <= 0 ? 1 : 0);
+    /* A TERRA VOLTA INTEIRA na troca de fase.
+       Ela some quando alguém acerta o feixe nela (ver `Renderer.blastEarth`), e
+       isso é para durar a sessão de quem estava lá — não a vida do processo.
+       Chegar à Lua e encontrar o céu sem planeta, sem ter visto o golpe, seria
+       um cenário quebrado sem explicação nenhuma. */
+    this.renderer.resetEarth();
 
     /* O jetpack é EQUIPAMENTO DA FASE, não do jogador: quem vai à Lua ganha um,
        quem volta ao vale devolve. Passar `null` restaura o movimento de sempre,
@@ -2432,8 +2650,13 @@ class Game {
       this.special?.cancel();
       this.hud.setMeteor(null);
       this.hud.setSpecial(null);
+      this.hud.setBossHp(null);
       this.hud.hideZombieCenter();
       this.hud.clearDanger();
+      this.hud.clearMeteorMarks();
+      // Saiu do modo: um Enter perdido não pode arrastar a sala de volta para a
+      // chuva depois de alguém já ter escolhido outra coisa.
+      this.gameOverRestartOpen = false;
     }
   }
 
@@ -2448,6 +2671,19 @@ class Game {
     if (!this._meteorOn) return;
     const M = CONFIG.modes.meteorRain;
     const st = this.meteorState;
+
+    /* A BARRA DO COLOSSO. Só ele tem uma, e só enquanto está em campo.
+     *
+     * As outras rochas pedem de uma a três flechas, e o escurecimento do
+     * material já conta essa história inteira. O colosso pede até dezoito e
+     * fica mais de um minuto na tela: sem um número, atirar nele é atirar num
+     * muro sem saber se está adiantando. Reusa a barra do chefão zumbi — é a
+     * mesma informação, no mesmo lugar, com outro substantivo.
+     *
+     * ANTES dos dois `return` abaixo (a contagem de entrada e o fim de
+     * partida), senão ela ficaria pendurada na tela durante os dez segundos de
+     * contagem da horda seguinte. */
+    this.hud.setBossHp(st?.tankHp ?? null, "COLOSSO");
 
     /* A contagem de entrada. O que chegou pela rede foi o INSTANTE, não os
        segundos — então o retardatário recebe um horário no passado, a
@@ -2482,22 +2718,55 @@ class Game {
     this.hud.setMeteor(st);
     if (st?.over) {
       this.hud.clearDanger();
+      this.hud.clearMeteorMarks();
       return;
     }
+    // Partida em andamento: o Enter de recomeçar não vale mais. Aqui e não no
+    // handler do modo porque é este estado — e não a mensagem — que diz que a
+    // chuva voltou a rodar.
+    this.gameOverRestartOpen = false;
 
-    const alvo = this.meteors.maisPerigosa();
-    if (!alvo) {
+    /* UM MARCADOR POR ROCHA, sem limiar de altitude nenhum.
+     *
+     * Antes era uma seta só, a da rocha mais baixa, e ela só aparecia depois de
+     * a rocha cruzar `warnAltitude`. As duas economias custavam a mesma coisa:
+     * quem estava girando a câmera não tinha como saber QUANTAS rochas havia.
+     * Marcando todas desde o nascimento, contar é olhar — e a decisão do modo
+     * ("qual das quatro eu atiro agora") passa a ter os dados na tela.
+     *
+     * O custo é irrelevante: o teto de rochas vivas é 16 (`maxAlive`), e cada
+     * marcador é uma `transform` num nó reaproveitado. */
+    const marcas = (this._meteorMarks ??= []);
+    marcas.length = 0;
+    let maisBaixa = Infinity;
+    for (const m of this.meteors.byNetId.values()) {
+      const alt = m.altitude;
+      if (alt < maisBaixa) maisBaixa = alt;
+      marcas.push({
+        angulo: this.screenDirection(m.group.position),
+        x: this._ndc.x,
+        y: this._ndc.y,
+        alt: Math.round(alt),
+        perigo: alt <= M.dangerAltitude,
+        aviso: alt <= M.warnAltitude,
+      });
+    }
+    /* Mais baixa primeiro. O pool do HUD é reaproveitado por ÍNDICE, e ordenar
+       por altitude mantém as rochas críticas nos mesmos nós de um quadro para o
+       outro — que é o que impede a animação de pulso de reiniciar cada vez que
+       uma rocha morre e as outras deslizam de posição na lista. */
+    marcas.sort((a, b) => a.alt - b.alt);
+    this.hud.setMeteorMarks(marcas);
+
+    /* A MOLDURA continua sendo da mais baixa, e continua com limiar. Ela é o
+       alarme, não o inventário: acesa por qualquer rocha alta, seria uma tela
+       vermelha permanente e deixaria de significar "agora". */
+    if (!marcas.length || maisBaixa > M.warnAltitude) {
       this.hud.clearDanger();
       return;
     }
 
-    const alt = alvo.altitude;
-    if (alt > M.warnAltitude) {
-      this.hud.clearDanger();
-      this.hud.setMeteorArrow(null);
-      return;
-    }
-
+    const alt = maisBaixa;
     // Quanto mais baixa, mais forte — e abaixo do limiar de perigo, contínuo.
     const t = 1 - Math.max(0, alt - M.dangerAltitude) / (M.warnAltitude - M.dangerAltitude);
     const perigo = alt <= M.dangerAltitude;
@@ -2512,16 +2781,14 @@ class Game {
         volume: 0.5,
       });
     }
-
-    this.hud.setMeteorArrow(
-      this.screenDirection(alvo.group.position),
-      Math.round(alt),
-    );
   }
 
   /**
    * Onde este ponto está em relação à tela: `null` se visível, ou o ângulo da
    * borda para onde a seta aponta.
+   *
+   * Deixa a projeção em `this._ndc` de brinde — quem precisa da posição NA tela
+   * (o marcador da rocha visível) já a tem, sem projetar duas vezes.
    */
   screenDirection(pos) {
     const camera = this.renderer.camera;
@@ -2577,7 +2844,7 @@ class Game {
    * e pode ser cancelado com a mesma tecla. Os demais pedem confirmação para
    * evitar acionamento acidental no meio de uma partida.
    */
-  askModeChange(mode) {
+  askModeChange(mode, semPergunta = false) {
     if (!this.net.connected) return;
 
     /* Nem todo modo existe em toda fase. Os porcos, o alce, as aves, a horda e
@@ -2596,6 +2863,22 @@ class Game {
       return;
     }
     if (this.mode === mode) return;
+
+    /* SEM PERGUNTA quando o pedido veio do MENU.
+     *
+     * A confirmação existe porque os modos moram em teclas de um toque: com
+     * `6` a um dedo de `5`, entrar na noite dos zumbis por engano no meio de
+     * uma caçada é fácil demais. Um botão dentro de um menu que a pessoa abriu
+     * de propósito não tem esse risco — o clique JÁ É a confirmação, e
+     * perguntar de novo transforma dois gestos em três.
+     *
+     * E, o que importa mais: o diálogo abria por cima de um menu que acabara
+     * de devolver o ponteiro ao jogo, e a pessoa ficava com uma pergunta na
+     * tela e sem cursor para respondê-la. */
+    if (semPergunta) {
+      this.net.send(C2S.MODE, { mode });
+      return;
+    }
     const nome = MODE_LABELS[mode] ?? mode;
     this.ask(`Entrar no ${nome}?`, () => this.net.send(C2S.MODE, { mode }));
   }
@@ -3171,7 +3454,9 @@ class Game {
     camera.updateMatrixWorld();
     camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
 
-    this.hud.setReticleVisible(!this.rig.isArrowCam);
+    // Retículo só quando a câmera É o ponto de vista da mira: na câmera da
+    // flecha e na do feixe ele apontaria para onde ninguém pode acertar.
+    this.hud.setReticleVisible(!this.rig.isCinematic);
   }
 
   /**

@@ -29,7 +29,7 @@ export class SpecialSystem {
   /**
    * @param {object} deps o mínimo para o sistema existir sem conhecer o jogo
    */
-  constructor({ scene, player, remotes, meteors, getTerrain, getAim, net, hud, audio }) {
+  constructor({ scene, player, remotes, meteors, getTerrain, getAim, net, hud, audio, rig, renderer }) {
     this.scene = scene;
     this.player = player;
     this.remotes = remotes;
@@ -39,6 +39,12 @@ export class SpecialSystem {
     this.net = net;
     this.hud = hud;
     this.audio = audio;
+    /** A câmera. Só para avisar que o feixe saiu — ver `CameraRig.onKame`. */
+    this.rig = rig;
+    /** O céu. A Terra mora lá dentro, e é ele quem sabe destruí-la. */
+    this.renderer = renderer;
+    /** Relógio do feixe a caminho da Terra, em segundos. `null` = não há. */
+    this.terraEm = null;
 
     this.charge = 0;
     this.max = CONFIG.special.hitsToCharge;
@@ -115,13 +121,49 @@ export class SpecialSystem {
     const feixe = new KamehamehaBeam(this.scene, origem, direcao, this.getTerrain(), local);
     this.feixes.push(feixe);
     this.audio?.play3D?.("kameFire", origem, 1.2);
+    this.mirarNaTerra(feixe);
     return feixe;
+  }
+
+  /**
+   * Este feixe foi para a Terra?
+   *
+   * A decisão é tomada AQUI e para QUALQUER feixe — o seu e o dos outros. É o
+   * que faz o planeta explodir no mesmo instante em todas as telas sem uma
+   * única mensagem nova: o `S2C.KAME` já carrega origem e direção, cada cliente
+   * reconstrói o mesmo feixe, e a mesma conta angular dá a mesma resposta. É a
+   * mesma economia que faz a flecha e a pedra do trabuco existirem como
+   * parâmetros de disparo em vez de poses.
+   *
+   * (Se dois feixes saírem para lá quase juntos, o segundo não faz nada:
+   * `blastEarth` recusa a repetição. Não há o que sincronizar.)
+   */
+  mirarNaTerra(feixe) {
+    if (!this.renderer?.aimingAtEarth?.(feixe.dir)) return;
+    if (this.terraEm != null) return;
+    this.terraEm = CONFIG.special.earth.travel;
+    this.hud?.toast?.("o feixe saiu da órbita…", "hit");
+  }
+
+  /** O feixe chegou lá. Três segundos e meio depois de sair da mão. */
+  passoDaTerra(dt) {
+    if (this.terraEm == null) return;
+    this.terraEm -= dt;
+    if (this.terraEm > 0) return;
+    this.terraEm = null;
+    if (!this.renderer?.blastEarth?.()) return;
+    this.hud?.toast?.("a Terra se foi", "hit");
+    this.audio?.play3D?.("explosion", this.player.position, 1.0);
   }
 
   /** Interrompe tudo (troca de modo, de fase, morte). */
   cancel() {
     this.ativo = false;
     this.t = 0;
+    this.meuFeixe = null;
+    // A câmera do feixe morre com ele: sem isto, trocar de modo no meio do
+    // golpe deixaria o jogador olhando um ponto no céu de uma fase que já foi.
+    this.rig?.leaveKame?.();
     this.player?.setKame(0);
     for (const f of this.feixes) f.dispose();
     this.feixes = [];
@@ -134,6 +176,10 @@ export class SpecialSystem {
   }
 
   update(dt) {
+    /* O feixe a caminho da Terra corre SOZINHO, fora de `ativo`: ele leva três
+       segundos e meio, e a pose de quem atirou termina antes disso. */
+    this.passoDaTerra(dt);
+
     // Os feixes vivem por conta própria — inclusive depois de o dono terminar
     // a pose, porque a dissipação sobra dela.
     for (let i = this.feixes.length - 1; i >= 0; i--) {
@@ -158,6 +204,11 @@ export class SpecialSystem {
       this.player.kameMuzzle(_v);
       _dir.copy(this.dirTravada);
       this.meuFeixe = this.spawnBeam(_v, _dir, true);
+      /* A CÂMERA VIRA. Ela sai de trás do ombro e vai para a frente do feixe,
+         olhando de volta para as mãos que o estão empurrando — e volta sozinha
+         no impacto. Só no feixe do próprio jogador: ninguém quer a câmera
+         arrancada por um especial do companheiro do outro lado da base. */
+      this.rig?.onKame?.(this.meuFeixe);
       this.net?.send?.(C2S.KAME, {
         o: [r(_v.x), r(_v.y), r(_v.z)],
         d: [r(_dir.x), r(_dir.y), r(_dir.z)],
@@ -186,19 +237,22 @@ export class SpecialSystem {
     const B = CONFIG.special.beam;
     const seg = feixe.segmento();
 
-    // Rochas: o feixe destrói qualquer uma, seja qual for a vida que tinha.
+    /* Rochas: UMA mensagem, e quem decide o estrago é a sala.
+     *
+     * Ela mandava uma por flecha que faltava — `maxHits` cópias do mesmo
+     * `METEOR_HIT` — para vaporizar sem inventar canal novo. Deixou de servir
+     * quando o colosso passou a ser exceção: o feixe apaga qualquer rocha de
+     * primeira, MENOS ele, em quem vale três flechas. Contar isso no cliente
+     * seria contar duas vezes (a sala já sabe qual delas é o colosso) e por
+     * dois caminhos que podem divergir. Aqui só se anuncia "o feixe passou por
+     * esta"; a regra mora em `Room.registerMeteorHit`. */
     for (const m of this.meteors?.byNetId?.values() ?? []) {
       const chave = `m${m.netId}`;
       if (this.jaAtingiu.has(chave)) continue;
       const p = m.group.position;
       if (distanciaAoFeixe(seg, p.x, p.y, p.z) <= B.killRadius + m.raio) {
         this.jaAtingiu.add(chave);
-        /* Uma mensagem por FLECHA que faltava. A sala tira a vida uma de cada
-           vez (é o contrato do `METEOR_HIT`), então vaporizar é mandar todas
-           de uma vez — sem inventar um canal novo só para o especial. */
-        for (let i = 0; i < m.maxHits; i++) {
-          this.net?.send?.(C2S.METEOR_HIT, { id: m.netId, d: 0, kame: true });
-        }
+        this.net?.send?.(C2S.METEOR_HIT, { id: m.netId, d: 0, kame: true });
       }
     }
 

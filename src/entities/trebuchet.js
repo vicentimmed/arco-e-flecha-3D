@@ -216,6 +216,63 @@ export class Trebuchet {
     this.group.name = `trabuco-${posto.id}`;
     parent.add(this.group);
     this.build();
+    this.buildBarra();
+  }
+
+  /**
+   * A BARRA DE RECARGA, presa ao engenho e não ao HUD.
+   *
+   * O painel do cerco tem dois losangos que dizem "carregado" ou "içando", e
+   * isso bastava enquanto a recarga era de catorze segundos: ninguém precisa de
+   * um cronômetro para catorze segundos. A dois minutos (ver
+   * `CONFIG.modes.siege.trebuchet.reload`) a pergunta muda de "está pronto?"
+   * para "QUANTO FALTA?" — e a resposta decide se vale a pena largar o arco e
+   * ir para a manivela agora ou daqui a um minuto.
+   *
+   * Ela fica NO ENGENHO porque é onde o olho já está quando a pergunta aparece:
+   * quem está no adarve olha para a máquina ao lado antes de decidir. Um número
+   * no canto da tela obrigaria a procurar.
+   *
+   * Duas malhas planas e um `lookAt` por quadro — o custo é o de um billboard,
+   * e não há billboard mais barato: nenhuma textura, nenhum canvas, nenhum
+   * elemento de DOM a posicionar.
+   */
+  buildBarra() {
+    const G = new THREE.Group();
+    G.position.set(0, 5.2, 0);
+
+    const fundo = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.6, 0.3),
+      new THREE.MeshBasicMaterial({
+        color: 0x0a0c12,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+      }),
+    );
+    fundo.renderOrder = 8;
+
+    /* O preenchimento cresce da ESQUERDA, e por isso a geometria é deslocada
+       meia unidade: escalar em x um plano centrado o faria crescer para os dois
+       lados a partir do meio, que não é como se lê uma barra de progresso. */
+    const geo = new THREE.PlaneGeometry(1, 0.22);
+    geo.translate(0.5, 0, 0);
+    this.barraFill = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        color: 0xffc451,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    this.barraFill.position.set(-1.24, 0, 0.01);
+    this.barraFill.renderOrder = 9;
+
+    G.add(fundo, this.barraFill);
+    this.barra = G;
+    // Ela é do MUNDO, não da armação: `corpo` gira com a mira, e uma barra que
+    // gira junto fica de lado justamente quando se está mirando.
+    this.group.add(G);
   }
 
   build() {
@@ -248,11 +305,15 @@ export class Trebuchet {
        sarilho, e as travessas de amarração. O braço nunca desce abaixo de
        y = 0,10 (o raio dele é menor que a altura do eixo), então as travessas
        rentes ao deque estão livres por construção, em qualquer z. */
+    /* AFUNDADAS 4 cm no deque. Uma soleira apoiada exatamente na cota do piso
+       empata as duas faces no cartão de profundidade, e o adarve inteiro pisca
+       em manchas em volta do engenho. Ver `Lote.assenta` em `entities/castle.js`
+       — mesmo defeito, mesma cura. */
     for (const s of [-1, 1]) {
-      lote.box(MAT.viga, 0.13, 0.09, 2.25, s * G.frameX, 0.09, -0.15);
+      lote.box(MAT.viga, 0.13, 0.11, 2.25, s * G.frameX, 0.07, -0.15);
     }
     for (const d of [-1, 1]) {
-      lote.box(MAT.vigaEscura, G.frameX + 0.13, 0.075, 0.12, 0, 0.075, d * 1.42);
+      lote.box(MAT.vigaEscura, G.frameX + 0.13, 0.095, 0.12, 0, 0.055, d * 1.42);
     }
 
     /* As quatro pernas. O ângulo sai do pé (z = ±1,2) até o eixo, e o SINAL do
@@ -289,14 +350,14 @@ export class Trebuchet {
        delas é o mesmo número que impede a funda de furar o deque — ver
        `update`. */
     for (const s of [-1, 1]) {
-      lote.box(MAT.vigaEscura, 0.055, 0.1, 0.66, s * 0.33, 0.1, -1.6);
+      lote.box(MAT.vigaEscura, 0.055, 0.12, 0.66, s * 0.33, 0.08, -1.6);
     }
-    lote.box(MAT.vigaEscura, 0.33, 0.045, 0.66, 0, 0.055, -1.6);
+    lote.box(MAT.vigaEscura, 0.33, 0.065, 0.66, 0, 0.035, -1.6);
 
     // Os cavaletes do sarilho entram NESTE lote: são parte da armação parada, e
     // um lote próprio para eles custaria uma chamada de desenho por engenho.
     for (const s of [-1, 1]) {
-      lote.box(MAT.viga, 0.07, 0.28, 0.07, s * 0.5, 0.28, -1.95);
+      lote.box(MAT.viga, 0.07, 0.3, 0.07, s * 0.5, 0.26, -1.95);
     }
 
     lote.flush(corpo, [MAT.viga]);
@@ -502,12 +563,36 @@ export class Trebuchet {
     if (ready) this.swing = 0;
   }
 
-  update(dt, carregando) {
+  /**
+   * A barra de recarga, virada para quem olha.
+   *
+   * Ela SOME quando o engenho está pronto, e some de propósito: uma barra cheia
+   * permanente vira ruído, e o estado "tem tiro" já é dito pelo próprio braço,
+   * que fica armado com o contrapeso no alto. A barra existe só enquanto há uma
+   * pergunta, e a pergunta é "quanto falta".
+   *
+   * A cor vai do vermelho ao dourado com o progresso: dá a leitura sem ler, do
+   * outro lado do muro, que é onde normalmente se está quando se pergunta.
+   */
+  atualizarBarra(camera) {
+    if (!this.barra) return;
+    const mostrar = !this.ready;
+    this.barra.visible = mostrar;
+    if (!mostrar) return;
+
+    const f = Math.max(0, Math.min(1, this.reload));
+    this.barraFill.scale.x = Math.max(0.001, f * 2.48);
+    this.barraFill.material.color.setHSL(0.02 + f * 0.11, 0.85, 0.42 + f * 0.16);
+    if (camera) this.barra.quaternion.copy(camera.quaternion);
+  }
+
+  update(dt, carregando, camera = null) {
     // Tensão: sobe segurando, e não desce sozinha — soltar é atirar.
     if (this.ready && carregando) {
       this.charge = Math.min(1, this.charge + dt / CONFIG.modes.siege.trebuchet.chargeTime);
     }
     this.corpo.rotation.y = this.yaw;
+    this.atualizarBarra(camera);
 
     /* O BRAÇO, e a leitura que ele carrega.
      *
@@ -767,9 +852,23 @@ export class Stone {
     this.body.addForce(this._f, true);
   }
 
-  /** Bateu em alguma coisa. Guarda o ponto; quem consome é o gerente. */
+  /**
+   * Bateu em alguma coisa. Guarda o ponto; quem consome é o gerente.
+   *
+   * OS PRIMEIROS DÉCIMOS NÃO CONTAM. A pedra nasce na funda, dentro do volume
+   * da própria armação e a um metro do piso do bastião — e com o alcance curto
+   * destravado ela sai a 10,5 m/s, que é lento o bastante para o solver achar
+   * contato ali mesmo. Uma pedra que estoura em cima do engenho que a atirou
+   * gasta os 14 s de recarga sem matar ninguém, e do muro isso é visualmente
+   * idêntico a "a bola não fez nada".
+   *
+   * 0,14 s cobre de 1,5 m (no tiro curto) a 4,6 m (no longo) — o suficiente
+   * para vencer a armação em qualquer velocidade, e curto demais para deixar
+   * passar qualquer coisa que ela deva acertar de verdade.
+   */
   registerImpact(point) {
     if (this.impact) return;
+    if (this.life < 0.14) return;
     this.impact = { x: point.x, y: point.y, z: point.z };
     this.dead = true;
   }

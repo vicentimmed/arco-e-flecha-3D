@@ -189,6 +189,51 @@
 >
 > ---
 >
+> **Quarta rodada — o adarve, e quatro coisas que o playtest viu.**
+>
+> * **AS DUAS ESCADAS ERAM MACIÇAS.** `castleBlockers()` declara cada escada
+>   como um BLOCO do pátio ao adarve — aproximação deliberada, porque o formato
+>   compartilhado não tem caixa girada em X e o servidor só precisa dela para
+>   visada. O cliente monta a rampa de verdade em `buildStairs`… e montava o
+>   bloco TAMBÉM, porque `buildSolids` percorre a lista inteira sem exceção. O
+>   que existia, então, era um pilar de pedra de oito metros com paredes
+>   verticais, com uma rampa inútil por dentro. Quem morria renascia na menagem
+>   e não tinha por onde voltar ao muro.
+> * **E, mesmo sem o bloco, não dava para subir.** O piso vencia por
+>   ATRIBUIÇÃO: estando a menos de 8 cm do terreno, o corpo era recolado nele.
+>   Subindo uma rampa de 30° a 4 m/s, o passo de um quadro sobe 3,8 cm — menos
+>   que a tolerância. O corpo ganhava os 3,8 cm pelo controlador e os perdia no
+>   mesmo quadro, para sempre; dava para atravessar a escada inteira por baixo,
+>   no nível do pátio. Hoje o terreno só ERGUE, nunca puxa para baixo: o chão é
+>   o mais alto dos dois. Medido: 14 → 22 m em ~5 s, nas duas escadas.
+> * **OS PÉS AFUNDAVAM 45 cm NA PEDRA.** A IK do pé amostra o campo de altura, e
+>   no adarve o campo de altura é o PÁTIO, oito metros abaixo. Havia um limite
+>   de um passo (45 cm) para a perna não esticar até lá — e era exatamente esse
+>   limite que se via, o tempo todo, em todo o muro. A correção é de
+>   interpretação: uma amostra que cai mais de um passo abaixo do corpo não está
+>   descrevendo o chão em que se pisa, e nesse caso quem sabe a verdade é o
+>   controlador. 0,451 m → 0,001 m.
+> * **O CHÃO DO MURO PISCAVA.** Toda peça que assenta sobre outra nascia com a
+>   face de baixo na cota exata do piso — torres do portão, ameias, guaritas,
+>   coroa da menagem, soleiras do trabuco. Duas faces coplanares na mesma
+>   profundidade são z-fighting, e na tela isso é o piso piscando em manchas.
+>   Hoje elas afundam 6 cm (`Lote.assenta`).
+> * **ANDAR PARA A FRENTE MATAVA.** A faixa de tiro da hourd tem 90 cm e termina
+>   em oito metros de queda. Medido agora contra a geometria de hoje: a flecha
+>   que vai à fila do portão passa a **5 cm** do deque na beira externa, então o
+>   §6.4 continua certo — não cabe borda nenhuma ali, nem de dez centímetros. O
+>   que entrou não é pedra, é regra: **o corpo não ANDA para dentro de uma queda
+>   que o mata** (`PlayerPhysics.ledgeGuard`). Só o componente sem chão é
+>   cancelado, então dá para correr rente à beira; e PULAR para fora continua
+>   sendo escolha de quem joga. Ligado só no cerco, que é o único modo com dano
+>   de queda — na Lua se anda para fora de uma plataforma de propósito.
+>
+> Isto revisa o §6.4 num ponto: a beira do adarve deixou de ser "uma decisão a
+> cada passo" e passou a ser uma decisão que se toma com o salto. A pedra
+> continua proibida ali pelo mesmo motivo de sempre.
+>
+> ---
+>
 > **Números atuais medidos** (arqueiro médio: 0,5 tiro/s, 78 % de acerto,
 > 18 % dos acertos na cabeça):
 > três defensores **75 %** de vitórias, com a derrota sempre no último minuto;

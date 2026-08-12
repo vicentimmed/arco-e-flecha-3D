@@ -19,7 +19,10 @@
 >    terceira pessoa fica OLHANDO POR DENTRO do tubo.
 > 2. **A câmera vai para o LADO** durante o golpe — que era a pergunta em aberto
 >    do §12, e a resposta veio pela necessidade, não pela estética: de trás não
->    existe enquadramento que funcione. Ver `CONFIG.camera.special*`.
+>    existe enquadramento que funcione. Ver `CONFIG.camera.special*`. **Segunda
+>    passada:** o lado ficou sendo a câmera da CARGA, e o feixe ganhou uma câmera
+>    própria que vai à frente da ponta e olha para trás — §4.4, com o interruptor
+>    de volta em `CONFIG.camera.kameCam.enabled`.
 > 3. **Raios e opacidades cortados**: Ø 2,2 / Ø 4 / Ø 6,4, e o núcleo deixou de
 >    ser branco puro — trezentos metros de cilindro aditivo passam longe do
 >    `bloomThreshold` e o passe de pós espalha o excesso pelo quadro inteiro.
@@ -34,7 +37,7 @@
 
 O arqueiro enche uma barra acertando flechas. Cheia, ele planta os pés, o arco
 vai para as costas, as duas mãos se juntam ao lado do quadril, uma esfera de
-energia cresce entre as palmas por dois segundos — e ele empurra as mãos para a
+energia cresce entre as palmas por um segundo — e ele empurra as mãos para a
 frente. Sai um feixe **grosso, branco-azulado e violento** na direção em que ele
 estava mirando. Ele fica lá, segurando, por três segundos. Depois a energia
 acaba: a cauda solta das mãos e vai embora atrás da ponta, afinando.
@@ -77,19 +80,25 @@ estado quadro a quadro — §6.
 
 | # | fase | duração | o que acontece |
 |---|---|---|---|
-| 1 | **carga** | 2,00 s | terceira pessoa forçada, arco para as costas, mãos ao quadril, esfera crescendo, zunido subindo |
+| 1 | **carga** | 1,00 s | terceira pessoa forçada, arco para as costas, mãos ao quadril, esfera crescendo, zunido subindo |
 | 2 | **disparo** | 0,15 s | as mãos vão à frente, o corpo recua, o feixe erupciona |
 | 3 | **sustentação** | 3,00 s | feixe na espessura máxima, ancorado nas mãos, pulsando |
 | 4 | **dissipação** | 1,20 s | a cauda **solta das mãos** e corre atrás da ponta, afinando |
-| 5 | **retorno** | 0,80 s | a pose volta, o arco desce das costas para a mão |
+| 5 | **retorno** | 0,56 s | a pose volta, o arco desce das costas para a mão |
 
-**Total: 7,15 s.** Os 2 s de carga e os 3 s de sustentação são o pedido; o resto
-é o que faz os dois se ligarem sem corte.
+**Total: 5,91 s.** Os 3 s de sustentação são o pedido; o resto é o que faz as
+pontas se ligarem sem corte.
 
-**O jogador fica preso os 7 segundos.** Corpo plantado, sem andar, e a direção
-do feixe é **travada no instante do disparo** — girar o mouse depois não
-entorta o feixe (a câmera continua livre para olhar em volta; só o feixe e o
-corpo é que não). Isso não é limitação técnica, é o **preço**: durante sete
+**A carga caiu de 2,00 para 1,00 s e o retorno de 0,80 para 0,56 s** (−30 %),
+por decisão de quem joga. O que se ganha não é só relógio: os dois segundos de
+concentração eram o trecho em que nada acontecia na tela, e numa horda com prazo
+o custo deles era pago em rocha perdida. O preço do golpe continua sendo a
+sustentação — que é onde o golpe É o golpe.
+
+**O jogador fica preso as cinco fases inteiras.** Corpo plantado, sem andar, e
+a direção do feixe é **travada no instante do disparo** — girar o mouse depois
+não entorta o feixe (a câmera continua livre para olhar em volta; só o feixe e o
+corpo é que não). Isso não é limitação técnica, é o **preço**: durante esses
 segundos você não atira flecha, não desvia de alien e não cobre o resto do céu.
 Numa horda em que uma rocha no chão encerra a partida, escolher a hora de gastar
 o especial é a decisão mais interessante do modo.
@@ -128,6 +137,12 @@ de `updateArms`.
 Coordenadas no espaço do tronco, via `localToRoot(x, y, z, out)`.
 Referência do corpo: ombro em `y = 1,42`, `shoulderX = 0,175`, braço
 `0,28 + 0,26`, `stanceYaw = 1,16 rad` (o arqueiro fica **de lado**).
+
+> **Sobre os segundos absolutos abaixo:** eles foram escritos para a carga de
+> 2 s do plano original, e a carga hoje é 1 s (§2). O código não os usa —
+> `poseKamehameha` lê as durações de `CONFIG.special` e trabalha em FRAÇÃO de
+> cada fase, então mexer nos tempos do config reescala a pose sozinho. Leia os
+> números daqui como proporções, não como relógio.
 
 **Carga (0 → 2,0 s)**
 
@@ -239,13 +254,92 @@ clarão. Enquanto o feixe estiver vivo e apontado para o chão, a explosão
 **sustenta** (pulsa) em vez de acontecer uma vez — é a ponta continuando a
 descarregar ali.
 
-### 4.4 Luzes
+### 4.4 A câmera — uma só, lateral, do começo ao fim
+
+**O especial usa o enquadramento lateral de `CONFIG.camera.special*` da carga
+até o retorno.** A câmera sai de trás do ombro, desliza para o lado durante a
+carga e fica lá — sem corte, sem viagem, sem volta.
+
+Houve uma segunda câmera, e ela está escrita e desligada. Vale registrar as duas
+coisas, porque a implementação continua no repositório:
+
+| fase | câmera | onde |
+|---|---|---|
+| tudo | terceira pessoa, deslizando para o **lado** | `CONFIG.camera.special*` |
+| ~~feixe vivo~~ | ~~à FRENTE da ponta, olhando para trás~~ | `CONFIG.camera.kameCam` — **`enabled: false`** |
+
+A da frente era o inverso exato da câmera da flecha: em vez do alvo chegando,
+mostrava a **origem** — o arqueiro plantado, mãos à frente, com trezentos metros
+de energia saindo delas. Ela se punha adiante da cabeça do feixe, um pouco de
+lado, olhava para o peito de quem atirou e se afastava junto com a ponta.
+Funcionava, e foi recusada por quem joga: **o corte para a frente e a volta no
+impacto tiram o jogador do lugar duas vezes em menos de um segundo** — e num
+modo em que o resto do céu continua caindo enquanto o especial roda, saber onde
+você está vale mais que o plano bonito.
+
+Ligar de novo é trocar um `false` por `true` no config, ou apertar a chave
+**"câmera do feixe"** no painel `~`, que faz isso ao vivo. `CameraMode.KAME`,
+`onKame`/`leaveKame` e `updateKameCam` continuam em `camera.js`, e o resto desta
+seção descreve como eles se comportam quando ligados.
+
+Três números não são estética, são o que faz a imagem existir:
+
+1. **O afastamento CRESCE com a viagem** (`lead/side/up` + `×Gain · frente`).
+   Com deslocamento fixo, a 400 m o arqueiro ficaria a menos de um grau do eixo
+   e o feixe viraria um ponto no meio da tela em vez de um traço.
+2. **O lateral mínimo (6 m) é maior que o halo (Ø 6,4 → 3,2 m de raio).** Dentro
+   do halo, um cilindro aditivo é uma tela branca — a lição do §8, pelo avesso.
+3. **`standoff: 30`.** MEDIDO: acompanhando a ponta até o fim, a câmera
+   terminava a dez metros da explosão, com a luz de impacto (intensidade 900,
+   alcance 90) encostada na lente, e o quadro lavava inteiro. Parando trinta
+   metros antes, a ponta se afasta nos últimos 0,1 s e a explosão acontece onde
+   dá para ver.
+
+**Duração real:** a ponta viaja a 300 m/s, então a viagem dura
+`alcance ÷ 300` — 0,37 s num feixe de 112 m, 1,33 s nos 400 m cheios. Os
+`hold: 0,55 s` no impacto existem porque sem eles o corte acontece no mesmo
+quadro da explosão e ninguém a vê.
+
+**Como ela desliga.** `kameCam.enabled: false` — o estado de hoje — devolve o
+especial inteiro ao enquadramento lateral, e nada mais precisa ser desfeito:
+`onKame` simplesmente recusa, e nenhum outro arquivo sabe da diferença. A chave
+**"câmera do feixe"** no painel `~` liga e desliga ao vivo (e, desligada no meio
+de um feixe, devolve a terceira pessoa na hora), porque a escolha entre as duas
+se faz olhando, não lendo.
+
+Duas recusas deliberadas, para quem for religá-la:
+
+* **feixe curto não vira cinema** (`minRange: 45`). Mirar no chão a vinte metros
+  daria um corte de dois frames ida e volta, que lê como falha de render.
+* **`returnToArcher()` não encerra esta câmera.** O clique e o W chegam lá como
+  `dismissArrowCam` sempre que o tiro está bloqueado — e durante o especial ele
+  está. Aceitá-los cancelaria a imagem sem devolver o movimento, que continua
+  travado pela duração inteira. Quem encerra a câmera do feixe é o impacto.
+
+### 4.4.1 O impacto: fagulha, não nuvem
+
+`pulsarImpacto` emitia duas nuvens de partícula no ponto de acerto, e as duas
+erravam pelo mesmo motivo: elas **sustentam**. A cada 0,12 s sai um sopro novo,
+e nos três segundos de feixe isso são vinte e cinco sopros no mesmo lugar.
+
+A poeira cinza (vida 2,2 s, crescimento 3,2×) virava uma cortina opaca. Medido
+em tela, a fagulha azul sozinha — 26 partículas de 3 m crescendo 2,8× — fazia a
+MESMA cortina, só que clara: ~260 bolas grandes vivas em regime permanente.
+Nos dois casos quem atirou perdia de vista a única coisa que a ponta precisa
+comunicar: **onde ela acertou**.
+
+A poeira saiu inteira. A fagulha ficou, mas em regime de fagulha: um terço da
+conta, um quinto do tamanho, quase sem crescer, meio segundo de vida — ~40
+riscos pequenos em vez de ~260 bolas. Quem marca o lugar é a ponta do feixe, que
+já cresce 1,9× no impacto e é a coisa mais brilhante do quadro.
+
+### 4.5 Luzes
 
 Duas `PointLight` no máximo, e só durante o especial: uma nas mãos na carga
 (0 → 400 de intensidade, alcance 40 m) e uma no ponto de impacto (900, alcance
 120 m, decaindo em 0,8 s). Fora dos 200 m da câmera, nenhuma — o emissivo e o
 bloom bastam. O `plano-lua-desempenho.md` mostra que luz dinâmica é o item mais
-caro que se pode acrescentar à Lua; duas, por sete segundos, num evento raro,
+caro que se pode acrescentar à Lua; duas, por seis segundos, num evento raro,
 cabem.
 
 ---
@@ -286,7 +380,7 @@ Duas adições. Só duas.
 **1. A animação vai na pose que já existe.** `packState` ganha um campo:
 
 ```js
-q: r3(player.kameFraction),   // 0 → 1 ao longo dos 7,15 s
+q: r3(player.kameFraction),   // 0 → 1 ao longo das cinco fases
 ```
 
 Um número, a 20 Hz, no pacote que já sai. Com ele, **todo mundo vê a carga, o
@@ -414,7 +508,7 @@ commit**:
 | # | tarefa | entrega verificável |
 |---|---|---|
 | 1 | `CONFIG.special` + carga na sala + barra no HUD | acertar 3 rochas acende `ESPECIAL PRONTO` |
-| 2 | Máquina de estados e `kameFraction` | o `Q` consome a carga e roda os 7,15 s, sem imagem nenhuma |
+| 2 | Máquina de estados e `kameFraction` | o `Q` consome a carga e roda as cinco fases, sem imagem nenhuma |
 | 3 | **A pose** (§3) — as cinco fases, arco nas costas | dá para reconhecer o golpe só pela silhueta, sem efeito |
 | 4 | O feixe (§4.1, §4.2) | sai o raio, cresce, sustenta e afina |
 | 5 | Acerto: rochas, jogadores, aliens | rocha que cai dentro do feixe morre |
@@ -424,7 +518,7 @@ commit**:
 | 9 | **`hitsToCharge` volta para 25** | antes de a fase sair do forno (§5) |
 
 Tarefas 1 e 2 são jogáveis sem uma única linha de Three.js — e é assim que se
-descobre se sete segundos parados são divertidos ou irritantes **antes** de
+descobre se ficar parado tanto tempo é divertido ou irritante **antes** de
 gastar o trabalho de arte.
 
 ---
@@ -463,11 +557,12 @@ Duas coisas em que sua referência decide melhor que o meu chute:
 1. **Cor.** Fui no clássico — núcleo branco, casca ciano, halo azul. Contra o
    céu preto e o chão cinza da Lua, funciona. Se você quer outra (dourado,
    verde), é um campo de config e uma passada de ajuste.
-2. **Enquadramento da câmera na carga.** Planejei um recuo suave mantendo o
-   arqueiro no canto de sempre. A referência costuma usar um giro lateral em
-   torno do personagem, que é mais bonito e atrapalha a mira. Se você quiser o
-   giro, me diga — e aí a mira precisa ficar travada já na carga, não só no
-   disparo.
+2. ~~**Enquadramento da câmera na carga.**~~ **RESPONDIDO — ver §4.4.** A carga
+   ficou com o deslizamento lateral; o feixe ganhou câmera própria, à frente da
+   ponta e olhando para trás. A mira não precisou de mudança nenhuma: a direção
+   já era travada no disparo, e a câmera de cinema não entra na conta da mira
+   (`CameraRig.aimMode`). O que ficou em aberto é só o AJUSTE dos números do
+   `kameCam` — e a chave do painel `~` existe para isso.
 
 Se tiver imagens de referência da pose (principalmente **as mãos no quadril** e
 **o afundo no disparo**), elas ajudam mais que qualquer descrição: os alvos de

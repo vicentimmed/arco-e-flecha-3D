@@ -43,6 +43,7 @@ import {
   castleBlockers,
   insideFootprint,
   gateBlocks,
+  mageTowers,
 } from "../src/shared/castleProps.js";
 
 let proximoId = 1;
@@ -101,6 +102,9 @@ export class Besieger {
     this.x = x;
     this.z = z;
     this.y = terrain.heightAt(x, z);
+    /** Andada do último passo, m/s. Ver `step` — quem lê é a flecha do bot. */
+    this.vx = 0;
+    this.vz = 0;
     this.yaw = Math.PI; // olhando para o portão (−Z)
     this.state = "walk";
     this.dead = false;
@@ -157,7 +161,22 @@ export class Besieger {
     this.x = nx;
     this.z = nz;
     this.y = this.terrain.heightAt(nx, nz);
+    /* A velocidade do passo que DEU CERTO — não a intenção.
+     *
+     * Quem lê é a flecha do bot (`Room.botPrey` → `botArrow.js`), que precisa
+     * saber para onde ele vai durante o meio segundo de voo. Guardar a direção
+     * pedida em vez da andada mentiria justamente no caso que importa: o
+     * sujeito parado contra o portão, que continua "querendo" ir para a
+     * frente e não sai do lugar. */
+    this.vx = fx * this.speed;
+    this.vz = fz * this.speed;
     return true;
+  }
+
+  /** Parou de andar (bateu, escalou, conjurou): a mira do bot para junto. */
+  parar() {
+    this.vx = 0;
+    this.vz = 0;
   }
 
   walkToward(tx, tz, dt, gateAlive, vizinhos) {
@@ -275,10 +294,38 @@ export class Siege {
     this.tiersOut = new Set();
     this.criticalTime = 0;
     this.pendente = null;
+    /* A FILA DE CHEGADAS COMEÇA UMA CAMINHADA ADIANTADA — e é esta linha que
+     * põe a horda saindo da floresta em vez de surgindo no meio da ponte.
+     *
+     * `agendar()` marca CHEGADAS ao portão e deriva delas o nascimento
+     * (`chegada − viagem`). Começando o acumulador em zero, a primeira chegada
+     * caía nos 5,5 s de partida — e para chegar ali um soldado teria de ter
+     * saído da linha de árvores 74 s ANTES de a partida existir. A resposta
+     * antiga era nascer com o percurso já andado, no ponto da rampa em que ele
+     * estaria: do muro se via gente aparecendo no meio da ponte, às vezes a um
+     * passo do portão.
+     *
+     * Adiantando o acumulador de uma travessia, ninguém deve caminhada
+     * nenhuma: cada um nasce no bosque, no instante certo, e sobe a rampa
+     * inteira. O que muda no jogo é só a abertura — o portão fica em paz
+     * enquanto a coluna sobe —, e ela não é tempo morto: a rampa está ao
+     * alcance do arco desde o primeiro segundo, e agora ela tem gente. A curva
+     * de pressão em regime é EXATAMENTE a mesma, só deslocada — e é
+     * `faseDaCurva` que desfaz o deslocamento, ancorando a curva na primeira
+     * chegada em vez de no carregamento da fase. */
+    this.abertura = this.viagem("soldier");
+    this.ultimaChegada = this.abertura;
     this.nextOgre = Infinity;
     this.nextCatapult = Infinity;
     this.fogos = [];
     this.kills = new Map();
+    /* AS TORRES ESTÃO OCUPADAS DESDE O PRIMEIRO SEGUNDO.
+       Elas não têm escalão e não entram no sorteio: são cenário com gente
+       dentro, e a ameaça delas é o que impede a metade distante da rampa de
+       ser um lugar seguro para olhar. Ver `mageTowers`. */
+    this.magoEspera = mageTowers().map(() => 0);
+    this.raiosPendentes = [];
+    for (const t of mageTowers()) this.nascerMago(t);
     return { duration: S.duration, gate: 1 };
   }
 
@@ -305,19 +352,53 @@ export class Siege {
   /* ------------------------------------------------------------ pressão ---- */
 
   /**
-   * O intervalo entre duas CHEGADAS ao portão, agora.
+   * O RELÓGIO DA CURVA, que deixou de ser o relógio da partida.
+   *
+   * `gapBase` e a maré descrevem dez minutos de CERCO — de "chega um a cada
+   * 5,5 s" até "chega um a cada 1,35 s". Enquanto a horda nascia já na rampa,
+   * o primeiro sujeito batia no portão aos 5 s de partida e os dois relógios
+   * eram o mesmo. Nascendo na floresta (ver `start`), o primeiro só chega
+   * depois de atravessar os 91 m: a defesa começa aos ~80 s.
+   *
+   * Deixar a curva no relógio da partida custava as duas pontas ao mesmo
+   * tempo — a abertura mansa era gasta com a rampa vazia, e os oitenta
+   * segundos finais, que são os mais apertados e os que decidem, nunca
+   * chegavam a acontecer. Medido no banco de provas: um defensor sozinho
+   * passava de 0 % para 80 % de vitórias, ou seja, o modo deixava de ser o modo.
+   *
+   * A curva é então ancorada na PRIMEIRA CHEGADA e esticada para caber na
+   * janela que sobra. Ela mantém forma, extremos e calibragem — o que muda é
+   * só que ela é lida entre o primeiro contato e o pôr do sol, em vez de entre
+   * a tela de carregamento e o pôr do sol.
+   *
+   * @param {number} quando instante da CHEGADA que se está espaçando
+   */
+  faseDaCurva(quando) {
+    const S = CONFIG.modes.siege;
+    const abertura = this.abertura ?? 0;
+    const janela = Math.max(1, S.duration - abertura);
+    return Math.max(0, quando - abertura) * (S.duration / janela);
+  }
+
+  /**
+   * O intervalo entre duas CHEGADAS ao portão, num instante da partida.
    *
    * `gapBase` é uma tabela de um ponto por minuto, interpolada. Tabela e não
    * fórmula porque é a tabela que o banco de provas corrige num ponto só.
+   *
+   * @param {number} [quando] o instante da CHEGADA que se está espaçando, e
+   *   não o relógio de agora — a fila corre uma travessia à frente. Ver
+   *   `faseDaCurva`.
    */
-  gapAtual() {
+  gapAtual(quando = this.t) {
     const S = CONFIG.modes.siege;
     const tab = S.gapBase;
-    const m = clamp(this.t / 60, 0, tab.length - 1);
+    const fase = this.faseDaCurva(quando);
+    const m = clamp(fase / 60, 0, tab.length - 1);
     const i = Math.floor(m);
     const f = m - i;
     const base = tab[i] + (tab[Math.min(i + 1, tab.length - 1)] - tab[i]) * f;
-    return base * this.tide() * Math.pow(S.playerGapScale, this.players - 1);
+    return base * this.tide(fase) * Math.pow(S.playerGapScale, this.players - 1);
   }
 
   /**
@@ -337,15 +418,49 @@ export class Siege {
    * tinham consequência. Parada em 1, o clímax continua sem alívio — que é o
    * que "maré cheia, sem vazante" quer dizer — sem ser um dado de uma face.
    */
-  tide() {
+  /** @param {number} [fase] já em tempo de CURVA — ver `faseDaCurva`. */
+  tide(fase = this.faseDaCurva(this.t)) {
     const S = CONFIG.modes.siege;
-    if (this.t >= S.tideEndsAt) return 1;
-    return 1 + S.tideDepth * Math.sin((TAU * this.t) / S.tidePeriod);
+    if (fase >= S.tideEndsAt) return 1;
+    return 1 + S.tideDepth * Math.sin((TAU * fase) / S.tidePeriod);
   }
 
   /** De 0 a 1: quanto a maré está apertando. Vai para o HUD e para os tambores. */
   get pressao() {
     return clamp(1 - (this.gapAtual() - 0.8) / (4.5 - 0.8), 0, 1);
+  }
+
+  /**
+   * Adianta o relógio até o próximo escalão. ATALHO DE TESTE.
+   *
+   * O que ele NÃO faz é tão importante quanto o que faz: não invoca o escalão à
+   * mão. Ele só move `this.t` para o segundo em que o escalão entra, e o passo
+   * seguinte de `update` dispara a trompa, a faixa e a mudança de composição
+   * pelo caminho normal — testar um atalho que passa por fora do caminho normal
+   * é testar o atalho.
+   *
+   * A fila de chegadas é RECOLOCADA junto. Ela corre uma travessia à frente de
+   * `this.t`; empurrando só o relógio, ela ficaria no passado e o próximo passo
+   * despejaria de uma vez todos os sitiantes cuja chegada venceu — quarenta de
+   * uma vez, na linha de árvores.
+   *
+   * @param {string|null} [alvoKind] pula direto para o escalão desta espécie,
+   *   em vez do próximo. É o que serve o caso comum — "quero ver o escalador
+   *   agora" —, que de outro modo pediria dois toques e a leitura de uma
+   *   tabela de segundos.
+   * @returns {number} o segundo de partida em que o cerco ficou
+   */
+  pularEscalao(alvoKind = null) {
+    const S = CONFIG.modes.siege;
+    const proximo = alvoKind
+      ? S.tiers.find((t) => t.kind === alvoKind)
+      : S.tiers.find((t, i) => !this.tiersOut.has(i) && t.at > this.t);
+    if (!proximo || proximo.at <= this.t) return this.t;
+    this.espera = 0;
+    this.t = proximo.at;
+    this.ultimaChegada = this.t + this.abertura;
+    this.pendente = null;
+    return this.t;
   }
 
   /** As espécies liberadas neste instante da partida. */
@@ -382,9 +497,16 @@ export class Siege {
     return pesos[pesos.length - 1][0];
   }
 
+  /**
+   * Quantos desta espécie estão em campo — SEM os magos das torres.
+   *
+   * Eles são xamãs (ver `nascerMago`), e contá-los aqui gastaria dois dos três
+   * lugares de `shamanMax` com gente que nem chega perto da rampa: o escalão
+   * dos xamãs abriria e o sorteio nunca conseguiria pôr um em campo.
+   */
   contar(kind) {
     let n = 0;
-    for (const b of this.lista) if (!b.dead && b.kind === kind) n++;
+    for (const b of this.lista) if (!b.dead && b.kind === kind && b.torre == null) n++;
     return n;
   }
 
@@ -399,7 +521,10 @@ export class Siege {
     /* A chegada ACUMULA — ela não é "daqui a `gap` segundos".
        Contada a partir de `this.t`, cada tique reiniciaria o relógio e o
        intervalo real viraria o passo da simulação: cem sitiantes por segundo. */
-    this.ultimaChegada = Math.max(this.ultimaChegada ?? 0, this.t) + this.gapAtual();
+    /* O espaçamento é lido NO INSTANTE DA CHEGADA que ele separa, e não no
+       relógio de agora — a fila corre uma travessia à frente. Ver `gapAtual`. */
+    const anterior = Math.max(this.ultimaChegada ?? 0, this.t);
+    this.ultimaChegada = anterior + this.gapAtual(anterior);
     this.pendente = { kind, chegada: this.ultimaChegada };
   }
 
@@ -413,25 +538,28 @@ export class Siege {
   /* ------------------------------------------------------------ nascimento -- */
 
   /**
-   * @param {string} kind
-   * @param {number} atraso segundos que ele já deveria estar andando. Ver o
-   *   bloco de chegadas em `update` — é o que faz a partida abrir com a coluna
-   *   já na rampa em vez de com 85 s de rampa vazia.
+   * TODO MUNDO NASCE NA LINHA DE ÁRVORES, sem exceção.
+   *
+   * Havia um `atraso` aqui: quem estivesse "devendo" caminhada nascia adiantado
+   * na rampa, no ponto em que estaria se tivesse saído a tempo. Era a solução
+   * para os 85 s de rampa vazia da abertura, e ela custava a única coisa que a
+   * fase promete o tempo todo — que eles VÊM DE ALGUM LUGAR. Do muro se via
+   * gente surgindo no meio da ponte, às vezes a um passo do portão.
+   *
+   * Quem resolve a abertura agora é o piso de `agendar()`: a primeira chegada é
+   * adiada até caber a caminhada, ninguém deve nada, e a partida abre com a
+   * coluna saindo do bosque. Ver o comentário lá.
    */
-  nascer(kind, atraso = 0) {
+  nascer(kind) {
     const S = CONFIG.modes.siege;
     if (this.lista.length >= S.maxEntities) return null;
     if (this.alive >= S.maxAlive) return null;
 
-    const avanco = Math.max(0, atraso) * S.species[kind].speed;
     let x = 0;
     let z = 0;
     for (let i = 0; i < 8; i++) {
       x = (Math.random() * 2 - 1) * S.spawnHalfX;
-      z = Math.max(
-        GATE.standZ + 2.5,
-        S.spawnZ + (Math.random() * 2 - 1) * S.spawnZJitter - avanco,
-      );
+      z = S.spawnZ + (Math.random() * 2 - 1) * S.spawnZJitter;
       if (this.terrain.isWalkable(x, z)) break;
     }
     const b = new Besieger(kind, x, z, this.terrain);
@@ -450,6 +578,142 @@ export class Siege {
 
     this.lista.push(b);
     return b;
+  }
+
+  /* ------------------------------------------------------ torres de mago -- */
+
+  /**
+   * Um mago no mirante.
+   *
+   * Ele é um XAMÃ — a mesma espécie, o mesmo código de rede, a mesma silhueta —
+   * e essa é a decisão que faz a coisa caber em meia página em vez de num
+   * sistema novo. O que muda é onde ele está e que ele não sai de lá: o quadro
+   * binário já carrega `y`, então pôr um xamã doze metros no ar é escrever a
+   * cota e mais nada. Nenhum bit novo, nenhuma espécie nova, nenhum caso
+   * especial no cliente.
+   *
+   * `torre` é o que o distingue do xamã de chão: é ela que faz `atualizarUm`
+   * mandá-lo para `atualizarMago` (que não anda) e é ela que diz a qual mirante
+   * ele volta quando morre.
+   */
+  nascerMago(t) {
+    const b = new Besieger("shaman", t.x, t.z, this.terrain);
+    b.torre = t.id;
+    /* UMA FLECHA, e não as três do xamã de chão.
+     *
+     * O alvo está a noventa metros, parado, em cima de um poste, e a recompensa
+     * é meio minuto de torre calada. Três flechas a essa distância seriam três
+     * ciclos inteiros de arco — quinze segundos de costas para o portão — por
+     * uma coisa que volta. Com uma, calar a torre é uma DECISÃO que cabe entre
+     * duas levas da fila, que é onde ela precisa caber. */
+    b.maxHits = 1;
+    b.y = t.platY + 0.32;
+    b.fixoY = b.y;
+    b.anchor = { x: t.x, z: t.z };
+    b.yaw = Math.PI;
+    this.lista.push(b);
+    return b;
+  }
+
+  /** Mirante vazio conta o tempo; ao fim dele, sobe outro. */
+  tickMagos(dt) {
+    const S = CONFIG.modes.siege;
+    const torres = mageTowers();
+    for (const [i, t] of torres.entries()) {
+      const vivo = this.lista.some((b) => b.torre === t.id && !b.dead);
+      if (vivo) {
+        this.magoEspera[i] = 0;
+        continue;
+      }
+      /* A ESPERA é o prêmio de acertar. Sem ela o mago voltaria no quadro
+         seguinte e a flecha gasta nele não teria comprado nada; com ela, calar
+         uma torre é uma janela de trinta segundos em que se pode olhar só para
+         o portão. É o mesmo desenho da tocha apagada do modo zumbi, ao
+         contrário. */
+      this.magoEspera[i] += dt;
+      if (this.magoEspera[i] < S.mageRespawn) continue;
+      this.magoEspera[i] = 0;
+      this.nascerMago(t);
+    }
+  }
+
+  /**
+   * O mago do mirante: não anda, não recua, e atira uma bola que MATA.
+   *
+   * O xamã de chão dispara o mesmo `bolt` desde sempre e ele nunca fez dano
+   * nenhum — o feixe saía, atravessava o defensor e sumia. Aqui a bola tem
+   * consequência, e ela é agendada em vez de instantânea: a distância dividida
+   * pela velocidade vira um prazo, e nesse prazo dá para SAIR DO LUGAR. É a
+   * mesma escolha da pedra de catapulta, e pelo mesmo motivo — uma ameaça de
+   * área se evita andando; um tiro teleguiado não se evita de jeito nenhum.
+   */
+  atualizarMago(b, dt, jogadores, agora, saida) {
+    const S = CONFIG.modes.siege;
+    const esp = S.species.shaman;
+    b.y = b.fixoY;
+    b.state = "cast";
+
+    // Ele também remonta esqueleto, como qualquer xamã — só que de longe.
+    for (const f of this.remontar(b)) saida.tiros.push(f);
+
+    if (agora - b.lastAttack < S.mageInterval * 1000) return;
+
+    const de = { x: b.x, y: b.y + 1.1, z: b.z };
+    /* O MAIS PRÓXIMO, e não o primeiro da lista.
+     *
+     * `break` no primeiro com visada parecia equivalente e não era: a lista vem
+     * de `Room.playerPositions`, que enfileira os humanos ANTES dos bots. Na
+     * prática o mago mirava sempre a mesma pessoa e a guarnição de CPU, que
+     * divide o mesmo adarve e corre exatamente o mesmo risco, nunca era
+     * ameaçada. Pela distância, quem está exposto é quem paga. */
+    let alvo = null;
+    let melhorD = Infinity;
+    for (const p of jogadores) {
+      /* SÓ QUEM ESTÁ NO MURO. Do mirante se vê o pátio por cima do adarve, e
+         um mago acertando quem repara o portão lá dentro seria uma morte vinda
+         de um lugar que a vítima não tem como olhar. */
+      if ((p.y ?? 0) < WALL_TOP - 3) continue;
+      const para = { x: p.x, y: (p.y ?? 0) + 1.2, z: p.z };
+      if (bloqueado(BLOCKERS, de, para)) continue;
+      const d = Math.hypot(para.x - de.x, para.z - de.z);
+      if (d >= melhorD) continue;
+      melhorD = d;
+      alvo = p;
+    }
+    if (!alvo) return;
+
+    b.faceToward(alvo.x, alvo.z);
+    b.lastAttack = agora;
+    const para = { x: alvo.x, y: (alvo.y ?? 0) + 1.2, z: alvo.z };
+    const voo = Math.hypot(para.x - de.x, para.y - de.y, para.z - de.z) / S.mageBolt.speed;
+    saida.tiros.push({
+      kind: "bolt",
+      id: b.id,
+      from: [de.x, de.y, de.z],
+      to: [para.x, para.y, para.z],
+      speed: S.mageBolt.speed,
+      target: alvo.id,
+      // O cliente desenha esta bem maior e mais brilhante que a do xamã de
+      // chão: ela é a única coisa que vem lá do fundo e mata.
+      big: 1,
+    });
+    this.raiosPendentes.push({
+      at: agora + voo * 1000,
+      x: para.x,
+      y: para.y,
+      z: para.z,
+      alvo: alvo.id,
+    });
+  }
+
+  /** Bolas de magia que venceram o prazo de voo. A sala aplica a morte. */
+  colherRaios(agora) {
+    if (!this.raiosPendentes?.length) return [];
+    const prontos = this.raiosPendentes.filter((r) => agora >= r.at);
+    if (prontos.length) {
+      this.raiosPendentes = this.raiosPendentes.filter((r) => agora < r.at);
+    }
+    return prontos;
   }
 
   /* ---------------------------------------------------------------- passo -- */
@@ -494,29 +758,20 @@ export class Siege {
     }
 
     /* --------------------------------------------------------- chegadas --
-       `while` e não `if` por dois motivos, e o segundo é o que dá a abertura
-       da partida:
+       `while` e não `if` porque numa maré cheia com quatro jogadores o
+       intervalo cai abaixo do passo de 100 ms, e um por tique deixaria a curva
+       para trás.
 
-       1. numa maré cheia com quatro jogadores o intervalo cai abaixo do passo
-          de 100 ms, e um por tique deixaria a curva para trás;
-
-       2. NO INSTANTE ZERO a conta pede gente que deveria ter nascido no
-          passado. A rampa tem 97 m e o soldado leva 85 s para vencê-la: para
-          alguém CHEGAR aos 4,5 s de partida, ele teria de ter saído da linha
-          de árvores 80 s antes de a partida existir.
-
-          A resposta não é adiar (85 s de rampa vazia) nem encurtar a rampa (é
-          ela o campo de tiro). É NASCER JÁ ANDANDO: `nascer` recebe o atraso e
-          põe o sujeito no ponto da rampa onde ele estaria. A partida abre com
-          a coluna já subindo, que é a imagem certa — o cerco não começa, ele
-          já está em curso — e os intervalos de chegada saem exatos desde o
-          primeiro. */
+       O segundo motivo que este bloco tinha — a dívida do instante zero —
+       deixou de existir: `agendar()` não agenda mais chegada que a caminhada
+       não alcance, e por isso `nascer` não precisa mais adiantar ninguém na
+       rampa. Ver os dois comentários lá. */
     if (!this.pendente) this.agendar();
     let guarda = 0;
     while (this.pendente && guarda++ < 40) {
       const nascimento = this.pendente.chegada - this.viagem(this.pendente.kind);
       if (this.t < nascimento) break;
-      this.nascer(this.pendente.kind, this.t - nascimento);
+      this.nascer(this.pendente.kind);
       this.agendar();
     }
 
@@ -545,6 +800,9 @@ export class Siege {
 
     /* ------------------------------------------------------------- fogo -- */
     this.atualizarFogo(dt, saida);
+
+    /* ------------------------------------------------------- as torres -- */
+    this.tickMagos(dt);
 
     /* ---------------------------------------------------------- limpeza -- */
     /* O corpo some depois de `corpseLifetime` — MENOS o esqueleto que ainda
@@ -598,7 +856,18 @@ export class Siege {
         continue;
       }
       const d = Math.hypot(b.x - GATE.x, b.z - GATE.standZ);
-      if (d > 14) {
+      /* VINTE E DOIS METROS, e não catorze.
+       *
+       * Quem está fora do raio não recebe posição na fila, e sem posição
+       * `postoDeEspera` manda para a boca do portão — ou seja, todos eles
+       * andam para o MESMO ponto, um atrás do outro. Era essa a coluna que se
+       * via descendo a rampa: não era a fila, era quem ainda não tinha entrado
+       * nela.
+       *
+       * A 22 m o leque começa a se abrir enquanto eles ainda estão chegando, e
+       * o que se forma na frente do portão é uma massa larga em vez de um fio.
+       * O custo é nulo — o laço já percorre a lista inteira. */
+      if (d > 22) {
         b.slot = -1;
         b.queue = null;
         continue;
@@ -645,6 +914,12 @@ export class Siege {
     const S = CONFIG.modes.siege;
     const vizinhos = this.vizinhosDe(b);
 
+    /* Parado até prova em contrário: `step` reescreve isto quando o passo dá
+       certo. Zerar aqui, num lugar só, cobre de uma vez todos os caminhos que
+       terminam sem andar — bater no portão, escalar, conjurar, ou tentar os
+       sete desvios e não passar por nenhum. */
+    b.parar();
+
     /* Queimando: o piche cobra por segundo e não perdoa esqueleto. */
     if (b.fire > 0) {
       b.fire -= dt;
@@ -656,6 +931,13 @@ export class Siege {
       }
     } else {
       b.burning = false;
+    }
+
+    // O mago do mirante vem antes do xamã: ele É um xamã, e o que o separa é
+    // a torre. Ver `nascerMago`.
+    if (b.torre != null) {
+      this.atualizarMago(b, dt, jogadores, agora, saida);
+      return;
     }
 
     switch (b.kind) {
@@ -702,18 +984,15 @@ export class Siege {
        * quem está a até 14 m, e sem a checagem de contato abaixo o sujeito
        * começava a arrancar tábua a treze metros do portão. O sintoma era o
        * portão perdendo 18 de vida por segundo aos dez segundos de partida,
-       * com a fila ainda subindo a rampa — dano vindo de ninguém.
-       *
-       * O x da vaga espalha os seis pelo vão, senão eles ocupam o mesmo ponto
-       * e a fila inteira lê como um bicho só. */
-      const alvoX = GATE.x + (b.slot - (S.gateSlots - 1) / 2) * 1.05;
-      const d = Math.hypot(b.x - alvoX, b.z - GATE.standZ);
+       * com a fila ainda subindo a rampa — dano vindo de ninguém. */
+      const posto = this.postoDaVaga(b.slot);
+      const d = Math.hypot(b.x - posto.x, b.z - posto.z);
       if (d > 1.2) {
         b.state = "walk";
-        b.walkToward(alvoX, GATE.standZ, dt, this.gateAlive, vizinhos);
+        b.walkToward(posto.x, posto.z, dt, this.gateAlive, vizinhos);
         return;
       }
-      this.aproximar(b, alvoX, GATE.standZ, dt, vizinhos);
+      this.aproximar(b, posto.x, posto.z, dt, vizinhos);
       b.faceToward(GATE.x, GATE.z);
       b.state = "attack";
       if (agora - b.lastAttack < esp.interval * 1000) return;
@@ -725,11 +1004,73 @@ export class Siege {
     }
 
     b.state = "walk";
-    // Sem vaga: anda até um ponto atrás da fila, não até o portão. Sem isso os
-    // que esperam empurram os que batem e a fila vira um bolo indistinto.
-    const espera = b.queue != null && b.queue >= S.gateSlots ? 1.6 + (b.queue - S.gateSlots) * 0.7 : 0;
+    const espera = this.postoDeEspera(b.queue);
     const desvio = b.kind === "hound" ? this.desvioDoMastim(b, dt) : 0;
-    b.walkToward(GATE.x + desvio, GATE.standZ + espera, dt, this.gateAlive, vizinhos);
+    b.walkToward(espera.x + desvio, espera.z, dt, this.gateAlive, vizinhos);
+  }
+
+  /**
+   * ONDE CADA UM DOS QUE BATEM FICA — em DUAS FILEIRAS, não numa.
+   *
+   * O vão tem 6 m e a primeira versão punha os seis atacantes lado a lado numa
+   * linha só, a 1,05 m de distância. Do muro, o que se via era isto: meia dúzia
+   * encostada na porta e o resto da horda esperando em COLUNA, um atrás do
+   * outro, uma fila indiana de trinta bichos descendo a rampa. Não parecia um
+   * cerco; parecia uma bilheteria.
+   *
+   * Agora são cinco de frente e cinco imediatamente atrás, encaixados nos vãos
+   * da primeira fileira (o `+0,62` de deslocamento). A segunda fileira alcança
+   * a madeira por cima do ombro da primeira — é o que uma turba fazendo aríete
+   * com o corpo faz de verdade —, e o número de gente batendo ao mesmo tempo
+   * dobrou sem que a porta ficasse mais larga.
+   */
+  postoDaVaga(slot) {
+    const S = CONFIG.modes.siege;
+    const porFileira = S.gatePerRank;
+    const fila = Math.floor(slot / porFileira);
+    const col = slot % porFileira;
+    return {
+      x: GATE.x + (col - (porFileira - 1) / 2) * 1.2 + (fila % 2 ? 0.6 : 0),
+      z: GATE.standZ + fila * 1.15,
+    };
+  }
+
+  /**
+   * ONDE ESPERA QUEM NÃO TEM VAGA — num LEQUE, não numa fila.
+   *
+   * Era `standZ + 1,6 + (posição − vagas) × 0,7`: um ponto por sujeito, todos
+   * no mesmo x, recuando em linha reta. Vinte deles davam catorze metros de
+   * coluna — a fila indiana da imagem.
+   *
+   * Em arcos concêntricos eles se AGLOMERAM: cada anel cabe mais gente que o
+   * anterior e se abre em torno da boca do portão, então a massa cresce em
+   * largura antes de crescer em profundidade. É a diferença entre "eles estão
+   * na fila" e "eles estão em cima da porta" — e, do ponto de vista do jogo, é
+   * o que dá ao trabuco um alvo que vale a pedra.
+   */
+  postoDeEspera(queue) {
+    const S = CONFIG.modes.siege;
+    if (queue == null || queue < S.gateSlots) return { x: GATE.x, z: GATE.standZ };
+    const fora = queue - S.gateSlots;
+
+    /* Anéis de largura crescente: 7, 9, 11… Um anel de largura fixa voltaria a
+       empilhar em profundidade assim que enchesse. */
+    let anel = 0;
+    let base = 0;
+    let largura = S.gateRingFirst;
+    while (fora >= base + largura) {
+      base += largura;
+      anel++;
+      largura += 2;
+    }
+    const i = fora - base;
+    const t = largura > 1 ? (i / (largura - 1)) * 2 - 1 : 0; // −1 … +1
+    const raio = 2.6 + anel * 1.6;
+    const ang = t * S.gateSpread;
+    return {
+      x: GATE.x + Math.sin(ang) * raio,
+      z: GATE.standZ + Math.cos(ang) * raio,
+    };
   }
 
   /** Anda os últimos centímetros sem o leque de desvios (já está no lugar). */
@@ -763,27 +1104,84 @@ export class Siege {
       return;
     }
 
-    /* No adarve. Ele não anda pelo muro: fica no ponto em que subiu e golpeia
-       quem chegar perto. Um escalador que patrulhasse o adarve seria um duelo,
-       e o modo já tem uma coisa acontecendo. */
+    /* NO ADARVE ELE CAÇA.
+     *
+     * Ele ficava parado no ponto em que subiu, golpeando só quem passasse a um
+     * metro e meio dele — e a justificativa era que um escalador patrulhando
+     * viraria um duelo dentro de um modo que já tem uma coisa acontecendo.
+     * Na prática deu o contrário do que a espécie existe para dar: ele subia,
+     * chegava ao topo e virava estátua. Quem estava a cinco metros continuava
+     * atirando na rampa de costas para ele, sem custo nenhum, e a única coisa
+     * capaz de fazer o jogador olhar para trás não fazia mais ninguém olhar
+     * para lugar nenhum.
+     *
+     * Caçando, ele volta a ser o que a ficha dele diz: o inimigo que obriga a
+     * largar a mira do portão. Não é um duelo — ele não desvia, não recua e
+     * morre com duas flechas —, é um relógio andando na sua direção. E vale
+     * para os arqueiros de CPU também, que estão no mesmo adarve pelo mesmo
+     * motivo. */
     b.y = WALL_TOP;
-    b.state = "attack";
     const esp = S.species.climber;
     let alvo = null;
-    let melhor = S.climbReach;
+    let melhor = Infinity;
     for (const p of jogadores) {
+      /* Só quem está NO MURO. O pátio fica onze metros abaixo, e um escalador
+         mirando alguém que está reparando o portão lá embaixo andaria até a
+         beirada e ficaria olhando para o vazio. */
+      if (Math.abs((p.y ?? 0) - b.y) > 3.5) continue;
       const d = Math.hypot(p.x - b.x, p.z - b.z);
-      if (Math.abs((p.y ?? 0) - b.y) > 2.5) continue;
       if (d < melhor) {
         melhor = d;
         alvo = p;
       }
     }
-    if (!alvo) return;
+    if (!alvo) {
+      // Ninguém no adarve: ele fica de guarda onde subiu, como antes.
+      b.state = "attack";
+      return;
+    }
+    if (melhor > S.climbReach) {
+      b.state = "walk";
+      this.andarNoAdarve(b, alvo.x, alvo.z, dt);
+      return;
+    }
     b.faceToward(alvo.x, alvo.z);
+    b.state = "attack";
     if (agora - b.lastAttack < esp.interval * 1000) return;
     b.lastAttack = agora;
     saida.ataques.push({ kind: "climber", playerId: alvo.id, x: b.x, z: b.z });
+  }
+
+  /**
+   * Um passo do escalador SOBRE o muro.
+   *
+   * Não passa por `Besieger.step`, e não pode passar: aquele recusa qualquer
+   * ponto dentro de `insideFootprint`, e o adarve é o topo da alvenaria — ou
+   * seja, o passo seria recusado sempre. Aqui a restrição é outra: ele anda
+   * livre no plano e fica PRESO À FAIXA do adarve, que é o retângulo entre as
+   * duas faces do muro mais a hourd. Sem a coleira ele sairia andando no ar
+   * atrás de alguém que pulou.
+   *
+   * A cota é fixa em `WALL_TOP`: os bastiões estão na mesma, então andar até
+   * eles não pede nada além de deixar o x correr.
+   */
+  andarNoAdarve(b, tx, tz, dt) {
+    const passo = CONFIG.modes.siege.species.climber.speed * dt;
+    let dx = tx - b.x;
+    let dz = tz - b.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-4) return;
+    dx /= d;
+    dz /= d;
+    /* A faixa útil: da face interna do muro à borda da hourd, e de um bastião
+       ao outro. As folgas de meio metro impedem o corpo de ficar meio fora. */
+    const limiteX = CASTLE.towerX + CASTLE.towerHalf - 0.6;
+    const zMin = CASTLE.courtZFront + 0.6;
+    const zMax = CASTLE.wallZOut + CASTLE.hoardOut - 0.5;
+    b.x = clamp(b.x + dx * passo, -limiteX, limiteX);
+    b.z = clamp(b.z + dz * passo, zMin, zMax);
+    b.y = WALL_TOP;
+    b.yaw = Math.atan2(tx - b.x, tz - b.z);
   }
 
   /**
@@ -1121,15 +1519,25 @@ export class Siege {
    *   yaw     uint8    (1 B)  1,4° de resolução
    *   flags   uint8    (1 B)  espécie (3 bits) | estado (3) | morto | fogo
    *
-   * 120 vivos = 1,2 KB por quadro, 12 KB/s por cliente. Cabe com folga.
+   * 120 vivos = 1,3 KB por quadro, 13 KB/s por cliente. Cabe com folga.
    *
-   * A vida (`h`) NÃO entra: ela só interessa no ogro, e o ogro vai à parte no
-   * `status`. Um nibble por bicho para uma informação que 119 deles não usam é
-   * exatamente o tipo de gordura que este formato existe para cortar.
+   * A VIDA (`hp`) ENTRA, e ela custa o décimo primeiro byte.
+   *
+   * Este comentário dizia o contrário, e com um argumento correto: um campo por
+   * bicho para uma informação que 119 deles não usam é gordura. O que mudou foi
+   * a informação deixar de ser inútil para os 119 — o ogro ganhou barra de
+   * vida, e barra de vida só existe se a vida chegar aqui. Alternativas
+   * pesadas foram descartadas: mandar só o ogro por um canal à parte precisaria
+   * de um segundo caminho de rede e de conciliar duas fontes de pose para o
+   * mesmo bicho.
+   *
+   * O preço medido é 10 %: 1,2 KB por quadro viraram 1,32 KB. Em troca, QUALQUER
+   * espécie pode ganhar barra sem tocar no formato outra vez — e é o cliente,
+   * sozinho, que decide quais merecem uma (ver `BesiegerMesh.setHealth`).
    */
   packFrame() {
     const n = this.lista.length;
-    const buf = new ArrayBuffer(4 + n * 10);
+    const buf = new ArrayBuffer(4 + n * 11);
     const dv = new DataView(buf);
     /* Byte 0 é o TIPO do quadro (`FRAME.SIEGE`). Um quadro binário não tem
        campo `t` como as mensagens de texto — um campo de texto no cabeçalho
@@ -1147,7 +1555,11 @@ export class Siege {
       const k = KINDS.indexOf(b.kind) & 0x07;
       const s = STATES.indexOf(b.state) & 0x07;
       dv.setUint8(o + 9, k | (s << 3) | (b.dead ? 0x40 : 0) | (b.burning ? 0x80 : 0));
-      o += 10;
+      // Vida em 0–255. Um byte dá 0,4 % de resolução numa barra de 200 px —
+      // muito além do que o olho lê, e é o menor campo que existe.
+      const vivo = b.maxHits > 0 ? 1 - b.hits / b.maxHits : 1;
+      dv.setUint8(o + 10, clamp(Math.round(vivo * 255), 0, 255));
+      o += 11;
     }
     return Buffer.from(buf);
   }

@@ -6,6 +6,13 @@ import * as THREE from "three";
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 
+/* Raio reaproveitado pelo teste de beira (`temChao`). Ele roda até três vezes
+   por quadro; alocar um `Ray` a cada chamada seria lixo para o coletor recolher
+   no caminho mais quente que existe — o do movimento.
+   PREGUIÇOSO de propósito: `RAPIER` só existe depois de `initPhysics()`, e um
+   `new RAPIER.Ray` no topo do módulo roda no import, antes disso. */
+let _ray = null;
+
 export class PlayerPhysics {
   constructor(physics, player, entityId) {
     this.physics = physics;
@@ -18,6 +25,21 @@ export class PlayerPhysics {
     this.jetVelocity = new THREE.Vector3();
     /** @type {import("./jetpack.js").Jetpack|null} só nas fases que têm um. */
     this.jetpack = null;
+
+    /**
+     * O corpo se recusa a ANDAR para dentro de uma queda mortal?
+     *
+     * Desligado por padrão, e ligado só por quem tem dano de queda — hoje, o
+     * cerco (`Game.applySiegeMode`). É a mesma disciplina do jetpack logo
+     * acima: o equipamento é da FASE, e o caminho do movimento não pergunta em
+     * qual delas está.
+     *
+     * Ligar isto em toda parte seria pior do que não ter: na Lua se anda para
+     * fora de uma plataforma o tempo todo, de propósito, e cair de 1/6 de g não
+     * machuca ninguém. Uma proteção que atrapalha onde não há o que proteger é
+     * uma parede invisível — que é exatamente o que ela existe para evitar.
+     */
+    this.ledgeGuard = false;
 
     this.build();
   }
@@ -220,22 +242,30 @@ export class PlayerPhysics {
     const sobreTerreno = descendo && ny <= feetGround + 0.08;
     const sobreColisor = descendo && this.controller.computedGrounded();
 
-    if (sobreTerreno) {
-      /* A folga de 2 cm não é frescura.
+    if (sobreTerreno || sobreColisor) {
+      /* O TERRENO SÓ ERGUE — NUNCA PUXA PARA BAIXO. É a linha que faz uma
+       * rampa de alvenaria sobre chão plano ser subível.
        *
-       * `heightAt` é uma função contínua; o colisor é um trimesh que a
-       * amostra nos vértices. Entre dois vértices, onde o relevo é curvo — a
-       * borda de uma cratera é o caso —, o triângulo plano fica ACIMA da
-       * curva. Colar a cápsula na altura analítica a enfia dentro da malha, e
-       * um colisor penetrado é um colisor que não deixa mais ninguém andar.
-       * Erguer dois centímetros custa nada de visual e nunca penetra. */
-      ny = feetGround + 0.02;
-      this.verticalVelocity = 0;
-      this.grounded = true;
-      p.airborne = false;
-    } else if (sobreColisor) {
-      // Em cima de um obstáculo: o controlador já parou a queda na altura
-      // certa; aqui só registramos que há chão embaixo.
+       * A folga de 2 cm não é frescura: `heightAt` é uma função contínua e o
+       * colisor é um trimesh que a amostra nos vértices. Entre dois vértices,
+       * onde o relevo é curvo — a borda de uma cratera é o caso —, o triângulo
+       * plano fica ACIMA da curva. Colar a cápsula na altura analítica a enfia
+       * dentro da malha, e um colisor penetrado é um colisor que não deixa mais
+       * ninguém andar.
+       *
+       * Mas a versão anterior ATRIBUÍA essa altura sempre que o corpo estivesse
+       * a menos de 8 cm do terreno — inclusive quando ele estava SUBINDO em
+       * cima de outra coisa. Andando a 4 m/s numa rampa de 30°, o passo de um
+       * quadro sobe 3,8 cm: menos que a tolerância. O corpo ganhava os 3,8 cm
+       * pelo controlador e era recolado no terreno no mesmo quadro, para
+       * sempre. Na tela, isso eram as duas escadas do castelo: dava para
+       * atravessar a rampa inteira por baixo, no nível do pátio, sem nunca
+       * subir um degrau.
+       *
+       * Comparar em vez de atribuir resolve os dois casos com uma regra só —
+       * o chão é o MAIS ALTO dos dois. */
+      const doTerreno = feetGround + 0.02;
+      if (sobreTerreno && doTerreno >= ny) ny = doTerreno;
       this.verticalVelocity = 0;
       this.grounded = true;
       p.airborne = false;
@@ -244,13 +274,69 @@ export class PlayerPhysics {
       p.airborne = true;
     }
 
+    /* A BEIRA MORTAL. O corpo não ANDA para dentro de uma queda que o mata.
+     *
+     * O adarve não tem parapeito, e isso é decisão de projeto, não esquecimento:
+     * o §6.4 do plano do cerco mediu que qualquer borda ali — de dez
+     * centímetros para cima — corta justamente o tiro no portão, que é a razão
+     * de existir da hourd. Medido de novo agora, contra a geometria de hoje: a
+     * flecha que vai à fila do portão passa a CINCO CENTÍMETROS do deque na
+     * beira externa. Não cabe pedra nenhuma ali.
+     *
+     * Só que a faixa de onde se atira tem 90 cm, e ela termina em oito metros
+     * de queda. Sem nada, o primeiro passo à frente mata — e o modo nasce
+     * apontando o jogador para esse lado.
+     *
+     * A saída não é construir: é o CORPO se recusar. Andando, o passo que
+     * deixaria os pés sem chão dentro de `fatalFall` é cancelado — e só ele,
+     * componente a componente, para continuar dando para andar RENTE à beira.
+     * Pular continua funcionando (o teste só vale com os pés no chão), e
+     * descer um degrau, um talude ou o próprio muro por um salto continua
+     * sendo escolha de quem joga.
+     *
+     * Custa até três raios por quadro, só para o jogador local, e só quando ele
+     * está andando no chão. */
+    if (
+      this.ledgeGuard &&
+      this.grounded &&
+      (this._corrected.x !== 0 || this._corrected.z !== 0)
+    ) {
+      const seguro = (x, z) => this.temChao(x, z, ny);
+      if (!seguro(nx, nz)) {
+        if (seguro(nx, t.z)) nz = t.z;
+        else if (seguro(t.x, nz)) nx = t.x;
+        else {
+          nx = t.x;
+          nz = t.z;
+        }
+      }
+    }
+
     /* A BARREIRA. Aqui ela é só isto: um ponto onde `isWalkable` diz não.
      *
      * Só o horizontal é revertido. Congelar `y` junto — que era o que acontecia
      * — prendia no ar quem chegasse à barreira voando de jetpack: a pessoa
      * ficava suspensa contra uma parede invisível em vez de escorregar por ela
-     * e continuar caindo. */
-    if (!terrain.isWalkable(nx, nz)) {
+     * e continuar caindo.
+     *
+     * E ELA SÓ VALE COM OS PÉS NO TERRENO. `isWalkable` responde sobre a
+     * INCLINAÇÃO do campo de altura, e quem está em cima de alvenaria não está
+     * sobre o campo de altura — está treze metros acima dele.
+     *
+     * No castelo isso era uma queda através do chão. O esporão é um
+     * despenhadeiro a partir de z ≈ 9, e a hourd e os bastiões se projetam
+     * exatamente POR CIMA dele (até z = 9,2 e 10,5). Andar para o bordo do
+     * adarve — que é de onde se atira — punha o corpo sobre uma célula íngreme,
+     * a barreira disparava, e o `ny` era reatribuído à cota do TERRENO: o
+     * jogador aparecia no pé da falésia, a treze metros abaixo, tendo
+     * atravessado a própria muralha. Era o "cai por dentro das paredes".
+     *
+     * A folga de 1 m é maior que qualquer discrepância entre a altura analítica
+     * e o trimesh (medida em ladeira: 0,24 m) e muito menor que a menor
+     * alvenaria pisável do jogo. */
+    const naAlvenaria =
+      ny - CONFIG.player.height / 2 > terrain.heightAt(nx, nz) + 1.0;
+    if (!naAlvenaria && !terrain.isWalkable(nx, nz)) {
       nx = t.x;
       nz = t.z;
       this.jetVelocity.set(0, 0, 0);
@@ -267,6 +353,35 @@ export class PlayerPhysics {
     // o centro do colisor; colá-la sempre no heightAt escondia todo o salto.
     p.position.y = ny - CONFIG.player.height / 2;
 
+  }
+
+  /**
+   * Há chão sob (x, z) dentro da queda que ainda dá para sobreviver?
+   *
+   * Duas fontes, e as duas precisam ser consultadas pelo mesmo motivo que
+   * `step` já consulta as duas para decidir se está no chão: o TERRENO é uma
+   * função de altura e a ALVENARIA é colisor. Um teste só contra o terreno
+   * diria que não há chão em cima do muro inteiro; um teste só contra colisores
+   * diria que não há chão no vale inteiro.
+   *
+   * O raio parte um pouco ABAIXO dos pés, senão ele começa dentro do próprio
+   * piso em que se está e volta com distância zero em toda parte.
+   *
+   * @param {number} yCentro cota do centro do colisor no destino
+   */
+  temChao(x, z, yCentro) {
+    const queda = CONFIG.player.ledgeGuardDrop;
+    const pes = yCentro - CONFIG.player.height / 2;
+
+    // 1. O terreno. Se ele está logo abaixo dos pés, há chão e acabou.
+    if (this.player.terrain.heightAt(x, z) > pes - queda) return true;
+
+    // 2. Alvenaria, plataforma, tronco caído — o que o terreno não conhece.
+    _ray ??= new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+    _ray.origin.x = x;
+    _ray.origin.y = pes - 0.12;
+    _ray.origin.z = z;
+    return this.physics.world.castRay(_ray, queda, true) != null;
   }
 
   getHitBody() {

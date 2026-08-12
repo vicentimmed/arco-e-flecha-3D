@@ -213,8 +213,25 @@ atira menos e acerta mais. Quem tem medo gasta o dobro de flechas.
   Ao longo de uma partida o campo em volta da base vai ficando coberto de
   cascalho — é o placar da noite, escrito no chão, e custa **uma** chamada de
   desenho.
+* **A CADA FLECHADA, lascas em brasa que NÃO caem.** A flecha arranca pedaços
+  que passam a acompanhar a rocha, girando em volta dela até a explosão final —
+  ver `CONFIG.modes.meteorRain.chips`. Isto não é enfeite, é a barra de vida do
+  modo: o escurecimento do material (`hp` → `emissiveIntensity`) já dizia "esta
+  apanhou", mas só de perto e só para quem soubesse comparar duas rochas. Uma
+  coroa de brasas é legível a duzentos metros e **contável** — três lascas
+  girando é a rocha que já levou três flechas —, e num co-op é isso que impede
+  duas pessoas de gastarem tiro na mesma pedra. Elas não têm colisão nenhuma,
+  pelo mesmo motivo dos estilhaços acima. Custo: **uma** chamada de desenho para
+  todas as rochas somadas, com teto de 90 lascas no lote inteiro — quarenta
+  flechadas no colosso dariam quinhentas, então as velhas são recicladas e ele
+  acaba usando uma coroa estável de escombro, que é exatamente a imagem que se
+  quer dele.
 * **No chão (a rocha encostou):** cratera de luz, tremor de câmera forte,
-  explosão em volume alto, tela branca por 0,4 s → **game over para todos**.
+  explosão em volume alto, tela branca por 0,4 s → **game over para todos**, com
+  a linha `Enter · para jogar de novo` na tela final: uma tela de fim que não
+  diz como recomeçar deixa a pessoa olhando o texto sem saber que o jogo ainda
+  responde. O `Enter` reentra no modo, o que no servidor é um `setMode` para o
+  mesmo modo — chuva nova, horda 1, barra do especial zerada.
   Não há raio de dano nem "morreu quem estava perto": a regra é a que foi
   pedida, e ela é boa justamente por não ter exceção. Cada rocha importa.
 
@@ -588,8 +605,24 @@ tela.
   espetáculo, porque um círculo de 22 m de luz crescendo no chão da base diz
   "vem coisa grande" melhor do que qualquer HUD. Custo: uma chamada de desenho
   por rocha, nenhuma luz dinâmica, nenhum mapa de sombra.
-* **Seta de borda** apontando para a rocha mais próxima do chão que não está no
-  campo de visão. Uma só, a mais urgente — três setas ao mesmo tempo é ruído.
+* ~~**Seta de borda** apontando para a rocha mais próxima do chão que não está
+  no campo de visão. Uma só, a mais urgente — três setas ao mesmo tempo é
+  ruído.~~ **REESCRITO: UM MARCADOR POR ROCHA, todas elas, o tempo todo.**
+  O "três setas seriam ruído" estava errado, e errado pelo motivo mais simples
+  possível: **a informação que o modo pede não é "qual é a mais urgente", é
+  "quantas e onde"**. Com uma seta só, duas rochas atrás do jogador viravam
+  uma, e quem estava girando a câmera não tinha como saber se já tinha visto
+  todas. Pior ainda era o limiar: a seta só aparecia depois de a rocha cruzar
+  `warnAltitude`, ou seja, o alerta chegava quando já não dava para escolher.
+  Agora cada rocha tem o seu, **desde o nascimento**, em duas formas:
+  * **na tela** — um anel em volta dela, com a altitude embaixo. Não aponta
+    para nada; a rocha está ali, o anel só a circula no meio das estrelas.
+  * **fora da tela** — a seta na borda, girada para o rumo dela, como antes.
+  A cor segue os mesmos dois limiares de sempre (laranja → âmbar em
+  `warnAltitude` → vermelho pulsando em `dangerAltitude`), então a leitura de
+  urgência não se perdeu: ela virou um atributo do marcador em vez de ser o
+  critério para existir. Custo: um nó de HTML por rocha, reaproveitado por um
+  pool, com teto no `maxAlive` (16).
 * **Pulso vermelho na borda**, do lado de onde ela vem, quando qualquer rocha
   cruza **60 m** de altitude. Abaixo de **25 m**, o pulso vira contínuo e entra
   um bipe crescente.
@@ -745,7 +778,8 @@ regra, explicitamente.
 | `server/botArrow.js` | raio de acerto por presa (`b.r ?? RAIO_BICHO`) em vez do 0,8 fixo |
 | `server/spaceSim.js` | perfil do modo: alien raro, **sem** nave, **sem** deriva |
 | `src/main.js` | handlers das seis mensagens, `applyMeteorMode`, preparo, alerta, trilha |
-| `src/ui/hud.js` | `setMeteor`, **contagem de entrada** (§3.6), faixa genérica, alerta de borda, seta fora da tela, tela final |
+| `src/ui/hud.js` | `setMeteor`, **contagem de entrada** (§3.6), faixa genérica, alerta de borda, **`setMeteorMarks` — um marcador por rocha** (§5.2), linha do `Enter` no game over, tela final |
+| `src/systems/meteorRain.js` | estilhaços do estouro, cascalho no chão e as **lascas em órbita** de cada flechada (§3.4) |
 | `src/entities/fallingMeteor.js` | inclui a **mancha no chão** (§5.2): disco aditivo no ponto de queda, acendendo com a descida |
 | `src/ui/lobby.js` | a quinta porta: **Chuva de Meteoros** |
 | `src/systems/input.js` | **`Shift+9`** — ver o quadro abaixo |
@@ -890,7 +924,7 @@ o próximo ajuste de dificuldade seja uma linha, e não uma arqueologia.
 
 | risco | por que é real | o que se faz |
 |---|---|---|
-| ~~**Mirar a pino é desconfortável**~~ **ACONTECEU** | o plano confiou no anel de queda de 55 m e isso não bastou: de 210 m de altitude com 12°–22° de inclinação, a rocha entrava a **68°–78° de elevação** — jogar era olhar para o teto | corrigido pela GEOMETRIA DA ENTRADA, não pela câmera: altitude 210 → **150 m** e inclinação 12°–22° → **35°–52°**, o que põe o ponto de entrada de 105 a 193 m ao lado do alvo e a elevação em **38°–55°**. As velocidades foram reescaladas por 150/210 para o prazo de queda — que é o que a dificuldade usa — ficar idêntico ao que o banco aprovou (medido de novo: 87,5 %) |
+| ~~**Mirar a pino é desconfortável**~~ **ACONTECEU DUAS VEZES** | o plano confiou no anel de queda de 55 m e isso não bastou: de 210 m de altitude com 12°–22° de inclinação, a rocha entrava a **68°–78° de elevação** — jogar era olhar para o teto. **E 38°–55° ainda era "de cima"** | corrigido pela GEOMETRIA DA ENTRADA, não pela câmera. 1ª passada: altitude 210 → **150 m** e inclinação 12°–22° → 35°–52° (entrada de 105 a 193 m ao lado, elevação 38°–55°); velocidades reescaladas por 150/210 para o prazo de queda — que é o que a dificuldade usa — ficar idêntico ao que o banco aprovou. 2ª passada: **só a inclinação**, 35°–52° → **58°–68°**, o que põe a entrada de **239 a 375 m** ao lado do alvo e a elevação em **22°–32°** — perto do horizonte de verdade (o da Lua, com a curvatura exagerada, fica a 300 m de quem está em pé). A altitude NÃO desceu junto, de propósito: mexendo só no ângulo, o prazo e a tabela de velocidades ficam intactos, e o banco continua valendo sem reescala nenhuma (medido: 90,5 %). **O preço está na velocidade HORIZONTAL** — de 7,3 para 14 m/s na horda 1, de 12,3 para 24 m/s na 10 —, ou seja, mirar exige mais adiantamento; é `entryTilt*` o número a baixar se ficar duro demais. Efeito colateral bem-vindo: o filtro de elevação ≤ 68° do bot (§4.7) deixa de recusar rocha |
 | **A rocha some contra o Sol** | o Sol da Lua tem flare e é ofuscante | o halo é aditivo e branco-azulado no núcleo, distinto do amarelo do Sol; e a zona de queda é fixa, então o jogador pode escolher de onde olhar |
 | **Sala cheia vira parede** | 12 jogadores dariam 87 rochas na horda 10 | `min(N,6)` na escala corta em 45, e `maxAlive: 16` segura o céu |
 | **Entrar no meio da partida** | quem chega na horda 8 não tem contexto | §3.6: o `snapshot` traz `METEOR_STATUS` (com `startsAt`) e a lista de rochas; a faixa e o chip explicam em dois segundos, e a contagem não reinicia para ninguém |

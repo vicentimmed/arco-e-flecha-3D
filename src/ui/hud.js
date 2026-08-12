@@ -31,19 +31,39 @@ function texto(conteudo, classe = "") {
    É uma tabela de dados, e não marcação escrita à mão, porque assim acrescentar
    uma tecla é acrescentar uma linha — e o painel não sai de sincronia com o
    `input.js` por esquecimento de editar HTML. */
+/* A TERCEIRA COLUNA de cada linha é o COMANDO, e ela é o que permite existir um
+   menu clicável sem uma segunda tabela.
+
+   O formato é `["campo", valor]`: o nome de um campo de `Input.actions` e o que
+   escrever nele. O botão do menu não chama função de jogo nenhuma — ele escreve
+   a MESMA intenção que a tecla escreveria, e o laço de `bindActions` consome no
+   quadro seguinte sem saber de onde veio.
+
+   É a única forma de os dois caminhos não divergirem: qualquer confirmação,
+   aviso ou mensagem de rede que a tecla dispara, o botão dispara igual, porque
+   é literalmente o mesmo código. Uma tabela de `onclick` chamando métodos seria
+   um segundo jogo para manter em sincronia.
+
+   Linhas SEM comando (mouse, W A S D, Shift) são só documentação: não há botão
+   para "andar", e fingir que há seria pior que não ter. */
 const ATALHOS = [
   {
     titulo: "Mirar e atirar",
     itens: [
       [["Mouse"], "mirar"],
       [["Clique"], "segurar e soltar"],
-      [["Dir.", "C"], "1ª pessoa"],
-      [["F"], "câmera da flecha liga/desliga"],
-      [["E"], "golpe de faca"],
+      [["Dir."], "1ª pessoa"],
+      [["C"], "câmera da flecha liga/desliga", ["toggleArrowCam", true]],
+      // No cerco o F é a MÃO — trabuco, manivela e reparo. Fora dele não faz
+      // nada, e por isso a linha vive no bloco do modo, não aqui. Sem botão:
+      // ela é uma tecla SEGURADA, e um clique não segura nada.
+      [["F"], "no cerco: trabuco / manivela / reparo"],
+      [["E"], "golpe de faca", ["knifeAttack", true]],
       // O especial só existe onde está ligado (ver `CONFIG.special.modes`), mas
       // a linha fica: uma tecla que não aparece aqui é uma tecla que ninguém
       // descobre.
-      [["Q"], "especial (com a barra cheia)"],
+      [["Q"], "especial (com a barra cheia)", ["special", true]],
+      [["Enter"], "recomeçar / fechar tela de fim", ["confirmOverlay", true]],
     ],
   },
   {
@@ -54,37 +74,62 @@ const ATALHOS = [
       [["Space"], "pular"],
       // Na Lua a mesma tecla tem um segundo significado no ar. Ver `jetpack.js`.
       [["Space", "Space"], "jetpack (só na Lua)"],
-      [["K"], "renascer"],
+      [["K"], "renascer", ["askRespawn", true]],
     ],
   },
   {
     titulo: "Modos de jogo",
     itens: [
-      [["1"], "livre"],
-      [["2"], "duelo"],
-      [["G"], "duelo de times (humanos × CPU)"],
-      [["3"], "caçada aos porcos"],
-      [["4"], "alvos em série"],
-      [["5"], "caçada ao alce"],
-      [["6"], "noite dos zumbis"],
-      [["7"], "zumbi (só chefão)"],
-      [["8"], "caça aos pássaros"],
-      [["U"], "o último em pé (uma vida)"],
-      [["Shift", "G"], "rouba bandeira (humanos × CPU)"],
+      [["1"], "livre", ["setMode", "free"]],
+      [["2"], "duelo", ["setMode", "duel"]],
+      [["G"], "duelo de times (humanos × CPU)", ["setMode", "teamDuel"]],
+      [["3"], "caçada aos porcos", ["setMode", "boarHunt"]],
+      [["4"], "alvos em série", ["setMode", "series"]],
+      [["5"], "caçada ao alce", ["setMode", "elkHunt"]],
+      [["6"], "noite dos zumbis", ["setMode", "zombie"]],
+      [["7"], "zumbi (só chefão)", ["setMode", "zombieBoss"]],
+      [["8"], "caça aos pássaros", ["setMode", "birdHunt"]],
+      [["U"], "o último em pé (uma vida)", ["setMode", "lastStand"]],
+      [["Shift", "G"], "rouba bandeira (humanos × CPU)", ["setMode", "captureFlag"]],
+      /* O CERCO NÃO TEM TECLA — os dígitos acabaram e as letras com mnemônico
+         também. Até aqui a única porta de entrada dele era a tela inicial, e
+         quem trocasse de modo por engano no meio de uma partida não tinha como
+         voltar sem recarregar a página. O menu resolve isso sem gastar tecla:
+         `kbd: false` desenha a linha só com o botão. */
+      [[], "cerco ao castelo", ["setMode", "siege"]],
     ],
   },
   {
-    titulo: "Fases e bots",
+    /* AS FASES, e não só a Lua.
+     *
+     * O teclado tem uma tecla só para fase (o 9), e ela é um interruptor entre
+     * o vale e a Lua — os dígitos acabaram, e o castelo nunca ganhou nenhuma.
+     * O menu não tem esse limite: as três aparecem por nome, e ir do castelo
+     * para a Lua deixa de ser uma viagem de duas confirmações passando pelo
+     * vale. As linhas sem tecla desenham só o botão. */
+    titulo: "Fases",
     itens: [
+      [[], "Vale", ["setLevel", "valley"]],
       // A mesma tecla leva e traz — ver `askLevelChange`.
-      [["9"], "Lua (ir e voltar)"],
-      // O 0 é o placar e os dígitos acabaram: Shift+9 lê como "a Lua, chovendo",
-      // que é literalmente o que ela faz.
-      [["Shift", "9"], "chuva de meteoros (Lua)"],
-      [["B"], "adicionar bot"],
-      [["Shift", "B"], "remover bot"],
-      [["N"], "dificuldade do bot"],
-      [["Shift", "N"], "dificuldade anterior"],
+      [["9"], "Lua (ir e voltar)", ["setLevel", "moon"]],
+      [[], "Castelo", ["setLevel", "castle"]],
+    ],
+  },
+  {
+    titulo: "Bots",
+    itens: [
+      [["B"], "adicionar bot", ["toggleBot", "add"]],
+      [["Shift", "B"], "remover bot", ["toggleBot", "remove"]],
+      [["N"], "dificuldade do bot", ["cycleBotDifficulty", 1]],
+      [["Shift", "N"], "dificuldade anterior", ["cycleBotDifficulty", -1]],
+    ],
+  },
+  {
+    titulo: "Soltar bichos",
+    itens: [
+      [["P"], "soltar porco", ["spawnBoar", true]],
+      [["L"], "soltar alce", ["spawnElk", true]],
+      [["O"], "lobos do alce", ["spawnElkWolves", true]],
     ],
   },
   {
@@ -92,20 +137,26 @@ const ATALHOS = [
     itens: [
       // O Tab saiu: no navegador ele é a tecla de navegação e o foco escapava
       // para os controles do próprio navegador. Ver `systems/input.js`.
+      // Sem botão: o placar é uma tecla SEGURADA, e o menu está por cima dele.
       [["0"], "placar"],
-      [["Y"], "zerar placar"],
-      [["P"], "soltar porco"],
-      [["L"], "soltar alce"],
-      [["O"], "lobos do alce (teste)"],
+      [["Y"], "zerar placar", ["askResetScores", true]],
+      [["J"], "cerco: próximo escalão", ["siegeSkip", "next"]],
+      [["Shift", "J"], "cerco: escaladores", ["siegeSkip", "climber"]],
     ],
   },
   {
     titulo: "Ajustes",
     itens: [
-      [["T"], "traçado"],
-      [["V"], "vento"],
-      [["M"], "música"],
-      [["R"], "limpar flechas"],
+      [["T"], "traçado", ["toggleTrace", true]],
+      [["V"], "vento", ["toggleWindInfluence", true]],
+      [["M"], "música", ["toggleMusic", true]],
+      [["R"], "limpar flechas", ["clearArrows", true]],
+      [["H"], "painel de atalhos", ["toggleHelp", true]],
+      /* SEM TECLA. A telemetria era a crase, e a crase agora só abre este menu
+         (ver `Input.crase`). Ela é o painel mais raramente usado do jogo — é o
+         primeiro que deve sair da lista de coisas a decorar, e o menu é
+         exatamente o lugar para onde ele vai. */
+      [[], "telemetria (depuração)", ["toggleDebug", true]],
     ],
   },
 ];
@@ -150,6 +201,63 @@ function montarAtalhos() {
   painel.appendChild(rodape);
 
   return painel;
+}
+
+/**
+ * O menu de comandos, montado da MESMA tabela `ATALHOS`.
+ *
+ * Só entram as linhas que têm comando: não há botão para "andar" nem para
+ * "mirar", e inventar um seria pior do que não ter. Os grupos que sobram vazios
+ * (nenhum hoje, mas "Mover" chega perto) simplesmente não aparecem.
+ *
+ * Cada botão mostra a AÇÃO em cima e a TECLA embaixo, e não o contrário: quem
+ * abriu o menu está procurando o que fazer, não que letra apertar. A tecla fica
+ * como nota de rodapé — e é ela que, com o tempo, ensina o atalho e torna o
+ * menu desnecessário, que é o melhor destino possível para um menu destes.
+ *
+ * @param {(cmd: [string, unknown]) => void} aoClicar
+ */
+function montarMenuComandos(aoClicar) {
+  const frag = document.createDocumentFragment();
+
+  for (const grupo of ATALHOS) {
+    const comandos = grupo.itens.filter((it) => it[2]);
+    if (!comandos.length) continue;
+
+    const bloco = document.createElement("div");
+    bloco.className = "cmd-grupo";
+
+    const titulo = document.createElement("h4");
+    titulo.textContent = grupo.titulo;
+    bloco.appendChild(titulo);
+
+    const grade = document.createElement("div");
+    grade.className = "cmd-grade";
+    for (const [teclas, rotulo, cmd] of comandos) {
+      const botao = document.createElement("button");
+      botao.type = "button";
+      botao.className = "cmd-botao";
+      botao.append(texto(rotulo, "cmd-rotulo"));
+
+      if (teclas.length) {
+        const dica = document.createElement("span");
+        dica.className = "cmd-tecla";
+        for (const t of teclas) {
+          const kbd = document.createElement("kbd");
+          kbd.textContent = t;
+          dica.appendChild(kbd);
+        }
+        botao.appendChild(dica);
+      }
+
+      botao.addEventListener("click", () => aoClicar(cmd));
+      grade.appendChild(botao);
+    }
+    bloco.appendChild(grade);
+    frag.appendChild(bloco);
+  }
+
+  return frag;
 }
 
 export class HUD {
@@ -325,10 +433,13 @@ export class HUD {
       <div id="siege-hint" hidden></div>
 
       <!-- Renascimento e game over. Este SIM no meio da tela: o jogador está
-           morto, não tem o que mirar, e a única coisa que importa é o número. -->
+           morto, não tem o que mirar, e a única coisa que importa é o número.
+           A terceira linha é a SAÍDA: uma tela de fim sem dizer como recomeçar
+           deixa a pessoa olhando o texto sem saber que o jogo ainda responde. -->
       <div id="zombie-center" hidden>
         <div id="zombie-center-title"></div>
         <div id="zombie-center-sub"></div>
+        <div id="zombie-center-hint" hidden><kbd>Enter</kbd><span></span></div>
       </div>
 
       <!-- Preparação coordenada da noite. O jogo fica coberto enquanto os
@@ -345,7 +456,9 @@ export class HUD {
 
       <!-- Vitória da caçada: entra ao fechar a quinta onda (ver S2C.HUNT_OVER).
            Fica na tela até o Enter, por isso a dica mora dentro do próprio
-           card — é a única tecla que a fecha, e ninguém adivinha sozinho. -->
+           card — é a única tecla que a fecha E recomeça a partida, e ninguém
+           adivinha sozinho. Mesmo card para todo modo com ranking no fim
+           (série, alce, pássaros, zumbis, último em pé, bandeira, cerco). -->
       <div id="hunt-victory" hidden>
         <div class="hv-card">
           <div class="hv-title" id="hunt-victory-title">CAÇADA CONCLUÍDA</div>
@@ -355,19 +468,16 @@ export class HUD {
             <span class="hv-winner-count"></span>
           </div>
           <div class="hv-others"></div>
-          <div class="hv-hint"><kbd>Enter</kbd><span>fecha esta tela</span></div>
+          <div class="hv-hint"><kbd>Enter</kbd><span>para jogar de novo</span></div>
         </div>
       </div>
 
       <!-- ALERTA DA CHUVA DE METEOROS.
            Sem isto o modo é injusto: a rocha que mata é sempre a que estava
-           fora da tela. São duas peças — a moldura que pulsa vermelho, e UMA
-           seta (a mais urgente; três ao mesmo tempo seriam ruído). -->
+           fora da tela. São duas peças — a moldura que pulsa vermelho, e UM
+           MARCADOR POR ROCHA, criado sob demanda em #meteor-marks. -->
       <div id="danger-edge" hidden></div>
-      <div id="meteor-arrow" hidden>
-        <div class="ma-seta">▲</div>
-        <div class="ma-alt"></div>
-      </div>
+      <div id="meteor-marks"></div>
 
       <!-- Barra do ESPECIAL. Cheia, ela pulsa e anuncia a tecla: ninguém
            adivinha sozinho que tem uma arma na mão. -->
@@ -381,6 +491,31 @@ export class HUD {
 
       <!-- Preenchido por montarAtalhos(), a partir da tabela ATALHOS. -->
       <div id="help" class="hidden"></div>
+
+      <!-- O MENU DE COMANDOS. Três toques na crase (ver Input.crase), e abre.
+           (Sem crases neste comentário: ele está dentro de um template
+           literal, e uma crase fecharia a string.)
+
+           Ele existe porque o jogo tem trinta e poucos atalhos e nenhum deles é
+           descobrível com o mouse: quem quer trocar de modo, pôr um bot ou
+           adiantar um escalão precisa lembrar a letra. O painel de atalhos
+           mostra as letras; este aqui as EXECUTA — e é montado da mesma tabela,
+           então nunca oferece um botão para uma tecla que não existe mais.
+
+           Preenchido por montarMenuComandos(). -->
+      <div id="cmd-menu" hidden>
+        <div class="cmd-card">
+          <div class="cmd-topo">
+            <span class="cmd-titulo">Comandos</span>
+            <button type="button" id="cmd-fechar" title="fechar (Esc)">✕</button>
+          </div>
+          <div class="cmd-corpo"></div>
+          <div class="cmd-rodape">
+            <kbd>\`</kbd><span>três toques abrem este menu</span>
+            <kbd>Esc</kbd><span>fecha</span>
+          </div>
+        </div>
+      </div>
 
       <!-- Com o painel fechado, esta é a única pista de como reabri-lo. -->
       <div id="help-hint"><kbd>F1</kbd><span>atalhos</span></div>
@@ -441,6 +576,8 @@ export class HUD {
       zombieCenter: root.querySelector("#zombie-center"),
       zombieCenterTitle: root.querySelector("#zombie-center-title"),
       zombieCenterSub: root.querySelector("#zombie-center-sub"),
+      zombieCenterHint: root.querySelector("#zombie-center-hint"),
+      zombieCenterHintText: root.querySelector("#zombie-center-hint span"),
       fpsMeter: root.querySelector("#fps-meter"),
       fpsValue: root.querySelector("#fps-value"),
       fuel: root.querySelector("#fuel"),
@@ -464,14 +601,49 @@ export class HUD {
       helpHint: root.querySelector("#help-hint"),
       lockHint: root.querySelector("#lock-hint"),
       dangerEdge: root.querySelector("#danger-edge"),
-      meteorArrow: root.querySelector("#meteor-arrow"),
-      meteorArrowAlt: root.querySelector("#meteor-arrow .ma-alt"),
+      meteorMarks: root.querySelector("#meteor-marks"),
       specialChip: root.querySelector("#special-chip"),
       specialFill: root.querySelector("#special-fill"),
       specialReady: root.querySelector("#special-ready"),
+      cmdMenu: root.querySelector("#cmd-menu"),
+      cmdCorpo: root.querySelector("#cmd-menu .cmd-corpo"),
+      cmdFechar: root.querySelector("#cmd-fechar"),
     };
 
     this.el.help.appendChild(montarAtalhos());
+
+    /* O MENU DE COMANDOS, montado uma vez.
+     *
+     * `onCommand` é preenchido por `main.js` e escreve a intenção em
+     * `Input.actions` — ver o cabeçalho da tabela `ATALHOS`. O HUD não conhece
+     * modo, rede nem física, e continua não conhecendo: ele só diz qual botão
+     * foi apertado. */
+    this.onCommand = null;
+    /* O menu FECHA ao trocar de modo ou de fase, e fica aberto no resto.
+     *
+     * As duas trocas devolvem o jogador ao jogo — uma tela de carregamento, uma
+     * arena nova — e deixar o menu por cima disso o obrigaria a fechá-lo às
+     * cegas. Todo o resto (bot, porco, música, traçado) é justamente o que se
+     * quer encadear sem fechar nada. */
+    this.comandosQueFecham = new Set(["setMode", "setLevel"]);
+    /** Chamado ao abrir e ao fechar, para o input soltar/retomar o ponteiro. */
+    this.onCommandMenuToggle = null;
+    this.el.cmdCorpo.appendChild(
+      montarMenuComandos((cmd) => this.onCommand?.(cmd)),
+    );
+    this.el.cmdFechar.addEventListener("click", () => this.closeCommandMenu());
+    /* Clicar no VÉU (fora do card) fecha, como em qualquer diálogo. O teste de
+       `target` é o que impede um clique dentro do card de fechar junto —
+       o evento borbulha até aqui de qualquer forma. */
+    this.el.cmdMenu.addEventListener("click", (e) => {
+      if (e.target === this.el.cmdMenu) this.closeCommandMenu();
+    });
+
+    /* Marcadores da chuva: um por rocha, criados sob demanda e REAPROVEITADOS.
+       O pool existe porque o número de rochas oscila a cada segundo, e recriar
+       nós a cada quadro faria o navegador recalcular estilo o tempo todo por
+       algo que só mudou de posição. */
+    this._marks = [];
 
     // Marca da velocidade máxima útil na barra (tensão total).
     this.el.powerMark.style.left = "100%";
@@ -644,6 +816,18 @@ export class HUD {
        curso não teria nada na tela dizendo por que pula seis metros. */
     const foraDoVale = level !== "valley";
     if (mode === "free" && !pendente && !foraDoVale) {
+      banner.hidden = true;
+      return;
+    }
+    /* O CERCO NÃO TEM FAIXA, e é o único modo assim.
+     *
+     * A regra geral — faixa sempre, fora do vale — existe para quem entra numa
+     * sala já em curso não ficar sem nada na tela explicando o estado. No cerco
+     * essa função já é cumprida, e melhor, pelo painel do próprio modo: a barra
+     * do portão, a fila e o relógio até o pôr do sol dizem em que modo se está
+     * e como ele vai. A faixa vira repetição — e repetição atravessada no alto
+     * da tela, que é exatamente onde a rampa aparece quando se olha do adarve. */
+    if (mode === "siege" && !pendente) {
       banner.hidden = true;
       return;
     }
@@ -887,8 +1071,16 @@ export class HUD {
     this.el.zombieLeft.textContent = String(estado.remaining);
   }
 
-  /** Barra de vida do chefão (reusa o chip do alce, centralizado no topo). */
-  setBossHp(health) {
+  /**
+   * Barra de vida do chefão (reusa o chip do alce, centralizado no topo).
+   *
+   * @param {number|null} health fração de 0 a 1; `null` esconde
+   * @param {string} [rotulo] quem está apanhando. O colosso da chuva usa a
+   *   MESMA barra pela mesma razão que o chip do modo reusa o do zumbi: é a
+   *   mesma informação, no mesmo lugar, com outro substantivo — e dois
+   *   conjuntos de elementos seriam dois para sair de sincronia.
+   */
+  setBossHp(health, rotulo = "CHEFÃO") {
     if (health == null) {
       this.el.elkChip.hidden = true;
       this.el.elkChip.classList.remove("boss-hp");
@@ -898,17 +1090,25 @@ export class HUD {
     this.el.elkChip.classList.add("boss-hp");
     this.el.elkBarFill.style.width = `${Math.max(0, Math.min(1, health)) * 100}%`;
     this.el.elkBarFill.style.background = `hsl(${health * 118}deg 70% 48%)`;
-    this.el.elkLabel.textContent = "CHEFÃO";
+    this.el.elkLabel.textContent = rotulo;
     this.el.elkChip.classList.toggle("perigo", health < 0.25);
   }
 
   /** Faixa central: contagem de renascimento ou fim de jogo. */
-  showZombieCenter(titulo, sub = "", classe = "") {
+  /**
+   * @param {string} titulo
+   * @param {string} sub
+   * @param {string} classe
+   * @param {string|null} dica texto da linha do `Enter`; `null` esconde a linha
+   */
+  showZombieCenter(titulo, sub = "", classe = "", dica = null) {
     const el = this.el.zombieCenter;
     el.hidden = false;
     el.className = classe;
     this.el.zombieCenterTitle.textContent = titulo;
     this.el.zombieCenterSub.textContent = sub;
+    this.el.zombieCenterHint.hidden = !dica;
+    if (dica) this.el.zombieCenterHintText.textContent = dica;
   }
 
   hideZombieCenter() {
@@ -1075,7 +1275,13 @@ export class HUD {
           ? `eles recuaram ao anoitecer · portão em risco por ${risco} s`
           : `a muralha foi tomada · ${risco} s de portão em risco`,
       statLabel: rotulo,
+      hint: "para defender de novo",
     });
+  }
+
+  /** Fecha a tela de fim do cerco. É a mesma da caçada — ver `showSiegeOver`. */
+  hideSiegeOver() {
+    this.hideHuntVictory();
   }
 
   /**
@@ -1091,10 +1297,17 @@ export class HUD {
     el.classList.toggle("critico", continuo);
   }
 
+  /**
+   * Apaga só a MOLDURA.
+   *
+   * Ela não leva mais os marcadores junto, e a separação é o ponto: a moldura é
+   * o alarme da rocha mais baixa e some assim que ninguém está perto do chão;
+   * os marcadores são o inventário do céu e valem enquanto houver rocha. Quem
+   * os apaga é `clearMeteorMarks`, e só no fim da partida.
+   */
   clearDanger() {
     this.el.dangerEdge.hidden = true;
     this.el.dangerEdge.classList.remove("critico");
-    this.el.meteorArrow.hidden = true;
   }
 
   /** Clarão vermelho de tela cheia — o impacto que encerra a partida. */
@@ -1105,24 +1318,77 @@ export class HUD {
   }
 
   /**
-   * A seta que aponta a rocha mais urgente fora da tela.
-   * @param {number|null} angulo radianos em NDC, ou null para esconder
+   * UM MARCADOR POR ROCHA — todas elas, o tempo todo.
+   *
+   * A versão anterior mostrava uma seta só, a da rocha mais baixa, e escondia
+   * até ela enquanto a altitude estivesse acima do limiar de aviso. O
+   * raciocínio era "três setas seriam ruído", e ele estava errado pelo motivo
+   * mais simples possível: **a informação que o modo pede não é "qual é a mais
+   * urgente", é "quantas e onde"**. Com uma seta só, duas rochas atrás do
+   * jogador viravam uma; e quem estava girando a câmera não tinha como saber se
+   * já tinha visto todas.
+   *
+   * Cada marcador tem duas formas, e a troca é o que o torna legível:
+   *
+   * • rocha NA TELA — um anel sobre ela, com a altitude embaixo. Não aponta
+   *   para nada: a rocha está ali, o anel só a circula no meio das estrelas.
+   * • rocha FORA DA TELA — a seta na borda, girada para o rumo dela, como
+   *   antes. É a única forma de apontar para algo que não está no quadro.
+   *
+   * @param {{angulo:number|null, x:number, y:number, alt:number,
+   *          perigo:boolean, aviso:boolean}[]} marcas
    */
-  setMeteorArrow(angulo, altitude = 0) {
-    const el = this.el.meteorArrow;
-    if (angulo == null) {
-      el.hidden = true;
-      return;
+  setMeteorMarks(marcas) {
+    const lista = marcas ?? [];
+    // Cresce o pool até caber a chuva; ele nunca encolhe, e o teto é o
+    // `maxAlive` da sala (16) — dezesseis nós é nada.
+    while (this._marks.length < lista.length) {
+      const el = document.createElement("div");
+      el.className = "mm";
+      el.innerHTML = `<div class="mm-anel"></div><div class="mm-seta">▲</div><div class="mm-alt"></div>`;
+      this.el.meteorMarks.appendChild(el);
+      this._marks.push({
+        el,
+        alt: el.querySelector(".mm-alt"),
+      });
     }
-    el.hidden = false;
-    // Elipse inscrita na tela: a seta encosta na borda mais próxima daquele
-    // rumo em vez de andar num círculo que sobra nos cantos.
-    const x = Math.cos(angulo) * 42;
-    const y = -Math.sin(angulo) * 38;
-    el.style.transform = `translate(-50%, -50%) translate(${x}vw, ${y}vh) rotate(${
-      90 - (angulo * 180) / Math.PI
-    }deg)`;
-    this.el.meteorArrowAlt.textContent = `${altitude} m`;
+
+    for (let i = 0; i < this._marks.length; i++) {
+      const m = this._marks[i];
+      const d = lista[i];
+      if (!d) {
+        m.el.hidden = true;
+        continue;
+      }
+      m.el.hidden = false;
+      const fora = d.angulo != null;
+      m.el.classList.toggle("fora", fora);
+      m.el.classList.toggle("perigo", d.perigo === true);
+      m.el.classList.toggle("aviso", d.aviso === true && d.perigo !== true);
+
+      if (fora) {
+        /* Elipse inscrita na tela: a seta encosta na borda mais próxima daquele
+           rumo em vez de andar num círculo que sobra nos cantos. */
+        const x = Math.cos(d.angulo) * 42;
+        const y = -Math.sin(d.angulo) * 38;
+        const grausSeta = 90 - (d.angulo * 180) / Math.PI;
+        m.el.style.transform = `translate(-50%, -50%) translate(${x}vw, ${y}vh)`;
+        /* A SETA gira, o resto do marcador não: ninguém lê "40 m" de cabeça
+           para baixo. Por isso a rotação vai na seta e não no bloco. */
+        m.el.style.setProperty("--mm-giro", `${grausSeta}deg`);
+      } else {
+        // Na tela: direto na posição projetada da rocha. ±1 em NDC é a borda,
+        // logo meia tela em cada eixo.
+        m.el.style.transform = `translate(-50%, -50%) translate(${d.x * 50}vw, ${-d.y * 50}vh)`;
+        m.el.style.setProperty("--mm-giro", "0deg");
+      }
+      m.alt.textContent = `${d.alt} m`;
+    }
+  }
+
+  /** Apaga todos os marcadores (fim de horda, game over, troca de modo). */
+  clearMeteorMarks() {
+    for (const m of this._marks) m.el.hidden = true;
   }
 
   /** Barra do especial. `null` esconde. */
@@ -1252,6 +1518,9 @@ export class HUD {
       title = "CAÇADA CONCLUÍDA",
       winnerLabel = "Vencedor",
       statLabel = (p) => `${p.boars ?? 0} ${p.boars === 1 ? "porco abatido" : "porcos abatidos"}`,
+      /* O que o Enter FAZ, escrito no card: fecha a tela e recomeça a
+         partida do mesmo modo, do zero — em todo modo que usa este card. */
+      hint = "para jogar de novo",
     } = opts;
     const [vencedor, ...resto] = ranking;
     const cor = (c) => `#${(c ?? 0xffffff).toString(16).padStart(6, "0")}`;
@@ -1274,6 +1543,9 @@ export class HUD {
         return linha;
       }),
     );
+
+    const dicaEl = this.el.huntVictory.querySelector(".hv-hint span");
+    if (dicaEl) dicaEl.textContent = hint;
 
     this.el.huntVictory.hidden = false;
   }
@@ -1441,5 +1713,32 @@ export class HUD {
   toggleHelp() {
     const fechado = this.el.help.classList.toggle("hidden");
     this.el.helpHint.hidden = !fechado;
+  }
+
+  /* ------------------------------------------------- menu de comandos ------ */
+
+  get commandMenuOpen() {
+    return !this.el.cmdMenu.hidden;
+  }
+
+  toggleCommandMenu() {
+    if (this.commandMenuOpen) this.closeCommandMenu();
+    else this.openCommandMenu();
+  }
+
+  openCommandMenu() {
+    if (this.commandMenuOpen) return;
+    this.el.cmdMenu.hidden = false;
+    /* O aviso sai ANTES do primeiro quadro com o menu aberto: quem escuta é o
+       `Input`, que solta o ponteiro do mouse. Sem isso o cursor continua
+       capturado e nenhum botão pode ser clicado — o menu apareceria e seria
+       impossível de usar. */
+    this.onCommandMenuToggle?.(true);
+  }
+
+  closeCommandMenu() {
+    if (!this.commandMenuOpen) return;
+    this.el.cmdMenu.hidden = true;
+    this.onCommandMenuToggle?.(false);
   }
 }

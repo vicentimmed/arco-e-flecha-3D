@@ -72,6 +72,7 @@ import { BirdFlock } from "./birdSim.js";
 import { ZombieNight } from "./zombieSim.js";
 import { MeteorRain } from "./meteorSim.js";
 import { Siege } from "./siegeSim.js";
+import { BatSwarm } from "./batSim.js";
 import { TargetSeries } from "./targetSeries.js";
 import {
   CASTLE,
@@ -159,8 +160,17 @@ export class Room {
     /* O cerco. Vive no castelo, e o campo é da FASE — sai inteiro com ela e
        renasce do outro lado, como a chuva. Ver `commitPreparedMode`. */
     this.siege = new Siege(this.terrain);
+    /* Os morcegos gigantes do cerco. Sistema à parte do `Siege` por uma razão
+       de FORMATO: eles não cabem no quadro binário (as oito espécies já ocupam
+       os 3 bits do campo) e não precisam dele — são dois bichos, e dois bichos
+       em JSON custam menos que um byte a mais em cento e vinte sitiantes. Ver
+       o cabeçalho de `server/batSim.js`.
+
+       `morcegos` e não `bats`: `this.bots` já existe, e dois campos com nomes
+       parecidos no mesmo objeto é o começo de um erro de digitação silencioso. */
+    this.morcegos = new BatSwarm(this.terrain);
     /**
-     * Os três trabucos: `{ pronto: ms em que estará carregado, wind: Set }`.
+     * Os dois trabucos: `{ pronto: ms em que estará carregado, wind: Set }`.
      *
      * Moram na SALA e não no cliente pelo mesmo motivo que a bandeira mora em
      * `flagSim.js`: o engenho é UM, e duas telas discordando sobre se ele está
@@ -850,6 +860,25 @@ export class Room {
     }
   }
 
+  /**
+   * A perícia padrão DO MODO que está entrando.
+   *
+   * Roda dentro de `setMode`, antes de qualquer bot ser criado — é isso que faz
+   * a guarnição do cerco e a antiaérea da chuva nascerem já no nível certo, em
+   * vez de herdarem o `easy` que o duelo deixou. Como `BotSquad.setDifficulty`
+   * escreve em `CONFIG.bot.difficulty`, o bot criado dez segundos depois pela
+   * tecla B também nasce nele.
+   *
+   * Nada acontece nos modos sem preferência: lá o que valer na sala continua
+   * valendo, inclusive o que alguém escolheu com a tecla N.
+   */
+  aplicarDificuldadeDoModo(modo) {
+    const nivel = CONFIG.bot?.modeDifficulty?.[modo];
+    if (!nivel || CONFIG.bot.difficulty === nivel) return;
+    const aplicado = this.bots.setDifficulty(nivel);
+    this.broadcastAll({ t: S2C.BOT_DIFFICULTY, level: aplicado });
+  }
+
   /** Põe um adversário de CPU em campo, visível para a sala inteira. */
   addBot() {
     const ocupados = this.allCharacters()
@@ -869,6 +898,20 @@ export class Room {
       t: S2C.JOIN,
       player: { id: bot.id, name: bot.name, color: bot.color, isBot: true },
     });
+
+    /* NO CERCO ELE NASCE NO MURO, e não no anel de duelo.
+     *
+     * `BotSquad.add` põe todo bot novo no anel de duelo da fase, que no castelo
+     * cai no pátio — e de lá o arqueiro de guarnição teria de subir a escada,
+     * que é justamente a coisa que ele não sabe fazer (ele é `postado`, ver o
+     * perfil em `tickBots`). O que se via era o bot da tecla B parado lá
+     * embaixo pela partida inteira, sem linha de tiro para nada.
+     *
+     * DEPOIS do `JOIN`, e é obrigatório: `postoLivreNoAdarve` transmite um
+     * `S2C.SPAWN`, e um spawn para um id que os clientes ainda não conhecem não
+     * tem em quem ser aplicado. */
+    if (isSiegeMode(this.mode) && !this.siege.over) this.postoLivreNoAdarve(bot);
+
     this.broadcastScores();
     this.log(`bot entrou: ${bot.name} (#${bot.id})`);
     return bot;
@@ -1167,6 +1210,7 @@ export class Room {
     this.mode = modo;
 
     this.resetWorld();
+    this.aplicarDificuldadeDoModo(modo);
 
     /* DUELO DE TIMES: começa parelho, um bot por humano.
      *
@@ -1240,6 +1284,8 @@ export class Room {
       this.lineUpForSiege();
       this.siege.setTerrain?.(this.terrain);
       this.siege.start(this.players.size + this.bots.count);
+      this.morcegos.setTerrain(this.terrain);
+      this.morcegos.start();
       this.broadcastSiegeStatus();
       this.broadcastTrebuchets();
     } else if (isMeteorMode(modo)) {
@@ -1351,6 +1397,7 @@ export class Room {
     /* O cerco também. Sem isto, sair dele deixaria 120 sitiantes andando
        invisíveis no servidor e o portão do modo seguinte já rachado. */
     this.siege.stop();
+    this.morcegos.stop();
     this.repairing.clear();
     for (const t of this.trebuchets) {
       t.pronto = 0;
@@ -1649,10 +1696,26 @@ export class Room {
     }
     /* As rochas entram como presa — com RAIO e com o ponto de mira no centro.
        Sem os dois, a flecha do bot seria testada contra uma esfera de 80 cm no
-       lugar de uma de até 28 m, e ele erraria tudo o que a tela mostra acertar. */
+       lugar de uma de até 28 m, e ele erraria tudo o que a tela mostra acertar.
+
+       E COM VELOCIDADE: `simularFlechaDoBot` integra a rocha junto com a
+       flecha durante os quase dois segundos de voo. Sem isso a fotografia
+       ficava dezoito metros acima do ponto por onde a flecha passa. Ver o
+       bloco dos bichos em `botArrow.js`. */
     for (const m of this.meteors.meteors) {
       if (m.dead) continue;
-      lista.push({ kind: "meteor", id: m.id, x: m.x, y: m.y, z: m.z, r: m.raio, aimY: 0 });
+      lista.push({
+        kind: "meteor",
+        id: m.id,
+        x: m.x,
+        y: m.y,
+        z: m.z,
+        vx: m.vx,
+        vy: m.vy,
+        vz: m.vz,
+        r: m.raio,
+        aimY: 0,
+      });
     }
     /* Os sitiantes entram como presa, e é isso que faz o arqueiro de muralha
        existir sem uma linha de IA nova: `botSim` já sabe escolher o alvo mais
@@ -1669,6 +1732,13 @@ export class Room {
         x: b.x,
         y: b.y,
         z: b.z,
+        /* Ele ANDA durante o voo da flecha, e o bot mira onde ele vai estar.
+           Sem estes três a conta do servidor testava a posição de agora contra
+           uma flecha mirada em meio segundo à frente — 60 cm de erro contra um
+           raio de 55 cm, ou seja, a guarnição inteira atirando sem matar
+           ninguém. Ver o bloco dos bichos em `botArrow.js`. */
+        vx: b.vx ?? 0,
+        vz: b.vz ?? 0,
         aimY: 1.1 * b.scale,
         /* O raio do alvo, para a flecha do bot. Sem ele `botArrow` usa 0,8 m
            para tudo — o que é generoso para um soldado e absurdamente pequeno
@@ -2299,7 +2369,24 @@ export class Room {
     if (!isMeteorMode(this.mode) || this.meteors.over) return;
     const id = Number(msg.id);
     if (!Number.isFinite(id)) return;
-    const r = this.meteors.hit(id);
+
+    /* O ESPECIAL VAPORIZA — MENOS O COLOSSO.
+     *
+     * A regra mora aqui e não no cliente porque é aqui que se sabe qual das
+     * rochas é o colosso. O feixe apaga qualquer outra de primeira, seja qual
+     * for a vida dela: um raio de energia que precisa de duas passadas numa
+     * pedra de 6 m não é um raio de energia. No colosso ele vale três flechas
+     * (`CONFIG.special.kameTankHits`) — um pedaço honesto da barra sem apagar
+     * numa tecla os setenta segundos que o ato dele existe para cobrar. */
+    const alvo = this.meteors.byId(id);
+    const dano =
+      msg.kame === true
+        ? alvo?.kind === "tank"
+          ? CONFIG.special.kameTankHits
+          : (alvo?.maxHits ?? 1)
+        : 1;
+
+    const r = this.meteors.hit(id, dano);
     if (!r) return;
 
     const M = CONFIG.modes.meteorRain;
@@ -2328,8 +2415,11 @@ export class Room {
     }
 
     // A carga do especial: um ponto por flecha que conecta, inclusive as
-    // parciais no colosso — acertar aquilo dezesseis vezes é trabalho.
-    this.addKameCharge(player, "meteor");
+    // parciais no colosso — acertar aquilo dezesseis vezes é trabalho. O feixe
+    // conta pelo que GASTOU, e não por uma mensagem: ele apaga uma rocha de
+    // três flechas com um pacote só, e cobrar por um seria pagar menos pelo
+    // mesmo estrago.
+    this.addKameCharge(player, "meteor", r.gasto ?? 1);
     this.broadcastScores();
     this.broadcastMeteorStatus();
   }
@@ -2364,6 +2454,17 @@ export class Room {
       hordes: M.hordes,
       rocks: this.meteors.vivos + this.meteors.pending.length,
       tank: this.meteors.tankAtivo,
+      /* A VIDA DO COLOSSO, para a barra do HUD.
+       *
+       * As outras rochas não têm barra e não devem ter: elas pedem de uma a
+       * três flechas e o escurecimento do material já conta essa história. O
+       * colosso pede de sete a dezoito, dura mais de um minuto e é o ato do
+       * modo — sem um número, atirar nele é atirar num muro sem saber se está
+       * adiantando. É a mesma exceção que o chefão zumbi já abre, e reusa a
+       * mesma barra (ver `Hud.setBossHp`). */
+      tankHp: this.meteors.tank
+        ? Math.max(0, 1 - this.meteors.tank.hits / this.meteors.tank.maxHits)
+        : null,
       /* O INSTANTE ABSOLUTO, não "faltam 6 segundos".
        *
        * É o que faz a contagem ser a mesma em todas as telas e o retardatário
@@ -2504,6 +2605,31 @@ export class Room {
       });
     }
 
+    /* A BOLA DO MAGO que venceu o prazo de voo.
+     *
+     * Mesma regra da pedra de catapulta, logo abaixo, e pelo mesmo motivo: o
+     * dano é do PONTO onde ela cai, não da pessoa em quem foi mirada. São cinco
+     * segundos de voo desde o mirante; quem viu a bola sair e saiu do lugar
+     * escapa, e é isso que faz a torre cobrar atenção em vez de cobrar sorte.
+     *
+     * O raio é pequeno (2,2 m) porque a bola é evitável: um raio grande
+     * transformaria "eu me mexi" em "eu me mexi e morri assim mesmo". */
+    for (const raio of this.siege.colherRaios(agora)) {
+      this.broadcastAll({
+        t: S2C.SIEGE_SHOT,
+        kind: "boltImpact",
+        to: [round(raio.x), round(raio.y), round(raio.z)],
+      });
+      for (const p of this.allCharacters()) {
+        if (!p.alive) continue;
+        const pos = p.state ? { x: p.state.p[0], y: p.state.p[1], z: p.state.p[2] } : p.position;
+        if (!pos) continue;
+        if (Math.hypot(pos.x - raio.x, pos.z - raio.z) > S.mageBlast) continue;
+        if (Math.abs(pos.y - raio.y) > 3) continue;
+        this.registerSiegeAttack(p.id, "shaman");
+      }
+    }
+
     /* Pedra de catapulta que venceu o prazo de voo. O dano é aplicado AQUI e
        não no disparo: quem sai do lugar durante os 2,4 s de voo escapa, que é
        a diferença entre uma ameaça de área e um tiro teleguiado. */
@@ -2517,6 +2643,20 @@ export class Room {
       }
     }
 
+    /* OS MORCEGOS.
+     *
+     * Andam no mesmo relógio de 10 Hz do resto do cerco, e DEPOIS dele: o
+     * mergulho persegue a pose de quem está no muro, e usar a do quadro
+     * anterior deixaria o bicho um passo atrás de quem está andando.
+     *
+     * `this.siege.t` e não o relógio da sala: o bando entra aos 150 s de
+     * PARTIDA, junto com o resto da escalada de ameaças, e uma sala aberta há
+     * duas horas não pode fazer o primeiro morcego chegar antes do primeiro
+     * soldado. */
+    const rb = this.morcegos.update(dt, jogadores, this.siege.t);
+    for (const m of rb.mortes) this.registerSiegeAttack(m.playerId, "bat");
+    this.broadcastAll({ t: S2C.BATS, time: agora, b: this.morcegos.view() });
+
     this.checarQuedaDoMuro();
 
     if (r.over) {
@@ -2529,7 +2669,23 @@ export class Room {
 
     // O estado vai a 2 Hz: ele é HUD, e HUD não precisa de 10 Hz.
     this._siegeStatusTick = (this._siegeStatusTick ?? 0) + 1;
-    if (this._siegeStatusTick % 5 === 0) this.broadcastSiegeStatus();
+    if (this._siegeStatusTick % 5 === 0) {
+      this.broadcastSiegeStatus();
+      /* OS ENGENHOS TAMBÉM, e não só quando mudam de estado.
+       *
+       * `broadcastTrebuchets` saía em três momentos por partida por engenho:
+       * ao atirar, ao ficar pronto e ao entrar no modo. Bastava enquanto a
+       * recarga era de catorze segundos e o HUD só dizia "carregado" ou
+       * "içando" — dois estados, dois avisos.
+       *
+       * Com dois minutos de recarga e uma BARRA no próprio engenho (ver
+       * `Trebuchet.atualizarBarra`), o que se transmite deixou de ser um estado
+       * e passou a ser um progresso: sem amostras no meio, a barra ficaria
+       * parada em zero por dois minutos e saltaria para cheia. A 2 Hz ela é
+       * exata a meio segundo, e são dois engenhos — o pacote inteiro cabe numa
+       * linha de texto. */
+      this.broadcastTrebuchets();
+    }
   }
 
   /**
@@ -2591,9 +2747,12 @@ export class Room {
           : causa === "catapult"
             ? "Catapulta"
             : causa === "shaman"
-              ? "Xamã"
-              : "Escalador",
-      killerColor: causa === "fall" ? "#6a6a72" : "#8a5a3a",
+              ? "Mago"
+              : causa === "bat"
+                ? "Morcego gigante"
+                : "Escalador",
+      killerColor:
+        causa === "fall" ? "#6a6a72" : causa === "bat" ? "#4b3a63" : "#8a5a3a",
       distance: null,
       c: null,
       v: null,
@@ -2608,8 +2767,29 @@ export class Room {
      * cerco se perde pelo portão, e transformar a derrota coletiva numa
      * eliminação individual seria reescrever o modo zumbi, que já existe. */
     setTimeout(() => {
-      if (!this.players.has(vitima.conn)) return;
+      /* O BOT TAMBÉM VOLTA — e volta DIRETO PARA O MURO.
+       *
+       * Esta checagem era `this.players.has(vitima.conn)`, e o bot não tem
+       * `conn`: `players.has(null)` é falso, então todo arqueiro de CPU morto
+       * por escalador, xamã ou catapulta ficava morto para sempre. A guarnição
+       * ia derretendo ao longo da partida sem nada explicando por quê, e por
+       * fim o jogador defendia sozinho o modo que o banco de provas diz ser
+       * invencível sozinho (`bench-cerco.js`: 0 % com um defensor).
+       *
+       * Ele não passa pela menagem porque não sabe subir escada: o arqueiro de
+       * muralha é `postado` (ver o perfil em `tickBots`) e ficaria de pé no
+       * pátio até o fim. Um posto livre do adarve, sorteado, é o renascimento
+       * certo — e é o mesmo caminho de quem entra no meio do cerco. */
+      const naSala = vitima.isBot
+        ? !!this.bots.byId(vitima.id)
+        : this.players.has(vitima.conn);
+      if (!naSala) return;
       if (!isSiegeMode(this.mode) || this.siege.over) return;
+      if (vitima.isBot) {
+        vitima.zDownUntil = 0;
+        this.postoLivreNoAdarve(vitima);
+        return;
+      }
       const K = CASTLE.respawn;
       vitima.zDownUntil = 0;
       vitima.alive = true;
@@ -2623,7 +2803,15 @@ export class Room {
         y: round(this.terrain.heightAt(K.x, K.z)),
         drop: 0,
         invulnUntil: vitima.invulnUntil,
-        yaw: 0,
+        /* DE FRENTE PARA A ESCADA que ele precisa subir.
+         *
+         * Nasce-se encostado na porta da menagem, e `yaw: 0` olha para −Z — ou
+         * seja, para a parede da própria menagem, a dois metros do nariz. As
+         * escadas ficam atrás, e a queixa que veio foi literalmente "não tem
+         * escada para subir": elas existem, em x = ±14, e ninguém as via porque
+         * o renascimento apontava para o lado oposto. Mirando o pé da escada
+         * mais próxima, ela é a primeira coisa no quadro. */
+        yaw: faceYaw(K, { x: Math.sign(K.x || 1) * CASTLE.stairX, z: CASTLE.stairZBottom }),
       });
     }, S.respawnDelay * 1000).unref?.();
   }
@@ -2776,11 +2964,17 @@ export class Room {
     return CONFIG.special.hitsToCharge;
   }
 
-  /** Um acerto encheu um ponto da barra. A SALA é quem conta. */
-  addKameCharge(player, fonte) {
+  /**
+   * Um acerto encheu um ponto da barra. A SALA é quem conta.
+   *
+   * @param {number} [vezes] quantos acertos este evento vale. Só o feixe passa
+   *   mais de um: ele consome de uma vez a vida que seriam várias flechas, e
+   *   cobrar por uma só encolheria a carga que o mesmo estrago dava antes.
+   */
+  addKameCharge(player, fonte, vezes = 1) {
     const S = CONFIG.special;
     if (!S.modes.includes(this.mode)) return;
-    const passo = S.chargeSources[fonte] ?? 0;
+    const passo = (S.chargeSources[fonte] ?? 0) * Math.max(0, vezes);
     if (!passo) return;
     const atual = this.kameCharge.get(player.id) ?? 0;
     if (atual >= this.kameMax()) return;
@@ -3519,6 +3713,9 @@ export class Room {
          sessão seria pagar complexidade sem comprar nada. */
       siege: isSiegeMode(this.mode) ? this.siege.view() : [],
       siegeStatus: isSiegeMode(this.mode) ? this.siege.status() : null,
+      // Quem entra no meio já vê os morcegos onde eles estão, e não só no
+      // primeiro pacote de 10 Hz — que é o mesmo cuidado do resto do cerco.
+      bats: isSiegeMode(this.mode) ? this.morcegos.view() : [],
       trebuchets: isSiegeMode(this.mode)
         ? this.trebuchets.map((t) => ({
             i: t.i,
@@ -3833,6 +4030,45 @@ export class Room {
         else this.repairing.delete(player.id);
         break;
 
+      case C2S.BAT_HIT: {
+        /* "Acertei o morcego." Quem atira é a autoridade sobre o próprio
+           acerto — o mesmo contrato da flecha em todo o resto do jogo —, e a
+           sala decide o que é compartilhado: se ele caiu e quanto vale. Uma
+           flecha basta: é um alvo grande, mas está no ar, em movimento, e o
+           tiro é feito com a fila crescendo no portão. */
+        if (!isSiegeMode(this.mode) || this.siege.over) break;
+        const morcego = this.morcegos.hit(Number(msg.id));
+        if (!morcego) break;
+        const pontos = CONFIG.modes.siege.bats.points;
+        player.score.points += pontos;
+        player.score.kills++;
+        this.broadcastAll({
+          t: S2C.BAT_DEATH,
+          id: morcego.id,
+          killer: player.id,
+          killerName: player.name,
+          killerColor: player.color,
+          points: pontos,
+          p: [round(morcego.x), round(morcego.y), round(morcego.z)],
+        });
+        this.broadcastScores();
+        break;
+      }
+
+      case C2S.SIEGE_SKIP: {
+        /* ATALHO DE TESTE: adianta o relógio do cerco até um escalão.
+           Vale para a SALA — o cerco é um só — e por isso o aviso sai para
+           todo mundo: um companheiro que visse a horda mudar de composição
+           sozinha acharia que quebrou alguma coisa. */
+        if (!isSiegeMode(this.mode) || this.siege.over) break;
+        const antes = Math.round(this.siege.t);
+        const depois = Math.round(this.siege.pularEscalao(msg.to ?? null));
+        if (depois === antes) break;
+        this.broadcastSiegeStatus();
+        this.log(`cerco adiantado: ${antes}s → ${depois}s`);
+        break;
+      }
+
       case C2S.KNIFE_HIT:
         this.registerKnifeHit(player, msg);
         break;
@@ -4086,18 +4322,26 @@ export class Room {
       .filter((p) => p !== player && p.state)
       .map((p) => ({ x: p.state.p[0], z: p.state.p[2] }));
 
-    let melhor = null;
-    let melhorFolga = -Infinity;
-    for (const posto of walkwayPosts()) {
+    /* SORTEADO ENTRE OS VAZIOS, não o mais vazio.
+     *
+     * O critério de folga sozinho é DETERMINÍSTICO: com um bot morrendo e
+     * voltando, ele recai sempre no mesmo posto — e num muro de 34 m com oito
+     * postos, "sempre o mesmo ponto" é o oposto do que uma guarnição parece.
+     * Sorteando entre os que estão razoavelmente livres (75 % da melhor folga
+     * ou mais), a distribuição continua evitando aglomeração e para de ser
+     * previsível. */
+    const postos = walkwayPosts().map((posto) => {
       let folga = Infinity;
       for (const o of outros) {
         folga = Math.min(folga, Math.hypot(o.x - posto.x, o.z - posto.z));
       }
-      if (folga > melhorFolga) {
-        melhorFolga = folga;
-        melhor = posto;
-      }
-    }
+      return { posto, folga };
+    });
+    const melhorFolga = Math.max(...postos.map((p) => p.folga));
+    const bons = postos.filter((p) => p.folga >= melhorFolga * 0.75);
+    const melhor = (bons.length ? bons : postos)[
+      Math.floor(Math.random() * (bons.length || postos.length))
+    ].posto;
 
     const gate = gateInfo();
     const invulnUntil = this.now() + S.invulnerability * 1000;

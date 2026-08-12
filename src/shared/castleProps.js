@@ -101,6 +101,15 @@ export const WALL_TOP = GROUND_Y + 8;
  */
 export const MERLON_TOP = WALL_TOP + 0.95;
 
+/**
+ * Base dos bastiões: a planície, não o topo do esporão.
+ *
+ * Eles avançam 5,5 m além da face do muro, e o esporão termina em z = 9 — a
+ * ponta deles fica sobre o chão de baixo. Ver o bloco das torres em
+ * `castleBlockers()`.
+ */
+export const TOWER_BASE_Y = 0;
+
 export const CASTLE = {
   /* ------------------------------------------------------- muro frontal -- */
   /** Meia-largura: 34 m de vão, o campo de tiro inteiro do modo. */
@@ -128,10 +137,28 @@ export const CASTLE = {
      onde o jogador andava para fora do castelo e caía oito metros. Era o
      "atravessando a parede nas extremidades laterais". O bastião agora vai até
      z = −2,5 e encosta no flanco. */
+  /* OS BASTIÕES AVANÇAM PARA A FLORESTA — 5,5 m além da face do muro.
+   *
+   * Eles iam de z = 3,4 a 10,6, ou seja, mal passavam da face externa (z = 8).
+   * Do alto do muro, o único ângulo possível para o aglomerado do portão era de
+   * cima para baixo e por cima do próprio bordo: a fila ficava a 54° abaixo da
+   * horizontal e, em terceira pessoa, o corpo do arqueiro tapava o que sobrava.
+   * Era o relato — "se o personagem está em cima do muro, é muito difícil de
+   * ver quem está no portão".
+   *
+   * Com o bastião indo até z = 13,5, quem anda até a ponta dele fica AO LADO da
+   * fila e não acima dela: o tiro passa a ser rasante, ao longo da face do
+   * muro, que é a linha em que se enxerga. E é do mesmo lugar que se vê o
+   * escalador subindo a pedra — de frente, contra o céu, em vez de olhando por
+   * cima do próprio pé.
+   *
+   * A largura em x NÃO mudou de propósito: a face interna do bastião fica em
+   * x = 14,4 e a rampa tem 13,3 m de meia-largura ali, então a horda continua
+   * passando sem esbarrar em alvenaria nova. */
   towerHalf: 3.6,
-  towerHalfZ: 6.5,
+  towerHalfZ: 8.0,
   towerX: 18,
-  towerZ: 4.0,
+  towerZ: 5.5,
 
   /* ---------------------------------------------------- muros laterais -- */
   /** Centro dos muros de flanco. O pátio vive entre eles. */
@@ -325,25 +352,60 @@ export function walkwayPosts() {
 }
 
 /**
- * Os três trabucos: um em cada bastião e um sobre o portão.
+ * Os DOIS trabucos, um em cada bastião.
  *
- * Três engenhos para até quatro jogadores — nunca há trabuco para todo mundo,
- * e é isso que faz "quem vai para o trabuco" ser decisão em vez de estado.
- * Ver §5.1 do plano.
+ * Eram três — os dois dos cantos e um sobre o portão. O do meio saiu, e não por
+ * economia: ele ocupava justamente a faixa central do adarve, que é de onde se
+ * atira no aglomerado do portão. O arqueiro que nascia nos postos de ±3,5 m
+ * jogava a partida inteira com uma armação de quatro metros e meio ao lado do
+ * quadro, e a câmera de terceira pessoa passava por dentro dela toda vez que a
+ * mira se aproximava do eixo.
+ *
+ * Dois engenhos para até quatro jogadores continua cumprindo o que o §5.1 do
+ * plano pede — nunca há trabuco para todo mundo, e é isso que faz "quem vai
+ * para o trabuco" ser decisão em vez de estado. Com dois a escassez até
+ * aperta, que é a direção certa.
+ *
+ * OS ids SÃO ÍNDICES: `Room.trebuchets` e `Siege.engenhos` são arrays indexados
+ * por eles (`this.trebuchets[msg.i]`). Tirar o do meio e deixar 0 e 2 daria um
+ * buraco no array e um `undefined` na primeira pedra do canto direito.
  */
 export function trebuchetPosts() {
-  /* O ENGENHO OCUPA z ∈ [−2,2, +2,2] em torno do posto (ver `G` em
-     `entities/trebuchet.js`), e ele tem de caber no piso em que está.
-     O adarve vai de z = 2,6 (face interna) a 8,0 (face externa): com o posto
-     em `WALL_ZC − 1,4` = 3,9 a armação passava 0,9 m para dentro do pátio e o
-     sarilho ficava pendurado sobre o vazio.
-     Encostado na face INTERNA, ele fecha em [2,8, 7,2] e deixa livres os dois
-     metros do bordo e a hourd — que é justamente a faixa de onde se atira. */
-  const zAdarve = CASTLE.wallZOut - CASTLE.wallThick + 2.4;
   return [
     { id: 0, x: -CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4, yaw: 0 },
-    { id: 1, x: 0, y: WALL_TOP, z: zAdarve, yaw: 0 },
-    { id: 2, x: CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4, yaw: 0 },
+    { id: 1, x: CASTLE.towerX, y: WALL_TOP, z: CASTLE.towerZ + 4, yaw: 0 },
+  ];
+}
+
+/**
+ * AS DUAS TORRES DE MADEIRA, no pé da rampa.
+ *
+ * Elas são o contrapeso do muro, e é isso que as justifica.
+ *
+ * Até aqui, tudo o que o modo tinha para ameaçar quem está no adarve vinha DE
+ * BAIXO e DE PERTO: o escalador sobe a pedra, a catapulta acerta o piso. O
+ * jogador aprendia depressa que a metade distante da rampa é um lugar seguro
+ * para olhar — e um campo de tiro em que o fundo nunca revida é um campo de
+ * tiro sem decisão nenhuma.
+ *
+ * Com um mago em cada torre, a linha de árvores passa a devolver fogo. O que
+ * elas cobram não é dano: é ATENÇÃO. Enquanto elas estiverem de pé, olhar só
+ * para o portão custa a vida, e olhar só para elas entrega o portão.
+ *
+ * Ficam nos OMBROS do corredor, fora da faixa por onde a horda anda (e por onde
+ * a pedra do trabuco cai): a mesma regra dos destroços em `rampDebris`.
+ *
+ * `platY` é a cota do piso do mirante, e é dela que o mago atira. Ela é
+ * absoluta e não relativa ao chão porque o chão ali é a planície (~0) e a
+ * altura importa em relação ao ADARVE (22 m): a 12 m eles ficam bem abaixo de
+ * quem defende, que é a leitura certa — quem está no muro continua tendo a
+ * vantagem de altura, só deixou de tê-la sozinho.
+ */
+export function mageTowers() {
+  const h = 12; // m — piso do mirante
+  return [
+    { id: 0, x: -21, z: 94, platY: h },
+    { id: 1, x: 21, z: 100, platY: h },
   ];
 }
 
@@ -624,7 +686,11 @@ export function castleHoard() {
   return {
     y: WALL_TOP - C.hoardThick / 2,
     z: C.wallZOut + C.hoardOut / 2,
-    hx: C.wallHalfX,
+    /* ATÉ A FACE DO BASTIÃO, pelo mesmo motivo que o pano do muro para ali:
+       além disso ela cobriria a mesma faixa que o bastião, com o topo na mesma
+       cota, e duas faces de piso coplanares fazem o adarve piscar. Quem anda
+       para lá continua tendo chão — o do bastião, que vai mais fundo em z. */
+    hx: C.towerX - C.towerHalf,
     hy: C.hoardThick / 2,
     hz: C.hoardOut / 2,
   };
@@ -721,8 +787,8 @@ export function gateBlocks(x, z, margin = 0.35) {
 export function castleBlockers() {
   const C = CASTLE;
   const out = [];
-  const box = (x, y, z, hx, hy, hz, name) =>
-    out.push({ box: true, x, y, z, hx, hy, hz, name });
+  const box = (x, y, z, hx, hy, hz, name, mat = null) =>
+    out.push({ box: true, x, y, z, hx, hy, hz, name, mat });
 
   const hz = C.wallThick / 2;
   const wallH = (WALL_TOP - GROUND_Y) / 2;
@@ -730,10 +796,24 @@ export function castleBlockers() {
 
   /* ----------------------------------------------------- muro frontal -- */
   /* Em três pedaços: os dois panos laterais e o lintel sobre o portão. O vão
-     fica vazio, e é isso que permite atirar por ele quando o portão racha. */
+     fica vazio, e é isso que permite atirar por ele quando o portão racha.
+
+     O PANO PARA NA FACE DO BASTIÃO, e não em `wallHalfX`.
+
+     Os bastiões vão de x = 14,4 a 21,6 e o pano ia até 17: os dois se
+     sobrepunham numa faixa de 2,6 m — e as duas caixas terminam no MESMO topo,
+     `WALL_TOP`. Duas faces de piso coplanares na mesma profundidade são
+     z-fighting, e o que se via era um retângulo do adarve piscando bem no
+     encontro do muro com o bastião.
+
+     Encurtar não abre buraco nem no piso nem na barreira de flechas: a faixa
+     que o pano deixa de cobrir é exatamente a que o bastião já cobre, e o
+     bastião é mais fundo em z (de −2,5 a 10,5 contra 2,6 a 8,0). O vão do muro
+     continua tendo 34 m — quem o desenha é `wallHalfX`, que não mudou. */
+  const panoAte = C.towerX - C.towerHalf;
   for (const s of [-1, 1]) {
     const x0 = s * C.gateHalfX;
-    const x1 = s * C.wallHalfX;
+    const x1 = s * panoAte;
     box((x0 + x1) / 2, wallCy, WALL_ZC, Math.abs(x1 - x0) / 2, wallH, hz, "muro");
   }
   {
@@ -741,9 +821,25 @@ export function castleBlockers() {
     box(0, C.gateTopY + h, WALL_ZC, C.gateHalfX, h, hz, "lintel");
   }
 
-  /* --------------------------------------------------------- torres -- */
-  for (const sx of [-C.towerX, C.towerX]) {
-    box(sx, wallCy, C.towerZ, C.towerHalf, wallH, C.towerHalfZ, "torre");
+  /* --------------------------------------------------------- torres --
+     ELES DESCEM ATÉ A PLANÍCIE, e não só do pátio para cima.
+
+     A caixa ia de `GROUND_Y` (14 m) ao adarve, o que bastava enquanto o
+     bastião mal ultrapassava a face do muro: ele se apoiava no topo do
+     esporão. Avançado até z = 13,5 (ver `CASTLE.towerZ`), a ponta dele fica
+     sobre a PLANÍCIE — o esporão termina em z = 9 e o chão ali está a 0,1 m.
+     Uma caixa começando aos 14 m seria oito metros de pedra pairando no ar a
+     catorze metros do chão.
+
+     Descendo até a base, ele vira o que sempre foi na silhueta de um castelo
+     de esporão: uma torre de canto que nasce lá embaixo e sobe até o adarve.
+     Não muda passo de horda nenhum — `insideFootprint` já recusava esta
+     planta em qualquer cota. */
+  {
+    const alto = (WALL_TOP - TOWER_BASE_Y) / 2;
+    for (const sx of [-C.towerX, C.towerX]) {
+      box(sx, TOWER_BASE_Y + alto, C.towerZ, C.towerHalf, alto, C.towerHalfZ, "torre");
+    }
   }
 
   /* ------------------------------------------------ casa do portão --
@@ -759,9 +855,14 @@ export function castleBlockers() {
   {
     const hz = C.gateTowerHalfZ;
     const zc = C.wallZOut - C.wallThick + hz;
-    const alt = C.gateTowerRise / 2;
+    /* AFUNDADAS 6 cm no adarve. A face de baixo da torre e a face de cima do
+       muro na mesma cota é o empate de profundidade que faz o piso PISCAR em
+       manchas — ver `Lote.assenta` em `entities/castle.js`, que trata da mesma
+       coisa para a decoração. Aqui a conta é à mão porque esta lista é
+       compartilhada com o servidor e não conhece o `Lote`. */
+    const alt = (C.gateTowerRise + 0.06) / 2;
     for (const sx of [-C.gateTowerX, C.gateTowerX]) {
-      box(sx, WALL_TOP + alt, zc, C.gateTowerHalfX, alt, hz, "casa-do-portão");
+      box(sx, WALL_TOP + alt - 0.06, zc, C.gateTowerHalfX, alt, hz, "casa-do-portão");
     }
   }
 
@@ -786,6 +887,22 @@ export function castleBlockers() {
   {
     const K = C.keep;
     box(K.x, GROUND_Y + K.height / 2, K.z, K.half, K.height / 2, K.half, "menagem");
+  }
+
+  /* ------------------------------------------- torres de madeira --
+     O fuste e o mirante de cada torre de mago. Entram nesta lista — e não na
+     decoração — porque as duas coisas que elas fazem são compartilhadas: a
+     flecha que sobe até o mirante tem de parar na madeira quando erra, e o
+     próprio mago precisa que a visada dele nasça de cima do obstáculo.
+
+     `mat` é a única peça deste arquivo que fala de aparência, e vale a
+     exceção: sem ele, `castle.js` pintaria as duas de pedra, e uma torre de
+     pedra improvisada no pé da rampa contradiz o resto do cenário — o cerco
+     monta madeira, é o que a hourd já diz. */
+  for (const t of mageTowers()) {
+    const alt = t.platY / 2;
+    box(t.x, alt, t.z, 1.1, alt, 1.1, "torre-mago", "madeira");
+    box(t.x, t.platY + 0.16, t.z, 1.9, 0.16, 1.9, "mirante", "madeira");
   }
 
   /* ------------------------------------------------------- bosque --

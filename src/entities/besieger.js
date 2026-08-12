@@ -94,6 +94,9 @@ export const FICHAS = {
      cabeça afundada entre eles e uma clava. A 3,4× ele é a única coisa em
      campo que ocupa espaço. */
   ogre: {
+    /* BARRA DE VIDA. Só as espécies que pedem mais de dez flechas a têm — ver
+       `BesiegerMesh.setHealth` para o critério. */
+    barra: true,
     h: 1.9,
     escala: 3.4,
     pele: "#6b6048",
@@ -104,7 +107,16 @@ export const FICHAS = {
   },
   /* A CATAPULTA não é gente. Quadro, viga, contrapeso e duas rodas — e ela não
      anda, o que a torna a única silhueta PARADA da rampa. */
-  catapult: { h: 2.6, pele: "#4a3627", pano: "#3a2a1c", metal: "#3a3a3e", olho: 0xff6a3a },
+  catapult: {
+    // Catorze flechas, e ela fica parada a 110 m: a barra é o que diz, do
+    // muro, se aquela série de tiros longos está adiantando alguma coisa.
+    barra: true,
+    h: 2.6,
+    pele: "#4a3627",
+    pano: "#3a2a1c",
+    metal: "#3a3a3e",
+    olho: 0xff6a3a,
+  },
 };
 
 /* Materiais de MÓDULO: nenhum sitiante é tingido individualmente, então
@@ -682,7 +694,73 @@ export class BesiegerMesh {
     this.group.visible = v;
   }
 
-  update(dt) {
+  /**
+   * A VIDA, e quem ganha barra por causa dela.
+   *
+   * Só as espécies GRANDES — o ogro e a catapulta —, e o critério é o número de
+   * flechas: elas pedem catorze e dezesseis, contra uma a três de todo o resto.
+   * Abaixo disso a barra não responde pergunta nenhuma, porque não há pergunta:
+   * o soldado morre no segundo tiro e ninguém precisa de um medidor para saber
+   * disso. No ogro a pergunta existe o tempo todo — "dá tempo de derrubar antes
+   * que ele chegue?" — e é ela que decide se vale continuar gastando flecha
+   * nele ou voltar para a fila do portão.
+   *
+   * A barra nasce SOB DEMANDA, no primeiro dano. Um ogro intacto não tem barra:
+   * cheia, ela só ocuparia o quadro dizendo o que já se sabe.
+   */
+  setHealth(hp) {
+    this.hp = hp;
+    if (!this.ficha.barra) return;
+    if (hp >= 0.999) {
+      if (this.barra) this.barra.visible = false;
+      return;
+    }
+    if (!this.barra) this.buildBarra();
+    this.barra.visible = !this.dead;
+    this.barraFill.scale.x = Math.max(0.001, hp);
+    // Verde → âmbar → vermelho. A cor é a leitura periférica: quem está mirando
+    // outra coisa vê a barra ficar vermelha sem precisar medir o comprimento.
+    this.barraFill.material.color.setHSL(0.33 * hp, 0.82, 0.46);
+  }
+
+  buildBarra() {
+    const larg = 1.5 * this.escala * 0.55;
+    const alt = 0.13 * this.escala * 0.55;
+    const G = new THREE.Group();
+    G.position.set(0, this.altura + 0.55 * this.escala * 0.55, 0);
+
+    const fundo = new THREE.Mesh(
+      new THREE.PlaneGeometry(larg, alt),
+      new THREE.MeshBasicMaterial({
+        color: 0x0a0c12,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+      }),
+    );
+    fundo.renderOrder = 8;
+
+    // Cresce da esquerda: o plano é deslocado meia unidade para a escala em x
+    // não abrir para os dois lados a partir do centro.
+    const geo = new THREE.PlaneGeometry(larg * 0.96, alt * 0.7);
+    geo.translate((larg * 0.96) / 2, 0, 0);
+    this.barraFill = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({ color: 0x66cc44, transparent: true, depthWrite: false }),
+    );
+    this.barraFill.position.set(-(larg * 0.96) / 2, 0, 0.01);
+    this.barraFill.renderOrder = 9;
+
+    G.add(fundo, this.barraFill);
+    this.barra = G;
+    this.group.add(G);
+  }
+
+  update(dt, camera = null) {
+    /* A barra encara a câmera. Ela é um billboard de duas malhas planas — o
+       billboard mais barato que existe, sem textura e sem elemento de DOM. */
+    if (this.barra?.visible && camera) this.barra.quaternion.copy(camera.quaternion);
+
     /* Interpolação para a pose de 10 Hz. `damp` e não `lerp` porque o passo do
        quadro varia: com `lerp` o bicho anda mais rápido em quem tem 144 Hz. */
     this.position.x = damp(this.position.x, this.alvo.x, 14, dt);

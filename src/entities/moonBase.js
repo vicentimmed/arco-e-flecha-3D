@@ -291,8 +291,20 @@ export class MoonBase {
     lote.add("aviso", new THREE.TorusGeometry(RP, 0.1, 5, 24), trs(x, yPiso + 0.16, z, Math.PI / 2));
     lote.add("aviso", new THREE.TorusGeometry(RM, 0.09, 5, 22), trs(x, yMeio + 0.14, z, Math.PI / 2));
 
-    // Cone de nariz, acima da plataforma.
-    lote.add("casco", new THREE.ConeGeometry(RAIO * 0.66, 5.5, 18), trs(x, yPiso + 3.1, z));
+    /* Cone de nariz, acima da plataforma — CURTO E FINO.
+     *
+     * Ele era uma ogiva de 5,5 m com 1,72 m de raio na base, plantada no meio
+     * de um piso de 3,6 m de raio. Visto de fora é o desenho certo de um
+     * foguete; visto de CIMA DELE, que é o único lugar de onde alguém joga,
+     * era uma parede de metal ocupando o miolo do quadro em qualquer direção
+     * que a câmera apontasse — e a plataforma existe justamente para dar linha
+     * de tiro de 360°.
+     *
+     * A 1,8 m de altura por 1,04 de raio ela ainda coroa o casco (o corpo
+     * afina para 1,72 m ali, então o cone continua fechando a silhueta), e
+     * deixa o horizonte livre em volta: o que sobra na frente do arqueiro é um
+     * toco na altura do ombro, não um obelisco. */
+    lote.add("casco", new THREE.ConeGeometry(RAIO * 0.4, 1.8, 18), trs(x, yPiso + 1.05, z));
 
     /* ---------------------------------------------- baliza de aviação ---
        Luz vermelha piscando no topo, como em qualquer estrutura alta.
@@ -302,7 +314,9 @@ export class MoonBase {
        piscar dá ao horizonte um relógio. O mesh emissivo sozinho apareceria,
        mas não pintaria o cone de nariz de vermelho a cada pulso, que é o que
        vende a luz como luz. */
-    const yBaliza = yPiso + 6.2;
+    /* Ela acompanhou a ogiva para baixo: pendurada nos 6,2 m antigos ficaria
+       boiando quatro metros acima da ponta que ela existe para coroar. */
+    const yBaliza = yPiso + 2.3;
     this.beacon = new THREE.Mesh(
       new THREE.SphereGeometry(0.26, 10, 8),
       new THREE.MeshBasicMaterial({ color: 0xff2a18, fog: false }),

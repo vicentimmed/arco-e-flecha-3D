@@ -118,11 +118,16 @@ export class FallingMeteor {
    * "quando", e somar "onde" e "com quanta força" seria um cálculo que não cabe
    * nos doze segundos de prazo.
    *
+   * @param {number} [dano] em flechas. Só o especial passa outra coisa que
+   *   não 1 — ver `Room.registerMeteorHit`.
    * @returns {{morreu:boolean, left:number}}
    */
-  atingir() {
+  atingir(dano = 1) {
     if (this.dead) return { morreu: false, left: 0 };
-    this.hits++;
+    // Preso no total: um golpe que vale mais do que a rocha tinha não pode
+    // deixar `hits` acima de `maxHits` — é dele que sai o `hp` da barra e o
+    // `gasto` que a sala converte em carga do especial.
+    this.hits = Math.min(this.maxHits, this.hits + dano);
     const left = Math.max(0, this.maxHits - this.hits);
     if (left <= 0) {
       this.dead = true;
@@ -196,6 +201,11 @@ export class MeteorRain {
 
   get tankAtivo() {
     return this.meteors.some((m) => m.kind === "tank" && !m.dead);
+  }
+
+  /** O colosso em campo, se houver. É dele que sai a barra de vida do HUD. */
+  get tank() {
+    return this.meteors.find((m) => m.kind === "tank" && !m.dead) ?? null;
   }
 
   /**
@@ -505,13 +515,16 @@ export class MeteorRain {
   /**
    * Alguém acertou uma flecha.
    *
-   * @returns {{meteor, morreu, left}|null}
+   * @param {number} [dano] em flechas — o especial vale mais de uma
+   * @returns {{meteor, morreu, left, gasto}|null} `gasto` é o quanto de vida
+   *   este acerto realmente consumiu, que não é o dano quando ele sobra
    */
-  hit(id) {
+  hit(id, dano = 1) {
     const m = this.byId(id);
     if (!m || m.dead) return null;
-    const r = m.atingir();
-    return { meteor: m, morreu: r.morreu, left: r.left };
+    const antes = m.hits;
+    const r = m.atingir(dano);
+    return { meteor: m, morreu: r.morreu, left: r.left, gasto: m.hits - antes };
   }
 
   /** O feixe do especial passou por aqui. @returns {FallingMeteor[]} */

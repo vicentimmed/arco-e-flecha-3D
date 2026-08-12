@@ -57,6 +57,14 @@ const SKY_FRAG = /* glsl */ `
   // retângulo inteiro como se o círculo tocasse as quatro bordas, e o disco
   // sai OVAL: mais alto que largo, na mesma proporção da foto.
   uniform float earthAspect;
+  /* O FIM DA TERRA, em dois números. (Sem crases aqui: isto está dentro de um
+     template literal, e uma crase fecharia a string.)
+     earthGlow é o clarão aditivo que a engole; earthFade é o que sobra dela.
+     Os dois são animados juntos por Renderer.blastEarth, e enquanto ninguém
+     acerta o planeta eles valem 0 e 1 — ou seja, o disco continua exatamente
+     o que era. */
+  uniform float earthGlow;
+  uniform float earthFade;
 
   varying vec3 vDir;
 
@@ -187,11 +195,19 @@ const SKY_FRAG = /* glsl */ `
           // Nunca vai a zero: o lado escuro da Terra tem cidades e luar.
           float ilum = 0.10 + 1.35 * pow(luz, 0.8);
 
-          vazio = mix(vazio, tex.rgb * ilum, tex.a);
+          /* O planeta some por ALFA e é engolido por um clarão branco-quente.
+             Fazer a bola inteira brilhar (e não só somar luz por cima) é o que
+             a lê como "aquilo ali detonou" em vez de "passou uma luz na
+             frente": o lado escuro acende junto, e um planeta cujo lado
+             noturno acende só pode estar em chamas. */
+          float a = tex.a * earthFade;
+          vec3 cor = tex.rgb * ilum + vec3(1.0, 0.86, 0.62) * earthGlow;
+          vazio = mix(vazio, cor, a);
+          vazio += vec3(1.0, 0.78, 0.46) * a * earthGlow * 1.6;
 
           // Fio de atmosfera no limbo iluminado — o azul que envolve a borda.
           float r = sqrt(d2);
-          vazio += vec3(0.30, 0.55, 0.98) * tex.a *
+          vazio += vec3(0.30, 0.55, 0.98) * a *
                    smoothstep(0.86, 0.99, r) * luz * 0.55;
         }
       }
@@ -209,6 +225,18 @@ const SKY_FRAG = /* glsl */ `
 /* Tintas de luz e névoa nas duas pontas do dia. Ficam aqui, como constantes de
    módulo, porque `setNight` roda a cada frame durante a transição e alocar seis
    `THREE.Color` por quadro para interpolar entre valores fixos é desperdício. */
+/**
+ * Meia-largura angular do disco da Terra.
+ *
+ * Constante de módulo porque agora DOIS lugares precisam dela: os uniformes do
+ * céu e o teste de "o feixe está apontando para o planeta?" (`aimingAtEarth`).
+ * O número não mudou — ver o comentário no bloco de uniformes.
+ */
+const EARTH_SIZE = 0.11;
+
+/** Segundos do fim da Terra: clarão, engolir, apagar. */
+const EARTH_BLAST_TIME = 3.2;
+
 const SKY_TINT_DAY = new THREE.Color(0xa8d3ff);
 const SKY_TINT_NIGHT = new THREE.Color(0x3a4a72);
 const GROUND_TINT_DAY = new THREE.Color(0x5d6142);
@@ -505,10 +533,13 @@ export class Renderer {
            jogador não a reconhece. É a mesma licença que toda foto de pôster
            lunar toma, e pela mesma razão — subiu de 0,085 porque mesmo esse
            exagero ainda lia como pequeno demais no céu cheio. */
-        earthSize: { value: 0.11 },
-        earthCos: { value: Math.cos(Math.atan(0.11) * 1.5) },
+        earthSize: { value: EARTH_SIZE },
+        earthCos: { value: Math.cos(Math.atan(EARTH_SIZE) * 1.5) },
         // 1200×675: ver o comentário do uniform no shader.
         earthAspect: { value: 1200 / 675 },
+        // Intactos até alguém acertar o planeta. Ver `blastEarth`.
+        earthGlow: { value: 0 },
+        earthFade: { value: 1 },
       },
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
@@ -658,6 +689,72 @@ export class Renderer {
    * carregamento, entre uma fase e outra. Um vale que desbota até virar Lua
    * seria bonito e mentiroso.
    */
+  /* ------------------------------------------------------------ a Terra ---- */
+
+  /**
+   * O feixe está apontado para o planeta?
+   *
+   * A Terra não é um objeto da cena — é um disco desenhado no shader do céu, a
+   * partir de uma DIREÇÃO. Não há colisor para acertar e nunca haverá: ela está
+   * infinitamente longe, e uma esfera de verdade lá seria uma esfera de raio
+   * absurdo só para receber um teste por partida.
+   *
+   * Então o acerto é angular, que é a mesma conta que o shader faz para saber
+   * se um pixel cai dentro do disco. A folga de 0,75 exige o miolo do planeta e
+   * não a borda: raspar a atmosfera não destrói ninguém.
+   *
+   * @param {{x:number,y:number,z:number}} dir unitária
+   */
+  aimingAtEarth(dir) {
+    if (this._earthGone) return false;
+    const e = this.earthDirection;
+    const c = dir.x * e.x + dir.y * e.y + dir.z * e.z;
+    return c >= Math.cos(Math.atan(EARTH_SIZE) * 0.75);
+  }
+
+  /** O feixe chegou. Começa o clarão; `render` conduz o resto. */
+  blastEarth() {
+    if (this._earthGone) return false;
+    this._earthGone = true;
+    this._earthT = 0;
+    return true;
+  }
+
+  /** A Terra volta inteira. Chamado ao (re)entrar na fase, não durante ela. */
+  resetEarth() {
+    this._earthGone = false;
+    this._earthT = 0;
+    const u = this.skyMaterial.uniforms;
+    u.earthGlow.value = 0;
+    u.earthFade.value = 1;
+    u.earthSize.value = EARTH_SIZE;
+    u.earthCos.value = Math.cos(Math.atan(EARTH_SIZE) * 1.5);
+  }
+
+  /**
+   * Um passo do fim do mundo.
+   *
+   * Três coisas ao mesmo tempo, e é a soma delas que lê como explosão: o disco
+   * INCHA (o clarão é maior que o planeta), acende até o branco e depois apaga
+   * por alfa. `earthCos` acompanha o inchaço — ele é o recorte barato do
+   * shader, e sem atualizá-lo o clarão seria cortado num círculo do tamanho
+   * antigo, como se a explosão estivesse dentro de uma janela.
+   */
+  _updateEarthBlast(dt) {
+    if (!this._earthGone || this._earthT >= EARTH_BLAST_TIME) return;
+    this._earthT += dt;
+    const u = this.skyMaterial.uniforms;
+    const t = Math.min(1, this._earthT / EARTH_BLAST_TIME);
+
+    // O clarão sobe depressa e cai devagar: é o perfil de uma detonação.
+    const glow = t < 0.12 ? t / 0.12 : Math.pow(1 - (t - 0.12) / 0.88, 1.6);
+    const escala = 1 + 1.9 * Math.pow(t, 0.55);
+    u.earthGlow.value = glow * 5.5;
+    u.earthFade.value = Math.pow(1 - t, 1.4);
+    u.earthSize.value = EARTH_SIZE * escala;
+    u.earthCos.value = Math.cos(Math.atan(EARTH_SIZE * escala) * 1.5);
+  }
+
   setSpace(t) {
     const s = Math.max(0, Math.min(1, t));
     this._space = s;
@@ -891,6 +988,7 @@ export class Renderer {
     // constelação inteira.
     this.stars.position.copy(this.camera.position);
     this.clouds.update(dt, this.camera, wind);
+    this._updateEarthBlast(dt);
 
     if (this.postEnabled && this.composer) {
       // O grão precisa se mexer, senão o padrão congela na tela e vira textura.

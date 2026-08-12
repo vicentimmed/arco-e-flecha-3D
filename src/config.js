@@ -149,6 +149,26 @@ export const CONFIG = {
     start: { x: 1.2, z: 12.0 },
     jumpSpeed: 4.2, // m/s — impulso vertical
     colliderRadius: 0.35, // m — cápsula do character controller
+
+    /* --------------------------------------------------------- a beira --
+       Queda a partir da qual o corpo se RECUSA a andar para fora da borda.
+
+       Não é uma parede invisível: é o teste que `PlayerPhysics.temChao` faz no
+       destino do passo, e ele só cancela o componente do movimento que ficaria
+       sem chão — andar rente à beira continua funcionando, e PULAR para fora
+       continua sendo escolha de quem joga.
+
+       5,5 m é o mesmo desnível que o cerco já considera mortal
+       (`modes.siege.fatalFall`), e é essa coincidência que dá a regra sua
+       forma final: **o corpo não anda para dentro de uma queda que o mata.**
+       Abaixo disso ele desce normalmente — um talude, um degrau de cratera, o
+       barranco da rampa continuam caminháveis.
+
+       No adarve isso é o que substitui o parapeito que a geometria proíbe: a
+       faixa de tiro tem 90 cm e termina em oito metros de queda, e o tiro no
+       portão passa a cinco centímetros do deque na beira externa — não cabe
+       borda nenhuma ali. Ver §6.4 de `docs/plano-cerco.md`. */
+    ledgeGuardDrop: 5.5, // m
     // O ponto de disparo NÃO é configurado aqui: ele sai da postura (ombro do
     // braço do arco + extensão do braço), em entities/player.js.
   },
@@ -194,10 +214,61 @@ export const CONFIG = {
     up: 0.5, // m acima
     /* Enquadramento do ESPECIAL: a câmera sai de trás do ombro e vai para o
        lado. Ver o comentário em `camera.js` — de trás, a câmera fica DENTRO do
-       feixe, e um tubo aditivo visto por dentro é uma tela branca. */
+       feixe, e um tubo aditivo visto por dentro é uma tela branca.
+
+       É ESTE o enquadramento do especial inteiro — carga, feixe e volta —,
+       porque `kameCam.enabled` está desligado (ver o bloco abaixo). */
     specialDistance: 9.0, // m
     specialRight: 7.5, // m — é este que tira a câmera de dentro do feixe
     specialUp: 2.4, // m
+
+    /* ------------------------------------------------- câmera do FEIXE -----
+       A câmera que ia para a FRENTE do Kamehameha e viajava com a cabeça dele
+       até o impacto, olhando para trás.
+
+       **DESLIGADA** (`enabled: false`), por decisão de quem joga: o especial
+       usa o enquadramento lateral de `special*` acima do começo ao fim, sem o
+       corte para a frente do feixe e sem a volta no impacto. Ela continua
+       inteira em `camera.js` (`CameraMode.KAME`) e ligar de novo é trocar este
+       `false` por `true` — ou apertar a chave "câmera do feixe" no painel `~`,
+       que faz isso ao vivo, sem recarregar.
+
+       Os números abaixo são ângulos disfarçados de metros: o par
+       `X + XGain · frente` faz o afastamento CRESCER com a viagem, então o
+       arqueiro encolhe ao fundo enquanto a ponta continua do lado da câmera.
+       Com ganho zero em tudo, a câmera vira um ponto fixo à frente do peito e a
+       ponta foge dela. */
+    kameCam: {
+      enabled: false,
+      /* m à frente da PONTA. É o que mantém a cabeça do feixe (o "bloco" que
+         acabou de sair) na borda do quadro em vez de atrás da câmera. */
+      lead: 7.0,
+      leadGain: 0.09, // ×m percorrido
+      /* m ao lado do eixo. O mínimo NÃO pode ser menor que o halo (Ø 6,4):
+         dentro dele a tela vira a parede branca do §8 do plano. */
+      side: 6.0,
+      sideGain: 0.03,
+      up: 2.0, // m acima do eixo (perpendicular a ele, não ao mundo)
+      upGain: 0.01,
+      /* m acima do chão, no mínimo. Um feixe rasante levaria a câmera para
+         dentro do terreno, e aí a tela é uma pedra. */
+      groundClearance: 2.5,
+      /* m — onde a viagem PARA, contados de trás do ponto de impacto.
+         MEDIDO EM TELA: sem isto a câmera acompanhava a ponta até o fim e
+         terminava a dez metros da explosão, com a luz de impacto (intensidade
+         900, alcance 90) praticamente encostada na lente. O quadro lavava
+         inteiro — a mesma lição do §8 do plano, agora pelo outro lado.
+         Parando trinta metros antes, a ponta se afasta da câmera nos últimos
+         0,1 s e a explosão acontece ONDE DÁ PARA VER. */
+      standoff: 30,
+      /* s parados no impacto antes de voltar para a terceira pessoa. Sem eles a
+         explosão acontece no frame do corte e ninguém a vê. */
+      hold: 0.55,
+      /* m — abaixo disto a câmera não assume. Um feixe que morre a vinte metros
+         (mirou no próprio pé) daria um corte de dois frames, que lê como falha
+         de render, não como cinema. */
+      minRange: 45,
+    },
     // Ponto da linha de tiro para onde a câmera olha (toe-in). É FIXO de
     // propósito: usar a distância do raycast fazia a imagem tremer a cada troca
     // de superfície sob a mira (ver systems/camera.js). Como a mira sai do eixo
@@ -996,11 +1067,54 @@ export const CONFIG = {
          verdade — a 35°–52° fora da vertical, a rocha entra de 105 a 192 m ao
          lado do alvo, ou seja, entre 38° e 55° de elevação vista da base. Ela
          aparece perto do horizonte, risca o campo de estrelas na diagonal e só
-         no fim passa por cima. */
-      spawnAltitude: 150, // m acima do ponto de queda
+         no fim passa por cima.
+
+         SEGUNDA PASSADA, pelo mesmo motivo: 38°–55° ainda era "de cima". A
+         faixa desceu para 58°–68° de inclinação, que põe a entrada entre 239 e
+         375 m ao lado do alvo — 22° a 32° de elevação vista da base, a altura
+         em que se olha uma coisa no céu sem levantar o queixo. Comparação que
+         calibra: o horizonte da Lua (curvatura exagerada, R = 26 km) fica a
+         300 m de quem está em pé, então a rocha NASCE praticamente em cima
+         dele e vem descendo na diagonal por todo o caminho.
+
+         A altitude NÃO desceu junto, e é de propósito: o prazo de queda é
+         `altitude ÷ velocidade`, e ele é o número que o banco de provas
+         aprovou (`scripts/bench-meteoros.js`). Mexer só na inclinação muda o
+         ÂNGULO sem tocar no prazo — a tabela de velocidades abaixo continua
+         valendo palavra por palavra.
+
+         O que muda de verdade no jogo é a VELOCIDADE HORIZONTAL: com 375 m de
+         recuo em vez de 192, a rocha atravessa o céu a 14 m/s na horda 1 e a
+         24 m/s na 10 (era 7,3 e 12,3). Mirar passa a exigir mais adiantamento —
+         é o preço de tirar a rocha de cima da cabeça, e é o número a baixar se
+         o modo ficar duro demais.
+
+         TERCEIRA PASSADA, e ela desfaz o exagero da segunda.
+
+         Medido no sorteio real (200 amostras): a faixa de 58°–68° punha a
+         entrada entre 202 e 423 m do ponto de queda, com elevação de 19,5° a
+         36°. O canto ruim dessa faixa é o que produziu o relato de que "o
+         meteoro aparece quando já está quase encostando no chão": a 423 m e
+         19,5°, uma pedra de 2,5 m de raio entra com meia dúzia de pixels rente
+         ao horizonte de um céu preto. Ela ESTÁ lá desde o nascimento — o
+         marcador do HUD prova —, mas não é legível como rocha até já estar
+         perto, e o que o jogador vê é uma coisa surgindo baixa.
+
+         A correção mexe nos DOIS números ao mesmo tempo, e é isso que a torna
+         barata: a altitude sobe para 185 m e a inclinação recua para 53°–61°.
+         O recuo horizontal fica em 242 a 331 m — praticamente a mesma faixa de
+         antes, sem a cauda de 423 — e a elevação de entrada sobe para 29° a
+         37°. É acima do horizonte de um jeito que se lê, e ainda abaixo dos
+         38°–55° que a segunda passada rejeitou por pedir queixo levantado.
+
+         O PRAZO DE QUEDA NÃO MUDA: as velocidades abaixo foram reescaladas por
+         185/150, exatamente como já haviam sido por 150/210. Continua sendo de
+         26,3 s na horda 1 a 15,7 s na 10 — o número que o banco de provas
+         aprovou, intocado. */
+      spawnAltitude: 185, // m acima do ponto de queda
       altitudeJitter: 12, // m
-      entryTiltMin: 0.61, // rad (35°)
-      entryTiltMax: 0.91, // rad (52°)
+      entryTiltMin: 0.92, // rad (53°) — 242 m ao lado, 37° de elevação
+      entryTiltMax: 1.06, // rad (61°) — 331 m ao lado, 29° de elevação
       /* MEDIDO, não estimado — ver `scripts/bench-meteoros.js`.
          A primeira tabela ia até 17,5 m/s e produzia 52 % de vitórias com o
          arqueiro médio, contra os 70 % que o modo pede. O motivo não estava na
@@ -1008,11 +1122,12 @@ export const CONFIG = {
          de ~2 s, uma sequência de dois erros já é fatal, e sequências de dois
          erros acontecem o tempo todo a 78 % de acerto.
 
-         Estas velocidades foram REESCALADAS junto com a altitude (×150/210),
-         e não escolhidas de novo: o que a dificuldade usa é o PRAZO DE QUEDA,
-         e ele continua idêntico ao que o banco de provas aprovou — de 26,3 s na
-         horda 1 a 15,6 s na 10. Baixar o céu não podia baratear o modo. */
-      fallSpeeds: [5.7, 6.1, 6.6, 7.0, 7.4, 7.9, 8.3, 8.7, 9.1, 9.6],
+         Estas velocidades foram REESCALADAS junto com a altitude (×150/210 e
+         depois ×185/150), e não escolhidas de novo: o que a dificuldade usa é o
+         PRAZO DE QUEDA, e ele continua idêntico ao que o banco de provas
+         aprovou — de 26,4 s na horda 1 a 15,7 s na 10. Nem baixar nem levantar
+         o céu podia mexer no preço do modo. */
+      fallSpeeds: [7.0, 7.5, 8.1, 8.6, 9.1, 9.7, 10.2, 10.7, 11.2, 11.8],
 
       /* -------------------------------------------------- onde elas caem --
          A base lunar É o centro da arena (`levels.moon.barrier` e
@@ -1064,8 +1179,8 @@ export const CONFIG = {
       tankRaio: 14.0, // m — Ø 28: mais grosso que tudo o mais em campo
       tankHits: { 3: 7, 6: 11, 9: 16, 10: 18 }, // para UM jogador
       // Reescaladas com a altitude, pelo mesmo motivo das outras: as janelas do
-      // colosso continuam sendo 40, 52, 62 e 70 s.
-      tankSpeeds: { 3: 3.7, 6: 2.9, 9: 2.4, 10: 2.1 }, // m/s
+      // colosso continuam sendo 40, 51, 62 e 71 s.
+      tankSpeeds: { 3: 4.6, 6: 3.6, 9: 3.0, 10: 2.6 }, // m/s
       /* Só na horda 10 a chuva não para durante o colosso. É o clímax. */
       tankDrizzleFrom: 10,
       tankDrizzleEvery: 15, // s
@@ -1126,6 +1241,69 @@ export const CONFIG = {
         fragFadeTime: 2.0,
         debrisMax: 60, // teto do lote instanciado
         explosionRadius: 0, // não mata: a rocha morreu, não explodiu em cima
+      },
+
+      /* ------------------------------------------------------------ lascas --
+         Cada FLECHADA arranca pedaços em brasa que NÃO caem: eles passam a
+         acompanhar a rocha, girando em volta dela até a explosão final.
+
+         Isso não é enfeite, é a barra de vida do modo. O escurecimento da rocha
+         (`hp` → `emissiveIntensity`) já dizia "esta apanhou", mas só de perto e
+         só para quem soubesse comparar. Uma nuvem de brasas em volta é legível
+         a duzentos metros e CONTÁVEL: três lascas girando é a rocha que já
+         levou três flechas, e num co-op isso é o que impede duas pessoas de
+         gastarem tiro na mesma pedra.
+
+         Sem colisão nenhuma — nem corpo, nem raio de morte. Elas são imagem, e
+         imagem que mata é o que o `burst` acima já recusou por escrito.
+
+         O teto de 90 é do LOTE INTEIRO, não por rocha, e é o que segura o
+         colosso: quarenta flechadas dariam quinhentas lascas, então as velhas
+         são recicladas e ele acaba usando uma coroa estável de escombros — que
+         é exatamente a imagem que se quer dele. */
+      /* O QUE ELAS ERAM, E POR QUE NÃO SE VIAM.
+       *
+       * Estavam implementadas e corretas, e ainda assim ninguém as via. Duas
+       * contas explicam o sumiço, e as duas foram consertadas aqui:
+       *
+       * 1. **TAMANHO.** 0,05 a 0,12 do raio dá lascas de 12 a 30 cm na pedra
+       *    pequena. A tela tem 720 px num campo de 58°, ou seja ~0,28 m por
+       *    pixel a 200 m: a lasca entrava com MEIO PIXEL. Não é uma questão de
+       *    contraste, é de não existir na grade de amostragem.
+       *
+       * 2. **ELAS ORBITAVAM DENTRO DO HALO.** O `haloScale` é 2,2 × o
+       *    DIÂMETRO, ou seja, o sprite aditivo da rocha se estende a 2,2 raios
+       *    do centro — e a órbita ia de 1,3 a 2,0 raios. Cada lasca ficava
+       *    submersa no clarão laranja que a própria rocha emite, que é o pior
+       *    fundo possível para uma brasa laranja. Fora do halo elas aparecem
+       *    contra o preto do céu, que é o que as torna contáveis.
+       *
+       * O piso ABSOLUTO em metros é o que faz a regra valer para a pedra de
+       * 2,5 m tanto quanto para o colosso de 14: uma fração sozinha sempre
+       * some no menor caso, que é justamente o mais comum. */
+      chips: {
+        perRadius: 1.25, // lascas por metro de raio, a cada flechada
+        perHitMin: 4,
+        perHitMax: 12,
+        max: 90, // teto do lote instanciado — de TODAS as rochas somadas
+        raioMin: 0.11, // × raio da rocha
+        raioMax: 0.2,
+        /* Piso e teto em METROS. Sem o piso, a lasca da pedra pequena tem meio
+           pixel a 200 m; sem o teto, a do colosso teria três metros e leria
+           como uma segunda rocha em vez de um pedaço da primeira. */
+        raioMinAbs: 0.62, // m
+        raioMaxAbs: 1.7, // m
+        /* Distância da órbita, × raio da rocha. O mínimo é > `haloScale`
+           (2,2): dentro dele a lasca some dentro do clarão da própria rocha,
+           que era metade do defeito. */
+        orbitMin: 2.4,
+        orbitMax: 3.1,
+        orbitDrift: 0.14, // × raio por segundo — a coroa ABRE devagar
+        orbitMaxScale: 4.2, // × raio — até onde a deriva abre antes de parar
+        spinMin: 0.55, // rad/s em volta da rocha
+        spinMax: 1.7,
+        tumbleMax: 2.6, // rad/s do giro da própria lasca
+        tiltMax: 1.0, // rad — inclinação do plano de órbita (não é um anel)
       },
 
       /* ------------------------------------------------------------ imagem --
@@ -1229,8 +1407,33 @@ export const CONFIG = {
          curva antiga, três defensores venciam 100 % das partidas SEM TRABUCO —
          ou seja, a arma que o modo inteiro existe para justificar tinha virado
          enfeite. A forma foi preservada; só o eixo do tempo apertou. */
+      /* APERTADA 22 % EM BLOCO quando a horda passou a nascer na floresta.
+         (Ver `Siege.nascer` e `Siege.start`.)
+
+         O motivo é uma conta de EXPOSIÇÃO, e ela foi medida. Antes, 30 % dos
+         sitiantes nasciam abaixo de z = 60 — passado o meio da ponte, e alguns
+         a um passo do portão: a fila de chegadas escolhia a espécie ANTES de
+         saber a hora do nascimento, e quem calhava de ser mais lento que a
+         média nascia com o percurso já andado. Isso era o defeito visual
+         relatado ("eles surgem no meio da ponte") e era, sem que ninguém
+         tivesse escrito, um terço da dificuldade do modo: um terço da horda
+         atravessava a rampa sem passar pelo campo de tiro.
+
+         Corrigido o nascimento, cada sitiante passa até oitenta segundos a
+         mais sob flecha, e o banco de provas mediu o tamanho do estrago: o
+         defensor solitário saltou de 0 % para 85 % de vitórias. A forma da
+         curva foi preservada — ela é o que o banco aprovou —, e só o eixo
+         apertou.
+
+         ISTO NÃO FECHA A CONTA SOZINHO, e é de propósito. A compensação cheia
+         que o banco pede (×0,45) põe mais gente na rampa do que o teto de
+         entidades aguenta, e mediria um jogo que não existe: o mesmo lote de
+         mudanças acrescenta ao modo três ameaças que o banco não modela — os
+         magos das torres, os morcegos e o escalador que agora caça pelo adarve
+         —, e cada morte de defensor custa onze segundos e meio sem arco. O
+         resto do ajuste é playtest, que é o juiz final. */
       gapBase: [
-        5.5, 4.5, 3.75, 3.1, 2.65, 2.3, 2.05, 1.8, 1.65, 1.5, 1.35,
+        4.3, 3.5, 2.9, 2.4, 2.05, 1.8, 1.6, 1.4, 1.3, 1.17, 1.05,
       ],
       /* Mais gente = mais poder de fogo, mas os arqueiros dividem 34 m de muro
          e disputam a mesma linha de tiro. Sublinear pelo mesmo motivo (e com o
@@ -1266,9 +1469,25 @@ export const CONFIG = {
          É curto DE PROPÓSITO: se ignorar o portão por quarenta segundos não
          perdesse a partida, a fila não seria ameaça e o modo não teria tensão. */
       gateHealth: 2400,
-      /** Cabem 6 de frente no vão de 6 m. O sétimo espera — e é o aglomerado
-          parado que resulta disso que dá ao trabuco um alvo. */
-      gateSlots: 6,
+      /* DEZ BATENDO AO MESMO TEMPO, em duas fileiras de cinco.
+       *
+       * Eram seis, lado a lado no vão de 6 m, e o sétimo esperava. Visto do
+       * muro, aquilo dava meia dúzia encostada na porta e o resto da horda numa
+       * COLUNA descendo a rampa — uma fila indiana, não um cerco.
+       *
+       * A segunda fileira alcança a madeira por cima do ombro da primeira (ver
+       * `Siege.postoDaVaga`), que é o que uma turba usando o corpo como aríete
+       * faz de verdade. O dano por segundo no portão dobra junto, e isso é
+       * intencional: o modo ficou mais fácil quando a horda passou a nascer na
+       * floresta (ver `gapBase`), e este é o lado da conta que devolve pressão
+       * onde ela é sentida — no portão, e não no tamanho da fila. */
+      gateSlots: 10,
+      gatePerRank: 5,
+      /* O leque de quem espera. `gateRingFirst` é a largura do primeiro anel e
+         cada anel seguinte cabe dois a mais; `gateSpread` é a meia-abertura em
+         radianos (1,15 ≈ 66° para cada lado da boca do portão). */
+      gateRingFirst: 9,
+      gateSpread: 1.35, // rad
       /** Reparo: vence dois soldados (10/s) e perde para três (15/s).
           Remendo, nunca solução — a solução continua sendo matar antes. */
       repairRate: 12, // vida/s
@@ -1312,6 +1531,84 @@ export const CONFIG = {
       shamanStandoff: 70, // m
       shamanRaiseRadius: 12, // m
       shamanBolt: { speed: 34, damage: 1 },
+      /* ------------------------------------------------ magos das torres --
+         Dois xamãs em mirantes de madeira no pé da rampa (ver `mageTowers` em
+         `shared/castleProps.js`). Eles não andam, não têm escalão e não entram
+         no sorteio: estão lá desde o primeiro segundo, e a bola deles MATA.
+
+         O intervalo é longo de propósito. Eles não existem para somar dano —
+         existem para cobrar ATENÇÃO: enquanto uma torre estiver de pé, olhar
+         só para o portão custa a vida. Uma bola a cada seis segundos é tempo de
+         sobra para ver de onde ela veio, sair do lugar e decidir se vale gastar
+         uma flecha a noventa metros.
+
+         A bola é LENTA (18 m/s contra os 34 do xamã de chão): ela atravessa
+         noventa metros em cinco segundos, e é essa demora que a torna evitável
+         — quem se mexe escapa, e quem não viu, morre. Uma bola rápida seria um
+         tiro teleguiado, que é o que a catapulta já foi ensinada a não ser.
+
+         `mageRespawn` é o prêmio de acertar: meio minuto de torre calada. */
+      /* MEDIDO EM TELA: seis segundos era a cadência de uma arma, não de uma
+         ameaça de fundo. Com dois mirantes, saía uma bola a cada três segundos
+         em média — o defensor passava a partida se desviando e a rampa, que é
+         o assunto do modo, virava o que se olhava nos intervalos. Dezoito
+         segundos por mago dão uma bola a cada nove: tempo de esquecer que elas
+         existem, que é justamente o que faz a próxima cobrar atenção. */
+      mageInterval: 18.0, // s entre bolas, por mago
+      /* TRÊS MINUTOS de mirante calado. Era meio, e meio minuto não pagava a
+         flecha: o mago voltava antes de a fila do portão mudar de tamanho.
+         Numa partida de dez minutos, três é quase um terço do cerco sem aquela
+         torre — o prêmio agora é grande o bastante para valer virar as costas
+         para o portão e gastar o tiro. */
+      mageRespawn: 180, // s até subir outro no mirante vazio
+      mageBolt: { speed: 18 }, // m/s — lenta o bastante para se desviar
+      /** Raio de morte da bola, no ponto em que ela cai. */
+      mageBlast: 2.2, // m
+
+      /* ------------------------------------------------ morcegos gigantes --
+         A terceira ameaça que não vem pela rampa, e a única que chega POR CIMA.
+         Ver o cabeçalho de `server/batSim.js` para o ciclo dos três estados.
+
+         O número que decide se eles são interessantes ou insuportáveis é
+         `circleTime`: são os segundos em que o bicho está em campo, visível e
+         inofensivo, depois de cada mergulho. É a janela em que a resposta cabe.
+         Curto demais e ele vira um projétil que reaparece; longo demais e ele
+         vira paisagem.
+
+         `diveTimeout` é o par disso do outro lado: o mergulho tem prazo, então
+         quem se mexeu escapa. As duas coisas juntas são o que fazem dele um
+         bicho e não uma sentença. */
+      bats: {
+        count: 2, // em campo ao mesmo tempo
+        firstAt: 150, // s de partida até o primeiro — depois dos escaladores
+        respawn: 25, // s entre reposições do bando
+        spawnZ: 118, // m — atrás da linha de árvores
+        spawnHalfX: 22,
+        cruiseYMin: 22, // m acima do chão onde nasce
+        cruiseYMax: 32,
+        /* Um passo mais lentos em tudo. A envergadura é de cinco metros, e um
+           bicho desse tamanho cruzando o quadro a 13 m/s lê como projétil: o
+           olho não acompanha as asas, então não lê como voo. Mais devagar, o
+           mergulho passa a ser uma coisa que se VÊ chegando — que é o que o
+           torna evitável em vez de fatal. */
+        cruiseSpeed: 11, // m/s na travessia
+        diveSpeed: 17, // m/s no mergulho — ainda bem mais rápido que a travessia
+        diveTimeout: 3.2, // s de mergulho antes de desistir
+        killRadius: 1.7, // m — encostou, matou
+        circleTime: 16, // s de ronda entre dois ataques
+        circleRadius: 34, // m em torno do pátio
+        /* A RONDA É ALTA. A 17 m ela passava rente ao adarve (que está a 8 m do
+           pátio), e o bicho ficava metido no meio da mira de quem estava
+           tentando atirar na rampa — a janela de trégua virava estorvo. A 27 m
+           ele fica claramente ACIMA de tudo: dá para vê-lo, contá-lo e decidir
+           gastar uma flecha nele, sem que ele atrapalhe o resto. */
+        circleHeight: 27, // m acima do piso do pátio
+        circleSpeed: 10, // m/s na órbita
+        turnRate: 1.5, // rad/s — o arco largo de um bicho grande
+        flap: 7.0, // rad/s do bater de asas (fase; quem desenha é o cliente)
+        /** Uma flecha basta. Alvo grande, mas em movimento e no ar. */
+        points: 150,
+      },
       /* -------------------------------------------------------- catapulta --
          A 110 m, atira no ADARVE. É a primeira vez que o jogador é o alvo. */
       catapultStandoff: 110, // m
@@ -1365,27 +1662,79 @@ export const CONFIG = {
          entorta pouco mas entorta.
 
          O ÂNGULO DE SOLTA É FIXO em 45°, e é a decisão que faz o modo. Com ele
-         fixo, o alcance mínimo é v²/g = 33 m: **o trabuco não alcança o pé do
-         próprio muro**. Ele é a arma da aproximação, o arco é a arma do
-         portão, e nenhum substitui o outro em distância nenhuma. */
+         fixo, quem escolhe o alcance é a VELOCIDADE, e é a faixa dela que diz
+         onde o engenho serve.
+
+         A FAIXA CURTA FOI ABERTA, e isso desfaz uma regra antiga.
+
+         O plano dizia, com todas as letras, que o trabuco não alcança o pé do
+         próprio muro: o arco seria a arma do portão e o engenho a arma da
+         aproximação, sem sobreposição. Medido na geometria real, a regra era
+         mais dura do que soava. Os engenhos ficam nos bastiões, a 19 m do
+         aglomerado do portão em planta, e SOLTAM DE 8 m DE ALTURA — a queda
+         alonga o tiro, então os 18 m/s de mínimo caíam a 40 m, não a 33. A
+         faixa inteira de 0 a 40 m era intocável, e é justamente ali que a fila
+         se acumula e onde o modo é perdido.
+
+         Com 9 m/s o mínimo cai para 14,6 m contra o piso do pátio, e o
+         aglomerado do portão está a 19,1 m dos bastiões: dá para largar a
+         pedra na boca do portão com folga para escolher onde dentro dele. O
+         arco não perde o posto — ele continua sendo a arma de cadência, e o
+         engenho cobra 14 s de recarga por tiro —, mas passa a haver uma
+         RESPOSTA para o momento em que a fila venceu a cadência do arco, que
+         antes simplesmente não existia. */
       trebuchet: {
         launchAngle: Math.PI / 4, // rad — fixo, ver acima
-        yawRange: 0.7, // rad — ±40° de giro da armação
-        speedMin: 18, // m/s → 33 m de alcance
+        /* ±77°, e não mais ±40°.
+           A abertura antiga bastava para varrer a rampa de frente, e a rampa é
+           o que se via de um engenho no MEIO do muro. Dos bastiões, o portão
+           fica a 70° fora do eixo — ou seja, a faixa que o parágrafo acima
+           acabou de destravar em DISTÂNCIA continuava trancada em ÂNGULO. */
+        yawRange: 1.35, // rad — ±77° de giro da armação
+        speedMin: 9.0, // m/s → ~15 m de alcance, dos bastiões
         speedMax: 33, // m/s → 111 m
         chargeTime: 1.6, // s de tensionamento até o máximo
         mass: 25, // kg
         radius: 0.14, // m — raio da PEDRA (área de arrasto)
         visualRadius: 0.42, // m — a bola de fogo que se vê é maior que a pedra
         dragCoefficient: 0.47, // esfera
-        /** Recarga: sozinha em 14 s, ou 4,5 s com alguém na manivela.
-            Quem está na manivela não está atirando — é a troca central. */
-        reload: 14, // s
-        windReload: 4.5, // s
+        /* RECARGA DE DOIS MINUTOS, e não de catorze segundos.
+         *
+         * A catorze segundos o engenho era uma segunda arma: dava para atirar,
+         * voltar ao arco por dois ciclos e atirar de novo. Com o estouro de 6 m
+         * cobrindo a boca inteira do portão, isso o tornava a resposta para
+         * tudo — e o modo se chama cerco de ARQUEIRO.
+         *
+         * A dois minutos ele volta a ser o que o §5.1 do plano descreve: o
+         * recurso ESCASSO, guardado para o momento em que a fila venceu a
+         * cadência do arco. Cinco pedras numa partida de dez minutos, e cada
+         * uma é uma decisão.
+         *
+         * A manivela mantém a proporção de sempre (~3,1×): quem larga o arco
+         * para içar troca a própria cadência pela do engenho, que continua
+         * sendo a troca central do modo. */
+        reload: 120, // s
+        windReload: 38, // s
         windRadius: 2.2, // m — distância para operar a manivela
-        /* ------------------------------------------------------- estouro -- */
-        blastRadius: 3.5, // m — dano direto
-        blastDamage: 6, // flechas equivalentes no centro
+        /* ------------------------------------------------------- estouro --
+           MEDIDO CONTRA A FILA, e não escolhido no abstrato.
+
+           3,5 m de raio é menos do que o vão do portão (6 m) e menos do que o
+           espaçamento da própria fila, que `atribuirVagas` abre em 1,05 m por
+           vaga: uma pedra bem colocada pegava três dos seis de frente, e uma
+           pedra no meio da rampa pegava um. Com 14 s de recarga, "matei um"
+           lê como "não matou ninguém" — que foi exatamente o relato.
+
+           A 6 m ela cobre o vão inteiro do portão, que é o alvo para o qual a
+           faixa curta acima acabou de ser aberta.
+
+           O DANO sobe de 6 para 8 pela mesma conta, e o teto é o OGRO: ele
+           pede 16 flechas, então 8 é metade da vida dele — estrago pesado, e
+           declaradamente insuficiente para derrubá-lo de uma vez. Na borda do
+           estouro sobram 2,4 (a queda é de 70 %), que ainda mata soldado e
+           esqueleto e não mata pavês. */
+        blastRadius: 6.0, // m — dano direto
+        blastDamage: 8, // flechas equivalentes no centro
         fireRadius: 6.0, // m — o piche em chamas
         fireTime: 8.0, // s
         fireDps: 2.2, // flechas equivalentes por segundo
@@ -1432,15 +1781,55 @@ export const CONFIG = {
     /** Ele mata outros jogadores. Virar `false` por modo é uma linha. */
     friendlyFire: true,
 
+    /* Quanto o feixe vale NO COLOSSO, em flechas.
+     *
+     * Em tudo o mais ele VAPORIZA — a rocha morre inteira, seja qual for a
+     * vida que tinha, porque um raio de energia que precisa de duas passadas
+     * numa pedra de 6 m não lê como um raio de energia. O colosso é a exceção
+     * declarada: ele é o ato do modo, e apagá-lo com uma tecla apagaria junto
+     * os setenta segundos que ele existe para cobrar. Três flechas de uma vez
+     * é um pedaço honesto da barra dele sem ser a barra inteira. */
+    kameTankHits: 3,
+
+    /* ------------------------------------------------------------- a Terra --
+       O feixe apontado para o planeta o DESTRÓI, e a flecha não faz nada.
+
+       A assimetria é o ponto inteiro: a Terra é a única coisa no céu que não é
+       um alvo, e é justamente por isso que apontar para ela é a piada que o
+       jogador vai querer contar. Uma flecha ali é uma flecha perdida no vácuo
+       (ela não tem colisor e nunca terá); o feixe é a única arma do jogo com
+       escala para a pergunta fazer sentido.
+
+       E ele DEMORA. A Terra está a 384 mil quilômetros, e um golpe que a apaga
+       no mesmo quadro em que sai da mão lê como um efeito de tela. Três
+       segundos e meio de nada acontecendo — com o feixe já indo embora e o
+       jogador sem entender por que apertou — é o que transforma o disparo numa
+       expectativa, e é a expectativa que faz o clarão valer. */
+    earth: {
+      /** s até o feixe chegar lá. É teatro, e é o teatro que dá o peso. */
+      travel: 3.5,
+      /** Quanto do disco é preciso acertar: 0,75 do raio, ou seja, o miolo. */
+      aimFrac: 0.75,
+    },
+
     /* ------------------------------------------------------------- fases --
-       Total 7,15 s, e o jogador fica PRESO neles: sem andar, e a direção do
+       Total 5,17 s, e o jogador fica PRESO neles: sem andar, e a direção do
        feixe é travada no disparo. Não é limitação técnica, é o preço — durante
-       sete segundos você não atira flecha nem cobre o resto do céu. */
-      charge: 2.0, // s de concentração
+       esse tempo você não atira flecha nem cobre o resto do céu.
+
+       A concentração e a recuperação caíram À METADE outra vez (1,0 → 0,5 e
+       0,56 → 0,28), pelo motivo que já havia justificado o primeiro corte e
+       que a tela confirmou: as duas são o trecho em que NADA ACONTECE. A
+       primeira é o arqueiro se concentrando com o céu cheio; a segunda é ele
+       voltando à postura depois que o feixe já foi embora. Num modo com prazo,
+       cada décimo delas é pago em rocha perdida — e nenhuma das duas é o
+       golpe. O preço continua sendo os três segundos de sustentação, que é
+       onde o golpe É o golpe, e esses não se tocam. */
+      charge: 0.5, // s de concentração
       release: 0.15, // s do empurrão das mãos
       sustain: 3.0, // s de feixe cheio
       dissipate: 1.2, // s da cauda perseguindo a ponta
-      recover: 0.8, // s até o corpo e o arco voltarem
+      recover: 0.28, // s até o corpo e o arco voltarem
 
     /* -------------------------------------------------------------- feixe -- */
     beam: {
@@ -2152,6 +2541,24 @@ export const CONFIG = {
   bot: {
     /** Perícia padrão de bot novo. Troque aqui — ou pela tecla N, em jogo. */
     difficulty: "easy",
+
+    /* A perícia PADRÃO DE CADA MODO, aplicada ao entrar nele.
+     *
+     * `easy` é o padrão certo enquanto o bot for ADVERSÁRIO: um duelo contra
+     * uma máquina que não erra não é um duelo. Nos modos em que ele é ALIADO a
+     * conta se inverte — um arqueiro de guarnição que erra dois de cada três
+     * tiros não é ajuda, é enfeite, e o jogador paga a conta sozinho.
+     *
+     * Chuva e cerco pedem níveis diferentes pelo mesmo motivo pelo qual pedem
+     * perfis diferentes em `tickBots`: na chuva a rocha tem prazo e a falha é
+     * coletiva e definitiva, então o bot precisa de fato estourar o que mira;
+     * no cerco a derrota é uma TAXA, e um aliado certeiro demais fecharia a
+     * conta sozinho — `bench-cerco.js` já mostra que três defensores medianos
+     * bastam. Quem quiser outra coisa continua tendo a tecla N. */
+    modeDifficulty: {
+      meteorRain: "hard",
+      siege: "medium",
+    },
     /** Teto de adversários de CPU em campo ao mesmo tempo. */
     maxBots: 6,
 

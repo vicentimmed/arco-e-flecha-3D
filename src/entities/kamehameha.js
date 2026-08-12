@@ -26,6 +26,10 @@ import { gameEvents, EventType } from "../core/events.js";
 const BASE_TAPER = 0.14;
 /** m — quanto o VISUAL nasce à frente das mãos (o acerto continua nelas). */
 const RECUO_VISUAL = 1.2;
+/** m — em quantos metros a ponta apaga quando não há nada em que bater. */
+const SUMICO_PONTA = 70;
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /**
  * Um Kamehameha em voo.
@@ -139,13 +143,34 @@ export class KamehamehaBeam {
     return mesh;
   }
 
-  /** Marcha pelo raio até achar o chão. Passo grosso, depois refinado. */
+  /**
+   * Marcha pelo raio até achar o chão. Passo grosso, depois refinado.
+   *
+   * SÓ O CHÃO PARA O FEIXE — e essa frase precisou ser escrita em código porque
+   * havia uma segunda parada aqui que não era chão nenhum.
+   *
+   * A versão anterior recusava o ponto em que `isWalkable` desse falso, e na
+   * Lua isso é a BARREIRA CIRCULAR de 165 m: um teste de x e z que não olha a
+   * altura. Um feixe disparado para o céu a 45° cruza esse círculo aos 233 m de
+   * caminho — a duzentos metros de altura, no vácuo — e parava ali, com a
+   * `bateu` verdadeira e a ponta inchando na explosão. Na tela: uma bola parada
+   * no ar, contra nada, exatamente o que foi relatado.
+   *
+   * E o mesmo defeito comia o golpe. Uma rocha a 150 m de altura fica atrás
+   * dessa fronteira invisível para quase todo ângulo útil, então o segmento
+   * vivo do feixe terminava ANTES dela e `testarAcertos` não tinha o que
+   * testar: o colosso atravessado pelo raio e intacto.
+   *
+   * `heightAt` é definida em qualquer x e z (ruído mais curvatura, sem
+   * fronteira), então o teste de terreno sozinho já cobre o caso rasante que a
+   * barreira pretendia cobrir. Sem obstáculo nenhum, o feixe vai até o alcance
+   * e some — ver o desvanecimento da ponta em `update`.
+   */
   acharFim(maxRange) {
     const p = new THREE.Vector3();
     let ultimo = 0;
     for (let d = 4; d <= maxRange; d += 4) {
       p.copy(this.origem).addScaledVector(this.dir, d);
-      if (!this.terrain?.isWalkable?.(p.x, p.z)) return d;
       if (p.y <= this.terrain.heightAt(p.x, p.z)) {
         // Refina em passos de meio metro: um erro de 4 m no ponto da explosão
         // apareceria como a bola de fogo enterrada ou flutuando.
@@ -177,7 +202,25 @@ export class KamehamehaBeam {
     });
   }
 
-  /** A explosão de energia onde ele bate. Sustenta enquanto o feixe vive. */
+  /**
+   * A explosão de energia onde ele bate. Sustenta enquanto o feixe vive.
+   *
+   * FAGULHA, NÃO NUVEM — e isto é informação, não estética.
+   *
+   * Havia duas emissões aqui, e as duas erravam pelo mesmo motivo: elas
+   * SUSTENTAM. A cada 0,12 s sai um sopro novo, e nos três segundos de feixe
+   * isso são vinte e cinco sopros no mesmo ponto. A poeira cinza (que vivia
+   * 2,2 s e crescia 3,2×) virava uma cortina opaca; medida em tela, a fagulha
+   * azul sozinha — 26 partículas de 3 m crescendo 2,8× — fazia a MESMA cortina,
+   * só que clara. Em ambos os casos quem atirou perdia de vista a única coisa
+   * que a ponta precisa comunicar: ONDE ela acertou.
+   *
+   * A poeira saiu. A fagulha ficou, mas em regime de fagulha: um terço da
+   * conta, um quinto do tamanho, quase sem crescer e com meio segundo de vida.
+   * O que fica no ar em regime permanente são ~40 riscos pequenos em vez de
+   * ~260 bolas grandes — o ponto de impacto continua aceso e volta a ser
+   * legível. Quem marca o lugar é a ponta do feixe, que já cresce 1,9× ali.
+   */
   pulsarImpacto(dt) {
     if (!this.bateu) return;
     this._impTimer = (this._impTimer ?? 0) - dt;
@@ -186,29 +229,16 @@ export class KamehamehaBeam {
     const B = CONFIG.special.beam;
     gameEvents.emit(EventType.PARTICLES, {
       position: { x: this.fim.x, y: this.fim.y, z: this.fim.z },
-      count: 26,
+      count: 10,
       color: 0xbfe8ff,
       speed: 26,
       spread: 1,
-      size: B.blastRadius * 0.14,
-      grow: 2.8,
-      life: 1.2,
+      size: B.blastRadius * 0.05,
+      grow: 1.4,
+      life: 0.5,
       gravity: -1.62,
       drag: 0.6,
       alpha: 1,
-    });
-    gameEvents.emit(EventType.PARTICLES, {
-      position: { x: this.fim.x, y: this.fim.y, z: this.fim.z },
-      count: 14,
-      color: 0x8a8880,
-      speed: 12,
-      spread: 1,
-      size: B.blastRadius * 0.2,
-      grow: 3.2,
-      life: 2.2,
-      gravity: -0.5,
-      drag: 0.8,
-      alpha: 0.5,
     });
   }
 
@@ -271,6 +301,22 @@ export class KamehamehaBeam {
       this.ponta.scale.setScalar(pontaEsc * 1.9);
     }
 
+    /* SEM ANTEPARO, A PONTA SOME. O TUBO FICA.
+     *
+     * `frente` é limitada pelo alcance, então um tiro para o céu terminava com
+     * a esfera PARADA na cota máxima pelo resto da sustentação: um ponto de luz
+     * estacionário no vácuo, que é a mesma leitura errada de "bati em alguma
+     * coisa invisível" — só que agora a 400 m em vez de 230.
+     *
+     * Some só ela, nos últimos metros do percurso. O cilindro continua lá,
+     * atravessado no céu e apontando para longe, que é o que se pede de uma
+     * coisa disparada contra o espaço: ela vai embora, não termina em lugar
+     * nenhum. */
+    if (!this.bateu) {
+      const u = clamp01((this.frente - (this.alcance - SUMICO_PONTA)) / SUMICO_PONTA);
+      this.ponta.material.opacity = 0.9 * (1 - u * u);
+    }
+
     if (this.luz) {
       const vivo = this.t < fimSustentacao ? 1 : Math.max(0, restante);
       this.luz.intensity = B.blastLight * vivo;
@@ -288,6 +334,10 @@ export class KamehamehaBeam {
   }
 
   dispose() {
+    // Feixe descartado é feixe morto — quem o estiver acompanhando (a câmera do
+    // especial, o teste de acerto) tem uma bandeira só para consultar, e não
+    // precisa saber que existe um `dispose`.
+    this.morto = true;
     this.scene.remove(this.group);
     this.group.traverse((o) => {
       o.geometry?.dispose();

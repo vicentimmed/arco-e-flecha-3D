@@ -15,6 +15,12 @@
      no chão em vez de quatro. Ao longo de uma partida o terreno em volta da
      base vai ficando coberto — é o placar da noite, escrito no chão, e custa
      UMA chamada de desenho porque tudo é um lote instanciado.
+
+   • **as LASCAS EM ÓRBITA.** Cada flechada arranca brasas que não caem: elas
+     acompanham a rocha, girando em volta dela até a explosão final. São a
+     barra de vida do modo — contáveis a duzentos metros, ao contrário do
+     escurecimento do material, que só se lê de perto. Outro lote instanciado,
+     mais UMA chamada de desenho para todas as rochas somadas.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -39,6 +45,10 @@ export class MeteorRainManager {
     this.estilhacos = [];
     this.fragMesh = null;
     this.vagasFrag = null;
+    /** Lascas em brasa girando em volta das rochas que já apanharam. */
+    this.lascas = [];
+    this.lascaMesh = null;
+    this.vagasLasca = null;
     this._warmups = [];
     this._cam = new THREE.Vector3();
   }
@@ -91,9 +101,173 @@ export class MeteorRainManager {
     }
   }
 
-  /** Alguém acertou esta rocha: ela pisca em todas as telas. */
+  /** Alguém acertou esta rocha: ela pisca em todas as telas — e solta brasas. */
   hit(id) {
-    this.byNetId.get(id)?.piscar();
+    const m = this.byNetId.get(id);
+    if (!m) return;
+    m.piscar();
+    this.soltarLascas(m);
+  }
+
+  /**
+   * A flechada arrancou pedaços, e eles ficam.
+   *
+   * Cada lasca guarda um ÂNGULO e um raio de órbita, não uma posição: quem tem
+   * posição é a rocha, e a lasca é sempre "aquele ponto em volta dela". É por
+   * isso que elas acompanham a queda de graça, sem integrar velocidade nenhuma
+   * e sem nunca ficarem para trás de uma rocha que desce a 24 m/s.
+   *
+   * O plano de cada órbita é inclinado por conta própria (`tiltMax`): com todas
+   * no mesmo plano a rocha ganharia um anel de Saturno, que lê como enfeite. O
+   * que se quer é uma nuvem de escombro acompanhando o tombo.
+   */
+  soltarLascas(m) {
+    const C = CONFIG.modes.meteorRain.chips;
+    this.prepararLascas();
+
+    const n = Math.max(
+      C.perHitMin,
+      Math.min(C.perHitMax, Math.round(m.raio * C.perRadius)),
+    );
+    const faixa = (a, b) => a + Math.random() * (b - a);
+
+    for (let i = 0; i < n; i++) {
+      let vaga = this.vagasLasca.pop();
+      if (vaga === undefined) {
+        /* Sem vaga: recicla a MAIS VELHA. O teto é do lote inteiro, então numa
+           partida com o colosso em campo ele é atingido o tempo todo — e a
+           coisa certa a perder é a brasa de trás, não a que acabou de sair. */
+        const velha = this.lascas.shift();
+        if (!velha) break;
+        vaga = velha.vaga;
+      }
+      this.lascas.push({
+        vaga,
+        netId: m.netId,
+        dono: m,
+        /* PISO E TETO EM METROS por cima da fração.
+           A fração sozinha dava lascas de meio pixel na pedra pequena (que é a
+           mais comum) e de três metros no colosso — invisível de um lado,
+           "segunda rocha" do outro. Ver o bloco `chips` no config. */
+        raio: Math.min(
+          C.raioMaxAbs,
+          Math.max(C.raioMinAbs, m.raio * faixa(C.raioMin, C.raioMax)),
+        ),
+        // Em unidades de RAIO DA ROCHA: assim a mesma conta serve para a pedra
+        // de 2,5 m e para o colosso de 14.
+        orbita: faixa(C.orbitMin, C.orbitMax),
+        ang: Math.random() * Math.PI * 2,
+        vel: faixa(C.spinMin, C.spinMax) * (Math.random() < 0.5 ? -1 : 1),
+        tilt: faixa(-C.tiltMax, C.tiltMax),
+        fase: Math.random() * Math.PI * 2,
+        rotX: Math.random() * Math.PI * 2,
+        rotZ: Math.random() * Math.PI * 2,
+        girX: faixa(-C.tumbleMax, C.tumbleMax),
+        girZ: faixa(-C.tumbleMax, C.tumbleMax),
+      });
+    }
+  }
+
+  /** O lote das lascas. Mesma estratégia do cascalho: uma chamada para todas. */
+  prepararLascas() {
+    if (this.lascaMesh) return;
+    const C = CONFIG.modes.meteorRain.chips;
+    const M = CONFIG.modes.meteorRain;
+    this.lascaGeo = new THREE.IcosahedronGeometry(1, 0);
+    /* EM BRASA, e por isso emissiva: a lasca é pequena e o céu da Lua é preto —
+       uma pedra apenas difusa a duzentos metros do único Sol é invisível, que é
+       a mesma razão pela qual a rocha inteira emite (ver `fallingMeteor.js`).
+       As chaves do material acompanham as do cascalho (`flatShading`,
+       `transparent`) para as duas caírem no mesmo programa de shader. */
+    this.lascaMat = new THREE.MeshStandardMaterial({
+      color: 0x2e2119,
+      emissive: new THREE.Color(M.fireColor),
+      /* Mais quente que a própria rocha (que anda entre 1,5 e 3,7): a lasca é
+         uma ordem de grandeza menor e precisa passar do `bloomThreshold` para
+         que o passe de pós a espalhe em alguns pixels. É o mesmo truque que faz
+         o halo segurar a leitura da rocha no preset sem bloom, e sem custar uma
+         luz dinâmica. */
+      emissiveIntensity: 3.6,
+      roughness: 0.9,
+      metalness: 0.05,
+      flatShading: true,
+      transparent: true,
+    });
+    this.lascaMesh = new THREE.InstancedMesh(this.lascaGeo, this.lascaMat, C.max);
+    this.lascaMesh.castShadow = false;
+    // Elas viajam de 200 m de altura até o chão; a caixa do lote não descreve
+    // isso, e o teto de custo já é a capacidade.
+    this.lascaMesh.frustumCulled = false;
+    this.scene.add(this.lascaMesh);
+
+    this._m4l = new THREE.Matrix4();
+    this._posl = new THREE.Vector3();
+    this._quatl = new THREE.Quaternion();
+    this._eulerl = new THREE.Euler();
+    this._escl = new THREE.Vector3();
+    this._zerol = new THREE.Matrix4().makeScale(0, 0, 0);
+
+    this.vagasLasca = [];
+    for (let i = C.max - 1; i >= 0; i--) {
+      this.lascaMesh.setMatrixAt(i, this._zerol);
+      this.vagasLasca.push(i);
+    }
+    this.lascaMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  esconderLasca(l) {
+    if (l.vaga === undefined || !this.lascaMesh) return;
+    this.lascaMesh.setMatrixAt(l.vaga, this._zerol);
+    this.vagasLasca.push(l.vaga);
+    l.vaga = undefined;
+  }
+
+  /**
+   * Um passo das lascas.
+   *
+   * A dona é reconferida pelo MAPA, não por uma bandeira no objeto: a rocha sai
+   * de `byNetId` por três caminhos diferentes (estourou, o especial vaporizou,
+   * a partida acabou) e um deles esquecido seria uma brasa girando em volta de
+   * nada até o fim da sessão. Uma consulta por lasca — no máximo noventa — é
+   * mais barata que a chance de vazar.
+   */
+  passoLascas(dt) {
+    if (!this.lascas.length) return;
+    const C = CONFIG.modes.meteorRain.chips;
+
+    for (let i = this.lascas.length - 1; i >= 0; i--) {
+      const l = this.lascas[i];
+      if (this.byNetId.get(l.netId) !== l.dono) {
+        this.esconderLasca(l);
+        this.lascas.splice(i, 1);
+        continue;
+      }
+
+      l.ang += l.vel * dt;
+      // A coroa ABRE devagar, com teto: sem o teto, uma rocha que apanha vinte
+      // flechas terminaria com as brasas a cinquenta metros dela.
+      l.orbita = Math.min(C.orbitMaxScale, l.orbita + C.orbitDrift * dt);
+      l.rotX += l.girX * dt;
+      l.rotZ += l.girZ * dt;
+
+      const R = l.dono.raio * l.orbita;
+      const cx = Math.cos(l.ang) * R;
+      const cz = Math.sin(l.ang) * R;
+      // O plano inclinado: o mesmo círculo, girado em torno do eixo X pelo
+      // `tilt` da lasca. Duas linhas, e some o anel de Saturno.
+      const p = l.dono.group.position;
+      this._posl.set(
+        p.x + cx,
+        p.y + cz * Math.sin(l.tilt) + Math.sin(l.fase) * l.dono.raio * 0.15,
+        p.z + cz * Math.cos(l.tilt),
+      );
+      this._eulerl.set(l.rotX, 0, l.rotZ);
+      this._quatl.setFromEuler(this._eulerl);
+      this._escl.setScalar(l.raio);
+      this._m4l.compose(this._posl, this._quatl, this._escl);
+      this.lascaMesh.setMatrixAt(l.vaga, this._m4l);
+    }
+    this.lascaMesh.instanceMatrix.needsUpdate = true;
   }
 
   /**
@@ -241,6 +415,11 @@ export class MeteorRainManager {
     if (camera) camera.getWorldPosition(this._cam);
     for (const m of this.byNetId.values()) m.update(dt, camera);
 
+    // DEPOIS das rochas: a lasca é uma posição relativa à dona, e usar a pose
+    // do quadro anterior a deixaria um passo atrás numa rocha que desce a
+    // 24 m/s — visível como a brasa "arrastando" atrás da pedra.
+    this.passoLascas(dt);
+
     if (!this.estilhacos.length) return;
 
     const g = CONFIG.levels.moon.gravity;
@@ -281,6 +460,13 @@ export class MeteorRainManager {
   prepare() {
     if (this._warmups.length) return;
     const M = CONFIG.modes.meteorRain;
+    /* Os dois lotes instanciados nascem AQUI, e não na primeira flechada. Eles
+       são criados uma vez e nunca destruídos, então o único custo que teriam
+       durante a partida é o pior possível: compilar um shader no quadro em que
+       alguém acertou a primeira rocha. É o mesmo motivo pelo qual as rochas de
+       aquecimento existem. */
+    this.prepararLote();
+    this.prepararLascas();
     const amostras = [...M.classes.map((c, i) => [c.raio, i, c.hits]), [M.tankRaio, 0, 10]];
     for (const [raio, formato, hits] of amostras) {
       const m = new FallingMeteor(this.scene, this.physics, -(this._warmups.length + 1), raio, formato, hits);
@@ -312,6 +498,8 @@ export class MeteorRainManager {
     this.clearWarmups();
     for (const f of this.estilhacos) this.esconderEstilhaco(f);
     this.estilhacos = [];
+    for (const l of this.lascas) this.esconderLasca(l);
+    this.lascas = [];
   }
 
   dispose() {
@@ -326,5 +514,16 @@ export class MeteorRainManager {
     this.fragGeo = null;
     this.fragMat = null;
     this.vagasFrag = null;
+
+    if (this.lascaMesh) {
+      this.scene.remove(this.lascaMesh);
+      this.lascaMesh.dispose();
+      this.lascaMesh = null;
+    }
+    this.lascaGeo?.dispose();
+    this.lascaMat?.dispose();
+    this.lascaGeo = null;
+    this.lascaMat = null;
+    this.vagasLasca = null;
   }
 }

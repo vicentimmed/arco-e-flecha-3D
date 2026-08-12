@@ -93,6 +93,13 @@ export class DebugPanel {
         <button data-toggle="vectors">vetores</button>
         <button data-toggle="trace">traçado</button>
         <button data-toggle="post" class="on">pós-processamento</button>
+        <!-- Ligada, a câmera do especial vai para a FRENTE do feixe e viaja com
+             a ponta; desligada, fica no enquadramento lateral de trás do ombro,
+             que é como o golpe funcionava antes. Está aqui, e não só no config,
+             porque a escolha entre as duas se faz OLHANDO — e para isso é
+             preciso trocar entre elas sem recarregar a página. -->
+        <button data-toggle="kamecam"
+                class="${CONFIG.camera.kameCam.enabled ? "on" : ""}">câmera do feixe</button>
       </div>
 
       <!-- A qualidade recarrega a página: shadow map, densidade da grama e o
@@ -213,6 +220,12 @@ export class DebugPanel {
             break;
           case "post":
             this.ctx.renderer.setPostEnabled(on);
+            break;
+          case "kamecam":
+            CONFIG.camera.kameCam.enabled = on;
+            // Desligar no meio de um feixe devolve a terceira pessoa na hora:
+            // esperar o impacto para ver o efeito da chave é esperar demais.
+            if (!on) this.ctx.rig?.leaveKame?.();
             break;
         }
       });

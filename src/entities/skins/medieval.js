@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   O Arqueiro Medieval — um ranger encapuzado.
+   O Arqueiro Medieval — um ranger de manto.
 
    Segunda tentativa, escrita do zero. A primeira ficou ruim, e a causa foi
    medida em vez de adivinhada (ver `docs/plano-arqueiro-medieval.md`): as onze
@@ -17,7 +17,7 @@
      5. FACETA E AUSÊNCIA DE VINCO → 20–24 lados, e barras de pano onduladas
 
    E acima de tudo isso, a regra que a v1 quebrou: **o corpo ALTERNA claro e
-   escuro de cima para baixo**. Capuz escuro, rosto claro, manto escuro, túnica
+   escuro de cima para baixo**. Cabelo escuro, rosto claro, manto escuro, túnica
    média, mangas brilhantes, cinto escuro, calças claras, botas escuras. É essa
    alternância — e não a contagem de peças — que faz um corpo ser legível de
    longe. Ver `tint` e `createMaterials`.
@@ -48,7 +48,7 @@ const TUNICA_CRUA = new THREE.Color("#8a6f3f");
 export const medieval = {
   id: "medieval",
   label: "Arqueiro Medieval",
-  detalhe: "capuz, manto e arco de teixo",
+  detalhe: "manto, cabelo curto e arco de teixo",
   swatch: ["#232a20", "#e8dfc4"],
 
   /* Arco de teixo. A GEOMETRIA continua idêntica — `BRACE_HEIGHT`,
@@ -73,15 +73,15 @@ export const medieval = {
    */
   createMaterials() {
     return {
-      // (0,46) O rosto é a mancha clara dentro do capuz escuro. É o contraste
-      // que faz um capuz parecer um capuz em vez de um balde.
+      // (0,46) O rosto é a mancha clara entre o cabelo escuro e a barba escura.
+      // É o contraste que faz o rosto ser a primeira coisa que o olho acha.
       skin: pele("#e0a97e", 0.62),
-      // (0,02) Cabelo e barba, quase pretos — eles emolduram o rosto por baixo.
+      // (0,02) Cabelo e barba, quase pretos — eles emolduram o rosto por cima
+      // e por baixo. É o cabelo que assume, na cabeça, o lugar de âncora
+      // escura que era do capuz.
       hair: pele("#2a2018", 0.5),
-      // (0,02) A lã do capuz. Verde tão fundo que lê como preto ao sol.
-      wool: pano("#232a20", 0.95),
-      // (0,016) O manto, ainda mais fundo que o capuz: é ele que separa a
-      // cabeça dos ombros quando os dois estão contra o céu.
+      // (0,016) O manto sobre os ombros — o escuro que separa a cabeça dos
+      // ombros quando os dois estão contra o céu.
       cloak: pano("#1e241c", 0.95),
       // (0,15 na cor do jogador) O gambeson — o ÚNICO lugar da cor do time.
       tunic: pano("#8a6f3f", 0.88),
@@ -121,7 +121,7 @@ export const medieval = {
    * túnica fica sozinha, com escuro em cima (o manto) e brilhante embaixo (as
    * mangas), e é esse cerco que a faz saltar mesmo num tom médio.
    *
-   * Pele, cabelo, capuz, manto, calças e botas NUNCA recebem cor: são eles que
+   * Pele, cabelo, manto, calças e botas NUNCA recebem cor: são eles que
    * seguram a estrutura de valor, e tingi-los é justamente o que colapsa tudo
    * para a mesma faixa.
    */
@@ -272,7 +272,6 @@ export const medieval = {
      *   direita: aljava nas costas, escarcela no cinto
      *   esquerda: adaga no quadril, ponta do cinto pendurada
      *   só no braço do arco: o bracelete
-     *   um lado só: o rabicho do capuz
      */
     const cinto = new THREE.Mesh(
       new THREE.CylinderGeometry(0.118, 0.118, 0.072, 20),
@@ -376,10 +375,11 @@ export const medieval = {
 
     /* ---------------------------------------------------------- a cabeça --
      *
-     * A regra que organiza tudo aqui: o ROSTO É UMA MANCHA CLARA dentro do
-     * escuro. A v1 errou exatamente isto — capuz escuro, barba subindo pela
-     * bochecha e rosto na sombra deram uma bola preta sem feições. Um capuz
-     * existe para EMOLDURAR um rosto claro, não para engoli-lo. */
+     * A regra que organiza tudo aqui continua a mesma de quando havia capuz: o
+     * ROSTO É UMA MANCHA CLARA dentro do escuro. Só que agora quem faz esse
+     * escuro é o CABELO, não um capuz — o capuz saiu a pedido (ver o bloco de
+     * cabelo, logo abaixo), e sem ele o crânio precisava de alguma coisa em
+     * cima, ou a cabeça vira uma bola de pele careca. */
     const head = new THREE.Group();
     head.position.y = BODY.headY - BODY.hipY;
     spine.add(head);
@@ -390,54 +390,35 @@ export const medieval = {
 
     const R = BODY.headR;
 
-    /* O CAPUZ — esfera com um vão de ~100° na frente.
+    /* O CABELO — curto, no lugar que o capuz ocupava.
      *
-     * O vão já nasce virado para o rosto: no `SphereGeometry` do Three,
-     * `phi = 0` aponta para -X e `phi = π/2` para +Z, então o arco coberto
-     * [-0,22π, 1,22π] varre -X → +Z → +X e o que sobra é a fatia centrada em -Z
-     * — a direção da mira. Copiar daqui o `rotation.y = -π/2` do cabelo da
-     * arqueira (que é meia esfera e precisa dele) fecha o capuz por completo:
-     * foi o primeiro erro desta peça, e o sintoma foi uma cabeça sem rosto.
+     * Duas peças, a mesma dupla que a arqueira usa (calota + parte de trás),
+     * mas mais BAIXA: cabelo curto de homem, não uma franja funda. Fica
+     * ESCURO (mat.hair, luminância 0,02) de propósito — é ele que herda o
+     * papel que o capuz tinha na alternância de valor da cabeça: escuro em
+     * cima, rosto claro embaixo. Sem essa âncora escura no alto, a cabeça
+     * inteira vira uma mancha clara só, e a régua de valor da bancada
+     * (`dev/skins.html`) acusa a queda na amplitude.
      *
-     * `DoubleSide` é obrigatório: a casca é ABERTA, e sem as duas faces a parte
-     * de trás — cujas normais apontam para longe de quem olha de frente — é
-     * descartada e aparece um buraco de céu dentro da cabeça. */
-    const capuz = new THREE.Mesh(
-      new THREE.SphereGeometry(R * 1.22, 20, 14, -Math.PI * 0.22, Math.PI * 1.44, 0, Math.PI * 0.78),
-      mat.wool,
+     * `castShadow` só na calota: a parte de trás é pequena e baixa, do tipo
+     * que `podarSombras` cortaria de qualquer forma (ver `skins/base.js`). */
+    const cabeloTopo = new THREE.Mesh(
+      new THREE.SphereGeometry(R * 1.04, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.56),
+      mat.hair,
     );
-    capuz.material.side = THREE.DoubleSide;
-    capuz.rotation.set(-0.16, 0, 0);
-    capuz.scale.set(1.02, 1.06, 1.1);
-    capuz.position.set(0, 0.012, 0.014);
-    capuz.castShadow = true;
-    head.add(capuz);
+    cabeloTopo.scale.set(1.0, 1.05, 1.02);
+    cabeloTopo.position.y = 0.006;
+    cabeloTopo.castShadow = true;
+    head.add(cabeloTopo);
 
-    /* O FORRO — a borda que dá espessura ao capuz.
-     *
-     * Uma casca de uma superfície só termina numa aresta de zero milímetro, e
-     * aresta de zero milímetro é papel. O forro é a mesma forma 5 % menor e mais
-     * escura, recuada 1 cm no vão: olhando de frente vê-se lã, depois uma tira
-     * escura, depois o rosto. É essa tira que o cérebro lê como "o capuz tem
-     * pano de espessura". */
-    const forro = new THREE.Mesh(
-      new THREE.SphereGeometry(R * 1.16, 18, 12, -Math.PI * 0.18, Math.PI * 1.36, 0, Math.PI * 0.74),
-      mat.cloak,
+    const cabeloNuca = new THREE.Mesh(
+      new THREE.SphereGeometry(R * 1.0, 16, 12, 0, Math.PI, 0, Math.PI),
+      mat.hair,
     );
-    forro.material.side = THREE.DoubleSide;
-    forro.rotation.copy(capuz.rotation);
-    forro.scale.copy(capuz.scale);
-    forro.position.copy(capuz.position);
-    head.add(forro);
-    medio.push(forro);
-
-    /* A ponta do capuz saiu junto com o rabicho, e por um motivo diferente:
-       medida contra a casca, ela emergia UM CENTÍMETRO. Era malha invisível
-       pagando chamada de desenho e entrada no passe de sombra — o pior tipo de
-       peça que existe, a que custa e não aparece. O capuz ficou uma abóbada
-       lisa. Um bico de verdade é fácil de devolver: basta empurrá-lo uns 4 cm
-       para fora da casca, e aí ele passa a ser silhueta em vez de enfeite
-       enterrado. */
+    cabeloNuca.rotation.y = -Math.PI / 2;
+    cabeloNuca.scale.set(1.0, 1.0, 0.8);
+    cabeloNuca.position.z = 0.018;
+    head.add(cabeloNuca);
 
     /* O rosto. As POSIÇÕES são as mesmas da arqueira, e isso é contrato:
        `setDetailLevel` corta este conjunto acima de 12 m e a âncora da corda é
@@ -462,7 +443,7 @@ export const medieval = {
       head.add(iris);
       perto.push(iris);
 
-      // Sobrancelha grossa e reta: é ela que fecha o olhar sob o capuz.
+      // Sobrancelha grossa e reta: é ela que fecha o olhar.
       const sobrancelha = new THREE.Mesh(
         new THREE.BoxGeometry(R * 0.36, R * 0.1, R * 0.1),
         mat.hair,
@@ -516,18 +497,13 @@ export const medieval = {
     head.add(barba);
     medio.push(barba);
 
-    /* SEM RABICHO.
+    /* SEM SWAY.
      *
-     * O capuz teve um liripipe — o rabicho de pano que os capuzes medievais têm
-     * de verdade, pendurado atrás e balançando na cadeia de `sway`. Saiu a
-     * pedido: pendurado na cabeça ele lia como apêndice, não como roupa, e
-     * roubava a atenção da única coisa que a cabeça precisa dizer de longe, que
-     * é a forma do capuz.
-     *
-     * `sway: null` é um valor previsto pelo contrato, e o rig sai de
-     * `updateSway` na primeira linha quando não há o que balançar (skin careca é
-     * skin válida). A ponta do capuz continua: ela é a silhueta do capuz, não um
-     * pingente. */
+     * Nada aqui balança — não há mais rabicho de capuz nem nada que o
+     * substitua, e cabelo curto de homem não tem ponta para animar.
+     * `sway: null` é um valor previsto pelo contrato: o rig sai de
+     * `updateSway` na primeira linha quando não há o que balançar (skin
+     * careca — ou de cabelo curto — é skin válida). */
 
     /* ------------------------------------------------ braços e pernas ----- */
     const armR = buildArm(mat, true, perto, medio); // braço do arco: leva o bracelete

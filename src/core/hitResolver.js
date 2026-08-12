@@ -61,7 +61,29 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "fallingMeteor") {
     return resolveFallingMeteorHit(ctx);
   }
+  if (other.kind === "bat") {
+    return resolveBatHit(ctx);
+  }
   return resolveSceneryHit(ctx);
+}
+
+/**
+ * Morcego gigante: a flecha ATRAVESSA, e a sala decide o resto.
+ *
+ * Não crava, pelo mesmo motivo do pássaro: ele está a trinta metros de altura e
+ * uma flecha presa nele ficaria rodopiando com o corpo até o fim da partida —
+ * ou, pior, pendurada no ar onde o corpo estava, porque ele some no estouro em
+ * vez de tombar. O bicho vira poeira, a flecha vai junto.
+ */
+function resolveBatHit({ arrow, other, impact, deps }) {
+  emitImpact(arrow, "bat", other.netId ?? other.entityId, impact, null, {
+    label: "morcego",
+    batId: other.netId ?? null,
+    hit: true,
+  });
+  deps.spawnPuff?.(impact, null);
+  deps.removeArrow?.(arrow);
+  return { kind: "bat", netId: other.netId ?? null };
 }
 
 /**

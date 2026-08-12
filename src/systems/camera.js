@@ -8,6 +8,11 @@
      mirando de verdade.
    • ARROW  — atrás da flecha em voo. Entra sozinha a cada disparo e só sai
      quando o jogador clica.
+   • KAME   — à FRENTE do Kamehameha, viajando com a ponta e olhando para trás.
+     Entra sozinha no disparo do especial e sai no impacto. É o inverso da
+     câmera da flecha, e o inverso é o ponto: o que se quer ver não é o que a
+     ponta vai encontrar, é o arqueiro ao fundo empurrando trezentos metros de
+     feixe. Desligável por `CONFIG.camera.kameCam.enabled`.
 
    REGRA DE OURO: a pose da câmera é função EXCLUSIVA dos ângulos de mira e da
    posição da arqueira — nunca do raycast. E é essa pose que DEFINE a mira.
@@ -43,7 +48,11 @@ export const CameraMode = {
   ARCHER: "archer",
   FIRST: "first",
   ARROW: "arrow",
+  KAME: "kame",
 };
+
+/** Modos que são CINEMA: a câmera não está mais no ponto de vista da mira. */
+const CINEMATIC = new Set([CameraMode.ARROW, CameraMode.KAME]);
 
 export class CameraRig {
   constructor(camera) {
@@ -61,6 +70,11 @@ export class CameraRig {
     this.frozenPosition = new THREE.Vector3();
     this.frozenLookAt = new THREE.Vector3();
 
+    /** Feixe que a câmera do especial está acompanhando, ou null. */
+    this.kameBeam = null;
+    /** Segundos parados no impacto antes de devolver a terceira pessoa. */
+    this.kameHold = 0;
+
     this.position = new THREE.Vector3();
     this.lookAt = new THREE.Vector3();
 
@@ -77,6 +91,8 @@ export class CameraRig {
     this._right = new THREE.Vector3();
     this._up = new THREE.Vector3(0, 1, 0);
     this._tmp = new THREE.Vector3();
+    /** "Cima" do enquadramento do feixe: perpendicular a ele, não ao mundo. */
+    this._axis = new THREE.Vector3();
     this.initialized = false;
 
     this.baseFov = CONFIG.camera.fov;
@@ -90,6 +106,15 @@ export class CameraRig {
 
   get isArrowCam() {
     return this.mode === CameraMode.ARROW;
+  }
+
+  get isKameCam() {
+    return this.mode === CameraMode.KAME;
+  }
+
+  /** A câmera está contando uma história em vez de mostrar a mira? */
+  get isCinematic() {
+    return CINEMATIC.has(this.mode);
   }
 
   /** Terceira pessoa é o padrão; botão direito/C segura a primeira pessoa. */
@@ -108,7 +133,7 @@ export class CameraRig {
     // O pedido é registrado mesmo durante a câmera da flecha: é ele que decide
     // para onde voltar quando o voo acaba.
     this.wantFirstPerson = on;
-    if (this.mode === CameraMode.ARROW) return;
+    if (this.isCinematic) return;
     const next = on ? CameraMode.FIRST : CameraMode.ARCHER;
     if (this.mode === next) return;
     this.mode = next;
@@ -132,6 +157,47 @@ export class CameraRig {
   }
 
   /**
+   * O feixe do PRÓPRIO jogador acabou de sair: a câmera vai para a frente dele.
+   *
+   * Recusa em dois casos, e os dois importam:
+   *
+   * • `enabled: false` — é o botão de volta para o enquadramento lateral que
+   *   existia antes desta câmera (`CONFIG.camera.special*`). Nenhum outro
+   *   arquivo precisa saber da diferença.
+   * • feixe curto — mirar no chão a vinte metros daria um corte de dois frames
+   *   ida e volta, e um corte tão curto lê como falha de render.
+   *
+   * @param {object} feixe um `KamehamehaBeam`
+   * @returns {boolean} se a câmera assumiu
+   */
+  onKame(feixe) {
+    const c = CONFIG.camera.kameCam;
+    if (!c?.enabled || !feixe || feixe.morto) return false;
+    if (feixe.alcance < c.minRange) return false;
+    this.kameBeam = feixe;
+    this.kameHold = 0;
+    this.mode = CameraMode.KAME;
+    this.initialized = false;
+    this.applyLens();
+    return true;
+  }
+
+  /** Interrompe a câmera do feixe (troca de modo, morte, cancelamento). */
+  leaveKame() {
+    if (this.mode !== CameraMode.KAME) return false;
+    this._leaveKameCam();
+    return true;
+  }
+
+  _leaveKameCam() {
+    this.kameBeam = null;
+    this.kameHold = 0;
+    this.mode = this.wantFirstPerson ? CameraMode.FIRST : CameraMode.ARCHER;
+    this.initialized = false;
+    this.applyLens();
+  }
+
+  /**
    * Encerra a câmera da flecha no modo que o jogador está pedindo AGORA.
    *
    * Voltar sempre para um modo fixo custava um frame de imagem errada: se ele
@@ -146,7 +212,16 @@ export class CameraRig {
     this.applyLens();
   }
 
-  /** Clique: volta para a visão da arqueira. */
+  /**
+   * Clique: volta para a visão da arqueira.
+   *
+   * Vale SÓ para a câmera da flecha, e de propósito. O clique e o W chegam aqui
+   * porque `input` os transforma em `dismissArrowCam` sempre que o tiro está
+   * bloqueado — e durante o especial ele está. Aceitá-los aqui deixaria a
+   * primeira tecla apertada cancelar o enquadramento do feixe sem devolver o
+   * movimento, que continua travado pelos sete segundos: a pessoa perderia a
+   * imagem e não ganharia nada. Quem encerra a câmera do feixe é o impacto.
+   */
   returnToArcher() {
     if (this.mode !== CameraMode.ARROW) return false;
     this._leaveArrowCam();
@@ -160,9 +235,9 @@ export class CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
-  /** Modo que manda na MIRA — a câmera da flecha não desvia a linha de tiro. */
+  /** Modo que manda na MIRA — câmera de cinema não desvia a linha de tiro. */
   get aimMode() {
-    if (this.mode !== CameraMode.ARROW) return this.mode;
+    if (!this.isCinematic) return this.mode;
     return this.wantFirstPerson ? CameraMode.FIRST : CameraMode.ARCHER;
   }
 
@@ -241,6 +316,18 @@ export class CameraRig {
     // e o retorno da câmera não dependem de um estado que ficou para trás.
     this.updateAimViewpoint(aimAxis, eye, cameraPivot);
 
+    if (this.mode === CameraMode.KAME) {
+      const feixe = this.kameBeam;
+      // Feixe que morreu (ou foi descartado) não prende ninguém numa câmera
+      // órfã — o mesmo cuidado da câmera da flecha, logo abaixo.
+      if (!feixe || feixe.morto) {
+        this._leaveKameCam();
+      } else {
+        this.updateKameCam(dt, feixe);
+        return;
+      }
+    }
+
     if (this.mode === CameraMode.ARROW) {
       const arrow = this.followArrow;
       // Se a flecha sumiu de vez, não prende o jogador numa câmera órfã.
@@ -262,6 +349,88 @@ export class CameraRig {
       .addScaledVector(this.aimForward, CONFIG.camera.convergence);
     this.camera.lookAt(this.lookAt);
     this.initialized = true;
+  }
+
+  /**
+   * A câmera do feixe: à frente da ponta, de lado, olhando para trás.
+   *
+   * A câmera da flecha vai ATRÁS porque o que interessa nela é o alvo chegando.
+   * Aqui é o contrário: o que interessa é a ORIGEM — o arqueiro plantado com as
+   * mãos à frente e trezentos metros de energia saindo delas. Então a câmera se
+   * põe adiante da ponta e olha para o peito de quem atirou; o feixe entra pelo
+   * canto do quadro, atravessa em diagonal e converge no personagem, que vai
+   * ficando pequeno enquanto a viagem continua.
+   *
+   * Três cuidados, e nenhum é enfeite:
+   *
+   * • **O afastamento CRESCE com a viagem** (`XGain · frente`). Com deslocamento
+   *   fixo, a 400 m o arqueiro estaria a menos de um grau do eixo: o feixe
+   *   viraria um ponto no centro da tela em vez de um traço. Crescendo, o ângulo
+   *   se mantém e o traço continua traço.
+   * • **Nunca dentro do halo.** O mínimo lateral (6 m) é maior que o raio
+   *   externo do feixe (3,2 m) — dentro dele, um cilindro aditivo é uma tela
+   *   branca, que é a lição mais cara de `docs/plano-kamehameha.md`.
+   * • **Para ANTES do impacto, e nunca dentro do chão.** A viagem termina
+   *   `standoff` metros atrás do fim, e a altura tem piso no terreno: colada na
+   *   explosão a câmera lava o quadro, e num feixe rasante ela iria para debaixo
+   *   da Lua.
+   *
+   * Tudo é função do estado do feixe — sem amortecimento, sem relógio próprio.
+   * A ponta viaja a 300 m/s numa reta travada, então não há tremor a filtrar, e
+   * um `damp` só produziria atraso.
+   */
+  updateKameCam(dt, feixe) {
+    const c = CONFIG.camera.kameCam;
+    const frente = feixe.frente;
+
+    /* Base do enquadramento: o eixo do feixe, uma lateral e um "cima"
+       perpendicular a ele. O cima do MUNDO não serve — com o feixe apontado
+       para o zênite, `up` e o eixo são paralelos e o quadro tomba. */
+    this._tmp.copy(feixe.dir);
+    this._right.crossVectors(this._tmp, this._up);
+    if (this._right.lengthSq() < 1e-6) this._right.set(1, 0, 0);
+    else this._right.normalize();
+    this._axis.crossVectors(this._right, this._tmp).normalize();
+
+    const lead = c.lead + c.leadGain * frente;
+    const side = c.side + c.sideGain * frente;
+    const up = c.up + c.upGain * frente;
+    /* À frente da ponta, e a viagem PARA antes do fim. O limite não é o ponto
+       de impacto: é `standoff` metros atrás dele. Ir até lá punha a câmera a
+       dez metros de uma luz de intensidade 900, e o quadro lavava — ver o
+       comentário do `standoff` no config. Nos últimos metros a ponta se afasta
+       da câmera, e é ela quem explode ao longe. */
+    const fim = Math.max(0, feixe.alcance - c.standoff);
+    const eixo = Math.min(frente + lead, fim);
+
+    this._desired
+      .copy(feixe.origem)
+      .addScaledVector(this._tmp, eixo)
+      .addScaledVector(this._right, side)
+      .addScaledVector(this._axis, up);
+
+    const chao = feixe.terrain?.heightAt?.(this._desired.x, this._desired.z);
+    if (Number.isFinite(chao)) {
+      this._desired.y = Math.max(this._desired.y, chao + c.groundClearance);
+    }
+
+    // O olhar é a ORIGEM do feixe, que é o peito do arqueiro. É isto, e só
+    // isto, que põe o personagem ao fundo com o raio saindo das mãos dele.
+    this._look.copy(feixe.origem);
+
+    this.position.copy(this._desired);
+    this.lookAt.copy(this._look);
+    this.camera.position.copy(this.position);
+    this.camera.lookAt(this.lookAt);
+    this.initialized = true;
+
+    /* Chegou ao fim: segura o quadro por um instante para a explosão aparecer e
+       devolve a terceira pessoa. Sair no mesmo frame do impacto é gastar a
+       viagem inteira para não mostrar o que ela ia mostrar. */
+    if (frente >= feixe.alcance - 0.01) {
+      this.kameHold += dt;
+      if (this.kameHold >= c.hold) this._leaveKameCam();
+    }
   }
 
   updateArrowCam(dt, arrow) {

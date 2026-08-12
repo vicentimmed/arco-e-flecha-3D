@@ -44,7 +44,7 @@
 import { CONFIG } from "../src/config.js";
 import { CastleField } from "../src/shared/castleField.js";
 import { Siege } from "../server/siegeSim.js";
-import { gateInfo } from "../src/shared/castleProps.js";
+import { gateInfo, trebuchetPosts } from "../src/shared/castleProps.js";
 
 const PASSO = 1 / 10; // o mesmo relógio de 10 Hz da sala
 const GATE = gateInfo();
@@ -118,7 +118,10 @@ function partida() {
     jogadores.push({ id: i + 1, x: (i - (defensores - 1) / 2) * 6, y: 25, z: 5.5, alive: true });
   }
 
-  const engenhos = semTrabuco ? [] : [new Engenho(), new Engenho(), new Engenho()];
+  /* QUANTOS ENGENHOS EXISTEM DE VERDADE, e não três escritos à mão. A conta
+     estava fixa em três, e o do meio saiu do muro (ver `trebuchetPosts`) — um
+     banco de provas que mede uma arma a mais mede outro jogo. */
+  const engenhos = semTrabuco ? [] : trebuchetPosts().map(() => new Engenho());
   /* Uma pessoa na manivela é uma pessoa que não atira — e a manivela é
      FRACIONÁRIA, não um posto.
 

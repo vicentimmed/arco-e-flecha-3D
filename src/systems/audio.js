@@ -434,6 +434,166 @@ function makeKameBeamBuffer(ctx) {
   return buffer;
 }
 
+/* ------------------------------------------------- as mortes do cerco -------
+
+   OITO ESPÉCIES, OITO SONS — e o motivo não é caprichoo.
+
+   O cerco põe até 120 bichos na rampa, e o jogador atira quase sempre para
+   FORA do centro da tela: ele mira o próximo da fila enquanto o canto do olho
+   cuida do resto. Nessa situação o som é o único canal que diz O QUE morreu sem
+   custar um olhar — "aquilo era o ogro" e "aquilo era mais um esqueleto" são
+   informações completamente diferentes para quem está decidindo o próximo tiro,
+   e até aqui as duas soavam igual: nada.
+
+   Todos são sintetizados, como quase tudo neste arquivo. Oito arquivos de áudio
+   custariam mais bytes de download do que o modo inteiro de código.
+
+   O que separa um do outro é a FAIXA e a TEXTURA, não o volume: grave e longo
+   lê como grande, agudo e curto lê como pequeno, e ruído sem altura definida
+   lê como coisa que não tem voz — osso e madeira. */
+
+/**
+ * O esqueleto: OSSO CAINDO, sem voz nenhuma.
+ *
+ * Uma pilha de estalos secos com alturas aleatórias e envoltórias muito curtas.
+ * Nenhuma senoide sustentada — é justamente a ausência de altura definida que
+ * faz o ouvido ler "aquilo não era vivo".
+ */
+function makeBoneRattleBuffer(ctx) {
+  const duration = 0.8;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  /* Onze estalos espalhados pelos primeiros dois terços, cada um com a própria
+     ressonância. Espalhados por uma curva quadrática e não uniformemente: uma
+     pilha que desaba tem muitos ossos no começo e uns poucos rolando no fim. */
+  const estalos = [];
+  for (let k = 0; k < 11; k++) {
+    const p = Math.pow(Math.random(), 0.55);
+    estalos.push({
+      at: p * duration * 0.68,
+      freq: 320 + Math.random() * 1500,
+      amp: 0.3 + Math.random() * 0.7,
+      decay: 55 + Math.random() * 90,
+    });
+  }
+
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    let v = 0;
+    for (const e of estalos) {
+      const dt = t - e.at;
+      if (dt < 0 || dt > 0.2) continue;
+      const env = Math.exp(-dt * e.decay);
+      v += Math.sin(TAU * e.freq * dt) * env * e.amp * 0.5;
+      // A madeira seca do osso: um pouco de ruído em cima do tom.
+      v += (Math.random() * 2 - 1) * env * e.amp * 0.22;
+    }
+    data[i] = v * Math.pow(1 - t / duration, 0.8);
+  }
+  return buffer;
+}
+
+/**
+ * O mago: a magia SE DESFAZ.
+ *
+ * Um tom que sobe (e não desce, como todo o resto deste arquivo) enquanto
+ * afina até sumir, com uma modulação em anel por cima. Subir é o que o separa
+ * de uma morte de bicho: nada orgânico morre subindo, e é exatamente por isso
+ * que soa como energia se dissipando em vez de fôlego acabando.
+ */
+function makeMagicFizzleBuffer(ctx) {
+  const duration = 1.1;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  let fase = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    const freq = 380 + 1500 * Math.pow(p, 1.6);
+    fase += (TAU * freq) / sampleRate;
+    const anel = Math.sin(TAU * 63 * t) * 0.5 + 0.5;
+    const brilho = Math.sin(fase) * 0.6 + Math.sin(fase * 2.51) * 0.25;
+    // Faísca: ruído picado que some antes do tom, como brasa apagando.
+    const faisca = (Math.random() * 2 - 1) * 0.25 * Math.exp(-p * 6);
+    const env = Math.min(1, t / 0.03) * Math.pow(1 - p, 1.5);
+    data[i] = (brilho * (0.45 + 0.55 * anel) + faisca) * env;
+  }
+  return buffer;
+}
+
+/**
+ * A catapulta: MADEIRA QUE ARREBENTA.
+ *
+ * Ela não tem voz — é uma máquina, e o que morre nela é a armação. Três
+ * rachaduras graves em sequência sobre um baque de queda: o ouvido lê "aquilo
+ * era grande e era feito de tábua", que é a única coisa que precisa saber.
+ */
+function makeWoodCrashBuffer(ctx) {
+  const duration = 1.5;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  const rachas = [0.0, 0.13, 0.31];
+  let low = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+
+    let v = 0;
+    for (const at of rachas) {
+      const dt = t - at;
+      if (dt < 0 || dt > 0.35) continue;
+      const env = Math.exp(-dt * 22);
+      // Rachar é ruído filtrado, não tom: madeira lascando não tem nota.
+      v += (Math.random() * 2 - 1) * env * 0.85;
+      v += Math.sin(TAU * 140 * dt) * env * 0.3;
+    }
+    // O baque grave da armação chegando ao chão, atrás de tudo.
+    low = low * 0.94 + (Math.random() * 2 - 1) * 0.06;
+    v += low * 2.2 * Math.exp(-p * 3.4);
+    data[i] = v * Math.pow(1 - p, 0.7);
+  }
+  return buffer;
+}
+
+/**
+ * O morcego: um GUINCHO agudo com flutter de asa.
+ *
+ * A faixa é o dobro de tudo o mais que morre neste jogo, e é de propósito: ele
+ * é a única ameaça que vem de cima, e um som que ninguém confunde com a rampa é
+ * o que diz, sem olhar, que o céu ficou livre.
+ */
+function makeBatScreechBuffer(ctx) {
+  const duration = 0.55;
+  const sampleRate = ctx.sampleRate;
+  const length = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  let fase = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / sampleRate;
+    const p = t / duration;
+    // Despenca de 2 kHz para 600 Hz — o guincho perdendo força.
+    const freq = 600 + 1500 * Math.pow(1 - p, 2.2);
+    fase += (TAU * freq) / sampleRate;
+    const voz = Math.sin(fase) * 0.5 + Math.sin(fase * 1.51) * 0.3;
+    // O bater desesperado das asas: modulação rápida de amplitude.
+    const bate = 0.72 + 0.28 * Math.sin(TAU * 19 * t);
+    const env = Math.min(1, t / 0.012) * Math.pow(1 - p, 1.3);
+    data[i] = (voz * bate + (Math.random() * 2 - 1) * 0.14) * env;
+  }
+  return buffer;
+}
+
 function makeRockBurstBuffer(ctx) {
   const duration = 1.6;
   const sampleRate = ctx.sampleRate;
@@ -816,6 +976,75 @@ export class AudioSystem {
     this.buffers.explosion = makeExplosionBuffer(this.ctx);
     // A rocha se parte com som de rocha, e não com o de uma nave pegando fogo.
     this.buffers.rockBurst = makeRockBurstBuffer(this.ctx);
+
+    /* ------------------------------------------------- as mortes do cerco --
+       Uma por espécie. Ver o bloco de comentário acima de `makeBoneRattleBuffer`
+       para o porquê de serem oito e não uma. A regra que organiza a tabela:
+       GRAVE E LONGO lê como grande, AGUDO E CURTO lê como pequeno, e SEM ALTURA
+       DEFINIDA lê como coisa que não tem voz.
+
+       Quem escolhe qual toca é `SiegeSystem.onDeath`, pela espécie que a sala
+       anunciou — o `id` do som é `death` mais o `kind` do protocolo, então
+       acrescentar uma espécie é acrescentar uma linha aqui. */
+    // Soldado: grito humano de peito, curto. É a régua contra a qual as outras
+    // sete espécies são lidas, então é o mais neutro dos oito.
+    this.buffers.deathSoldier = makeCryBuffer(this.ctx, {
+      duration: 0.62,
+      from: 300,
+      to: 140,
+      vibrato: 19,
+      rasp: 0.2,
+      growl: 0.12,
+    });
+    // Pavês: o mesmo homem, mais encorpado — ele é o que aguenta três flechas.
+    this.buffers.deathShielded = makeCryBuffer(this.ctx, {
+      duration: 0.78,
+      from: 232,
+      to: 104,
+      vibrato: 14,
+      rasp: 0.3,
+      growl: 0.22,
+    });
+    // Esqueleto: nenhuma voz. Ele desmonta.
+    this.buffers.deathSkeleton = makeBoneRattleBuffer(this.ctx);
+    /* Escalador: grito AGUDO e longo, que despenca. Ele morre no alto do muro
+       e cai oito metros — o som acompanha a queda, e é o único da lista que
+       conta o que aconteceu DEPOIS do acerto. */
+    this.buffers.deathClimber = makeCryBuffer(this.ctx, {
+      duration: 1.15,
+      from: 540,
+      to: 150,
+      vibrato: 12,
+      rasp: 0.16,
+      growl: 0.05,
+    });
+    // Mastim: ganido curto e alto, como o de um cão. É o mais rápido dos oito,
+    // porque ele é o mais rápido dos oito.
+    this.buffers.deathHound = makeCryBuffer(this.ctx, {
+      duration: 0.4,
+      from: 720,
+      to: 250,
+      vibrato: 34,
+      rasp: 0.24,
+      growl: 0,
+    });
+    // Xamã e mago das torres: a magia se desfaz. Ver `makeMagicFizzleBuffer`.
+    this.buffers.deathShaman = makeMagicFizzleBuffer(this.ctx);
+    /* Ogro: bramido de peito, grave e arrastado. Um segundo e meio — ele é o
+       único da rampa que vale dezesseis flechas, e derrubá-lo tem de SOAR como
+       um acontecimento. */
+    this.buffers.deathOgre = makeCryBuffer(this.ctx, {
+      duration: 1.6,
+      from: 132,
+      to: 48,
+      vibrato: 8,
+      rasp: 0.26,
+      growl: 0.7,
+    });
+    // Catapulta: madeira arrebentando. Ela não tem voz — é uma máquina.
+    this.buffers.deathCatapult = makeWoodCrashBuffer(this.ctx);
+    // Morcego: guincho, o dobro da faixa de tudo o mais que morre aqui.
+    this.buffers.deathBat = makeBatScreechBuffer(this.ctx);
 
     /* Chuva de meteoros e especial. Sintetizados, como quase tudo aqui:
        um bipe de alerta, o zunido da carga e o rugido do feixe. */

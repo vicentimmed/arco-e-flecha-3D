@@ -57,6 +57,16 @@ const TINTAS = {
   pano: { color: "#a8342e", roughness: 0.95, metalness: 0, side: THREE.DoubleSide },
 };
 
+/**
+ * Quanto uma peça afunda no piso em que assenta, em metros.
+ *
+ * Seis centímetros: o suficiente para o cartão de profundidade nunca empatar as
+ * duas faces (ver `Lote.assenta`), e pouco o bastante para caber dentro da
+ * espessura de qualquer alvenaria deste castelo — a mais fina são os 40 cm da
+ * hourd.
+ */
+const AFUNDA = 0.06;
+
 /** Acumula geometrias por material e entrega tudo em poucas malhas. */
 class Lote {
   constructor() {
@@ -79,6 +89,28 @@ class Lote {
     );
     this.add(tinta, g, m);
     g.dispose();
+  }
+
+  /**
+   * Uma caixa que ASSENTA sobre um piso — e que NÃO briga com ele.
+   *
+   * Toda peça que fica em cima de outra (ameia sobre o adarve, guarita sobre o
+   * bastião, torre sobre o muro) nasce com a face de baixo exatamente na cota
+   * do piso. Duas faces coplanares na mesma profundidade são o caso clássico de
+   * **z-fighting**: o cartão de profundidade não tem precisão para decidir qual
+   * está na frente, e a que ganha muda de pixel para pixel e de quadro para
+   * quadro. Na tela isso é o chão do muro PISCANDO em manchas — que foi
+   * exatamente o relato.
+   *
+   * A cura é não empatar: a peça afunda seis centímetros no piso. Nada disso
+   * aparece (o que afunda está dentro de pedra maciça) e o empate acaba.
+   *
+   * `yBase` é a cota do PISO, não o centro da caixa — que é como se pensa ao
+   * pôr uma coisa em cima de outra, e é a metade do valor deste método.
+   */
+  assenta(tinta, hx, alt, hz, x, yBase, z) {
+    const meia = alt / 2 + AFUNDA / 2;
+    this.box(tinta, hx, meia, hz, x, yBase + alt / 2 - AFUNDA / 2, z);
   }
 
   flush(parent) {
@@ -144,10 +176,34 @@ export class Castle {
          nada apontando para uma árvore. Quem constrói o bosque é
          `castleGround.buildWoods`. */
       if (!b.box) continue;
+
+      /* A ESCADA NÃO, e é o defeito que fazia o cerco perder um jogador por
+       * morte.
+       *
+       * `castleBlockers()` declara cada escada como um BLOCO MACIÇO do pátio ao
+       * adarve — uma aproximação deliberada, porque o formato compartilhado não
+       * tem caixa girada em torno de X e o servidor só precisa dela para
+       * decidir visada. O cliente monta a rampa de verdade em `buildStairs`, e
+       * o comentário de lá sempre disse isso.
+       *
+       * Só que esta varredura não abria exceção: ela criava o colisor do bloco
+       * TAMBÉM. O resultado era uma escada que, do lado de cá, era um pilar de
+       * pedra de oito metros com paredes verticais — a rampa existia por baixo
+       * e não servia para nada, porque o bloco a envolvia inteira. Quem morria
+       * renascia na menagem e não tinha por onde voltar ao muro: as duas
+       * escadas do castelo eram maciças.
+       *
+       * A malha sai junto pelo mesmo motivo: o bloco ia até `WALL_TOP` e
+       * escondia os degraus desenhados. Quem desenha a escada é `buildStairs`. */
+      if (b.name === "escada") continue;
+
       /* Fiadas alternadas: peças pares num tom, ímpares no outro. Não é
          aleatório — é determinístico pela ordem da lista, então a parede é a
          mesma em todas as telas. */
-      const tinta = i++ % 2 === 0 ? "pedra" : "pedraEscura";
+      /* A peça pode DECLARAR o material. Só as torres de madeira do pé da
+         rampa fazem isso hoje (ver `mageTowers`); todo o resto continua
+         alternando as fiadas de calcário pela ordem da lista. */
+      const tinta = b.mat ?? (i++ % 2 === 0 ? "pedra" : "pedraEscura");
       lote.box(tinta, b.hx, b.hy, b.hz, b.x, b.y, b.z, b.ry ?? 0);
 
       const body = physics.createBody(
@@ -188,9 +244,9 @@ export class Castle {
        silhueta precisa dizer — "isto foi pregado aqui às pressas" — se perde.
        São só malha: ninguém encosta nelas. */
     const passo = 2.6;
-    const n = Math.floor((C.wallHalfX * 2) / passo);
+    const n = Math.floor((h.hx * 2) / passo);
     for (let i = 0; i <= n; i++) {
-      const x = -C.wallHalfX + i * passo;
+      const x = -h.hx + i * passo;
       lote.box("madeira", 0.11, 0.11, 0.85, x, WALL_TOP - 1.2, C.wallZOut + 0.55, 0, -0.62);
       lote.box("madeira", 0.11, 0.6, 0.11, x, WALL_TOP - 0.85, C.wallZOut + 1.05);
     }
@@ -240,15 +296,21 @@ export class Castle {
     const C = CASTLE;
     const corrida = C.stairZTop - C.stairZBottom;
     const subida = WALL_TOP - GROUND_Y;
-    const ang = Math.atan2(subida, corrida); // 38°
+    const ang = Math.atan2(subida, corrida); // 30° com o muro de 8 m
     const comp = Math.hypot(corrida, subida) / 2;
 
     for (const sx of [-C.stairX, C.stairX]) {
       const cz = (C.stairZBottom + C.stairZTop) / 2;
       const cy = (GROUND_Y + WALL_TOP) / 2;
 
-      /* Rampa inclinada. O giro é em torno de X e o sinal é negativo porque a
-         escada sobe no sentido +Z: a face de cima tem de olhar para trás. */
+      /* Rampa inclinada. A escada sobe no sentido +Z: o pé em z = −11, no
+         pátio, e o topo em z = 3, encostado no muro.
+
+         O SINAL É NEGATIVO, e a conta que o decide é a do Three: girar em torno
+         de X por θ leva o eixo local +Z para (0, −sen θ, cos θ). Para a ponta
+         +Z ser a ALTA é preciso −sen θ > 0, ou seja θ = −ang. Medido depois de
+         escrever: com −ang o perfil vai de y = 14 em z = −11 a y = 22 em z = 3;
+         com +ang ele desce ao contrário e o topo fica pendurado sobre o pátio. */
       const body = physics.createBody(
         RAPIER.RigidBodyDesc.fixed()
           .setTranslation(sx, cy, cz)
@@ -266,15 +328,35 @@ export class Castle {
       /* Os degraus são SÓ VISUAL — a rampa acima é que sustenta o pé. Fazer o
          contrário (colisor por degrau) daria 64 corpos para o mesmo resultado,
          e o autostep do controlador já resolveria de qualquer jeito. */
+      /* A MASSA DE ALVENARIA ERA UM TIJOLÃO QUE ENGOLIA A ESCADA.
+       *
+       * Ela existe para os degraus não flutuarem, e era UMA caixa alinhada aos
+       * eixos indo de y = 13,5 a 21,5 ao longo de todo o vão. Só que os degraus
+       * sobem de 14 a 22: no pé da escada o degrau está a oito metros ABAIXO do
+       * topo da caixa, ou seja, dentro dela. O que se via era um bloco liso com
+       * dois ou três degraus espetados na ponta de cima — a escada existia,
+       * dava para subir, e estava coberta.
+       *
+       * A massa passa a ser feita DEGRAU A DEGRAU: sob cada um, uma coluna que
+       * desce até o piso do pátio. O contorno resultante é o de uma escada de
+       * pedra maciça, que é o que ela é. Custo: nenhuma chamada de desenho a
+       * mais — tudo cai no mesmo `Lote`, fundido por material.
+       *
+       * A coluna é um pouco mais ESTREITA que o degrau (94 %), e não é detalhe:
+       * é o ressalto que faz cada degrau ter sombra própria em vez de a escada
+       * virar um plano inclinado serrilhado. */
       const n = Math.round(subida / 0.34);
       for (let k = 0; k < n; k++) {
         const t = (k + 0.5) / n;
         const z = C.stairZBottom + corrida * t;
         const y = GROUND_Y + subida * t;
         lote.box("pedraEscura", C.stairHalfW, 0.17, 0.34, sx, y, z);
+
+        const h = (y - 0.17 - GROUND_Y) / 2;
+        if (h > 0.03) {
+          lote.box("pedra", C.stairHalfW * 0.94, h, 0.34, sx, GROUND_Y + h, z);
+        }
       }
-      // Massa de alvenaria por baixo, para a escada não flutuar.
-      lote.box("pedra", C.stairHalfW, subida / 2, comp * Math.cos(ang), sx, cy - 0.5, cz);
     }
   }
 
@@ -468,13 +550,13 @@ export class Castle {
     for (const sx of [-C.sideX, C.sideX]) {
       const x = sx + Math.sign(sx) * (C.sideThick / 2 - 0.22);
       for (let z = C.sideZBack + 1.2; z < C.wallZOut - 1.2; z += 1.55) {
-        lote.box("pedraEscura", 0.22, 0.5, 0.42, x, topoFlanco + 0.5, z);
+        lote.assenta("pedraEscura", 0.22, 1.0, 0.42, x, topoFlanco, z);
       }
     }
     // O muro de fundo, que é o que se vê do pátio e de trás.
     for (let x = -C.sideX + 1.0; x <= C.sideX - 1.0; x += 1.55) {
-      lote.box("pedraEscura", 0.42, 0.5, 0.22,
-        x, topoFlanco + 0.5, C.sideZBack - C.sideThick / 2 + 0.22);
+      lote.assenta("pedraEscura", 0.42, 1.0, 0.22,
+        x, topoFlanco, C.sideZBack - C.sideThick / 2 + 0.22);
     }
 
     /* Os BASTIÕES: ameias só no terço de trás, e guaritas nos dois cantos de
@@ -483,12 +565,12 @@ export class Castle {
     for (const sx of [-C.towerX, C.towerX]) {
       const zFundo = C.towerZ - C.towerHalfZ;
       for (let x = sx - C.towerHalf + 0.5; x <= sx + C.towerHalf - 0.4; x += 1.5) {
-        lote.box("pedraEscura", 0.4, 0.5, 0.22, x, WALL_TOP + 0.5, zFundo + 0.22);
+        lote.assenta("pedraEscura", 0.4, 1.0, 0.22, x, WALL_TOP, zFundo + 0.22);
       }
       for (const lado of [-1, 1]) {
         for (let z = zFundo + 0.8; z < C.towerZ - 1.0; z += 1.5) {
-          lote.box("pedraEscura", 0.22, 0.5, 0.4,
-            sx + lado * (C.towerHalf - 0.22), WALL_TOP + 0.5, z);
+          lote.assenta("pedraEscura", 0.22, 1.0, 0.4,
+            sx + lado * (C.towerHalf - 0.22), WALL_TOP, z);
         }
         // A guarita do canto de trás: um cilindro em balanço, com cobertura.
         const gx = sx + lado * (C.towerHalf - 0.1);
@@ -499,7 +581,7 @@ export class Castle {
 
   /** Uma guarita: fuste, coroa e um cone de quatro caixas. Pura silhueta. */
   guarita(lote, x, base, z) {
-    lote.box("pedra", 0.52, 1.15, 0.52, x, base + 1.15, z);
+    lote.assenta("pedra", 0.52, 2.3, 0.52, x, base, z);
     lote.box("pedraQuente", 0.62, 0.14, 0.62, x, base + 2.38, z);
     for (let k = 0; k < 3; k++) {
       const h = 0.55 * (1 - k * 0.3);
@@ -537,7 +619,7 @@ export class Castle {
     }
 
     // A coroa ameada e as quatro guaritas de canto.
-    lote.box("pedraQuente", K.half + 0.42, 0.2, K.half + 0.42, K.x, topo + 0.2, K.z);
+    lote.assenta("pedraQuente", K.half + 0.42, 0.4, K.half + 0.42, K.x, topo, K.z);
     this.ameias(lote, K.x, topo + 0.4, K.z, K.half + 0.34, K.half + 0.34, 0.62);
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
@@ -567,15 +649,15 @@ export class Castle {
    */
   ameias(lote, cx, base, cz, hx, hz, passo) {
     const larg = 0.42;
-    const alt = 0.52;
+    const alt = 1.04;
     for (let x = -hx + larg; x <= hx - larg + 0.01; x += larg * 2 + passo) {
       for (const s of [-1, 1]) {
-        lote.box("pedraEscura", larg, alt, 0.24, cx + x, base + alt, cz + s * (hz - 0.2));
+        lote.assenta("pedraEscura", larg, alt, 0.24, cx + x, base, cz + s * (hz - 0.2));
       }
     }
     for (let z = -hz + larg; z <= hz - larg + 0.01; z += larg * 2 + passo) {
       for (const s of [-1, 1]) {
-        lote.box("pedraEscura", 0.24, alt, larg, cx + s * (hx - 0.2), base + alt, cz + z);
+        lote.assenta("pedraEscura", 0.24, alt, larg, cx + s * (hx - 0.2), base, cz + z);
       }
     }
   }

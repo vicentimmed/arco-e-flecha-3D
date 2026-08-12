@@ -34,6 +34,7 @@
 
 import * as THREE from "three";
 import { CONFIG } from "../config.js";
+import { gameEvents, EventType } from "../core/events.js";
 import { C2S, S2C, FRAME } from "../shared/protocol.js";
 import { BesiegerMesh, FICHAS, construirGeometrias } from "../entities/besieger.js";
 import { Trebuchet, Stone, voar, velocidadePara } from "../entities/trebuchet.js";
@@ -211,8 +212,9 @@ export class SiegeSystem {
     this._vistos ??= new Set();
     this._vistos.clear();
 
+    // 11 bytes por sitiante — o décimo primeiro é a VIDA. Ver `Siege.packFrame`.
     let o = 4;
-    for (let i = 0; i < n; i++, o += 10) {
+    for (let i = 0; i < n; i++, o += 11) {
       const id = dv.getUint16(o, true);
       const x = dv.getInt16(o + 2, true) / 100;
       const y = dv.getInt16(o + 4, true) / 100;
@@ -223,6 +225,7 @@ export class SiegeSystem {
       const state = STATES[(flags >> 3) & 0x07] ?? "walk";
       const dead = (flags & 0x40) !== 0;
       const fogo = (flags & 0x80) !== 0;
+      const hp = dv.getUint8(o + 10) / 255;
 
       this._vistos.add(id);
       let b = this.byId.get(id);
@@ -239,6 +242,7 @@ export class SiegeSystem {
          IA de verdade continua andando invisível. Mesma regra do zumbi. */
       else if (!dead && b.dead) b.reviveLocal();
       b.setNetworkTarget(x, y, z, yaw, state, fogo);
+      b.setHealth(hp);
     }
 
     for (const [id, b] of [...this.byId]) {
@@ -263,15 +267,46 @@ export class SiegeSystem {
         this.byId.set(item.id, b);
       }
       b.setNetworkTarget(x, y, z, item.y, STATES[item.s] ?? "walk", item.f === 1);
+      // O instantâneo traz a vida em quinze avos (ver `Siege.view`); o quadro
+      // binário traz em 255. Quem entra no meio já vê a barra do ogro cheia
+      // pela metade, em vez de esperar o primeiro dano para ela existir.
+      if (item.h != null) b.setHealth(item.h / 15);
       if (item.d) b.killLocal(item.f === 1);
     }
   }
 
   /* ------------------------------------------------------------ eventos ---- */
 
+  /**
+   * Um sitiante caiu — e cada espécie cai com a PRÓPRIA voz.
+   *
+   * O som é a única coisa que diz O QUE morreu sem custar um olhar, e num modo
+   * com 120 bichos na rampa isso decide o tiro seguinte: quem está mirando o
+   * próximo da fila precisa saber, pelo canto do ouvido, se o que caiu atrás
+   * dele foi mais um esqueleto ou o ogro. O id sai do `kind` do protocolo
+   * (`deathOgre`, `deathHound`…), então acrescentar uma espécie é acrescentar
+   * um buffer em `audio.js` e mais nada aqui.
+   *
+   * O VOLUME acompanha o tamanho. Não é mixagem por gosto: o ogro tem 6,5 m e
+   * o mastim 1,0 m, e um bramido no mesmo nível de um ganido apagaria a única
+   * informação que a diferença entre os dois carrega.
+   */
   onDeath(msg) {
     const b = this.byId.get(msg.id);
     if (!b) return;
+
+    const p = b.group?.position;
+    if (p && msg.kind) {
+      const som = `death${msg.kind[0].toUpperCase()}${msg.kind.slice(1)}`;
+      const volume =
+        msg.kind === "ogre" ? 1.0 : msg.kind === "catapult" ? 0.85 : 0.6;
+      gameEvents.emit(EventType.AUDIO_PLAY, {
+        sound: som,
+        position: { x: p.x, y: p.y + 0.9, z: p.z },
+        volume,
+      });
+    }
+
     b.killLocal(msg.head === true);
     this.arrows?.removeAttachedTo(b);
   }
@@ -289,13 +324,57 @@ export class SiegeSystem {
       this.clarao(msg.to[0], msg.to[1], msg.to[2], 3.2);
       return;
     }
+    if (msg.kind === "boltImpact") {
+      /* A bola do mago chegou. O clarão sai SEMPRE, tenha matado ou não: ele é
+         a resposta à pergunta "por onde aquilo passou?", e quem escapou por um
+         metro precisa da resposta tanto quanto quem morreu. */
+      this.clarao(msg.to[0], msg.to[1], msg.to[2], 2.6);
+      gameEvents.emit(EventType.PARTICLES, {
+        position: { x: msg.to[0], y: msg.to[1], z: msg.to[2] },
+        count: 34,
+        color: 0x8affd8,
+        speed: 13,
+        spread: 1,
+        size: 0.5,
+        grow: 2.0,
+        life: 0.8,
+        gravity: CONFIG.physics.gravity * 0.2,
+        drag: 0.7,
+        alpha: 1,
+      });
+      return;
+    }
     const cor =
       msg.kind === "bolt" ? 0x7affc8 : msg.kind === "raise" ? 0x9cff6a : 0xff8a3a;
-    const raio = msg.kind === "rock" ? 0.45 : msg.kind === "raise" ? 0.22 : 0.16;
+    /* A BOLA DO MAGO É GRANDE, e é obrigatório que seja.
+     *
+     * Ela atravessa noventa metros de rampa e mata. Com os 16 cm do raio do
+     * xamã de chão ela entra na tela com dois pixels a essa distância — e uma
+     * ameaça que só se vê quando já está em cima não é uma ameaça, é um
+     * sorteio. Quem carrega a leitura à distância é o HALO aditivo, e não o
+     * núcleo: por isso o corpo pôde encolher de 0,55 para 0,4 sem custar
+     * visibilidade nenhuma — de perto ele deixou de ser uma bola de praia
+     * atravessada na tela, e de longe continua sendo o mesmo ponto verde
+     * saindo do mirante. */
+    const grande = msg.big === 1;
+    const raio = msg.kind === "rock" ? 0.45 : grande ? 0.4 : msg.kind === "raise" ? 0.22 : 0.16;
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(raio, 8, 6),
-      new THREE.MeshBasicMaterial({ color: cor }),
+      new THREE.SphereGeometry(raio, grande ? 12 : 8, grande ? 10 : 6),
+      new THREE.MeshBasicMaterial({ color: grande ? 0xd8fff0 : cor }),
     );
+    if (grande) {
+      const halo = new THREE.Mesh(
+        new THREE.SphereGeometry(raio * 2.3, 10, 8),
+        new THREE.MeshBasicMaterial({
+          color: cor,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      mesh.add(halo);
+    }
     mesh.frustumCulled = false;
     mesh.renderOrder = 5;
     this.root.add(mesh);
@@ -305,12 +384,54 @@ export class SiegeSystem {
     this.projeteis.push({ mesh, from, to, t: 0, dur, arco: msg.kind === "rock" });
   }
 
-  /** A pedra do trabuco caiu — a de qualquer um. */
+  /**
+   * A pedra do trabuco caiu — a de qualquer um.
+   *
+   * A poça de piche e o clarão já estavam aqui; o que faltava era a EXPLOSÃO
+   * ser explosão. Quem está no muro vê a pedra sair, some três segundos de
+   * olho e o que voltava era um disco laranja acendendo no chão: o abate
+   * acontecia (a sala decide em `Siege.blast`) e nada na tela ligava as duas
+   * coisas. Fogo, terra e o baque fazem essa ligação — e são a diferença entre
+   * "caiu uma pedra ali" e "aquilo matou a fila".
+   */
   onTrebImpact(msg) {
     const [x, y, z] = msg.p;
     const T = CONFIG.modes.siege.trebuchet;
     this.acenderFogo(x, z, T.fireRadius, T.fireTime);
     this.clarao(x, y, z, T.blastRadius);
+
+    const p = { x, y, z };
+    gameEvents.emit(EventType.PARTICLES, {
+      position: p,
+      count: 90,
+      color: 0xffb340,
+      speed: 22,
+      spread: 1,
+      size: T.blastRadius * 0.22,
+      grow: 2.4,
+      life: 1.3,
+      gravity: CONFIG.physics.gravity,
+      drag: 0.6,
+      alpha: 1,
+    });
+    gameEvents.emit(EventType.PARTICLES, {
+      position: p,
+      count: 55,
+      color: 0x6b5b48,
+      speed: 11,
+      spread: 1,
+      size: T.blastRadius * 0.34,
+      grow: 3.0,
+      life: 2.2,
+      gravity: CONFIG.physics.gravity * 0.25,
+      drag: 0.85,
+      alpha: 0.5,
+    });
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "explosion",
+      position: p,
+      volume: 0.85,
+    });
   }
 
   onTrebState(msg) {
@@ -342,12 +463,26 @@ export class SiegeSystem {
 
   /* ------------------------------------------------------------- física ---- */
 
-  onContact(contact) {
-    const a = this.physics.ownerOf(contact.a);
-    const b = this.physics.ownerOf(contact.b);
+  /**
+   * A PEDRA BATEU EM ALGUMA COISA.
+   *
+   * `a` e `b` do payload JÁ SÃO OS DONOS — `Physics.drainContacts` os resolve
+   * antes de despachar, e é assim que `ArrowManager.handleContact` os lê. Aqui
+   * eles estavam passando por `ownerOf()` outra vez, e `ownerOf` espera um
+   * HANDLE de colisor: recebendo um objeto de dono, o `Map` não achava nada e
+   * devolvia null, sempre.
+   *
+   * A consequência era silenciosa e total: `dono` nunca era encontrado, a pedra
+   * jamais registrava impacto e o `C2S.TREB_IMPACT` jamais era enviado. Ou
+   * seja — o trabuco nunca explodiu, desde sempre. A bola voava, encostava no
+   * chão e ficava lá parada até o descarte por tempo de vida, sem estouro, sem
+   * piche e sem matar ninguém. Nenhum erro aparecia, porque não havia erro
+   * nenhum: era uma consulta legítima que respondia "não é uma pedra".
+   */
+  onContact({ a, b }) {
     const dono = a?.kind === "stone" ? a : b?.kind === "stone" ? b : null;
     if (!dono) return;
-    const p = contact.point ?? dono.stone.body?.translation();
+    const p = dono.stone.body?.translation();
     if (p) dono.stone.registerImpact(p);
   }
 
@@ -697,7 +832,9 @@ export class SiegeSystem {
   update(dt, camera, jogadorYaw = null, pos = null) {
     if (!this.ativo) return;
 
-    for (const b of this.byId.values()) b.update(dt);
+    // A câmera vai junto: a barra de vida do ogro é um billboard e precisa
+    // dela para se virar. Ver `BesiegerMesh.setHealth`.
+    for (const b of this.byId.values()) b.update(dt, camera);
 
     /* A armação acompanha a MARCA, não o corpo do jogador. Quem decide o rumo
        é onde a pedra vai cair — ver `entrarNaMira`. */
@@ -712,7 +849,9 @@ export class SiegeSystem {
          dos outros dois — que é exatamente a informação que ele precisa dos
          outros dois. Ver `Trebuchet.setDetalhe`. */
       if (camera) e.setDetalhe(_cam.distanceToSquared(e.base) < 256);
-      e.update(dt, false);
+      // A câmera vai junto: a barra de recarga é um billboard e precisa dela
+      // para se virar. Ver `Trebuchet.atualizarBarra`.
+      e.update(dt, false, camera);
     }
 
     /* O ENGENHO FICOU PRONTO ENQUANTO SE MIRAVA. `pronto` só era recalculado
@@ -764,8 +903,13 @@ export class SiegeSystem {
         continue;
       }
       this.root.remove(p.mesh);
-      p.mesh.geometry.dispose();
-      p.mesh.material.dispose();
+      /* `traverse` e não os dois `dispose` diretos: a bola do mago carrega um
+         halo pendurado nela, e liberar só o pai deixaria uma esfera de dez
+         faces na GPU por bola disparada — algumas centenas por partida. */
+      p.mesh.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
     }
     this.projeteis = vivos;
   }

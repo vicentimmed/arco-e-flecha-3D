@@ -120,13 +120,29 @@ export function simularFlechaDoBot(tiro, ctx) {
        14 m, e testá-la contra os 0,8 m de um javali seria mirar num alvo
        quatro vezes menor do que o que está desenhado na tela. O deslocamento
        em `y` só vale para quem tem a posição no pé (bicho); a rocha tem a
-       posição no CENTRO, e somar 0,8 lá seria errar por baixo de propósito. */
+       posição no CENTRO, e somar 0,8 lá seria errar por baixo de propósito.
+
+       E A PRESA ANDA DURANTE O VOO. Esta função resolve a trajetória inteira
+       no instante do disparo, contra uma lista que é uma FOTOGRAFIA — mas o
+       bot mira onde o alvo VAI ESTAR (`Bot.mirarComLead`), não onde ele está.
+       Sem `vx/vy/vz`, as duas contas discordam por exatamente a liderança, e o
+       defeito é proporcional a ela:
+
+       • uma rocha da chuva desce a 9 m/s com quase dois segundos de voo — a
+         fotografia está DEZOITO metros acima de onde a flecha passa, e a
+         pedra de 2,5 m de raio some do teste. Na tela a flecha atravessa a
+         rocha em cheio e nada estoura, que é o sintoma relatado;
+       • um sitiante anda a 1,2 m/s com meio segundo de voo — 60 cm de erro
+         contra um raio de 55 cm, e o soldado simplesmente nunca morre.
+
+       Quem tem velocidade é integrado junto com a flecha; quem não tem (um
+       javali é rápido mas o tiro é curto) continua parado, como antes. */
     for (const b of bichos) {
       const raio = b.r ?? RAIO_BICHO;
       const d = distanciaSegmentoPonto(anterior, p, {
-        x: b.x,
-        y: b.y + (b.r ? 0 : RAIO_BICHO),
-        z: b.z,
+        x: b.x + (b.vx ?? 0) * t,
+        y: b.y + (b.vy ?? 0) * t + (b.r ? 0 : RAIO_BICHO),
+        z: b.z + (b.vz ?? 0) * t,
       });
       if (d <= raio) {
         return { kind: b.kind, alvo: b, ponto: { ...p }, velocidade: { ...v }, tempo: t };

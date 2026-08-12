@@ -43,6 +43,36 @@ const _color = new THREE.Color();
 /** Quanto o pé pode descer abaixo da base do corpo ao acompanhar o relevo (m). */
 const MAX_STEP_DOWN = 0.45;
 
+/**
+ * A cota do chão sob um pé, relativa à base do corpo.
+ *
+ * O pé segue o RELEVO, e o relevo é amostrado no campo de altura da fase. Isso
+ * vale enquanto o corpo está sobre o terreno — e deixa de valer no instante em
+ * que ele pisa em alvenaria: no adarve do castelo o terreno sob o pé é o pátio,
+ * **oito metros abaixo**.
+ *
+ * A versão anterior LIMITAVA essa descida a um passo (45 cm) e plantava o pé
+ * ali. O limite evitava a perna de oito metros, mas o que sobrava era o defeito
+ * relatado: os dois pés enterrados quarenta e cinco centímetros na pedra, em
+ * todo o muro e o tempo todo.
+ *
+ * A correção é de INTERPRETAÇÃO, não de limite. Uma amostra que cai mais de um
+ * passo abaixo do corpo não está descrevendo o chão em que se pisa — está
+ * descrevendo outro chão, lá embaixo. Quando isso acontece, quem sabe a
+ * verdade é o controlador de personagem, e a resposta dele é `position.y`: o
+ * pé vai para o plano do próprio corpo. Ladeira abaixo, degrau de cratera e
+ * rampa continuam funcionando, porque ali a amostra CABE no passo.
+ *
+ * @param {object} terrain campo de altura da fase
+ * @param {number} wx @param {number} wz ponto do mundo sob o pé
+ * @param {number} baseY cota do corpo (`position.y`)
+ * @param {number} rootLift quanto o tronco subiu/desceu por cima dos pés
+ */
+function chaoSobOPe(terrain, wx, wz, baseY, rootLift) {
+  const degrau = terrain.heightAt(wx, wz) - baseY;
+  return (degrau < -MAX_STEP_DOWN ? 0 : degrau) - rootLift;
+}
+
 export class Player {
   /**
    * @param {object} terrain o chão desta fase
@@ -1093,10 +1123,7 @@ export class Player {
     const s = Math.sin(this.yaw);
     const wx = this.root.position.x + c * pe.x + s * pe.z;
     const wz = this.root.position.z - s * pe.x + c * pe.z;
-    const groundY = Math.max(
-      -this.rootLift - MAX_STEP_DOWN,
-      this.terrain.heightAt(wx, wz) - this.position.y - this.rootLift,
-    );
+    const groundY = chaoSobOPe(this.terrain, wx, wz, this.position.y, this.rootLift);
     pe.y = groundY + BODY.ankleY;
 
     // Joelho para a frente do corpo: é o que dá o agachamento em vez de a perna
@@ -1454,17 +1481,10 @@ export class Player {
     const wx = this.root.position.x + c * x + s * z;
     const wz = this.root.position.z - s * x + c * z;
     /* `rootLift` sai da conta para que o pé fique colado no chão enquanto o
-       corpo quica e agacha por cima dele.
-
-       O piso é LIMITADO a um passo abaixo do corpo. De pé sobre uma pedra, o
-       terreno sob o pé está metros abaixo, e sem a trava a perna esticaria
-       para baixo procurando esse chão — atravessando a própria pedra em que a
-       pessoa está. Um passo de 45 cm cobre qualquer declive caminhável e para
-       exatamente antes desse absurdo. */
-    const groundY = Math.max(
-      -this.rootLift - MAX_STEP_DOWN,
-      this.terrain.heightAt(wx, wz) - this.position.y - this.rootLift,
-    );
+       corpo quica e agacha por cima dele. O resto — e por que a amostra do
+       terreno às vezes precisa ser IGNORADA em vez de limitada — está em
+       `chaoSobOPe`. */
+    const groundY = chaoSobOPe(this.terrain, wx, wz, this.position.y, this.rootLift);
 
     /* Fase de balanço = pé indo NA DIREÇÃO da marcha, ou seja, derivada
        positiva do deslocamento acima. Como a projeção do deslocamento sobre a

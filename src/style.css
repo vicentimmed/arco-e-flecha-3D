@@ -482,6 +482,31 @@ body {
   border-color: var(--red);
 }
 
+/* A linha do Enter. Mesma peça visual da dica da tela de vitória (`.hv-hint`),
+   porque é a mesma frase: "esta tela acaba quando você apertar isto". */
+#zombie-center-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+#zombie-center-hint[hidden] {
+  display: none;
+}
+
+#zombie-center-hint kbd {
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 5px;
+  font-weight: 800;
+  color: var(--text);
+}
+
 /* A contagem de entrada da chuva: um número só, enorme, sem moldura. Ela não é
    um aviso — é uma largada, e largada não pede caixa. */
 #zombie-center.countdown {
@@ -526,36 +551,85 @@ body {
   50% { box-shadow: inset 0 0 190px 60px rgba(255, 70, 40, 0.85); }
 }
 
-/* A seta da rocha fora da tela. UMA, a mais urgente — três seriam ruído. */
-#meteor-arrow {
+/* OS MARCADORES DE ROCHA — um por rocha, todas elas, o tempo todo.
+   Duas formas no mesmo nó: anel quando a rocha está na tela, seta girada na
+   borda quando não está. Ver `Hud.setMeteorMarks`. */
+#meteor-marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mm {
   position: absolute;
   top: 50%;
   left: 50%;
-  pointer-events: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+  /* A cor é UMA variável e o resto do bloco a herda: trocar de estado (aviso,
+     perigo) é trocar duas linhas, não seis regras. */
+  --mm-cor: #ff8a2a;
+  --mm-num: #ffd9a8;
 }
 
-#meteor-arrow[hidden] {
+.mm[hidden] {
   display: none;
 }
 
-#meteor-arrow .ma-seta {
-  font-size: 30px;
-  line-height: 1;
-  color: #ff8a2a;
-  filter: drop-shadow(0 0 10px rgba(255, 120, 30, 0.9));
+/* Na tela: o anel circula a rocha; a seta não faz sentido e some. */
+.mm .mm-anel {
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--mm-cor);
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(255, 120, 30, 0.55);
+  /* O miolo fica VAZIO: é sobre a rocha que ele cai, e um disco a cobriria. */
 }
 
-#meteor-arrow .ma-alt {
+.mm .mm-seta {
+  display: none;
+  font-size: 30px;
+  line-height: 1;
+  color: var(--mm-cor);
+  filter: drop-shadow(0 0 10px rgba(255, 120, 30, 0.9));
+  transform: rotate(var(--mm-giro, 0deg));
+}
+
+/* Fora da tela: a seta aponta o rumo, o anel sai de cena. */
+.mm.fora .mm-anel {
+  display: none;
+}
+
+.mm.fora .mm-seta {
+  display: block;
+}
+
+.mm .mm-alt {
   font-size: 12px;
   font-weight: 800;
-  color: #ffd9a8;
-  /* A seta gira; o número, não — ninguém lê "40 m" de cabeça para baixo. */
-  transform: rotate(var(--ma-contra, 0deg));
+  color: var(--mm-num);
+}
+
+/* Abaixo do limiar de aviso e do de perigo. O marcador é a mesma peça — o que
+   muda é a cor e, no crítico, a pulsação: a forma constante é o que permite
+   contar quantas rochas existem sem ler nenhuma. */
+.mm.aviso {
+  --mm-cor: #ffc44a;
+  --mm-num: #ffe9bd;
+}
+
+.mm.perigo {
+  --mm-cor: #ff4a2a;
+  --mm-num: #ffc0b0;
+  animation: pulso-marca 0.42s ease-in-out infinite;
+}
+
+@keyframes pulso-marca {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 /* ------------------------------------------------------------ especial ---- */
@@ -1228,6 +1302,217 @@ body {
 #help.hidden {
   opacity: 0;
   visibility: hidden;
+}
+
+/* --------------------------------------------------- menu de comandos ------
+
+   O painel clicável de tudo o que o jogo faz. Ver `montarMenuComandos`.
+
+   Três decisões carregam o layout:
+
+   • **É UM VÉU, e não um canto.** Ele para o jogo (o ponteiro é solto) e por
+     isso tem de parecer que parou: um painel de canto pediria que a pessoa
+     descobrisse sozinha que o mundo atrás dele congelou.
+
+   • **COLUNAS QUE SE ACOMODAM.** `auto-fit` com mínimo de 240 px dá quatro
+     colunas num monitor largo, duas num laptop e uma no vertical, sem uma
+     única consulta de mídia. O menu é uma lista de grupos independentes —
+     exatamente o caso para o qual o `auto-fit` existe.
+
+   • **BOTÕES GRANDES.** 40 px de altura mínima. O jogo é jogado com a mão no
+     mouse e a atenção no campo; um alvo de clique de 20 px num menu que se
+     abre no meio de uma partida é um alvo que se erra.
+
+   O `overflow-y` do card é obrigatório: com todos os grupos abertos ele passa
+   de 600 px, e numa janela baixa a última fileira ficaria fora da tela sem
+   nenhuma forma de alcançá-la. */
+
+#cmd-menu {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  /* Escurece o jogo atrás: o menu para a partida, e isso precisa se ver. */
+  background: rgba(6, 8, 14, 0.62);
+  backdrop-filter: blur(3px);
+  /* O HUD inteiro é `pointer-events: none`; aqui ele volta, senão nenhum botão
+     recebe clique. É o mesmo motivo pelo qual o card também o declara. */
+  pointer-events: auto;
+  z-index: 60;
+}
+
+#cmd-menu[hidden] {
+  display: none;
+}
+
+.cmd-card {
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, 100%);
+  max-height: 100%;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.cmd-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px 11px;
+  border-bottom: 1px solid var(--ui-stroke);
+}
+
+.cmd-titulo {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+#cmd-fechar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+#cmd-fechar:hover,
+#cmd-fechar:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--gold);
+}
+
+/* MULTICOLUNA, e não uma grade.
+   Numa grade cada grupo é uma célula, e células de uma mesma fileira compartilham
+   a altura do grupo mais alto: com "Modos de jogo" tendo doze botões e "Fases"
+   três, sobravam dois palmos de buraco ao lado do menor. Em multicoluna os
+   grupos EMPILHAM e transbordam para a coluna seguinte, e o navegador equilibra
+   as alturas sozinho — que é exatamente o que se quer de uma lista de blocos
+   independentes de tamanhos diferentes. */
+.cmd-corpo {
+  columns: 232px 4;
+  column-gap: 16px;
+  padding: 14px 16px;
+  overflow-y: auto;
+}
+
+/* Um grupo nunca se parte no meio: metade dos modos numa coluna e metade na
+   outra, sob um título que ficou para trás, é pior do que uma coluna desigual. */
+.cmd-grupo {
+  break-inside: avoid;
+  margin-bottom: 15px;
+}
+
+.cmd-grupo h4 {
+  margin-bottom: 7px;
+  font-size: 9.5px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+  opacity: 0.8;
+}
+
+.cmd-grade {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cmd-botao {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  padding: 7px 11px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 9px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background 110ms ease, border-color 110ms ease, transform 110ms ease;
+}
+
+.cmd-botao:hover {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: var(--gold);
+}
+
+/* O foco de teclado é VISÍVEL e é o mesmo realce do hover, com contorno: quem
+   navega por Tab precisa ver onde está sem depender de cor. */
+.cmd-botao:focus-visible,
+#cmd-fechar:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.cmd-botao:active {
+  transform: translateY(1px);
+}
+
+.cmd-rotulo {
+  flex: 1 1 auto;
+}
+
+/* A tecla é NOTA DE RODAPÉ do botão: quem abriu o menu procura o que fazer,
+   não que letra apertar — mas é ela que, com o tempo, ensina o atalho. */
+.cmd-tecla {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  opacity: 0.65;
+}
+
+.cmd-rodape {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 16px 10px;
+  border-top: 1px solid var(--ui-stroke);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.cmd-rodape span {
+  margin-right: 10px;
+}
+
+#cmd-menu kbd {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ui-stroke);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
 }
 
 /* ------------------------------------------------------------- overlay ----- */

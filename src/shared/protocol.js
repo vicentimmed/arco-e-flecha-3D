@@ -200,6 +200,15 @@ export const C2S = {
   TREB_WIND: "trebWind",
   /** "Estou reparando o portão": `{ on }`. */
   GATE_REPAIR: "gateRepair",
+  /** "Acertei este morcego": `{ id }`. Uma flecha basta; a sala confirma. */
+  BAT_HIT: "batHit",
+  /** "Adianta o cerco até o próximo escalão": `{}`. Atalho de TESTE.
+   *
+   *  O modo abre os escaladores aos 105 s, os xamãs aos 165 e as catapultas aos
+   *  450 — esperar isso a cada verificação é meia hora de relógio por tarde de
+   *  ajuste. Ele vale para a sala inteira (o cerco é um só) e por isso passa
+   *  pelo servidor como qualquer outra mudança de estado compartilhado. */
+  SIEGE_SKIP: "siegeSkip",
 };
 
 /* --------------------------------------------------------- servidor → cliente */
@@ -415,6 +424,14 @@ export const S2C = {
    *  `dusk` é a VITÓRIA — o Sol tocou o horizonte e eles recuaram. O cerco é
    *  uma tarde, não uma noite: ver `Game.updateDusk`. */
   SIEGE_OVER: "siegeOver",
+  /** Poses dos morcegos, a 10 Hz: `{ b: [{ i, p, y, s }] }`.
+   *
+   *  EM JSON, e de propósito: são no máximo quatro bichos, ~60 B cada. O quadro
+   *  binário do cerco existe porque lá são 120; a mesma conta que o justifica lá
+   *  o descarta aqui. Ver o cabeçalho de `server/batSim.js`. */
+  BATS: "bats",
+  /** Morcego abatido: `{ id, killer, points, p }`. Vira estouro e placar. */
+  BAT_DEATH: "batDeath",
 
   /** Resposta do sincronismo: `{ c, s }`. */
   PONG: "pong",
@@ -552,6 +569,8 @@ export const zombieEntity = (id) => `z${id}`;
 export const torchEntity = (id) => `t${id}`;
 // `m` de meteoro. Livre: p, b, e, v, z e t já estavam tomados.
 export const meteorEntity = (id) => `m${id}`;
+// `g` de morcego GIGANTE: `m` é do meteoro, `b` do porco e `v` do pássaro.
+export const batEntity = (id) => `g${id}`;
 
 /** O caminho de volta: `"p3"` → `3`. Devolve null se não for de jogador. */
 export function playerIdFrom(entityId) {

@@ -421,6 +421,11 @@ class Game {
     this._reAxis = new THREE.Vector3();
     this._reWanted = new THREE.Vector3();
 
+    /* O que a entrada apura e a pose consome um passo de física depois. Ver
+       `updateAimAndPose` e `applyPlayerPose`. */
+    this._moving = false;
+    this._knifeFraction = 0;
+
     // Contabilidade do placar. O aviso na tela NÃO sai daqui: sai do evento de
     // impacto, logo abaixo, para ser um por flecha em vez de um por callback.
     this.arrows.onScore = (_target, result) => {
@@ -492,6 +497,12 @@ class Game {
     gameEvents.on(EventType.ARROW_IMPACT, (e) => {
       if (e.ownerId !== this.player.entityId) return;
       if (e.targetKind !== "fallingMeteor" || e.meteorId == null) return;
+      /* E as LASCAS saem AQUI, no mesmo quadro do piscar.
+         Elas nasciam só dentro do `S2C.METEOR_HIT` — que quem atirou descarta,
+         para não piscar duas vezes. O resultado era o avesso do que o modo
+         quer: o único jogador que NUNCA via a coroa de brasas em volta da
+         pedra era quem estava acertando nela. Ver `MeteorRainManager.lascasEm`. */
+      this.meteors.lascasEm(e.meteorId);
       this.net.send(C2S.METEOR_HIT, {
         id: e.meteorId,
         d: Math.round((e.distance ?? 0) * 100) / 100,
@@ -1650,10 +1661,34 @@ class Game {
       this.entrarNoEspectador();
     }
 
-    // A ORDEM importa: a câmera define a mira (systems/aim.js), então ela é
-    // posicionada ANTES do raycast, e o raycast antes do disparo.
+    /* A ORDEM importa, e são DUAS regras encadeadas:
+     *
+     * 1. O passo da física vem entre a ENTRADA e a POSE. `updateAimAndPose` lê
+     *    o teclado e entrega ao controlador a velocidade desejada; `stepPhysics`
+     *    integra e escreve a posição de render deste quadro; só então o corpo é
+     *    montado em cima dela. Montar a pose antes — que era o que acontecia —
+     *    desenhava o arqueiro na posição do quadro ANTERIOR, e como a câmera é
+     *    rígida nele, a distância percorrida na tela passava a valer o `dt` do
+     *    quadro passado enquanto o tempo que ela ocupava era o deste. Medido com
+     *    ±3 ms de tremor no relógio de quadros: a velocidade aparente variava
+     *    entre 2,3 e 4,4 m/s numa caminhada de 3,2 m/s. Nesta ordem ela dá
+     *    exatamente 3,2 m/s, sem desvio.
+     *
+     * 2. A câmera define a mira (systems/aim.js), então ela é posicionada ANTES
+     *    do raycast, e o raycast antes do disparo. */
     this.syncCameraMode();
     this.updateAimAndPose(dt, actions);
+
+    /* O vento é função do relógio da SALA, não do local. É essa amarração que
+       permite mandar um evento de disparo em vez da trajetória inteira: com o
+       mesmo vento no mesmo instante, cada cliente recalcula a mesma curva e o
+       mesmo traçado. Sozinho, o relógio local serve igual. Fica antes do passo
+       porque é ele que empurra as flechas em voo. */
+    if (this.net.connected) this.wind.setTime(this.net.serverTime / 1000);
+    else this.wind.update(dt);
+
+    this.stepPhysics(dt);
+    this.applyPlayerPose(dt);
     // Não recebe `dt`: os dois gatilhos são de ESTADO (tocou o chão, cruzou meio
     // ciclo de passada), não de tempo decorrido. Ver `updateFootDust`.
     this.updateFootDust();
@@ -1675,14 +1710,6 @@ class Game {
       this.shoot();
     }
 
-    /* O vento é função do relógio da SALA, não do local. É essa amarração que
-       permite mandar um evento de disparo em vez da trajetória inteira: com o
-       mesmo vento no mesmo instante, cada cliente recalcula a mesma curva e o
-       mesmo traçado. Sozinho, o relógio local serve igual. */
-    if (this.net.connected) this.wind.setTime(this.net.serverTime / 1000);
-    else this.wind.update(dt);
-
-    this.stepPhysics(dt);
     this.arrows.update(dt);
     /* A câmera vai a TODOS os bichos. Ela sempre foi necessária para o alce (é
        ela que orienta a barra de vida); agora também decide o nível de detalhe
@@ -3080,7 +3107,14 @@ class Game {
     this.aimYaw = yaw;
     this.aimPitch = pitch;
 
-    const moving = this.player.move(
+    /* Aqui a entrada acaba e o quadro passa para a física.
+     *
+     * `move` não desloca ninguém: ele entrega ao controlador a velocidade
+     * desejada e avança a fase do passo. Quem move o corpo é o `stepPhysics`, e
+     * a pose vem depois dele, em `applyPlayerPose` — ver a nota de ordem no
+     * `frameInterno`. O que atravessa são `_moving` e `_knifeFraction`, que a
+     * pose precisa e que só a entrada sabe. */
+    this._moving = this.player.move(
       dt,
       morto || atacando ? 0 : this.input.forward,
       morto || atacando ? 0 : this.input.strafe,
@@ -3088,13 +3122,27 @@ class Game {
     );
     this.player.setAim(yaw, pitch);
     this.player.setDraw(atacando ? 0 : drawFraction(this.drawTime));
-    this.player.update(dt, moving);
+    this._knifeFraction = knifeFraction;
+  }
+
+  /**
+   * O corpo montado sobre a posição DESTE quadro.
+   *
+   * Chamada logo depois de `stepPhysics`, e é essa vizinhança que importa: a
+   * posição que ela lê já é a interpolada do quadro corrente
+   * (`PlayerPhysics.applyInterpolation`), não a do quadro anterior. Daqui saem,
+   * na ordem, a pose, a boca do arco, o olho e o pivô da câmera — tudo o que o
+   * resto do quadro (câmera, mira, disparo) consome.
+   */
+  applyPlayerPose(dt) {
+    const knifeFraction = this._knifeFraction ?? 0;
+    this.player.update(dt, this._moving);
     if (this.knifeTimer > 0 && knifeFraction >= CONFIG.knife.hitStart && knifeFraction <= CONFIG.knife.hitEnd) {
       this.resolveKnifeHits();
     }
     this.player.getMuzzle(this._muzzle);
 
-    this._forward.copy(this.aim.solveAxis(yaw, this.player.pitch));
+    this._forward.copy(this.aim.solveAxis(this.aimYaw, this.player.pitch));
     this.player.getEye(this._eye, this._forward);
     this.player.getCameraPivot(this._cameraPivot);
   }
@@ -3399,7 +3447,14 @@ class Game {
     }
     if (steps === CONFIG.physics.maxSubSteps) this.accumulator = 0;
     this.stepsLastFrame = steps;
-    this.sync.apply(this.accumulator / h);
+    /* O MESMO alpha para o mundo e para o jogador — eles precisam sair do mesmo
+       instante, senão a interpolação conserta o tremor de um e cria o do outro.
+       Ver `PlayerPhysics.applyInterpolation`: o jogador era o único corpo que
+       ia para a tela na cota crua do passo fixo, e era isso que fazia a
+       caminhada engasgar em qualquer taxa de quadros que não fosse 60 ou 120. */
+    const alpha = this.accumulator / h;
+    this.sync.apply(alpha);
+    this.playerPhysics.applyInterpolation(alpha);
   }
 
   updateCamera(dt) {

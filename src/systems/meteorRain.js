@@ -110,6 +110,22 @@ export class MeteorRainManager {
   }
 
   /**
+   * SÓ as brasas, sem o piscar.
+   *
+   * É o caminho de quem ATIROU. A rocha dele já piscou no quadro do impacto
+   * (`hitResolver.resolveFallingMeteorHit`) e o `S2C.METEOR_HIT` que a sala
+   * devolve é descartado na origem — de propósito, para não piscar duas vezes.
+   * Só que as lascas nasciam exclusivamente lá dentro: quem acertava a pedra era
+   * justamente quem nunca via a coroa crescer, e num jogo sozinho ninguém via
+   * uma sequer. A barra de vida do modo não existia para o único que precisa
+   * dela. Aqui ela nasce no mesmo quadro do piscar, sem o piscar de novo.
+   */
+  lascasEm(id) {
+    const m = this.byNetId.get(id);
+    if (m) this.soltarLascas(m);
+  }
+
+  /**
    * A flechada arrancou pedaços, e eles ficam.
    *
    * Cada lasca guarda um ÂNGULO e um raio de órbita, não uma posição: quem tem
@@ -122,6 +138,13 @@ export class MeteorRainManager {
    * que se quer é uma nuvem de escombro acompanhando o tombo.
    */
   soltarLascas(m) {
+    /* SÓ A ROCHA QUE AGUENTA MAIS DE UMA FLECHA lasca.
+       Uma pedra de um tiro morre no mesmo golpe: as brasas dela nasceriam e
+       sumiriam no estouro meio ping depois, um piscar de lixo na tela. E o que
+       a coroa conta é justamente quantas flechas aquela pedra já levou — numa
+       que morre de primeira não há nada para contar. */
+    if (m.maxHits <= 1) return;
+
     const C = CONFIG.modes.meteorRain.chips;
     this.prepararLascas();
 

@@ -138,17 +138,45 @@ antes de esperar o certificado.
 
 ---
 
-## 7. Ambiente (Environment) — opcional
+## 7. Ambiente (Environment)
 
-Aba **Environment**. O padrão já funciona sem nada. Se quiser deixar explícito:
+Aba **Environment**. O padrão já funciona sem nada, mas é aqui que fica a
+**chave da sala** — sem ela, qualquer robô que ache o domínio entra no jogo:
 
 ```dotenv
 NODE_ENV=production
 PORT=3000
 HOST=0.0.0.0
+ROOM_KEY=SUA_CHAVE_AQUI
 ```
 
-Salve.
+Salve e faça **Deploy** (variável nova só vale com o container recriado).
+
+### Como a chave funciona
+
+O site continua público: qualquer um abre a página. O que a chave tranca é a
+**entrada na sala** — o WebSocket. Quem chega sem chave vê o lobby e recebe
+"entrada só pelo link do convite" ao tentar entrar.
+
+O link que você compartilha passa a ser:
+
+```text
+https://SEU_DOMINIO/?k=SUA_CHAVE_AQUI
+```
+
+O navegador **lembra** a chave depois da primeira entrada bem-sucedida. Daí em
+diante o domínio pelado, o favorito, o F5 e o botão de voltar funcionam sozinhos
+— e a reconexão automática no meio da partida usa a mesma chave, sem interrupção.
+
+Para **trocar a chave sem derrubar ninguém**, use uma lista separada por vírgula:
+publique a nova junto com a velha, avise o pessoal, e só depois remova a velha.
+
+```dotenv
+ROOM_KEY=chave-nova,SUA_CHAVE_AQUI
+```
+
+> Gere a sua com: `node -e "console.log(require('crypto').randomBytes(9).toString('base64url'))"`
+> Deixar `ROOM_KEY` vazia ou fora do Environment devolve a sala ao modo aberto.
 
 ---
 
@@ -189,7 +217,9 @@ Deve responder `ok`.
 
 ## 10. Jogar
 
-1. Abra o domínio no navegador (Chrome/Firefox/Edge atualizados)
+1. Abra o **link com a chave** no navegador (Chrome/Firefox/Edge atualizados) —
+   `https://SEU_DOMINIO/?k=SUA_CHAVE`, o mesmo link que você manda para os
+   convidados (ver a seção 7)
 2. Digite um nome no lobby e entre na sala
 3. Abra a **mesma URL em outra aba** (ou outro dispositivo) com outro nome —
    os dois jogadores aparecem no mesmo mundo

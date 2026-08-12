@@ -21,6 +21,28 @@ export class PlayerPhysics {
 
     this.desiredHorizontal = new THREE.Vector3();
     this._corrected = new THREE.Vector3();
+
+    /* INTERPOLAÇÃO DE RENDER — o mesmo que `BodySync` faz com todo corpo de
+     * física, e que faltava justamente para o jogador.
+     *
+     * A física anda em passos fixos de 1/120 s e o render é livre. Num quadro de
+     * 1/60 s cabem exatamente dois passos; num quadro de 1/55 s cabem dois ou
+     * TRÊS, conforme o acumulador. Sem interpolar, a cápsula avança 5,3 cm num
+     * quadro e 8,0 cm no seguinte — e, se um quadro atrasa o bastante, 2,7 cm
+     * num e 8,0 cm no outro. Isso é um solavanco de até 3× entre quadros
+     * consecutivos, e ele aparece TAMBÉM na vertical, porque a altura do pé sai
+     * do terreno amostrado nessa posição aos trancos.
+     *
+     * E não é só o corpo que treme: a câmera de terceira pessoa é RÍGIDA no
+     * jogador (`Player.getCameraPivot`, sem amortecimento nenhum), então o
+     * solavanco vira o cenário inteiro tremendo na tela.
+     *
+     * Guardamos o centro da cápsula no início e no fim de cada passo fixo, e o
+     * render sai do meio dos dois (`applyInterpolation`). Custa até 1/120 s de
+     * atraso visual — o mesmo que todo o resto do mundo já paga. */
+    this.prevCenter = new THREE.Vector3();
+    this.currCenter = new THREE.Vector3();
+
     /** Velocidade horizontal REAL durante o voo de jetpack. Ver `step`. */
     this.jetVelocity = new THREE.Vector3();
     /** @type {import("./jetpack.js").Jetpack|null} só nas fases que têm um. */
@@ -95,6 +117,13 @@ export class PlayerPhysics {
     // parede invisível antes das árvores. Os obstáculos reais continuam sendo
     // resolvidos pelos colisores de troncos, rochas e cercas.
     this.controller.setMaxSlopeClimbAngle(Math.PI * 0.495);
+    /* E NÃO ESCORREGA DAQUILO QUE SOBE. O padrão do Rapier começa a escorregar
+       a pessoa ladeira abaixo aos 45°, e isso passou a importar agora que o
+       corpo pede para descer a cada passo (ver `desired`): parado numa encosta
+       de 64° do vale, ele derrapava 4 cm/s sozinho. Casado com o ângulo de
+       escalada, o par volta a dizer a mesma coisa que sempre disse — o que dá
+       para subir, dá para ficar em pé em cima. */
+    this.controller.setMinSlopeSlideAngle(Math.PI * 0.495);
 
     /* DEGRAU AUTOMÁTICO — é isto que destrava as bordas de cratera.
      *
@@ -141,6 +170,7 @@ export class PlayerPhysics {
     this.grounded = true;
     this.jumpQueued = false;
     this.desiredHorizontal.set(0, 0, 0);
+    this.markTeleport();
     return this;
   }
 
@@ -186,12 +216,19 @@ export class PlayerPhysics {
 
     const jato = this.jetpack?.step(h, this) ?? false;
 
-    if (!this.grounded) {
-      this.verticalVelocity += CONFIG.physics.gravity * h;
-      if (jato) this.verticalVelocity += this.jetpack.thrust * h;
+    // A gravidade não pergunta se há chão — ver a nota em `desired`. O empuxo,
+    // sim: jato aceso com os pés no chão é decolagem, e quem decide isso é o
+    // `Jetpack` (a ignição exige estar no ar).
+    this.verticalVelocity += CONFIG.physics.gravity * h;
+    if (!this.grounded && jato) {
+      this.verticalVelocity += this.jetpack.thrust * h;
     }
 
     const t = this.body.translation();
+    // Onde a cápsula estava quando este passo começou. Lido do CORPO, e não do
+    // fim do passo anterior, para que um teleporte ou uma carona escritos por
+    // fora do controlador entrem aqui já como a nova verdade.
+    this.prevCenter.set(t.x, t.y, t.z);
 
     /* Duas formas de andar, e a segunda só existe com jetpack aceso.
      *
@@ -207,9 +244,27 @@ export class PlayerPhysics {
      * manobra em vez de um clique. */
     const horizontal = jato ? this.jetVelocity : this.desiredHorizontal;
 
+    /* NO CHÃO O CORPO PEDE PARA DESCER, e é isto que o prende ao relevo.
+     *
+     * Antes o pedido vertical era ZERO com os pés no chão, e um pedido zero não
+     * desce: o `computedMovement().y` voltava 0 em TODOS os passos. O corpo
+     * então só sabia SUBIR — pela trava do terreno vinte linhas abaixo, que
+     * ergue e nunca puxa — e num relevo ondulado isso vira uma catraca: cada
+     * lombada empurra a cápsula para cima, cada descida a deixa lá. Medido
+     * andando: a folga sobre o terreno crescia sozinha, passo a passo, até
+     * furar a tolerância de 8 cm; aí o corpo era declarado NO AR, caía os 8 cm,
+     * pousava e a catraca recomeçava — cerca de dez vezes por segundo. Na tela
+     * isso é o boneco encolhendo a perna (é a pose de salto, que `footTarget`
+     * monta com os pés recolhidos) e caindo de novo: os "mini pulos".
+     *
+     * A gravidade agora corre SEMPRE. Com os pés no chão ela é zerada a cada
+     * passo pelo pouso, então o que sobra é um pedido de meio milímetro para
+     * baixo — o bastante para o `enableSnapToGround(0.35)` entender que o corpo
+     * quer o chão e colá-lo à ladeira, e pequeno demais para empurrar alguém
+     * para dentro de coisa nenhuma. */
     const desired = {
       x: horizontal.x * h,
-      y: this.grounded ? 0 : this.verticalVelocity * h,
+      y: this.verticalVelocity * h,
       z: horizontal.z * h,
     };
 
@@ -346,13 +401,54 @@ export class PlayerPhysics {
     }
 
     this.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
+    this.currCenter.set(nx, ny, nz);
 
+    /* A posição da SIMULAÇÃO. Quem desenha lê a de RENDER, escrita depois do
+       laço de passos fixos por `applyInterpolation` — mas dentro do laço, entre
+       um passo e o seguinte, é esta que vale: os eventos de colisão do
+       `world.step()` são resolvidos no meio dele e leem a posição do jogador. */
     p.position.x = nx;
     p.position.z = nz;
     // `position` é a posição dos PÉS. Durante o pulo ela precisa acompanhar
     // o centro do colisor; colá-la sempre no heightAt escondia todo o salto.
     p.position.y = ny - CONFIG.player.height / 2;
 
+  }
+
+  /**
+   * A posição de RENDER do jogador, entre o penúltimo e o último passo fixo.
+   *
+   * Chamada uma vez por quadro, com `alpha = acumulador / passo fixo` — o mesmo
+   * número que `BodySync.apply` recebe, para o jogador e o mundo saírem do mesmo
+   * instante. Sem isto o corpo anda aos trancos do tamanho do passo de física, e
+   * é o que fazia a caminhada "flicar" (ver `prevCenter`).
+   *
+   * Escreve em `player.position`, que é a posição dos PÉS — a mesma que a pose,
+   * a câmera e a rede já liam. A cápsula não é tocada: quem manda nela continua
+   * sendo o `step`.
+   */
+  applyInterpolation(alpha) {
+    const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+    const p = this.prevCenter;
+    const c = this.currCenter;
+    this.player.position.set(
+      p.x + (c.x - p.x) * a,
+      p.y + (c.y - p.y) * a - CONFIG.player.height / 2,
+      p.z + (c.z - p.z) * a,
+    );
+  }
+
+  /**
+   * "A cápsula foi posta à mão onde está" — nada a interpolar.
+   *
+   * Sem isto, o quadro seguinte a um teleporte (nascer, trocar de fase, subir
+   * numa plataforma) desenharia o corpo no MEIO do caminho entre onde ele estava
+   * e onde ele passou a estar.
+   */
+  markTeleport() {
+    const t = this.body.translation();
+    this.prevCenter.set(t.x, t.y, t.z);
+    this.currCenter.copy(this.prevCenter);
   }
 
   /**
@@ -392,6 +488,7 @@ export class PlayerPhysics {
     const p = this.player;
     const y = p.position.y + CONFIG.player.height / 2;
     this.body.setTranslation({ x: p.position.x, y, z: p.position.z }, true);
+    this.markTeleport();
   }
 
   /**
@@ -411,5 +508,6 @@ export class PlayerPhysics {
     this.grounded = false;
     this.player.airborne = true;
     this.desiredHorizontal.set(0, 0, 0);
+    this.markTeleport();
   }
 }

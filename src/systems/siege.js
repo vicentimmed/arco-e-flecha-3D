@@ -38,7 +38,14 @@ import { gameEvents, EventType } from "../core/events.js";
 import { C2S, S2C, FRAME } from "../shared/protocol.js";
 import { BesiegerMesh, FICHAS, construirGeometrias } from "../entities/besieger.js";
 import { Trebuchet, Stone, voar, velocidadePara } from "../entities/trebuchet.js";
-import { CASTLE, GROUND_Y, WALL_TOP, gateInfo, trebuchetPosts } from "../shared/castleProps.js";
+import {
+  CASTLE,
+  GROUND_Y,
+  WALL_TOP,
+  gateInfo,
+  trebuchetPosts,
+  mageTowers,
+} from "../shared/castleProps.js";
 import { lodLevel, applyLod } from "../utils/lod.js";
 
 /** Espelha `KINDS` de `server/siegeSim.js`. A ORDEM é o código na rede. */
@@ -55,6 +62,32 @@ const KINDS = [
 const STATES = ["walk", "attack", "climb", "cast", "down", "rise", "bones"];
 
 const TAU = Math.PI * 2;
+
+/**
+ * Este xamã é um MAGO DE MIRANTE?
+ *
+ * A pergunta é respondida pela GEOMETRIA e não por um campo de rede, e é de
+ * propósito: o quadro binário do cerco tem 11 bytes por bicho e o byte de flags
+ * está cheio (3 bits de espécie, 3 de estado, morto, fogo — ver `packFrame`).
+ * Um décimo segundo byte para 120 sitiantes, dez vezes por segundo, para
+ * distinguir DOIS deles, seria pagar 1,2 KB/s por uma coisa que os dois lados
+ * já sabem: `mageTowers()` é compartilhado, o mago nasce exatamente em cima da
+ * torre (`Siege.nascerMago`) e nunca sai de lá.
+ *
+ * A tolerância é folgada em `y` (a pose chega interpolada) e apertada em `x/z`
+ * — nenhum xamã de chão chega perto dos ombros do corredor, que é onde os
+ * mirantes ficam.
+ */
+function magoDeMirante(kind, x, y, z) {
+  if (kind !== "shaman") return false;
+  for (const t of mageTowers()) {
+    if (Math.abs(x - t.x) < 1.5 && Math.abs(z - t.z) < 1.5 && y > t.platY - 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const _m4 = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _v = new THREE.Vector3();
@@ -231,6 +264,7 @@ export class SiegeSystem {
       let b = this.byId.get(id);
       if (!b) {
         b = new BesiegerMesh(this.root, this.physics, `s${id}`, kind, x, y, z);
+        if (magoDeMirante(kind, x, y, z)) b.virarMagoDeTorre();
         this.byId.set(id, b);
       }
       if (dead && !b.dead) {
@@ -264,6 +298,7 @@ export class SiegeSystem {
       let b = this.byId.get(item.id);
       if (!b) {
         b = new BesiegerMesh(this.root, this.physics, `s${item.id}`, kind, x, y, z);
+        if (magoDeMirante(kind, x, y, z)) b.virarMagoDeTorre();
         this.byId.set(item.id, b);
       }
       b.setNetworkTarget(x, y, z, item.y, STATES[item.s] ?? "walk", item.f === 1);

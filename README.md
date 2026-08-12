@@ -44,6 +44,21 @@ Guia completo, do VPS até jogar online:
 Resumo: App service → Source GitHub → Builder **Dockerfile** → Domain na
 porta **3000** → **Deploy** → abrir o domínio e entrar na sala.
 
+### Trancar a sala (`ROOM_KEY`)
+
+Domínio público é domínio que robô acha. Definindo `ROOM_KEY` no Environment do
+EasyPanel, a página segue aberta mas **a sala só aceita quem chega pelo link do
+convite**:
+
+```text
+https://SEU_DOMINIO/?k=SUA_CHAVE
+```
+
+O navegador lembra a chave depois da primeira entrada, então voltar pelo
+favorito, dar F5 ou reconectar no meio da partida continua funcionando sem o
+`?k=`. `ROOM_KEY` vazia (o padrão, e o caso do `npm run dev`) deixa a sala
+aberta. Detalhes e troca de chave sem derrubar ninguém: [docs/easypanel.md](docs/easypanel.md#7-ambiente-environment).
+
 ## Controles
 
 | Comando | Ação |

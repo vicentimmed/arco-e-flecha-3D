@@ -9,12 +9,30 @@
    O `upgrade` é tratado com `noServer` e filtrado por caminho de propósito: no
    desenvolvimento, o Vite tem o PRÓPRIO WebSocket para o hot reload, no mesmo
    servidor HTTP. Sequestrar todo upgrade quebraria o HMR.
+
+   A CHAVE DA SALA (`ROOM_KEY`) é a porta. O site é público — qualquer robô que
+   ache o domínio carrega a página —, mas entrar na sala exige o `?k=` que só
+   está no link que você mandou. Sem `ROOM_KEY` definida a sala fica aberta, que
+   é o que se quer em `npm run dev`: a trava existe só onde há domínio exposto.
+
+   A chave é ESTÁTICA: sem expiração, sem carimbo de tempo, sem nonce. É uma
+   partida longa em que se sai e se volta pelo link, e uma chave que envelhece
+   viraria exatamente o "deu pau no meio da jogatina" que não pode acontecer.
+   Aceitar uma LISTA separada por vírgula é o que permite trocar a chave sem
+   derrubar ninguém: publica-se a nova, deixa-se a velha valendo, e ela sai da
+   lista quando não houver mais ninguém usando.
    --------------------------------------------------------------------------- */
 
 import { WebSocketServer } from "ws";
 import { RoomHost } from "./room.js";
+import { CLOSE_BAD_KEY } from "../src/shared/protocol.js";
 
 export const WS_PATH = "/ws";
+
+const CHAVES = String(process.env.ROOM_KEY ?? "")
+  .split(",")
+  .map((k) => k.trim())
+  .filter(Boolean);
 
 /**
  * @param {import("node:http").Server} httpServer
@@ -25,14 +43,29 @@ export function attachRoom(httpServer, { path = WS_PATH, log } = {}) {
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.on("upgrade", (req, socket, head) => {
-    let pathname;
+    let url;
     try {
-      pathname = new URL(req.url, "http://localhost").pathname;
+      url = new URL(req.url, "http://localhost");
     } catch {
       return;
     }
     // Não é para nós (HMR do Vite, por exemplo): sai sem tocar no socket.
-    if (pathname !== path) return;
+    if (url.pathname !== path) return;
+
+    /* Chave errada: completa o aperto de mão só para poder FECHAR com um
+       código. Um `socket.destroy()` seria mais seco, mas o navegador entrega
+       toda queda como 1006 — e aí quem abriu um link velho não teria como saber
+       que o problema é a chave, e não o servidor fora do ar. O custo é um
+       socket que vive um milissegundo e nunca vê a sala: quem é robô continua
+       sem entrar, quem é gente lê o motivo na tela. */
+    if (!chaveVale(url.searchParams.get("k"))) {
+      log?.(`entrada recusada: chave inválida (${req.socket.remoteAddress})`);
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.close(CLOSE_BAD_KEY, "chave inválida");
+      });
+      return;
+    }
+
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
 
@@ -55,4 +88,10 @@ export function attachRoom(httpServer, { path = WS_PATH, log } = {}) {
   });
 
   return { host, wss };
+}
+
+/** Sem `ROOM_KEY` a sala é aberta — é assim que `npm run dev` segue sem senha. */
+function chaveVale(k) {
+  if (!CHAVES.length) return true;
+  return typeof k === "string" && CHAVES.includes(k);
 }

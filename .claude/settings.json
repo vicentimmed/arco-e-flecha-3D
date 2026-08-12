@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev)",
+      "Bash(sh -c 'ROOM_KEY=teste123 npm run dev -- --port 5199')",
+      "Bash(npm run build)",
+      "Bash(npm run preview)",
+      "Bash(npm start)",
+      "Bash(npm install)",
+      "Bash(npm ci)",
+      "Bash(npm list)",
+      "Bash(npm outdated)",
+      "Bash(npm view *)",
+      "Bash(node -v)",
+      "Bash(node --version)",
+      "Bash(npm -v)",
+      "Bash(npm --version)"
+    ]
+  }
+}

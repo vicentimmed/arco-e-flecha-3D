@@ -19,8 +19,8 @@
 
    Duas coisas dependiam do raycast e as duas tremiam:
 
-   1. A câmera olhava direto para o ponto devolvido pelo raio. Como ela fica 4 m
-      atrás e 1,25 m ao lado da linha de tiro, a distância desse ponto entrava na
+   1. A câmera olhava direto para o ponto devolvido pelo raio. Como ela fica
+      atrás e ao lado da linha de tiro, a distância desse ponto entrava na
       conta do ângulo: varrer o mouse sobre a borda de um alvo fazia o raio pular
       de 10 m para 60 m e a câmera girava graus num único frame — o "shuttering".
    2. Corrigido isso, o retículo é que passou a pular: mirando pelo OLHO da
@@ -282,7 +282,7 @@ export class CameraRig {
      * quadro, com o arqueiro plantado no canto. `t` sobe e desce com a pose,
      * então a viagem da câmera acompanha a carga em vez de cortar. */
     const k = this.specialFrame ?? 0;
-    const dist = c.distance + (c.specialDistance ?? 9.0 - c.distance) * k;
+    const dist = c.distance + ((c.specialDistance ?? 13.15) - c.distance) * k;
     const right = c.right + ((c.specialRight ?? 7.5) - c.right) * k;
     const up = c.up + ((c.specialUp ?? 2.4) - c.up) * k;
 

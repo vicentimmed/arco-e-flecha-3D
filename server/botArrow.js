@@ -139,11 +139,26 @@ export function simularFlechaDoBot(tiro, ctx) {
        javali é rápido mas o tiro é curto) continua parado, como antes. */
     for (const b of bichos) {
       const raio = b.r ?? RAIO_BICHO;
-      const d = distanciaSegmentoPonto(anterior, p, {
-        x: b.x + (b.vx ?? 0) * t,
-        y: b.y + (b.vy ?? 0) * t + (b.r ? 0 : RAIO_BICHO),
-        z: b.z + (b.vz ?? 0) * t,
-      });
+      const cx = b.x + (b.vx ?? 0) * t;
+      const cy = b.y + (b.vy ?? 0) * t;
+      const cz = b.z + (b.vz ?? 0) * t;
+
+      /* QUEM TEM ALTURA É TESTADO PELO CORPO INTEIRO, não por um ponto.
+         É o defeito que mantinha a guarnição do cerco atirando a partida
+         inteira sem derrubar um soldado: `b.y` de um sitiante é o PÉ dele, o
+         bot mira no PEITO (`aimY`, 1,1 m acima), e a esfera de 0,55 m ficava
+         no chão — a flecha passava meio metro acima da conta, sempre, e a
+         única maneira de acertar era errar para baixo. Com `h` o teste vira o
+         eixo do corpo contra o segmento da flecha, que é a mesma cápsula que
+         o Rapier do cliente usa (`entities/besieger.js`). Quem não declara
+         altura (javali, alce, zumbi) segue com a esfera de sempre. */
+      const d = b.h
+        ? distanciaSegmentoEixo(anterior, p, { x: cx, y: cy, z: cz }, b.h)
+        : distanciaSegmentoPonto(anterior, p, {
+            x: cx,
+            y: cy + (b.r ? 0 : RAIO_BICHO),
+            z: cz,
+          });
       if (d <= raio) {
         return { kind: b.kind, alvo: b, ponto: { ...p }, velocidade: { ...v }, tempo: t };
       }
@@ -211,7 +226,9 @@ function distanciaSegmentoPonto(a, b, p) {
  *
  * Amostrar o eixo em alguns pontos é o suficiente e evita a álgebra de
  * segmento-contra-segmento: a cápsula tem 1,72 m e cinco amostras a deixam com
- * 43 cm entre elas, bem abaixo do raio de acerto.
+ * 43 cm entre elas, bem abaixo do raio de acerto. A proporção se sustenta para
+ * os sitiantes, que entram aqui pela mesma porta: o ogro tem 6,46 m e 1,87 m de
+ * raio, ou seja, 1,29 m entre amostras — folga ainda maior que a do humano.
  */
 function distanciaSegmentoEixo(a, b, base, altura) {
   let melhor = Infinity;

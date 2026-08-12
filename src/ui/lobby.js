@@ -90,6 +90,8 @@ export class Lobby {
     this.root = root;
     this.ready = false;
     this.busy = false;
+    /** Há um erro na linha de status que o `refresh` não deve apagar. */
+    this.errorShown = false;
     /** @type {(nome: string, entrada: {level: string, mode: string}) => Promise<void>} */
     this.onEnter = async () => {};
 
@@ -183,16 +185,23 @@ export class Lobby {
   /** O mundo está montado; a partir daqui só falta o nome. */
   setReady() {
     this.ready = true;
+    this.errorShown = false;
     this.status.textContent = "";
     this.status.classList.remove("error");
     this.refresh();
   }
 
   setError(text) {
+    this.busy = false;
+    /* O `refresh` que vem a seguir reacende os botões — e apagaria esta mesma
+       mensagem, porque a linha de status é uma só e ele a usa para o aviso do
+       nome. A marca é o que faz o erro sobreviver ao próprio destravamento: sem
+       ela, falhar ao entrar não dizia nada na tela, e quem clicou ficava vendo
+       o lobby inteiro voltar ao normal como se nada tivesse acontecido. */
+    this.errorShown = true;
+    this.refresh();
     this.status.textContent = text;
     this.status.classList.add("error");
-    this.busy = false;
-    this.refresh();
   }
 
   refresh() {
@@ -200,6 +209,7 @@ export class Lobby {
     const bloqueado = !this.ready || this.busy || nome.length === 0;
     for (const botao of this.buttons) botao.disabled = bloqueado;
     if (!this.ready || this.busy) return;
+    if (this.errorShown) return; // a mensagem do erro fica até a próxima tentativa
     this.status.classList.remove("error");
     // O aviso some quando deixa de valer: com quatro botões acesos e um nome
     // escrito, "escreva um nome para entrar" ainda na tela vira ruído — e pior,
@@ -214,6 +224,7 @@ export class Lobby {
     if (!nome) return;
 
     this.busy = true;
+    this.errorShown = false;
     for (const botao of this.buttons) botao.disabled = true;
     this.status.classList.remove("error");
     this.status.textContent = "entrando…";

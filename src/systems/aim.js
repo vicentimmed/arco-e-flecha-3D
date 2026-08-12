@@ -9,7 +9,9 @@
 
    POR QUE O RAIO SAI DA CÂMERA, E NÃO DO OLHO DA ARQUEIRA.
 
-   Em terceira pessoa a câmera fica ~4 m atrás e 1,25 m ao lado da linha de tiro.
+   Em terceira pessoa a câmera fica alguns metros atrás e um pouco ao lado da
+   linha de tiro (`CONFIG.camera.distance`/`right`/`up` — e o quanto não importa
+   para nada do que se lê abaixo, que é justamente a graça do arranjo).
    Um ponto do mundo só cai sempre no mesmo lugar da tela se estiver sobre uma
    reta que passa pelo centro óptico da câmera — qualquer outra reta se projeta
    como um SEGMENTO, e a posição do ponto dentro dele depende da distância.

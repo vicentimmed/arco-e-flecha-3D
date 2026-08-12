@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "arco-flecha-com-chave",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "ROOM_KEY=teste123 npm run dev -- --port 5199"],
+      "port": 5199
     }
   ]
 }

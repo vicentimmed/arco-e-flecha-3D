@@ -452,7 +452,19 @@ export const FRAME = {
 export const RejectReason = {
   FULL: "full",
   VERSION: "version",
+  KEY: "key",
 };
+
+/**
+ * Fechamento por chave da sala inválida.
+ *
+ * É um CÓDIGO DE FECHAMENTO e não um `REJECT` porque a recusa acontece antes de
+ * existir uma sala com quem falar: o servidor barra no `upgrade`, sem nunca
+ * aceitar a conexão. A faixa 4000+ é a reservada à aplicação, e o navegador a
+ * entrega intacta em `event.code` — que é justamente o que um `socket.destroy()`
+ * não faria (toda queda crua chega como 1006).
+ */
+export const CLOSE_BAD_KEY = 4003;
 
 /* ------------------------------------------------------------------ estado -- */
 

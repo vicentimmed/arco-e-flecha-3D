@@ -39,6 +39,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RAPIER } from "../core/physics.js";
+import { CONFIG } from "../config.js";
 import { entityRegistry } from "../core/entityRegistry.js";
 import { NPC_COLLISION_GROUPS } from "../core/collisionGroups.js";
 import { damp } from "../utils/math.js";
@@ -756,10 +757,101 @@ export class BesiegerMesh {
     this.group.add(G);
   }
 
+  /**
+   * ESTE xamã está num mirante — e por isso precisa ser VISTO de noventa metros.
+   *
+   * O mago das torres é o único sitiante do modo que nasce fora do alcance em
+   * que o jogo desenha um corpo inteiro, e é também o único que o jogador
+   * precisa achar SEM que nada o obrigue a olhar para lá: a bola dele sai a cada
+   * dezoito segundos, e entre uma e outra o mirante é só uma silhueta de madeira
+   * no fundo da rampa. Ele estava perdendo as duas coisas que o denunciam — o
+   * cajado dourado (some no LOD 2) e o contraste (azul-marinho contra bosque
+   * noturno) —, e o resultado era uma ameaça que só se localizava pela bola já
+   * no ar, quando o que se pode fazer é desviar e não revidar.
+   *
+   * Duas mudanças, e nenhuma delas toca no resto da horda:
+   *
+   * • as FAIXAS DE LOD dele são multiplicadas (`mageLod`), então o corpo
+   *   articulado — cajado incluído — continua desenhado a essa distância. São
+   *   dois corpos a mais no quadro, porque são dois mirantes;
+   * • um FACHO no alto do cajado, na cor da bola que ele atira. É o que o torna
+   *   achável num relance, e é o que ensina, sem uma linha de texto, de onde a
+   *   próxima bola vem.
+   */
+  virarMagoDeTorre() {
+    if (this._facho) return;
+    const B = CONFIG.modes.siege.mageBeacon;
+    this.lodScale = CONFIG.modes.siege.mageLod;
+
+    const F = new THREE.Group();
+    /* O TOPO DO CAJADO. A haste é um cilindro de `h × 1,25` centrado em
+       `h × 0,62` (ver `CONSTRUTORES.shaman`), então a ponta está em
+       `0,62 h + 0,625 h`; o `x` é o da mão direita. */
+    const h = this.ficha.h;
+    F.position.set(0.34, h * 1.245 + B.raio * 0.6, 0.05);
+
+    /* Núcleo BASIC, e não emissivo: `MeshBasicMaterial` não é tocado pela luz
+       da cena, então o facho tem o mesmo brilho na noite fechada e sob o clarão
+       do incêndio do portão. É o mesmo material da própria bola em
+       `SiegeSystem.onShot`, pelo mesmo motivo. */
+    this.fachoNucleo = new THREE.Mesh(
+      new THREE.SphereGeometry(B.raio, 10, 8),
+      new THREE.MeshBasicMaterial({ color: B.nucleoCor }),
+    );
+    this.fachoNucleo.renderOrder = 5;
+    F.add(this.fachoNucleo);
+
+    this.fachoHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(B.raio * B.halo, 10, 8),
+      new THREE.MeshBasicMaterial({
+        color: B.cor,
+        transparent: true,
+        opacity: B.opacidade,
+        /* `depthWrite: false` com o teste de profundidade LIGADO: o facho é
+           aditivo e não pode tapar o que está atrás dele, mas TEM de ser tapado
+           pelo merlão e pela própria torre. Um ponto verde atravessando a
+           alvenaria seria pior que nenhum — diria que o mago está onde não
+           está. */
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    this.fachoHalo.renderOrder = 5;
+    F.add(this.fachoHalo);
+
+    /* Nunca descartado pelo frustum, pela mesma razão dos olhos: a caixa
+       envolvente do grupo o elimina em ângulos rasantes justamente quando ele é
+       a única coisa que se vê do bicho. */
+    F.frustumCulled = false;
+    this.fachoNucleo.frustumCulled = false;
+    this.fachoHalo.frustumCulled = false;
+
+    this._facho = F;
+    this._fachoFase = Math.random() * Math.PI * 2;
+    /* Entra na RAIZ VISUAL e não em `group`: assim ele acompanha o balanço e a
+       escala do corpo, e desmonta junto quando o mago cai. */
+    (this.visualRoot ?? this.group).add(F);
+  }
+
   update(dt, camera = null) {
     /* A barra encara a câmera. Ela é um billboard de duas malhas planas — o
        billboard mais barato que existe, sem textura e sem elemento de DOM. */
     if (this.barra?.visible && camera) this.barra.quaternion.copy(camera.quaternion);
+
+    /* O facho RESPIRA. Um ponto parado a noventa metros lê como pixel queimado
+       do monitor; um que muda de tamanho lê como coisa acesa. E ele se apaga
+       com o dono: um mago morto não continua marcando o mirante — é justamente
+       a ausência dele que diz que a torre está calada. */
+    if (this._facho) {
+      const B = CONFIG.modes.siege.mageBeacon;
+      this._facho.visible = !this.dead;
+      if (!this.dead) {
+        this._fachoFase += dt * B.pulso * Math.PI * 2;
+        const p = 1 + Math.sin(this._fachoFase) * B.pulsoAmp;
+        this.fachoHalo.scale.setScalar(p);
+        this.fachoHalo.material.opacity = B.opacidade * (0.8 + (p - 1));
+      }
+    }
 
     /* Interpolação para a pose de 10 Hz. `damp` e não `lerp` porque o passo do
        quadro varia: com `lerp` o bicho anda mais rápido em quem tem 144 Hz. */
@@ -902,6 +994,18 @@ export class BesiegerMesh {
   }
 
   dispose() {
+    /* O facho tem geometria e material PRÓPRIOS — não vêm do cache de espécie
+       (`CACHE`), que é liberado uma vez só no fim da fase. Sem isto, cada mago
+       que morre e volta deixa duas esferas na GPU, e o mirante repõe um a cada
+       três minutos por dez minutos de partida. */
+    for (const m of [this.fachoNucleo, this.fachoHalo]) {
+      m?.geometry?.dispose();
+      m?.material?.dispose();
+    }
+    this.fachoNucleo = null;
+    this.fachoHalo = null;
+    this._facho = null;
+
     entityRegistry.unregister?.(this.entityId);
     this.physics?.removeBody(this.shieldBody);
     this.shieldBody = null;

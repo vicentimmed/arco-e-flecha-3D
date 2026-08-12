@@ -205,20 +205,58 @@ export const CONFIG = {
     fov: 58, // graus
     near: 0.15,
     far: 900,
-    // Enquadramento de trás e por cima do ombro: a arqueira fica à esquerda do
-    // quadro e o campo de tiro à direita, como na referência. A câmera pode
-    // ficar longe da linha de tiro sem prejudicar a mira porque a linha de tiro
-    // converge no ponto sob o retículo (systems/aim.js).
-    distance: 4.15, // m atrás do ponto de disparo
-    right: 1.25, // m à direita da linha de tiro
-    up: 0.5, // m acima
+    /* Enquadramento de trás e por cima do ombro: a arqueira fica à esquerda do
+       quadro e o campo de tiro à direita, como na referência. A câmera pode
+       ficar longe da linha de tiro sem prejudicar a mira porque a linha de tiro
+       converge no ponto sob o retículo (systems/aim.js).
+
+       ----------------------------------------------------- a câmera CHEGOU --
+       Era 4,15 / 1,25 / 0,50, e desse ponto a arqueira era um bonequinho de um
+       terço da altura da tela: o corpo lia como um marcador de posição, não
+       como uma pessoa. Agora ela ocupa metade do quadro, cortada na altura do
+       joelho pela borda de baixo — o enquadramento de terceira pessoa moderno.
+
+       Os três números andam JUNTOS, e é por isso que não é só `distance`:
+
+       • `right` encolhe quase na mesma proporção que `distance`. O que decide a
+         posição da arqueira na tela é o ÂNGULO `atan(right/distance)`, não o
+         afastamento em metros. Mantendo 1,25 m a 2,35 de distância ela iria de
+         15° para 29° fora do eixo — jogada contra a borda esquerda, metade do
+         corpo fora. Com 0,78 o ângulo fica em ~17°, que é onde ela já estava, e
+         o corpo chega maior sem sair do lugar.
+       • `up` desce quase meio metro, e ESSE é o número que muda o retrato. Com
+         0,50 a lente ficava ACIMA do alto da cabeça (ombro 1,42 + 0,50 = 1,92
+         contra 1,72 de estatura), então a cabeça nascia abaixo do meio da tela
+         por construção, olhando a pessoa de cima. Com 0,22 a lente fica na
+         altura dos olhos: a cabeça sobe para perto da linha do horizonte, que é
+         a proporção da referência.
+
+       A MIRA NÃO SENTE NADA DISSO — e não é sorte, é a geometria de `aim.js`:
+       o raio de mira sai do centro óptico e o retículo está no eixo, então o
+       ponto mirado cai no centro da tela para QUALQUER trio aqui. Medido nos
+       dois enquadramentos, em seis direções de mira incluindo os extremos de
+       pitch: erro de 0 px em ambos. O que a aproximação faz é reduzir a
+       paralaxe entre lente e arco, ou seja, a flecha sai ainda mais alinhada
+       com o gesto do que saía antes. */
+    distance: 2.35, // m atrás do ponto de disparo
+    right: 0.78, // m à direita da linha de tiro
+    up: 0.22, // m acima
     /* Enquadramento do ESPECIAL: a câmera sai de trás do ombro e vai para o
        lado. Ver o comentário em `camera.js` — de trás, a câmera fica DENTRO do
        feixe, e um tubo aditivo visto por dentro é uma tela branca.
 
        É ESTE o enquadramento do especial inteiro — carga, feixe e volta —,
-       porque `kameCam.enabled` está desligado (ver o bloco abaixo). */
-    specialDistance: 9.0, // m
+       porque `kameCam.enabled` está desligado (ver o bloco abaixo).
+
+       Por que 13,15 e não 9: o `9.0` de antes NUNCA foi o afastamento que se
+       via. `camera.js` interpolava com `c.specialDistance ?? 9.0 - c.distance`,
+       e `??` amarra mais frouxo que `-`, então a expressão valia 9,0 inteiro em
+       vez de `9,0 − distance`: o especial ia parar em `distance + 9,0` = 13,15
+       m. O parêntese foi consertado lá; o número foi trazido para cá com o
+       valor que estava de fato em cena, porque o enquadramento do golpe foi
+       ajustado OLHANDO para ele. Agora ele é absoluto de verdade — aproximar ou
+       afastar a terceira pessoa não mexe mais no especial. */
+    specialDistance: 13.15, // m
     specialRight: 7.5, // m — é este que tira a câmera de dentro do feixe
     specialUp: 2.4, // m
 
@@ -1564,6 +1602,43 @@ export const CONFIG = {
       mageBolt: { speed: 18 }, // m/s — lenta o bastante para se desviar
       /** Raio de morte da bola, no ponto em que ela cai. */
       mageBlast: 2.2, // m
+
+      /* ------------------------------------------------- o mago SE VÊ ------
+         O mirante fica a 92 e 98 m do adarve, e essa distância desmontava o
+         mago duas vezes antes de ele chegar ao olho de quem defende:
+
+         1. o LOD. Acima de `cullDistance` (60 m no preset alto, 45 no baixo) o
+            corpo articulado sai do render e o bicho vira uma instância da
+            malha `corpo` — sem cajado, sem olhos, sem manto. O cajado dourado
+            é justamente "a única linha vertical alta da horda", a coisa pela
+            qual se acha um xamã, e ele sumia exatamente na faixa em que o mago
+            das torres VIVE. `mageLod` empurra as faixas dele para longe o
+            bastante para isso não acontecer em nenhum preset — e custa dois
+            corpos articulados, porque são dois mirantes e mais nada.
+
+         2. a COR. O xamã é azul-marinho quase preto (`#22304a`) contra um
+            bosque noturno. Mesmo desenhado inteiro, ele é uma mancha escura
+            sobre fundo escuro a noventa metros.
+
+         O facho resolve a segunda: um núcleo branco-verde no alto do cajado
+         com um halo aditivo em volta, na MESMA cor da bola que ele atira
+         (`0x7affc8` em `SiegeSystem.onShot`). É de propósito que seja a mesma:
+         quem aprende "aquele ponto verde no mirante é de onde a bola vem"
+         aprende com uma cor só. Nenhuma luz dinâmica, pelo motivo de sempre —
+         são dois sprites de esfera, como o halo da própria bola. */
+      mageLod: 3.0, // × cullDistance — as faixas de LOD dele
+      mageBeacon: {
+        raio: 0.26, // m — o núcleo, branco e sem sombreamento
+        halo: 2.8, // × o núcleo
+        cor: 0x7affc8, // a cor da bola dele
+        nucleoCor: 0xd8fff0,
+        opacidade: 0.42,
+        /* A PULSAÇÃO. Um ponto fixo a noventa metros lê como pixel morto do
+           monitor; um que respira lê como coisa viva. O período é longo — o
+           facho é um marcador, não um alarme. */
+        pulso: 0.45, // s⁻¹ (≈ 2,2 s de ciclo)
+        pulsoAmp: 0.22, // fração do tamanho
+      },
 
       /* ------------------------------------------------ morcegos gigantes --
          A terceira ameaça que não vem pela rampa, e a única que chega POR CIMA.

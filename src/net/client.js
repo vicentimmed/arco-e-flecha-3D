@@ -20,7 +20,14 @@
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../config.js";
-import { C2S, S2C, PROTOCOL_VERSION, RejectReason } from "../shared/protocol.js";
+import {
+  C2S,
+  S2C,
+  PROTOCOL_VERSION,
+  RejectReason,
+  CLOSE_BAD_KEY,
+} from "../shared/protocol.js";
+import { roomKey, storedKey, rememberKey, forgetKey } from "./roomKey.js";
 
 /** Quantas amostras de RTT considerar ao escolher o desvio do relógio. */
 const CLOCK_SAMPLES = 8;
@@ -30,6 +37,10 @@ export class NetClient {
     this.url = url;
     this.socket = null;
     this.name = "";
+    /** A chave usada na tentativa atual. Ver `open` e `roomKey.js`. */
+    this.key = null;
+    /** A do link já foi recusada: daqui em diante vale só a lembrada. */
+    this.useStoredKey = false;
     /** Dados do WELCOME: quem eu sou nesta sala. */
     this.me = null;
     this.connected = false;
@@ -103,9 +114,13 @@ export class NetClient {
   }
 
   open(resolve, reject) {
+    /* A chave entra a CADA tentativa, e não uma vez no construtor: numa partida
+       longa a reconexão pode acontecer horas depois, e é aqui que ela pega a
+       chave que valeu da última vez. */
+    this.key = this.useStoredKey ? storedKey() : roomKey();
     let socket;
     try {
-      socket = new WebSocket(this.url);
+      socket = new WebSocket(comChave(this.url, this.key));
     } catch (err) {
       reject?.(new Error(`não consegui abrir ${this.url}: ${err.message}`));
       return;
@@ -151,11 +166,35 @@ export class NetClient {
       this.receive(msg, resolve, reject);
     });
 
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       const eraConectado = this.connected;
       this.connected = false;
       this.stopPinging();
       if (this.socket === socket) this.socket = null;
+
+      /* Chave recusada. Não é queda de rede: reconectar com a MESMA chave seria
+         bater para sempre na mesma porta trancada. */
+      if (event.code === CLOSE_BAD_KEY) {
+        /* Antes de desistir, o segundo palpite: o link que a pessoa clicou pode
+           ser o antigo que ficou no WhatsApp, enquanto a chave que este
+           navegador já usou continua boa. Tentar a lembrada é o que evita que
+           um link velho tranque quem tinha entrada — e `useStoredKey` fica
+           ligado para o resto da sessão, senão a reconexão do meio da partida
+           voltaria a pegar a chave velha da barra de endereço. */
+        const salva = storedKey();
+        if (!this.useStoredKey && salva && salva !== this.key) {
+          this.useStoredKey = true;
+          this.open(resolve, reject);
+          return;
+        }
+        this.wantConnection = false;
+        forgetKey();
+        const erro = new Error(describeReject({ reason: RejectReason.KEY }));
+        erro.reason = RejectReason.KEY;
+        if (reject) reject(erro);
+        else this.emit("rejected", { t: S2C.REJECT, reason: RejectReason.KEY });
+        return;
+      }
 
       // Fechou antes do `welcome` na PRIMEIRA tentativa: é falha de entrada, e
       // quem está olhando o lobby precisa saber. Depois de dentro, é queda de
@@ -180,6 +219,9 @@ export class NetClient {
         this.me = msg.you;
         this.connected = true;
         this.attempt = 0;
+        /* Entrou: só AGORA a chave é digna de memória. Guardar antes deixaria
+           um link errado sobrescrever a chave boa que já estava salva. */
+        rememberKey(this.key);
         // Primeiro palpite do relógio, antes do primeiro pong: melhor que zero.
         this.clockOffset = msg.time - performance.now();
         this.startPinging();
@@ -299,12 +341,22 @@ function defaultUrl() {
   return `${esquema}//${location.host}/ws`;
 }
 
+/** Acrescenta `?k=` sem atropelar o que já houver de query na URL. */
+function comChave(url, chave) {
+  if (!chave) return url;
+  const separador = url.includes("?") ? "&" : "?";
+  return `${url}${separador}k=${encodeURIComponent(chave)}`;
+}
+
 function describeReject(msg) {
   if (msg.reason === RejectReason.FULL) {
     return `sala cheia (${msg.players}/${msg.max})`;
   }
   if (msg.reason === RejectReason.VERSION) {
     return "versão do jogo desatualizada — recarregue a página";
+  }
+  if (msg.reason === RejectReason.KEY) {
+    return "entrada só pelo link do convite — peça o link atualizado a quem te chamou";
   }
   return "entrada recusada pelo servidor";
 }

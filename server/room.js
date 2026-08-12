@@ -1739,7 +1739,17 @@ export class Room {
            ninguém. Ver o bloco dos bichos em `botArrow.js`. */
         vx: b.vx ?? 0,
         vz: b.vz ?? 0,
-        aimY: 1.1 * b.scale,
+        /* O PEITO, medido na altura da espécie e não numa constante.
+           `1,1 × escala` valia para o soldado e mentia nas pontas: no mastim,
+           que tem 1,05 m de altura, o bot mirava CINCO CENTÍMETROS ACIMA DAS
+           COSTAS do bicho. Seis décimos da altura é o peito de todas as fichas. */
+        aimY: b.altura * 0.6,
+        /* A ALTURA DO CORPO. É ela que faz `botArrow` testar o eixo do sitiante
+           em vez de um ponto — e sem ela a guarnição do muro não matava
+           ninguém: o teste caía no PÉ (`b.y`) enquanto a mira ia para o peito,
+           meio metro acima, e a esfera de 0,55 m nunca era tocada. Ver o bloco
+           dos bichos em `botArrow.js`. */
+        h: b.altura,
         /* O raio do alvo, para a flecha do bot. Sem ele `botArrow` usa 0,8 m
            para tudo — o que é generoso para um soldado e absurdamente pequeno
            para um ogro de 6 m, que a tela mostra sendo acertado e a conta diz

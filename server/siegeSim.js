@@ -91,6 +91,23 @@ function angleDelta(from, to) {
 const BLOCKERS = castleBlockers();
 const GATE = gateInfo();
 
+/**
+ * Altura de cada espécie, em metros, ANTES da escala. Cópia do `h` de `FICHAS`
+ * em `src/entities/besieger.js` — ver `Besieger.altura` para o porquê da cópia.
+ * O mastim é o número que importa: 1,05 m, e um valor genérico de 1,8 mandaria
+ * a flecha do bot para meio metro acima das costas de um cachorro.
+ */
+const ALTURAS = {
+  soldier: 1.82,
+  shielded: 1.8,
+  skeleton: 1.7,
+  climber: 1.62,
+  hound: 1.05,
+  shaman: 1.8,
+  ogre: 1.9,
+  catapult: 2.6,
+};
+
 /* ------------------------------------------------------------------ sitiante */
 
 export class Besieger {
@@ -132,6 +149,20 @@ export class Besieger {
 
   get scale() {
     return this.kind === "ogre" ? 3.4 : 1;
+  }
+
+  /**
+   * Altura do corpo, em metros. Espelha o `h` de `FICHAS`
+   * (`src/entities/besieger.js`), pelo mesmo motivo que `scale` espelha o
+   * `escala` de lá: o servidor não pode importar aquele arquivo, que carrega
+   * Three.js inteiro junto.
+   *
+   * Quem lê é a flecha do bot (`Room.botPrey` → `botArrow.js`), que precisa do
+   * eixo do corpo para acertar em qualquer altura — e não só na cota exata em
+   * que o bot mirou.
+   */
+  get altura() {
+    return (ALTURAS[this.kind] ?? 1.8) * this.scale;
   }
 
   /** Altura do peito — de onde sai o tiro do xamã e onde a flecha acerta. */

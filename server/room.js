@@ -23,8 +23,9 @@
        público aberto, e isso está claro no plano.
    --------------------------------------------------------------------------- */
 
-import { CONFIG } from "../src/config.js";
+import { CONFIG, specialEnabled } from "../src/config.js";
 import { pathCenterX } from "../src/shared/terrainField.js";
+import { tempoDeVoo } from "../src/shared/soulFlight.js";
 import { BotSquad, obstaculosDe } from "./botSim.js";
 import { simularFlechaDoBot, orientacaoDe } from "./botArrow.js";
 import { SpaceField } from "./spaceSim.js";
@@ -181,6 +182,15 @@ export class Room {
     this.repairing = new Set();
     /** Carga do especial de cada jogador, por id. Ver `CONFIG.special`. */
     this.kameCharge = new Map();
+    /**
+     * A geração das barras. Sobe a cada zeramento.
+     *
+     * Existe porque o ponto do especial é creditado com ATRASO — o tempo de voo
+     * da alma (ver `addKameCharge`). Um abate feito nos últimos segundos de uma
+     * partida tem um ponto em trânsito quando o modo troca, e sem um selo de
+     * geração ele cairia na partida seguinte.
+     */
+    this.kameGen = 0;
     /**
      * As quatro tochas do modo zumbi: acesa (true) ou apagada (false).
      *
@@ -719,6 +729,10 @@ export class Room {
       this.mode === "captureFlag" ? (b) => this.objetivoDoBot(b) : null,
     );
 
+    /* O ESPECIAL DA CPU. Antes das poses, para a fração da pose que começa
+       neste tique já entrar no `packState` de baixo. */
+    for (const b of this.bots.list) this.talvezSoltarKame(b, personagens, bichos);
+
     // A pose de cada bot entra no mesmo formato dos humanos.
     for (const b of this.bots.list) {
       b.state = packState(b);
@@ -732,7 +746,222 @@ export class Room {
        por tique, dez vezes por segundo — lixo puro, e justo no modo em que o
        orçamento importa. A fotografia do começo do tique é a mesma que o bot
        usou para escolher o alvo; usar outra seria até menos correto. */
-    for (const { bot, tiro } of tiros) this.dispararDoBot(bot, tiro, bichos);
+    for (const { bot, tiro } of tiros) {
+      if (tiro.kame) this.soltarKameDoBot(bot, tiro);
+      else this.dispararDoBot(bot, tiro, bichos);
+    }
+  }
+
+  /**
+   * A CPU decidiu que é hora do especial.
+   *
+   * A regra é curta de propósito: barra cheia, vivo, e algo que valha o golpe
+   * dentro do alcance. Não há economia de recurso nem leitura de momento — um
+   * bot que guarda o especial para a hora certa é um bot melhor que o jogador
+   * médio numa arma que o jogador médio ainda está aprendendo a usar, e o papel
+   * dele nos modos cooperativos é ser guarnição, não professor.
+   *
+   * O ALVO é o que ele já está mirando, e isso não é preguiça: `_ultimoAlvo` é
+   * o resultado de `escolherAlvoDeTiro`, que já sabe o que importa em cada modo
+   * — a rocha mais baixa na chuva, o sitiante mais perto do portão no cerco, o
+   * adversário no duelo. Escolher de novo aqui seria escrever uma segunda IA
+   * que discorda da primeira.
+   */
+  talvezSoltarKame(bot, personagens, bichos) {
+    if (!specialEnabled(this.mode)) return;
+    if (!bot.alive || bot.kameT != null) return;
+    if ((this.kameCharge.get(bot.id) ?? 0) < this.kameMax()) return;
+
+    const mira = this.alvoDoKameDoBot(bot, personagens, bichos);
+    if (!mira) return;
+    if (!bot.iniciarKame(mira)) return;
+
+    /* A barra zera AGORA, no começo da pose, e não no quadro do disparo. É o
+       mesmo instante em que ela zera para o humano (`SpecialSystem.fire` chama
+       `setCharge(0)` junto com a pose) e evita o caso feio: um segundo abate
+       chegando durante a concentração e o bot saindo da pose já carregado. */
+    this.kameCharge.set(bot.id, 0);
+    this.broadcastAll({ t: S2C.KAME_CHARGE, id: bot.id, charge: 0, max: this.kameMax() });
+  }
+
+  /** O ponto para onde o feixe da CPU vai. Ver `talvezSoltarKame`. */
+  alvoDoKameDoBot(bot, personagens, bichos) {
+    const alvo = bot._ultimoAlvo;
+    const temAlvo = alvo && (alvo.x !== 0 || alvo.y !== 0 || alvo.z !== 0);
+    if (temAlvo) return alvo;
+
+    /* Sem alvo recente, o bicho vivo mais próximo. É a rede para o caso em que
+       a barra encheu no fim de uma leva e a mira ainda não achou a seguinte —
+       sem ela o bot ficaria carregado para sempre esperando o quadro certo. */
+    let melhor = null;
+    let melhorD = Infinity;
+    for (const c of bichos ?? []) {
+      const d = Math.hypot(c.x - bot.position.x, c.z - bot.position.z);
+      if (d < melhorD) {
+        melhorD = d;
+        melhor = c;
+      }
+    }
+    return melhor;
+  }
+
+  /**
+   * O feixe da CPU saiu.
+   *
+   * Sai pelo MESMO `S2C.KAME` de um humano, e por isso cada cliente reconstrói
+   * frente, cauda, afinamento e explosão sem uma linha nova — é o contrato do
+   * arquivo `protocol.js`, e é o que faz o especial do bot custar sessenta
+   * bytes em vez de um sistema.
+   *
+   * O que a sala tem de fazer no lugar do cliente é o ESTRAGO: quem atira é
+   * dono da ponta do feixe (`SpecialSystem.varrerOChao` manda `C2S.KAME_BLAST`
+   * de onde ela parou), e um bot não tem cliente para mandar isso. Aqui a sala
+   * marcha a direção contra o próprio campo de altura — a mesma conta de
+   * `KamehamehaBeam.acharFim` — e chama o mesmo `registerKameBlast`.
+   */
+  soltarKameDoBot(bot, tiro) {
+    const o = tiro.o;
+    const d = tiro.d;
+    this.broadcastAll({
+      t: S2C.KAME,
+      owner: bot.id,
+      ownerName: bot.name,
+      o: [round(o.x), round(o.y), round(o.z)],
+      d: [round(d.x), round(d.y), round(d.z)],
+      w: this.now(),
+    });
+    this.log(`${bot.name} soltou o especial`);
+
+    /* O ESTRAGO SE REPETE enquanto o feixe vive, e não uma vez no contato.
+       É o mesmo desenho de `SpecialSystem.varrerOChao`: ele sustenta por três
+       segundos, e uma passada só faria a sustentação não valer nada — uma rocha
+       que cai DENTRO do feixe durante a sustentação tem de morrer ali. */
+    const S = CONFIG.special;
+    const fim = this.pontaDoFeixe(o, d);
+    const geracao = this.kameGen;
+    const ondas = Math.max(1, Math.floor(S.sustain / S.groundBlast.interval));
+    /* A frente leva `distância / velocidade` para chegar lá. São décimos a 300
+       m/s, e mesmo assim eles importam: matar antes de a esfera abrir na tela
+       de quem assiste é a horda caindo sem causa visível. */
+    const alcance = fim ? Math.hypot(fim.x - o.x, fim.y - o.y, fim.z - o.z) : S.beam.range;
+    const viagem = alcance / S.beam.speed;
+    for (let i = 0; i < ondas; i++) {
+      const atraso = viagem + i * S.groundBlast.interval;
+      setTimeout(() => {
+        if (geracao !== this.kameGen) return;
+        if (!this.bots.byId(bot.id)) return;
+        this.varrerFeixeDoBot(bot, o, d, alcance, fim);
+      }, atraso * 1000).unref?.();
+    }
+  }
+
+  /**
+   * O que o feixe da CPU acerta — o lado que, num humano, o cliente resolve.
+   *
+   * Quem atira é a autoridade sobre o próprio acerto em todo o resto do jogo, e
+   * o especial não é exceção: `SpecialSystem.testarAcertos` roda na tela de quem
+   * atirou e manda `METEOR_HIT`/`KILL`/`KAME_BLAST`. O bot não tem tela, então
+   * a sala faz o papel dela — pelos MESMOS métodos, para que um feixe de CPU e
+   * um feixe de gente não possam divergir em regra nenhuma.
+   */
+  varrerFeixeDoBot(bot, o, d, alcance, fim) {
+    const B = CONFIG.special.beam;
+
+    // A esfera do fim, apoiada no chão: horda de zumbi e cerco morrem em área.
+    if (fim) this.registerKameBlast(bot, { p: [fim.x, fim.y, fim.z] });
+
+    // As rochas atravessadas pelo feixe. `registerMeteorHit` com `kame` é o
+    // mesmo caminho do humano, e é lá que mora a exceção do colosso.
+    if (isMeteorMode(this.mode) && !this.meteors.over) {
+      for (const m of this.meteors.meteors ?? []) {
+        if (m.dead) continue;
+        if (this.distanciaAoFeixe(o, d, alcance, m) > B.killRadius + (m.raio ?? 1)) continue;
+        this.registerMeteorHit(bot, { id: m.id, d: 0, kame: true });
+      }
+    }
+
+    if (!CONFIG.special.friendlyFire) return;
+
+    // E quem atravessa o feixe morre, exatamente como no de um humano.
+    for (const alvo of this.allCharacters()) {
+      if (alvo.id === bot.id || !alvo.alive) continue;
+      if (this.now() < (alvo.invulnUntil ?? 0)) continue;
+      if (this.temTimes() && this.timeDe(alvo.id) === this.timeDe(bot.id)) continue;
+      const p = this.corpoDe(alvo);
+      if (!p) continue;
+      // Do pé ao peito: o corpo tem 1,72 m e o feixe pode passar na altura da
+      // cabeça sem tocar o chão sob ela. Mesma conta de `testarAcertos`.
+      const alvoY = p.y + Math.min(1.4, Math.max(0, o.y - p.y));
+      if (this.distanciaAoFeixe(o, d, alcance, { x: p.x, y: alvoY, z: p.z }) > B.killRadius) {
+        continue;
+      }
+      this.matarPeloFeixe(bot, alvo, { x: p.x, y: alvoY, z: p.z }, d);
+    }
+  }
+
+  /** Distância de um ponto ao segmento do feixe. Ver `distanciaAoFeixe` no cliente. */
+  distanciaAoFeixe(o, d, alcance, ponto) {
+    const vx = ponto.x - o.x;
+    const vy = (ponto.y ?? o.y) - o.y;
+    const vz = ponto.z - o.z;
+    let t = vx * d.x + vy * d.y + vz * d.z;
+    t = t < 0 ? 0 : t > alcance ? alcance : t;
+    return Math.hypot(vx - d.x * t, vy - d.y * t, vz - d.z * t);
+  }
+
+  /** O feixe da CPU derrubou alguém. Mesmo caminho de `matarPeloBot`. */
+  matarPeloFeixe(bot, vitima, ponto, d) {
+    vitima.alive = false;
+    vitima.score.deaths++;
+    bot.score.kills++;
+    this.pontuarTime(vitima, bot);
+    this.broadcastAll({
+      t: S2C.KILL,
+      victim: vitima.id,
+      victimName: vitima.name,
+      killer: bot.id,
+      killerName: bot.name,
+      killerColor: bot.color,
+      victimColor: vitima.color,
+      distance: null,
+      c: [round(ponto.x), round(ponto.y), round(ponto.z)],
+      v: [round(d.x * 40), round(d.y * 40 + 6), round(d.z * 40)],
+      cause: "kame",
+    });
+    this.broadcastScores();
+    this.aoMorrer(vitima);
+  }
+
+  /**
+   * Onde o feixe encosta no chão, ou `null` se ele foi para o céu.
+   *
+   * É a mesma marcha de `KamehamehaBeam.acharFim`, com o mesmo passo grosso de
+   * 4 m e o mesmo refinamento de meio metro — e tem de ser a mesma, porque o
+   * cliente desenha a explosão onde ELE calculou e a sala mata onde ELA
+   * calculou. Duas contas diferentes seriam a bola de fogo num lugar e os
+   * mortos noutro.
+   */
+  pontaDoFeixe(origem, dir) {
+    const B = CONFIG.special.beam;
+    const alt = (x, z) => this.terrain?.heightAt?.(x, z) ?? 0;
+    const ponto = (t) => ({
+      x: origem.x + dir.x * t,
+      y: origem.y + dir.y * t,
+      z: origem.z + dir.z * t,
+    });
+    let ultimo = 0;
+    for (let t = 4; t <= B.range; t += 4) {
+      const p = ponto(t);
+      if (p.y <= alt(p.x, p.z)) {
+        for (let f = ultimo; f <= t; f += 0.5) {
+          const q = ponto(f);
+          if (q.y <= alt(q.x, q.z)) return q;
+        }
+        return p;
+      }
+      ultimo = t;
+    }
+    return null;
   }
 
   /**
@@ -924,6 +1153,7 @@ export class Room {
   abaterMorcegoPeloBot(bot, id) {
     const morcego = this.morcegos.hit(id);
     if (!morcego) return;
+    this.addKameCharge(bot, "bat", 1, morcego);
     this.broadcastAll({
       t: S2C.BAT_DEATH,
       id: morcego.id,
@@ -960,6 +1190,12 @@ export class Room {
   abaterRochaPeloBot(bot, id) {
     const r = this.meteors.hit(id);
     if (!r) return;
+    /* A BARRA DO BOT ENCHE, mesmo que o placar dele não conte.
+       As duas coisas parecem a mesma e não são: o placar é um ranking entre
+       pessoas, e por isso o bot fica de fora dele; o especial é uma ARMA, e uma
+       guarnição de CPU que abate a partida inteira sem nunca soltar o golpe é
+       uma guarnição jogando um jogo diferente do seu. Ver `Bot.querSoltarKame`. */
+    this.addKameCharge(bot, "meteor", r.gasto ?? 1, r.meteor);
     this.broadcastAll({
       t: S2C.METEOR_HIT,
       id,
@@ -985,6 +1221,7 @@ export class Room {
     vitima.score.deaths++;
     bot.score.kills++;
     this.pontuarTime(vitima, bot);
+    this.addKameCharge(bot, "player", 1, this.corpoDe(vitima));
 
     this.broadcastAll({
       t: S2C.KILL,
@@ -1017,6 +1254,7 @@ export class Room {
     if (tipo === "boar") {
       const porco = this.hunt.kill(id, agora);
       if (!porco) return;
+      this.addKameCharge(bot, "boar", 1, porco);
       this.broadcastAll({
         t: S2C.BOAR_DEATH,
         id,
@@ -1033,6 +1271,7 @@ export class Room {
       if (bicho && !bicho.dead) {
         bicho.hit?.(false);
         if (bicho.dead) {
+          this.addKameCharge(bot, "zombie", 1, bicho);
           this.broadcastAll({ t: S2C.ZOMBIE_DEATH, id, killer: bot.id, points: 0, head: false });
         }
       }
@@ -1040,6 +1279,7 @@ export class Room {
       const r = this.siege.hit(id, { head: false });
       if (!r?.killed) return;
       this.siege.matar(r.b, bot.id, agora);
+      this.addKameCharge(bot, "besieger", 1, { x: r.b.x, y: r.b.chestY, z: r.b.z });
       this.broadcastAll({
         t: S2C.SIEGE_DEATH,
         id,
@@ -1496,9 +1736,7 @@ export class Room {
       this.lineUpForMeteorRain();
       this.meteors.setTerrain(this.terrain);
       this.meteors.start(this.players.size + this.bots.count);
-      this.kameCharge.clear();
       this.broadcastMeteorStatus();
-      this.broadcastKameCharges();
     } else if (modo === "duel") {
       this.startDuel();
     } else if (modo === "lastStand") {
@@ -1596,7 +1834,16 @@ export class Room {
     this.meteors.stop();
     // As flechas de bot a caminho de rochas que deixaram de existir.
     this.rochasReservadas?.clear();
+    /* A BARRA ZERA EM TODA TROCA, e a tela é avisada.
+       Era zerada só ao entrar na chuva, de quando a chuva era o único lugar em
+       que o especial existia. Hoje ele existe em todos (ver `specialEnabled`), e
+       herdar meia barra da partida anterior seria começar um cerco com um golpe
+       comprado noutro modo. */
     this.kameCharge.clear();
+    // Os pontos que ainda estavam voando morrem com a partida. Ver `kameGen`.
+    this.kameGen++;
+    for (const b of this.bots.list) b.cancelarKame?.();
+    this.broadcastKameCharges();
     // As tochas voltam acesas: a partida seguinte não herda o escuro que a
     // anterior produziu.
     this.torches = [true, true, true, true];
@@ -1733,6 +1980,8 @@ export class Room {
 
     player.score.points += vencido.points;
     player.score.targets = (player.score.targets ?? 0) + 1;
+    // Meio ponto por alvo: ele não reage e não anda. Ver `chargeSources.target`.
+    this.addKameCharge(player, "target", 1, vencido);
 
     this.broadcastAll({
       t: S2C.SERIES_HIT,
@@ -2722,7 +2971,7 @@ export class Room {
     // conta pelo que GASTOU, e não por uma mensagem: ele apaga uma rocha de
     // três flechas com um pacote só, e cobrar por um seria pagar menos pelo
     // mesmo estrago.
-    this.addKameCharge(player, "meteor", r.gasto ?? 1);
+    this.addKameCharge(player, "meteor", r.gasto ?? 1, r.meteor);
     this.broadcastScores();
     this.broadcastMeteorStatus();
   }
@@ -3147,9 +3396,11 @@ export class Room {
     const pontos = this.siege.pontos(r.b.kind);
     player.score.points += pontos;
     player.score.kills++;
-    // A alma. Quem desenha a bolinha subindo é o cliente, a partir deste mesmo
-    // evento; aqui só se conta o ponto. Ver `systems/souls.js`.
-    this.addKameCharge(player, "besieger");
+    /* A alma. Quem desenha a bolinha subindo é o cliente, a partir deste mesmo
+       evento; aqui se conta o ponto — e ele só entra na barra quando a bolinha
+       CHEGA. O corpo vai junto porque é dele que sai a distância que decide o
+       atraso. Ver `addKameCharge` e `systems/souls.js`. */
+    this.addKameCharge(player, "besieger", 1, { x: r.b.x, y: r.b.chestY, z: r.b.z });
     this.broadcastAll({
       t: S2C.SIEGE_DEATH,
       id,
@@ -3293,7 +3544,7 @@ export class Room {
    */
   registerKameBlast(player, msg) {
     const S = CONFIG.special;
-    if (!S.modes.includes(this.mode)) return;
+    if (!specialEnabled(this.mode)) return;
     if (!player.alive) return;
     const p = msg?.p;
     if (!Array.isArray(p) || p.length < 3) return;
@@ -3357,21 +3608,94 @@ export class Room {
     }
   }
 
-  addKameCharge(player, fonte, vezes = 1) {
+  /**
+   * Um abate encheu um pedaço da barra — DAQUI A ALGUNS SEGUNDOS.
+   *
+   * O ponto não é creditado na morte, é creditado quando a ALMA CHEGA em quem
+   * matou. É a mesma bolinha que o cliente desenha saindo do corpo
+   * (`systems/souls.js`), e o atraso é o tempo de voo dela, integrado da mesma
+   * curva pelos dois lados da rede (`shared/soulFlight.js`).
+   *
+   * Por que mexer nisto: a alma existe para ser a confirmação de abate legível
+   * de longe, e a barra subindo no instante da morte contava o fim da história
+   * antes de a bolinha sair do corpo — a viagem virava enfeite atrasado. Agora
+   * a bolinha é a CAUSA do ponto: ela sai, atravessa, encosta, e a barra sobe.
+   * Num co-op é informação de verdade — dá para ver quanto especial está a
+   * caminho de quem, e não só quanto já chegou.
+   *
+   * E vale para o BOT sem uma linha a mais: ele não desenha alma nenhuma, mas o
+   * atraso é uma conta e não uma animação.
+   *
+   * @param {object} player quem matou (humano ou bot)
+   * @param {string} fonte a chave em `CONFIG.special.chargeSources`
+   * @param {number} [vezes] quantos pontos, para as fontes que valem mais de um
+   * @param {{x:number,y:number,z:number}|null} [corpo] de onde a alma sai. Sem
+   *   ele o ponto é creditado na hora — é o caso de quem não tem posição a
+   *   informar, e é melhor um ponto adiantado que um ponto perdido.
+   */
+  addKameCharge(player, fonte, vezes = 1, corpo = null) {
     const S = CONFIG.special;
-    if (!S.modes.includes(this.mode)) return;
+    if (!specialEnabled(this.mode)) return;
     const passo = (S.chargeSources[fonte] ?? 0) * Math.max(0, vezes);
     if (!passo) return;
-    const atual = this.kameCharge.get(player.id) ?? 0;
+
+    const voo = corpo ? tempoDeVoo(this.distanciaAte(player, corpo)) : 0;
+    if (voo < 0.05) {
+      this.creditarKame(player.id, passo);
+      return;
+    }
+
+    /* A GERAÇÃO é o que impede uma alma de atravessar uma troca de modo. Ela
+       está a caminho quando alguém aperta o 5, e quatro segundos depois cairia
+       numa partida que não é a dela — enchendo a barra de uma chuva com um
+       esqueleto do cerco anterior. `kameGen` muda em toda limpeza de barra
+       (ver `resetWorld` e `setMode`), e o ponto atrasado confere antes de somar. */
+    const geracao = this.kameGen;
+    const id = player.id;
+    setTimeout(() => {
+      if (geracao !== this.kameGen) return;
+      this.creditarKame(id, passo);
+    }, voo * 1000).unref?.();
+  }
+
+  /** O ponto entrou na barra. Ver `addKameCharge` para por que ele demora. */
+  creditarKame(id, passo) {
+    const S = CONFIG.special;
+    if (!specialEnabled(this.mode)) return;
+    // Quem saiu da sala no meio do voo não tem mais barra para encher.
+    if (!this.players.has(id) && !this.bots.byId(id)) return;
+    const atual = this.kameCharge.get(id) ?? 0;
     if (atual >= this.kameMax()) return;
     const novo = Math.min(this.kameMax(), atual + passo);
-    this.kameCharge.set(player.id, novo);
-    this.broadcastAll({
-      t: S2C.KAME_CHARGE,
-      id: player.id,
-      charge: novo,
-      max: this.kameMax(),
-    });
+    this.kameCharge.set(id, novo);
+    this.broadcastAll({ t: S2C.KAME_CHARGE, id, charge: novo, max: this.kameMax() });
+  }
+
+  /**
+   * Metros entre um jogador (ou bot) e um ponto.
+   *
+   * Os dois corpos são declarados de modos diferentes — o humano manda pose em
+   * `state.p`, o bot tem `position` — e a alma não quer saber de qual dos dois
+   * se trata.
+   */
+  distanciaAte(player, ponto) {
+    const p = this.corpoDe(player);
+    if (!p || !ponto) return 0;
+    return Math.hypot(ponto.x - p.x, (ponto.y ?? p.y) - p.y, ponto.z - p.z);
+  }
+
+  /**
+   * Onde está o corpo de um jogador ou bot, `null` se ele não declarou pose.
+   *
+   * Os dois são declarados de modos diferentes — o humano manda pose em
+   * `state.p`, o bot tem `position` — e nem a alma nem a distância querem saber
+   * de qual dos dois se trata.
+   */
+  corpoDe(quem) {
+    if (quem?.state) {
+      return { x: quem.state.p[0], y: quem.state.p[1], z: quem.state.p[2] };
+    }
+    return quem?.position ?? null;
   }
 
   broadcastKameCharges() {
@@ -3398,7 +3722,7 @@ export class Room {
    */
   registerKame(player, msg) {
     const S = CONFIG.special;
-    if (!S.modes.includes(this.mode)) return;
+    if (!specialEnabled(this.mode)) return;
     if ((this.kameCharge.get(player.id) ?? 0) < this.kameMax()) return;
     if (!Array.isArray(msg.o) || !Array.isArray(msg.d)) return;
 
@@ -3469,7 +3793,7 @@ export class Room {
     }
     player.score.points += pontos;
     player.score.kills++;
-    this.addKameCharge(player, "zombie");
+    this.addKameCharge(player, "zombie", 1, r.zombie);
 
     this.broadcastAll({
       t: S2C.ZOMBIE_DEATH,
@@ -3763,6 +4087,8 @@ export class Room {
     if (!morto.fun) {
       player.score.elks = (player.score.elks ?? 0) + 1;
       player.score.points += pontos;
+      // O alce vale dobrado: são seis flechas e ele revida. Ver `chargeSources`.
+      this.addKameCharge(player, "elk", 1, morto);
     }
 
     this.broadcastAll({
@@ -3825,6 +4151,7 @@ export class Room {
       : CONFIG.birds.points;
     player.score.birds = (player.score.birds ?? 0) + 1;
     player.score.points += pontos;
+    this.addKameCharge(player, "bird", 1, ave);
 
     this.broadcastAll({
       t: S2C.BIRD_DEATH,
@@ -3892,6 +4219,10 @@ export class Room {
       player.score.boars++;
       player.score.points += pontos;
     }
+    /* O porco solto na mão não vale ponto de placar E não vale barra, pela
+       mesma razão: quem solta escolhe onde, e um alvo escolhido pelo próprio
+       atirador não é abate, é treino. */
+    if (!porco.fun) this.addKameCharge(player, "boar", 1, porco);
 
     this.broadcastAll({
       t: S2C.BOAR_DEATH,
@@ -4087,7 +4418,11 @@ export class Room {
       // queda. Ver `FallingMeteor.view`.
       meteors: isMeteorMode(this.mode) ? this.meteors.fullView() : [],
       meteorStatus: isMeteorMode(this.mode) ? this.meteorStatus() : null,
-      kameCharge: isMeteorMode(this.mode)
+      /* A barra de quem está entrando, EM QUALQUER MODO. Era só na chuva, de
+         quando a chuva era o único lugar onde o especial existia — hoje ele
+         existe em todos (ver `specialEnabled`), e um retardatário que entrasse
+         no cerco via a barra zerada mesmo tendo carga guardada da rodada. */
+      kameCharge: specialEnabled(this.mode)
         ? { charge: this.kameCharge.get(exceto?.id) ?? 0, max: this.kameMax() }
         : null,
       torches: this.torches,
@@ -4409,6 +4744,20 @@ export class Room {
         this.registerKameBlast(player, msg);
         break;
 
+      /* ATALHO DE TESTE: a barra de quem pediu, cheia. Passa pelo servidor
+         porque a barra é dele — ver `C2S.KAME_FILL`. */
+      case C2S.KAME_FILL:
+        if (!specialEnabled(this.mode)) break;
+        this.kameCharge.set(player.id, this.kameMax());
+        this.broadcastAll({
+          t: S2C.KAME_CHARGE,
+          id: player.id,
+          charge: this.kameMax(),
+          max: this.kameMax(),
+        });
+        this.log(`${player.name} encheu o especial (atalho de teste)`);
+        break;
+
       /* ---------------------------------------------------------- cerco -- */
       case C2S.BOLT_HIT: {
         /* A flecha estourou a bola de magia no ar.
@@ -4470,6 +4819,7 @@ export class Room {
         const pontos = CONFIG.modes.siege.bats.points;
         player.score.points += pontos;
         player.score.kills++;
+        this.addKameCharge(player, "bat", 1, morcego);
         this.broadcastAll({
           t: S2C.BAT_DEATH,
           id: morcego.id,
@@ -4633,6 +4983,9 @@ export class Room {
     vitima.score.deaths++;
     killer.score.kills++;
     this.pontuarTime(vitima, killer);
+    /* A alma de quem cai vai para quem o derrubou, como a de qualquer bicho —
+       ver `CONFIG.special.chargeSources.player` para por que ela vale mais. */
+    this.addKameCharge(killer, "player", 1, this.corpoDe(vitima));
 
     this.broadcastAll({
       t: S2C.KILL,

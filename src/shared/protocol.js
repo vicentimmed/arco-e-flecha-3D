@@ -229,6 +229,18 @@ export const C2S = {
    *  ajuste. Ele vale para a sala inteira (o cerco é um só) e por isso passa
    *  pelo servidor como qualquer outra mudança de estado compartilhado. */
   SIEGE_SKIP: "siegeSkip",
+
+  /** "Enche a minha barra do especial": `{}`. Atalho de TESTE.
+   *
+   *  Dez abates por disparo é o preço certo em jogo e é caro demais em bancada:
+   *  verificar uma linha do feixe custava uma horda inteira, e a alternativa que
+   *  se usava — baixar `hitsToCharge` no config e esquecer de subir — é a que
+   *  vaza para o jogo de verdade.
+   *
+   *  Ele enche SÓ A DE QUEM PEDIU. É a diferença para o `SIEGE_SKIP`, que
+   *  adianta o relógio da sala inteira porque o cerco é um só: aqui não há nada
+   *  compartilhado, e encher a barra dos outros seria decidir pelos outros. */
+  KAME_FILL: "kameFill",
 };
 
 /* --------------------------------------------------------- servidor → cliente */

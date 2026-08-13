@@ -37,6 +37,7 @@
 
 import * as THREE from "three";
 import { gameEvents, EventType } from "../core/events.js";
+import { ALMA, tetoDaAlma, passoDaAlma } from "../shared/soulFlight.js";
 
 /** Quantas almas cabem em campo. Passou disto, a mais velha é reciclada. */
 const TETO = 64;
@@ -44,22 +45,26 @@ const TETO = 64;
 /**
  * Tamanho da esfera, em metros, e por que ele é ESTE.
  *
- * A primeira versão usava 1,3 m e sumia — que é o oposto do trabalho dela. A
- * conta: com FOV de 58° e 720 px de altura, um metro a 60 m ocupa 12 px. Um
- * zumbi morre tipicamente entre 40 e 70 m; um sitiante do cerco, entre 60 e
- * 90; uma rocha da chuva, a 150. A 1,3 m isso dava de 6 a 15 px de núcleo —
- * tamanho de sujeira na tela, não de sinal.
+ * A conta original: com FOV de 58° e 720 px de altura, um metro a 60 m ocupa
+ * 12 px. Um zumbi morre tipicamente entre 40 e 70 m; um sitiante do cerco,
+ * entre 60 e 90; uma rocha da chuva, a 150.
  *
- * `raioBase` é o dobro disso, e `raioPorDistancia` é o que fecha a conta para o
- * caso longe: a esfera cresce um pouco com a distância, então ela mantém um
- * tamanho ANGULAR quase constante em vez de encolher com o quadrado. Não é o
- * mesmo que desligar a atenuação (aí ela viraria um balão colado na cara de
- * quem mata de perto); é um meio-termo que a deixa legível em toda a faixa em
- * que o jogo mata alguma coisa.
+ * `RAIO_POR_DISTANCIA` é o que fecha o caso longe: a esfera cresce um pouco com
+ * a distância, então ela mantém um tamanho ANGULAR quase constante em vez de
+ * encolher com o quadrado. Não é o mesmo que desligar a atenuação (aí ela
+ * viraria um balão colado na cara de quem mata de perto); é um meio-termo que a
+ * deixa legível em toda a faixa em que o jogo mata alguma coisa.
+ *
+ * PELA METADE. Os números anteriores (2,4 / 0,016 / 7,0) foram calibrados contra
+ * o pior caso — uma alma solitária no fundo escuro da rampa — e num modo de
+ * horda esse caso é raro: com seis abates em dois segundos, seis esferas
+ * daquele tamanho vindas de direções diferentes cobriam a mira, que é o único
+ * pedaço de tela que não pode ser coberto. Metade continua acima do limiar de
+ * leitura e devolve a mira ao jogador.
  */
-const RAIO_BASE = 2.4; // m
-const RAIO_POR_DISTANCIA = 0.016; // m por metro de distância até a câmera
-const RAIO_MAX = 7.0; // m
+const RAIO_BASE = 1.2; // m
+const RAIO_POR_DISTANCIA = 0.008; // m por metro de distância até a câmera
+const RAIO_MAX = 3.5; // m
 
 /* A mesma textura de disco macio da rocha da chuva, gerada uma vez para o jogo
    inteiro. Um canvas de 64 px custa menos que carregar um arquivo. */
@@ -149,6 +154,16 @@ export class SoulSystem {
     s.position.set(de.x, de.y + 0.9, de.z);
     s.visible = true;
 
+    /* O TETO É DECIDIDO AGORA, pela distância até quem matou, e não muda mais.
+       É o que faz a alma de uma rocha a duzentos metros ser um risco de luz e a
+       de um esqueleto a trinta ser uma bolinha mansa — ver `tetoDaAlma`. Lê-lo
+       a cada quadro faria a bolinha DESACELERAR ao se aproximar, que é o
+       contrário da leitura que ela precisa ter. */
+    const destino = this.localizar?.(matadorId) ?? null;
+    const d0 = destino
+      ? Math.hypot(destino.x - de.x, destino.y + 1.2 - (de.y + 0.9), destino.z - de.z)
+      : 0;
+
     this.vivas.push({
       vaga,
       matadorId,
@@ -162,6 +177,7 @@ export class SoulSystem {
       // idênticos lê como uma coisa só.
       raio: 0.8 + Math.random() * 0.9,
       vel: 0,
+      teto: tetoDaAlma(d0),
     });
   }
 
@@ -170,8 +186,11 @@ export class SoulSystem {
    *
    * A alma ACELERA em direção ao destino em vez de andar a velocidade
    * constante: perto do corpo ela ainda está "se soltando", e no fim chega
-   * rápido. Sem isso, uma morte a cem metros produzia uma bolinha atravessando
-   * a tela devagar por quatro segundos, o que é tempo demais para um retorno.
+   * rápido. E o TETO dela depende de quão longe o destino estava no começo, o
+   * que é o que mantém a viagem em torno de quatro segundos tanto para um
+   * esqueleto a trinta metros quanto para uma rocha a duzentos. Ver
+   * `shared/soulFlight.js`, que é de onde a conta vem — e é a mesma que a sala
+   * usa para saber quando a barra do especial sobe.
    */
   update(dt, camera = null) {
     if (camera) this.camera = camera;
@@ -199,22 +218,38 @@ export class SoulSystem {
       let dz = destino.z - s.position.z;
       const d = Math.hypot(dx, dy, dz);
 
-      if (d < 1.1) {
+      /* A CURVA MORA NO `shared`, e é a mesma que a sala integra para saber
+         quando somar o ponto da barra do especial. Ver `shared/soulFlight.js`
+         para os três termos — a rampa, a aceleração que cresce com o que falta
+         e o teto que cresce com a distância inicial. Este arquivo desenha; ele
+         não decide mais a velocidade sozinho. */
+      a.vel = passoDaAlma(a.vel, dt, d, a.t, a.teto);
+
+      /* A CHEGADA ACOMPANHA O PASSO, e não é um raio fixo.
+       *
+       * Ela era `d < 1,1 m`, escolhido quando o teto de velocidade era 20 m/s:
+       * o passo de um quadro dava 0,36 m e a bolinha sempre caía dentro da
+       * casca antes de passar por ela. Com o teto atrelado à distância (até
+       * 62 m/s, para a alma de uma rocha a duzentos metros), o passo chega a
+       * 1,1 m a 55 quadros — e a 2 m num quadro ruim. A alma PULAVA POR CIMA
+       * do destino todo quadro, o teste nunca dava verdadeiro e ela orbitava o
+       * arqueiro para sempre: medido em jogo, as 64 vagas do lote entupiam em
+       * dois minutos de cerco e nenhuma alma nova conseguia nascer.
+       *
+       * Comparar contra o que a bolinha ANDA neste quadro fecha o buraco em
+       * qualquer velocidade e em qualquer taxa de quadros — e o passo é limitado
+       * ao que falta, para ela parar no destino em vez de atravessá-lo. */
+      const avanco = Math.min(a.vel * dt, d);
+      if (d <= Math.max(ALMA.encosto, a.vel * dt)) {
         this.chegou(destino, a);
         this.recolher(i);
         continue;
       }
 
       /* A SUBIDA sobrevive ao primeiro meio segundo e depois se rende à
-         atração: é ela que dá o arco, e é ela que separa a alma de um projétil.
-         Ficou mais longa junto com o teto de velocidade — ver abaixo. */
+         atração: é ela que dá o arco, e é ela que separa a alma de um projétil. */
       const solta = Math.max(0, 1 - a.t / 0.7);
-      /* MAIS DEVAGAR. A 34 m/s ela cruzava sessenta metros em dois segundos e
-         quem não estava olhando para o corpo no instante da morte não via
-         nada — que é justamente a pessoa para quem o aviso existe. A 20 m/s a
-         mesma viagem leva o dobro, e o dobro é o tempo de virar a cabeça. */
-      a.vel = Math.min(20, a.vel + (9 + d * 0.22) * dt);
-      const passo = (a.vel * dt) / d;
+      const passo = avanco / d;
       s.position.x += dx * passo;
       s.position.y += dy * passo + a.subida * solta * dt * 6;
       s.position.z += dz * passo;
@@ -233,9 +268,9 @@ export class SoulSystem {
   /**
    * O tamanho na tela.
    *
-   * Ela PULSA e é grande de propósito: 1,3 m de sprite aditivo a cem metros são
-   * uns nove pixels de núcleo com halo em volta — que é o mínimo para ser vista
-   * contra a rampa noturna, que é a única razão pela qual ela existe.
+   * Ela PULSA, e o pulso é o que a mantém legível agora que ela é metade do que
+   * era: um ponto fixo pequeno lê como sujeira na tela; um que respira lê como
+   * coisa viva, que é a mesma razão do facho do mago no mirante.
    */
   desenhar(a, s, opacidade) {
     const pulso = 1 + Math.sin(a.t * 11) * 0.14;

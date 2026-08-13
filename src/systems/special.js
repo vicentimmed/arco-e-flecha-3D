@@ -18,7 +18,7 @@
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
-import { CONFIG, kameTotal } from "../config.js";
+import { CONFIG, kameTotal, specialEnabled } from "../config.js";
 import { C2S } from "../shared/protocol.js";
 import { KamehamehaBeam, distanciaAoFeixe } from "../entities/kamehameha.js";
 
@@ -70,7 +70,7 @@ export class SpecialSystem {
 
   /** O modo mudou: o especial existe aqui? */
   setMode(mode) {
-    this.habilitado = CONFIG.special.modes.includes(mode);
+    this.habilitado = specialEnabled(mode);
     if (!this.habilitado) {
       this.cancel();
       this.hud?.setSpecial(null);

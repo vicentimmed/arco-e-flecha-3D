@@ -1559,6 +1559,34 @@ export const CONFIG = {
          mesmo número) que `playerGapScale` do modo zumbi. */
       playerGapScale: 0.85,
 
+      /* -------------------------------------------------------- a abertura --
+         A COLUNA DO PRIMEIRO MINUTO. Ver `Siege.enfileirarAbertura`.
+
+         O modo continua sem ondas: isto não é uma horda com pausa depois, é o
+         começo da mesma taxa contínua, apertado. Ele existe porque a curva tem
+         um problema que só aparece no começo — a rampa leva uma travessia
+         inteira (84 s) para encher, e durante essa travessia `gapBase` está no
+         ponto mais frouxo de toda a partida. As duas coisas se somam no pior
+         lugar possível: os primeiros noventa segundos, que são justamente onde
+         o jogador decide se aquilo vai exigir algo dele.
+
+         DEZOITO, a 1,5 s. São 27 s de coluna saindo do bosque e 27 s de chegada
+         ao portão — pressão de meados do minuto 7 (`gapBase` cruza 1,5 s por
+         ali), aplicada no minuto 1,4 e só com soldados.
+
+         A conta que a torna justa é a rampa: dezoito soldados a 1,15 m/s ficam
+         84 s sob flecha antes de encostar na madeira, e um arqueiro médio (0,39
+         abates/s) derruba trinta e três nesse tempo. Ou seja, a coluna inteira
+         cabe com folga — DESDE QUE se atire nela. Quem passar a abertura
+         olhando a paisagem recebe os dezoito no portão de uma vez, que é
+         exatamente a lição que a fase quer ensinar no primeiro minuto em vez de
+         no oitavo. */
+      opening: {
+        count: 18,
+        gap: 1.5, // s entre duas chegadas da coluna
+        kind: "soldier",
+      },
+
       /* -------------------------------------------------------------- maré --
          O que substitui a pausa entre ondas. Sem onda não há pausa, e sem
          pausa ninguém larga o arco para içar o contrapeso ou reparar o portão.
@@ -1989,16 +2017,47 @@ export const CONFIG = {
      diz "isto encheu um ponto" é o modo, por `chargeSources`. */
   special: {
     kind: "kamehameha",
-    /** Onde ele está LIGADO hoje. Ligar noutro modo é acrescentar um id aqui. */
-    modes: ["meteorRain", "zombie", "zombieBoss", "siege"],
+    /* EM TODO MODO, e é o que `"*"` quer dizer. Ver `specialEnabled`.
+     *
+     * Era uma lista de quatro — chuva, as duas noites de zumbi e o cerco —, e a
+     * lista descrevia menos uma decisão de desenho do que a ordem em que as
+     * coisas foram escritas: o especial nasceu junto com a chuva e foi sendo
+     * ligado onde havia horda. O critério não sobrevive ao teste óbvio: o que
+     * enche a barra é ABATER, e todo modo deste jogo é feito de abates. Um
+     * duelo sem especial e um cerco com especial são dois jogos diferentes
+     * vendidos com o mesmo arco.
+     *
+     * Uma lista também é uma armadilha para o modo seguinte: quem escrever o
+     * décimo quarto modo não tem como saber que precisa vir aqui, e o sintoma é
+     * um sistema inteiro que simplesmente não aparece, sem erro nenhum. */
+    modes: "*",
     /* O que enche a barra, e quanto, por evento.
      *
-     * Na chuva a moeda é a FLECHA que conecta; nos modos de monstro é a ALMA,
-     * ou seja, o abate inteiro — e é ela que o jogador vê subindo até ele
+     * Na chuva a moeda é a FLECHA que conecta; em todo o resto é a ALMA, ou
+     * seja, o abate inteiro — e é ela que o jogador vê subindo até ele
      * (`systems/souls.js`). São duas moedas diferentes de propósito: uma rocha
      * pede de uma a vinte flechas e um zumbi pede uma; contar flecha lá e
-     * abate aqui é o que mantém as duas barras enchendo no mesmo ritmo. */
-    chargeSources: { meteor: 1, zombie: 1, besieger: 1 },
+     * abate aqui é o que mantém as duas barras enchendo no mesmo ritmo.
+     *
+     * O ALVO DE MADEIRA VALE MENOS QUE UM BICHO, e o JOGADOR vale mais.
+     * A série é o modo mais barato de encher barra que existe — o alvo não
+     * reage, não anda e nasce sempre à sua frente —, e pagá-lo cheio faria o
+     * especial sair a cada dois minutos num modo que é sobre pontaria (a 0,5,
+     * são vinte alvos por golpe). O abate de gente é o contrário: num duelo é a
+     * coisa mais cara do jogo, e a 2,5 são QUATRO abates por golpe — o suficiente
+     * para o feixe ser um prêmio de quem está ganhando a briga, e caro o
+     * bastante para não sair duas vezes na mesma troca de tiros. */
+    chargeSources: {
+      meteor: 1,
+      zombie: 1,
+      besieger: 1,
+      bat: 1,
+      boar: 1,
+      elk: 2,
+      bird: 1,
+      target: 0.5,
+      player: 2.5,
+    },
     /** Dez almas enchem a barra. */
     hitsToCharge: 10,
     /** Ele mata outros jogadores. Virar `false` por modo é uma linha. */
@@ -2945,6 +3004,19 @@ export function savedQuality() {
 export function kameTotal() {
   const S = CONFIG.special;
   return S.charge + S.release + S.sustain + S.poseDissipate + S.recover;
+}
+
+/**
+ * O especial existe neste modo?
+ *
+ * Uma função e não um `includes` espalhado porque `CONFIG.special.modes` aceita
+ * `"*"` — "em todos" —, e a alternativa era repetir a mesma condição de três
+ * caracteres em quatro arquivos e esquecer um. Ver o comentário do campo.
+ */
+export function specialEnabled(mode) {
+  const m = CONFIG.special.modes;
+  if (m === "*") return true;
+  return Array.isArray(m) && m.includes(mode);
 }
 
 /** Velocidade inicial em função do tempo de tensionamento (s). */

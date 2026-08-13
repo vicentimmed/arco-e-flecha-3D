@@ -289,8 +289,13 @@ export class Siege {
     this.tiersOut = new Set();
     /** Quanto tempo o portão passou abaixo do crítico — vai para a tela de fim. */
     this.criticalTime = 0;
-    /** @type {{kind:string, chegada:number}|null} o próximo agendado. */
-    this.pendente = null;
+    /**
+     * @type {Array<{kind:string, chegada:number, nascimento:number}>} as chegadas
+     * já sorteadas e ainda não nascidas.
+     *
+     * UMA FILA, e não um único agendado — ver `agendar`.
+     */
+    this.pendentes = [];
     this.nextOgre = Infinity;
     this.nextCatapult = Infinity;
     /** Piche em chamas no chão: `{x, z, r, until, dps, owner}`. */
@@ -326,7 +331,7 @@ export class Siege {
     this.players = Math.max(1, nPlayers);
     this.tiersOut = new Set();
     this.criticalTime = 0;
-    this.pendente = null;
+    this.pendentes = [];
     /* A FILA DE CHEGADAS COMEÇA UMA CAMINHADA ADIANTADA — e é esta linha que
      * põe a horda saindo da floresta em vez de surgindo no meio da ponte.
      *
@@ -352,6 +357,7 @@ export class Siege {
     this.nextCatapult = Infinity;
     this.fogos = [];
     this.kills = new Map();
+    this.enfileirarAbertura();
     /* AS TORRES ESTÃO OCUPADAS DESDE O PRIMEIRO SEGUNDO.
        Elas não têm escalão e não entram no sorteio: são cenário com gente
        dentro, e a ameaça delas é o que impede a metade distante da rampa de
@@ -492,53 +498,58 @@ export class Siege {
     this.espera = 0;
     this.t = proximo.at;
     this.ultimaChegada = this.t + this.abertura;
-    this.pendente = null;
+    this.pendentes = [];
     return this.t;
   }
 
   /**
-   * As espécies liberadas neste instante — UMA TRAVESSIA ANTES DA FAIXA.
+   * O escalão de uma espécie, ou `null` se ela não tem um.
    *
-   * O escalão dos esqueletos abre aos 45 s e a faixa "Esqueletos" sobe na tela
-   * no mesmo instante. Só que o esqueleto nasce na linha de árvores, a 97 m do
-   * portão, e anda a 2,4 m/s: quarenta segundos depois. O jogador lia o
-   * anúncio, procurava, não achava nada, e a novidade chegava quando ele já
-   * tinha desistido de procurar — o degrau perdia justamente o efeito que os
-   * degraus existem para ter. Com o xamã era pior ainda: 0,9 m/s, quase dois
-   * minutos entre a faixa e o primeiro cajado na rampa.
-   *
-   * A correção não é fazê-los nascer mais perto — isso custaria a única coisa
-   * que a fase promete o tempo todo, que é que eles VÊM DE ALGUM LUGAR (ver o
-   * comentário em `nascer`). É soltá-los no sorteio uma travessia ANTES, e
-   * deixar a faixa onde está: eles saem do bosque cedo, sobem a rampa à vista
-   * de quem defende, e o anúncio cai no segundo em que o primeiro chega. A
-   * faixa deixa de dizer "saíram" e passa a dizer "chegaram".
-   *
-   * Ogro e catapulta não são afetados: não têm peso em `weights` e nunca saem
-   * daqui — cada um tem relógio próprio.
+   * O mago de mirante é um xamã sem escalão (`nascerMago` não passa por aqui), e
+   * o `null` existe para essa gente: espécie sem degrau é espécie que nunca foi
+   * prometida na tela e por isso nunca pode sair no sorteio.
    */
-  escaloesAbertos() {
-    const S = CONFIG.modes.siege;
-    return S.tiers.filter((t) => this.t >= t.at - this.viagem(t.kind));
+  escalaoDe(kind) {
+    return CONFIG.modes.siege.tiers.find((t) => t.kind === kind) ?? null;
   }
 
   /**
-   * Sorteia a espécie da próxima chegada.
+   * Sorteia a espécie de uma chegada — e a trava é o NASCIMENTO, não a chegada.
+   *
+   * NADA APARECE NA RAMPA ANTES DE TER SIDO ANUNCIADO, e é esta linha que
+   * garante isso. A regra anterior soltava a espécie no sorteio uma travessia
+   * ANTES da faixa, apostando que o primeiro exemplar chegaria ao portão no
+   * segundo do anúncio. A aposta ignorava que a rampa é o campo de tiro: o
+   * jogador não vê ninguém "chegar", ele vê sair do bosque. Medido, o buraco era
+   * grande — escalador na rampa aos 80 s com a faixa dele aos 105, xamã aos 116
+   * com a faixa aos 165, pavês aos 236 com a faixa aos 300. Três espécies
+   * inteiras entravam em campo sem nome, no meio do escalão anterior, que é
+   * exatamente o defeito que os degraus existem para não ter.
+   *
+   * Agora a conta é exata em vez de aproximada: sabemos a chegada que estamos
+   * espaçando e sabemos a travessia de cada espécie, então sabemos o SEGUNDO em
+   * que cada candidata sairia do bosque. Quem sairia antes da própria faixa não
+   * entra no sorteio. O degrau volta a valer o que ele diz.
    *
    * Ogro e catapulta NÃO entram aqui: têm relógio próprio, porque uma espécie
    * que aparece por sorteio pode não aparecer nunca — e "o ogro do minuto 9" é
    * um evento, não uma probabilidade.
+   *
+   * @param {number} chegada o instante de chegada ao portão que se está sorteando
    */
-  sortearEspecie() {
+  sortearEspecie(chegada = this.t) {
     const S = CONFIG.modes.siege;
     const pesos = [];
     let total = 0;
-    for (const t of this.escaloesAbertos()) {
-      const p = S.weights[t.kind];
-      if (!p) continue; // ogro e catapulta
-      if (t.kind === "shaman" && this.contar("shaman") >= S.shamanMax) continue;
-      if (t.kind === "climber" && this.contar("climber") >= S.climberMax) continue;
-      pesos.push([t.kind, p]);
+    for (const [kind, p] of Object.entries(S.weights)) {
+      if (!p) continue;
+      const tier = this.escalaoDe(kind);
+      if (!tier) continue;
+      // O segundo em que ESTE bicho sairia da linha de árvores.
+      if (chegada - this.viagem(kind) < tier.at) continue;
+      if (kind === "shaman" && this.contar("shaman") >= S.shamanMax) continue;
+      if (kind === "climber" && this.contar("climber") >= S.climberMax) continue;
+      pesos.push([kind, p]);
       total += p;
     }
     if (!pesos.length) return "soldier";
@@ -564,21 +575,83 @@ export class Siege {
   }
 
   /**
+   * O TETO É RECONFERIDO NA HORA DE SAIR DO BOSQUE, e não só no sorteio.
+   *
+   * `sortearEspecie` escolhe uma travessia inteira antes do nascimento (ver
+   * `horizonte`), e `shamanMax`/`climberMax` contam quem está EM CAMPO — dois
+   * relógios diferentes. Sem esta reconferência, cinco escaladores sorteados num
+   * minuto em que não havia nenhum nasceriam todos juntos um minuto depois, e o
+   * teto que existe para o adarve não virar uma escada não valeria nada.
+   *
+   * Quem não cabe vira SOLDADO em vez de sumir: a chegada foi marcada pela
+   * curva, e apagá-la seria tirar pressão do portão por um limite que é sobre
+   * variedade, não sobre volume.
+   */
+  escolherNoNascimento(kind) {
+    const S = CONFIG.modes.siege;
+    if (kind === "shaman" && this.contar("shaman") >= S.shamanMax) return "soldier";
+    if (kind === "climber" && this.contar("climber") >= S.climberMax) return "soldier";
+    return kind;
+  }
+
+  /**
    * Agenda a próxima chegada e deriva dela o instante de nascimento.
    *
    * É a peça central do ritmo. Ver o cabeçalho do arquivo para por que ela não
    * pode ser um simples "nasce a cada N segundos".
+   *
+   * ---------------------------------------------------- por que ela ENFILEIRA
+   *
+   * Havia UM agendado por vez (`this.pendente`), e esse único lugar era um
+   * defeito de trancar a fase inteira.
+   *
+   * A ordem de nascimento NÃO é a ordem de chegada, e não pode ser: o ritmo é
+   * agendado pela chegada, e cada espécie leva um tempo diferente na rampa. Um
+   * esqueleto (2,4 m/s, 40 s de subida) que chega ao portão no segundo 90 sai do
+   * bosque no 50; um soldado (1,15 m/s, 84 s) que chega no 93 sai no 9. Com um
+   * lugar só, sortear o esqueleto PARAVA a fila até o segundo 50 — e o soldado
+   * do segundo 9, que já devia estar subindo, nunca era sequer sorteado.
+   *
+   * Medido, com o defeito: três soldados nos primeiros dez segundos e mais
+   * ninguém até o 55. A abertura era uma rampa vazia, que é justamente o
+   * contrário do que a abertura tem de ser. E não era só a abertura — o cerco
+   * inteiro nascia com 118 sitiantes em dez minutos onde a curva pede ~300, ou
+   * seja, o modo rodava a um terço da pressão que `gapBase` descreve.
+   *
+   * Com uma fila cada chegada espera a própria hora sem segurar as de trás, e a
+   * curva de `gapBase` passa a ser o que ela sempre disse ser.
    */
   agendar() {
-    const kind = this.sortearEspecie();
     /* A chegada ACUMULA — ela não é "daqui a `gap` segundos".
        Contada a partir de `this.t`, cada tique reiniciaria o relógio e o
        intervalo real viraria o passo da simulação: cem sitiantes por segundo. */
     /* O espaçamento é lido NO INSTANTE DA CHEGADA que ele separa, e não no
        relógio de agora — a fila corre uma travessia à frente. Ver `gapAtual`. */
     const anterior = Math.max(this.ultimaChegada ?? 0, this.t);
-    this.ultimaChegada = anterior + this.gapAtual(anterior);
-    this.pendente = { kind, chegada: this.ultimaChegada };
+    const chegada = anterior + this.gapAtual(anterior);
+    this.ultimaChegada = chegada;
+    const kind = this.sortearEspecie(chegada);
+    this.pendentes.push({ kind, chegada, nascimento: chegada - this.viagem(kind) });
+  }
+
+  /**
+   * Até onde a fila precisa correr à frente do relógio.
+   *
+   * É a travessia MAIS LONGA do sorteio: uma chegada marcada para daqui a menos
+   * que isso pode ser de um xamã, e o xamã tem de sair do bosque agora para
+   * cumpri-la. Agendar menos que este horizonte é perder as espécies lentas —
+   * elas chegariam sempre atrasadas ou não chegariam.
+   */
+  horizonte() {
+    if (this._horizonte != null) return this._horizonte;
+    const S = CONFIG.modes.siege;
+    let maior = 0;
+    for (const kind of Object.keys(S.weights)) {
+      if (!S.weights[kind]) continue;
+      maior = Math.max(maior, this.viagem(kind));
+    }
+    this._horizonte = maior;
+    return maior;
   }
 
   /** Quanto tempo esta espécie leva da linha de árvores até o portão. */
@@ -586,6 +659,48 @@ export class Siege {
     const S = CONFIG.modes.siege;
     const dist = S.spawnZ - GATE.standZ;
     return dist / Math.max(0.2, S.species[kind].speed);
+  }
+
+  /**
+   * A COLUNA DE ABERTURA — a primeira horda, e a única que é uma horda.
+   *
+   * O modo não tem ondas (ver o cabeçalho), e continua não tendo: o que existe é
+   * uma taxa contínua. Mas a taxa tem um começo, e o começo dela é um problema
+   * que nenhuma curva resolve — a rampa demora uma travessia inteira para
+   * encher, e durante essa travessia `gapBase` está no ponto mais frouxo que
+   * terá em toda a partida. Somando as duas coisas, o primeiro minuto e meio
+   * saía com meia dúzia de soldados espalhados em noventa metros: tempo de
+   * sobra para matar todos e olhar a paisagem, num modo que se apresenta como
+   * um cerco.
+   *
+   * A coluna é a resposta, e ela é SÓ SOLDADO de propósito. É a primeira coisa
+   * que o jogador vê, e a primeira coisa que ele vê tem de ser a que ensina a
+   * leitura básica da fase: um corpo de duas flechas subindo a rampa. Esqueleto,
+   * escalador e xamã têm degrau próprio, e antecipá-los aqui gastaria os degraus
+   * todos no primeiro minuto.
+   *
+   * O espaçamento dela é mais apertado que o de `gapBase`, e isso é a
+   * dificuldade: eles chegam ao portão em bloco. O que torna a conta justa é que
+   * a coluna atravessa os noventa metros À VISTA, do primeiro segundo em diante
+   * — quem gastar a abertura atirando não vê fila nenhuma no portão; quem gastar
+   * olhando a paisagem recebe a coluna inteira de uma vez.
+   *
+   * As chegadas dela ocupam o começo do acumulador, então o fluxo normal pega
+   * exatamente onde a coluna termina: não há soma de duas pressões, há uma
+   * abertura mais densa que afrouxa para a curva de sempre.
+   */
+  enfileirarAbertura() {
+    const A = CONFIG.modes.siege.opening;
+    if (!A?.count) return;
+    const viagem = this.viagem(A.kind);
+    for (let i = 0; i < A.count; i++) {
+      const chegada = this.abertura + i * A.gap;
+      this.pendentes.push({ kind: A.kind, chegada, nascimento: chegada - viagem });
+    }
+    /* O acumulador salta para o fim da coluna. Sem isto o fluxo normal começaria
+       a marcar chegadas POR CIMA das dela, e o portão receberia as duas coisas
+       somadas — que é o dobro da pressão que a curva descreve. */
+    this.ultimaChegada = this.abertura + (A.count - 1) * A.gap;
   }
 
   /* ------------------------------------------------------------ nascimento -- */
@@ -825,31 +940,42 @@ export class Siege {
     const antes = this.t;
     this.t += dt;
 
-    /* --------------------------------------------------------- escalões -- */
+    /* --------------------------------------------------------- escalões --
+       A ESTREIA SAI JUNTO COM A FAIXA. O sorteio já garante que ninguém nasce
+       antes de ser anunciado (ver `sortearEspecie`); o que ele não garante é o
+       contrário — que alguém nasça LOGO depois. Um escalador tem peso 1,4 num
+       bolo de catorze, então a faixa podia subir e o primeiro exemplar demorar
+       meio minuto a ser sorteado, que é a mesma promessa quebrada ao contrário.
+       Um exemplar forçado no instante do anúncio fecha os dois lados: a trompa
+       toca e há o que procurar na linha de árvores. */
     for (const [i, t] of S.tiers.entries()) {
       if (this.tiersOut.has(i) || this.t < t.at) continue;
       this.tiersOut.add(i);
       saida.tier = { i, nome: t.nome, kind: t.kind, at: t.at };
       if (t.kind === "ogre") this.nextOgre = this.t;
-      if (t.kind === "catapult") this.nextCatapult = this.t;
+      else if (t.kind === "catapult") this.nextCatapult = this.t;
+      // Ogro e catapulta já nascem pelo relógio próprio, logo abaixo.
+      else if (S.weights[t.kind]) this.nascer(t.kind);
     }
 
     /* --------------------------------------------------------- chegadas --
-       `while` e não `if` porque numa maré cheia com quatro jogadores o
-       intervalo cai abaixo do passo de 100 ms, e um por tique deixaria a curva
-       para trás.
+       Duas coisas, e elas são independentes desde que a fila deixou de ter um
+       lugar só (ver `agendar`): MARCAR chegadas até o horizonte, e FAZER NASCER
+       quem já venceu a hora de sair do bosque.
 
-       O segundo motivo que este bloco tinha — a dívida do instante zero —
-       deixou de existir: `agendar()` não agenda mais chegada que a caminhada
-       não alcance, e por isso `nascer` não precisa mais adiantar ninguém na
-       rampa. Ver os dois comentários lá. */
-    if (!this.pendente) this.agendar();
+       O `while` de cima é o que mantém a curva: numa maré cheia com quatro
+       jogadores o intervalo cai abaixo do passo de 100 ms, e uma marcação por
+       tique deixaria `gapBase` para trás. */
     let guarda = 0;
-    while (this.pendente && guarda++ < 40) {
-      const nascimento = this.pendente.chegada - this.viagem(this.pendente.kind);
-      if (this.t < nascimento) break;
-      this.nascer(this.pendente.kind);
+    while (this.ultimaChegada - this.horizonte() < this.t && guarda++ < 200) {
       this.agendar();
+    }
+
+    for (let i = this.pendentes.length - 1; i >= 0; i--) {
+      const p = this.pendentes[i];
+      if (this.t < p.nascimento) continue;
+      this.pendentes.splice(i, 1);
+      this.nascer(this.escolherNoNascimento(p.kind));
     }
 
     /* Ogro e catapulta, no relógio próprio deles. */

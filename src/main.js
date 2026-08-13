@@ -810,6 +810,14 @@ class Game {
     });
 
     net.on(S2C.KILL, (msg) => {
+      /* A ALMA DE QUEM CAI, e ela sai ANTES do corpo tombar — a posição de
+         quem morreu ainda é a do abate. Vale para gente pelo mesmo motivo que
+         vale para monstro: `killer` pode ser `null` (a Lua, um meteoro, a
+         queda) e aí não há para quem ela ir, e é `soltarAlma` que recusa. */
+      /* ONDE ELE CAIU, lido ANTES de o corpo tombar — serve às duas coisas
+         abaixo, e a alma precisa da posição do abate, não da do ragdoll. */
+      const onde = this.deathPosition(msg.victim);
+      this.soltarAlma(onde, msg.killer, 1.6);
       if (msg.victim === net.me?.id) {
         this.cancelKnifeAttack();
         this.death.begin(net.serverTime, msg);
@@ -821,7 +829,6 @@ class Game {
          costas só tem o som para saber que alguém caiu ali. E a cabeçada leva
          a pancada junto, porque um baque seco e um grito contam uma história
          diferente de um grito sozinho. */
-      const onde = this.deathPosition(msg.victim);
       if (onde) {
         if (msg.cause === "gore") {
           gameEvents.emit(EventType.AUDIO_PLAY, {
@@ -893,6 +900,8 @@ class Game {
     });
 
     net.on(S2C.BOAR_DEATH, (msg) => {
+      // Antes de `kill`, como no zumbi e no sitiante: o corpo ainda está de pé.
+      if (!msg.fun) this.soltarAlma(this.boars.byNetId.get(msg.id)?.position, msg.killer);
       this.boars.kill(msg.id);
       // Porco avulso não entra no feed de pontuação: ele é brincadeira.
       if (msg.fun) return;
@@ -929,6 +938,8 @@ class Game {
     });
 
     net.on(S2C.ELK_DEATH, (msg) => {
+      // O alce solta uma alma GRANDE: são seis flechas e ele revida.
+      if (!msg.fun) this.soltarAlma(this.elks.byNetId.get(msg.id)?.position, msg.killer, 1.8);
       this.elks.kill(msg.id);
       if (msg.fun) return;
       this.killFeed.push([
@@ -969,6 +980,9 @@ class Game {
     });
 
     net.on(S2C.BIRD_DEATH, (msg) => {
+      /* A ave rara solta uma alma maior, como o ogro e o colosso. Ela vale 500
+         pontos e fecha a partida: a tela tem de dizer isso de longe. */
+      this.soltarAlma(this.birds.byNetId.get(msg.id)?.position, msg.killer, msg.special ? 2.2 : 1);
       this.birds.kill(msg.id);
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
@@ -1021,6 +1035,11 @@ class Game {
       // A explosão marca o acerto a qualquer distância: com o alvo a 250 m,
       // sem estouro visível ninguém sabe se acertou ou se passou de raspão.
       this.series.explode(msg.x, msg.y + 0.9, msg.z, msg.killerColor);
+      /* E a alma sai da tábua. Aqui ela é a única confirmação que vem DE VOLTA:
+         a duzentos e cinquenta metros o estouro é do tamanho de um pixel e o
+         alvo seguinte já nasceu adiante — a bolinha atravessando a estrada é o
+         que diz "aquele era o seu" sem tirar o olho da linha de tiro. */
+      this.soltarAlma({ x: msg.x, y: msg.y + 0.9, z: msg.z }, msg.killer, 1.2);
       this.killFeed.push([
         { text: msg.killerName, color: msg.killerColor, forte: true },
         { text: "  \u2299  " },
@@ -2040,6 +2059,14 @@ class Game {
     if (a.toggleMusic) {
       const on = this.audio.toggleMusic();
       this.hud.toast(on ? "música ligada" : "música desligada", "miss");
+    }
+    /* ATALHO DE TESTE: a barra cheia num toque. Quem enche é a SALA, e não esta
+       linha — o cliente não é dono da barra em lugar nenhum, e um atalho que
+       escrevesse `special.charge` direto testaria um caminho que o jogo não
+       tem. Ver `C2S.KAME_FILL`. */
+    if (a.fillSpecial) {
+      if (this.special.habilitado) this.net.send(C2S.KAME_FILL, {});
+      else this.hud.toast("o especial não existe neste modo", "miss");
     }
     if (a.special) {
       if (this.special.pronto) {

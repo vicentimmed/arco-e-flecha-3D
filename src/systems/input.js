@@ -106,6 +106,7 @@ export class Input {
       toggleBot: null, // "add" | "remove" — adversário de CPU
       cycleBotDifficulty: 0, // N: +1 avança, Shift+N volta, 0 = nada
       siegeSkip: null, // J: "next" | "climber" — atalho de teste do cerco
+      fillSpecial: false, // Shift+Q — enche a barra do especial, para teste
       toggleCommandMenu: false, // três toques na crase — ver `Input.crase`
       /* A intenção nasceu de um CLIQUE no menu, e não de uma tecla. Quem lê é
          `Game.handleActions`, e o único efeito é pular a pergunta de
@@ -390,9 +391,17 @@ export class Input {
           this.actions.knifeAttack = true;
           break;
         case "KeyQ":
-          // Q de especial. Das letras livres (Q, X, Z, I, J, U) é a única com
-          // convenção a favor.
-          this.actions.special = true;
+          /* Q de especial. Das letras livres (Q, X, Z, I, J, U) é a única com
+             convenção a favor.
+
+             SHIFT+Q ENCHE A BARRA — atalho de TESTE, e ele entra aqui em vez de
+             numa letra própria pela convenção que o Shift+G, o Shift+9, o
+             Shift+B e o Shift+J já seguem: a tecla nomeia o ASSUNTO e o Shift
+             escolhe a variante. Verificar uma linha do feixe custava dez abates;
+             agora custa dois toques, e não há nenhum número de balanceamento
+             baixado "só para testar" que possa ser esquecido ligado. */
+          if (e.shiftKey) this.actions.fillSpecial = true;
+          else this.actions.special = true;
           break;
         case "KeyY":
           this.actions.askResetScores = true;
@@ -582,6 +591,7 @@ export class Input {
      * barra vazia ficava pendurado, e no instante em que ela enchia o golpe
      * saía sozinho, sem ninguém tocar em nada. */
     a.special = false;
+    a.fillSpecial = false;
     a.dismissArrowCam = false;
     a.cycleTarget = false;
     a.clearArrows = false;

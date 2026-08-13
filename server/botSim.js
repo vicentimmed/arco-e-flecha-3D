@@ -33,7 +33,7 @@
    amostragem de altura) e os TRONCOS (segmento contra cilindro).
    --------------------------------------------------------------------------- */
 
-import { CONFIG, drawSpeed } from "../src/config.js";
+import { CONFIG, drawSpeed, kameTotal } from "../src/config.js";
 import { DEFAULT_SKIN } from "../src/shared/skins.js";
 import { levelPhysics } from "../src/shared/levels.js";
 import { valleyBlockers } from "../src/shared/valleyProps.js";
@@ -159,6 +159,15 @@ export class Bot {
     this.moveS = 0;
     this.airborne = false;
     this.jetFlame = 0;
+    /* A POSE DO ESPECIAL, num número de 0 a 1 — e é ela que faz o feixe do bot
+       aparecer nas telas sem uma linha nova de cliente. `packState` já leva o
+       campo (`q`), e `RemotePlayers` já o desenha para qualquer corpo da sala.
+       O bot não é exceção em lugar nenhum, e não vai ser aqui. */
+    this.kameFraction = 0;
+    /** Relógio da pose do especial, em segundos. `null` = não está soltando. */
+    this.kameT = null;
+    this.kameDir = null;
+    this.kameSaiu = false;
 
     /* ------------------------------------------------------ estado de sala -- */
     this.score = { kills: 0, deaths: 0, boars: 0, elks: 0, elkHits: 0, birds: 0, targets: 0, points: 0 };
@@ -232,6 +241,7 @@ export class Bot {
     this.pausaT = 0;
     this.avancoT = 0;
     this._decidiuPausa = false;
+    this.cancelarKame();
   }
 
   relevel(terrain, levelId) {
@@ -257,7 +267,24 @@ export class Bot {
    *   faz o que sempre fez — orbitar o adversário mais próximo.
    */
   update(dt, alvos, bichos = [], objetivo = null) {
-    if (!this.alive) return null;
+    if (!this.alive) {
+      // Morreu no meio da pose: a esfera some com ele. Sem isto o corpo caído
+      // ficaria com as mãos juntas e a fração congelada na tela de todo mundo.
+      if (this.kameT != null) this.cancelarKame();
+      return null;
+    }
+
+    /* O ESPECIAL TRAVA TUDO, como trava para o humano.
+       Enquanto a pose corre ele não anda, não mira e não atira — é o preço do
+       golpe (ver `SpecialSystem.travado`), e cobrá-lo do jogador e não do bot
+       daria à CPU uma versão melhor da mesma arma. */
+    if (this.kameT != null) {
+      const feixe = this.passoDoKame(dt);
+      this.gravidade(dt);
+      // O feixe sai pelo MESMO canal de retorno da flecha, marcado com `kame`.
+      // Quem separa os dois é `Room.tickBots`.
+      return feixe ? { kame: true, ...feixe } : null;
+    }
 
     this.objetivo = objetivo;
     const alvo = this.escolherAlvo(alvos);
@@ -278,6 +305,83 @@ export class Bot {
       return null;
     }
     return this.mirarEAtirar(dt, alvoTiro);
+  }
+
+  /* ------------------------------------------------------------ especial --- */
+
+  /**
+   * A CPU solta o feixe.
+   *
+   * Ela não tem tela, não tem tecla e não tem `SpecialSystem` — o que ela tem é
+   * a mesma barra (a sala conta a dele como a de qualquer um, ver
+   * `Room.addKameCharge`) e a mesma pose, que viaja no `q` de `packState`. Todo
+   * o resto do golpe já é reconstruído por cada cliente a partir do `S2C.KAME`,
+   * exatamente como o de um humano: quem recebe o evento não tem como saber, e
+   * não precisa saber, que do outro lado não havia ninguém.
+   *
+   * A DIREÇÃO É TRAVADA AQUI, no início da pose, e é a mesma regra do humano:
+   * quem aperta escolhe para onde, e girar depois não entorta o feixe.
+   *
+   * @param {{x:number,y:number,z:number}} mira ponto para onde o feixe vai
+   */
+  iniciarKame(mira) {
+    const dx = mira.x - this.position.x;
+    const dy = mira.y - (this.position.y + 1.42);
+    const dz = mira.z - this.position.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (!(d > 0.5)) return false;
+
+    this.kameT = 0;
+    this.kameDir = { x: dx / d, y: dy / d, z: dz / d };
+    this.kameSaiu = false;
+    // A corda é solta: não dá para tensionar o arco e juntar as mãos ao mesmo
+    // tempo. Mesma linha do `handleActions` do cliente, pelo mesmo motivo.
+    this.drawTime = 0;
+    this.drawFraction = 0;
+    /* O CORPO VIRA PARA O FEIXE. Sem isto o bot solta o golpe de lado, e a
+       pose — que é a mesma do humano, montada em torno do eixo do olhar —
+       apareceria com as mãos empurrando para uma direção e o tronco para outra. */
+    this.yaw = Math.atan2(-this.kameDir.x, -this.kameDir.z);
+    this.pitch = Math.asin(Math.max(-1, Math.min(1, this.kameDir.y)));
+    return true;
+  }
+
+  /**
+   * Um passo da pose.
+   *
+   * @returns {object|null} o disparo, no quadro em que as mãos empurram — a
+   *   sala o transforma num `S2C.KAME`. Nos outros quadros, `null`.
+   */
+  passoDoKame(dt) {
+    const S = CONFIG.special;
+    this.kameT += dt;
+    this.kameFraction = Math.min(1, this.kameT / kameTotal());
+
+    let disparo = null;
+    if (!this.kameSaiu && this.kameT >= S.charge) {
+      this.kameSaiu = true;
+      disparo = {
+        o: {
+          x: this.position.x + this.kameDir.x * 0.4,
+          y: this.position.y + 1.28,
+          z: this.position.z + this.kameDir.z * 0.4,
+        },
+        d: this.kameDir,
+      };
+    }
+
+    if (this.kameT >= kameTotal()) {
+      this.kameT = null;
+      this.kameFraction = 0;
+    }
+    return disparo;
+  }
+
+  /** Interrompe a pose (morte, troca de modo). */
+  cancelarKame() {
+    this.kameT = null;
+    this.kameFraction = 0;
+    this.kameSaiu = false;
   }
 
   /**

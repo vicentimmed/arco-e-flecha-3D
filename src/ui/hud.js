@@ -59,9 +59,9 @@ const ATALHOS = [
       // ela é uma tecla SEGURADA, e um clique não segura nada.
       [["F"], "no cerco: trabuco / manivela / reparo"],
       [["E"], "golpe de faca", ["knifeAttack", true]],
-      // O especial só existe onde está ligado (ver `CONFIG.special.modes`), mas
-      // a linha fica: uma tecla que não aparece aqui é uma tecla que ninguém
-      // descobre.
+      // O especial vale em TODO modo desde que `CONFIG.special.modes` virou
+      // `"*"`, e a linha continua aqui pelo mesmo motivo de sempre: uma tecla
+      // que não aparece neste painel é uma tecla que ninguém descobre.
       [["Q"], "especial (com a barra cheia)", ["special", true]],
       [["Enter"], "recomeçar / fechar tela de fim", ["confirmOverlay", true]],
     ],
@@ -142,6 +142,7 @@ const ATALHOS = [
       [["Y"], "zerar placar", ["askResetScores", true]],
       [["J"], "cerco: próximo escalão", ["siegeSkip", "next"]],
       [["Shift", "J"], "cerco: escaladores", ["siegeSkip", "climber"]],
+      [["Shift", "Q"], "encher o especial (teste)", ["fillSpecial", true]],
     ],
   },
   {

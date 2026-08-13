@@ -47,6 +47,8 @@ import {
 } from "../src/shared/castleProps.js";
 
 let proximoId = 1;
+/** Contador das bolas de magia. Ver `bid` em `atualizarMago` e `cancelarRaio`. */
+let proximoRaio = 1;
 
 /** A ordem É o código da espécie no quadro binário. Nunca reordenar. */
 export const KINDS = [
@@ -494,10 +496,30 @@ export class Siege {
     return this.t;
   }
 
-  /** As espécies liberadas neste instante da partida. */
+  /**
+   * As espécies liberadas neste instante — UMA TRAVESSIA ANTES DA FAIXA.
+   *
+   * O escalão dos esqueletos abre aos 45 s e a faixa "Esqueletos" sobe na tela
+   * no mesmo instante. Só que o esqueleto nasce na linha de árvores, a 97 m do
+   * portão, e anda a 2,4 m/s: quarenta segundos depois. O jogador lia o
+   * anúncio, procurava, não achava nada, e a novidade chegava quando ele já
+   * tinha desistido de procurar — o degrau perdia justamente o efeito que os
+   * degraus existem para ter. Com o xamã era pior ainda: 0,9 m/s, quase dois
+   * minutos entre a faixa e o primeiro cajado na rampa.
+   *
+   * A correção não é fazê-los nascer mais perto — isso custaria a única coisa
+   * que a fase promete o tempo todo, que é que eles VÊM DE ALGUM LUGAR (ver o
+   * comentário em `nascer`). É soltá-los no sorteio uma travessia ANTES, e
+   * deixar a faixa onde está: eles saem do bosque cedo, sobem a rampa à vista
+   * de quem defende, e o anúncio cai no segundo em que o primeiro chega. A
+   * faixa deixa de dizer "saíram" e passa a dizer "chegaram".
+   *
+   * Ogro e catapulta não são afetados: não têm peso em `weights` e nunca saem
+   * daqui — cada um tem relógio próprio.
+   */
   escaloesAbertos() {
     const S = CONFIG.modes.siege;
-    return S.tiers.filter((t) => this.t >= t.at);
+    return S.tiers.filter((t) => this.t >= t.at - this.viagem(t.kind));
   }
 
   /**
@@ -717,9 +739,14 @@ export class Siege {
     b.lastAttack = agora;
     const para = { x: alvo.x, y: (alvo.y ?? 0) + 1.2, z: alvo.z };
     const voo = Math.hypot(para.x - de.x, para.y - de.y, para.z - de.z) / S.mageBolt.speed;
+    const bid = proximoRaio++;
     saida.tiros.push({
       kind: "bolt",
       id: b.id,
+      // A IDENTIDADE DA BOLA. Ela existe porque a bola virou uma coisa que se
+      // pode ABATER, e abater exige poder apontar para qual delas — o id do
+      // atirador não serve, porque ele dispara várias ao longo da partida.
+      bid,
       from: [de.x, de.y, de.z],
       to: [para.x, para.y, para.z],
       speed: S.mageBolt.speed,
@@ -729,12 +756,31 @@ export class Siege {
       big: 1,
     });
     this.raiosPendentes.push({
+      bid,
       at: agora + voo * 1000,
       x: para.x,
       y: para.y,
       z: para.z,
       alvo: alvo.id,
     });
+  }
+
+  /**
+   * Uma flecha estourou a bola no ar.
+   *
+   * É a única ameaça deste modo que se DESFAZ depois de anunciada, e ela existe
+   * porque a bola era a única sem resposta: dava para desviar dela, e mais
+   * nada. Poder abatê-la transforma o mago numa disputa — a bola vem, o
+   * defensor decide se sai da frente ou se gasta a flecha nela —, e é essa
+   * escolha que justifica ela ser lenta e grande.
+   *
+   * @returns {object|null} o raio cancelado, ou null se ele já tinha caído
+   */
+  cancelarRaio(bid) {
+    if (!this.raiosPendentes?.length) return null;
+    const i = this.raiosPendentes.findIndex((r) => r.bid === bid);
+    if (i < 0) return null;
+    return this.raiosPendentes.splice(i, 1)[0];
   }
 
   /** Bolas de magia que venceram o prazo de voo. A sala aplica a morte. */
@@ -1242,24 +1288,66 @@ export class Siege {
     if (agora - b.lastAttack < esp.interval * 1000) return;
 
     const de = { x: b.x, y: b.chestY, z: b.z };
+    /* O MAIS PRÓXIMO, e não o primeiro da lista com visada.
+     *
+     * `break` no primeiro parecia equivalente e não era: `Room.playerPositions`
+     * enfileira os humanos ANTES dos bots, então o xamã de chão mirava sempre a
+     * mesma pessoa e a guarnição de CPU — que divide o mesmo adarve e corre
+     * exatamente o mesmo risco — nunca era ameaçada. É o mesmo defeito que o
+     * mago do mirante já tinha corrigido; ver `atualizarMago`. */
     let alvo = null;
+    let melhorD = Infinity;
     for (const p of jogadores) {
+      if (p.alive === false) continue;
       const para = { x: p.x, y: (p.y ?? 0) + 1.2, z: p.z };
       if (bloqueado(BLOCKERS, de, para)) continue;
+      const d = Math.hypot(para.x - de.x, para.z - de.z);
+      if (d >= melhorD) continue;
+      melhorD = d;
       alvo = p;
-      break;
     }
     if (!alvo) return;
 
     b.lastAttack = agora;
     if (b.kind === "shaman") {
+      const para = { x: alvo.x, y: (alvo.y ?? 0) + 1.2, z: alvo.z };
+      const voo =
+        Math.hypot(para.x - de.x, para.y - de.y, para.z - de.z) / S.shamanBolt.speed;
+      const bid = proximoRaio++;
       saida.tiros.push({
         kind: "bolt",
         id: b.id,
+        bid,
         from: [de.x, de.y, de.z],
-        to: [alvo.x, (alvo.y ?? 0) + 1.2, alvo.z],
+        to: [para.x, para.y, para.z],
         speed: S.shamanBolt.speed,
         target: alvo.id,
+        /* GRANDE como a do mirante. Ela nasce a setenta metros do adarve, ou
+           seja, na mesma faixa em que a do mago já tinha provado que 16 cm de
+           raio somem na tela — e agora que ela MATA e que dá para abatê-la, ser
+           vista deixou de ser conforto e virou a regra do golpe. */
+        big: 1,
+      });
+      /* A BOLA DO XAMÃ DE CHÃO PASSOU A TER CONSEQUÊNCIA.
+       *
+       * Ela saía do cajado, cruzava a rampa, atravessava o defensor e sumia:
+       * a espécie de maior valor da horda — a que remonta esqueleto e a que o
+       * jogador precisa decidir caçar — não cobrava nada por ser ignorada. Era
+       * ameaça de mentira, e o jogador aprende isso em duas partidas.
+       *
+       * Entra pela MESMA fila do mago do mirante (`raiosPendentes`), o que dá
+       * três coisas de graça e sem uma linha nova de sala: o dano é do PONTO
+       * onde a bola cai e não da pessoa mirada, ele só é aplicado quando o voo
+       * termina — ou seja, quem viu a bola sair e saiu do lugar escapa — e ele
+       * alcança jogadores E bots, porque quem colhe a fila varre
+       * `allCharacters()`. Ver `Room.tickSiege`. */
+      this.raiosPendentes.push({
+        bid,
+        at: agora + voo * 1000,
+        x: para.x,
+        y: para.y,
+        z: para.z,
+        alvo: alvo.id,
       });
     } else {
       /* A catapulta atira num PONTO, com erro, e não numa pessoa. É a
@@ -1483,6 +1571,40 @@ export class Siege {
       this.gateHp = Math.max(0, this.gateHp - gate);
     }
     return { mortos, feridos, gate };
+  }
+
+  /**
+   * O feixe do especial bateu no chão aqui.
+   *
+   * Irmã de `blast` (a pedra de trabuco) e diferente dela de propósito: a pedra
+   * cai com o dano decrescendo até a borda, porque o que ela entrega é uma
+   * ONDA. O feixe entrega uma esfera de energia — dentro dela não há gradiente,
+   * há dentro e fora.
+   *
+   * As duas faixas: soldado, esqueleto, mastim, escalador e pavês morrem de
+   * primeira (todos pedem de uma a três flechas); ogro e catapulta levam o
+   * equivalente a quatro. Ver `CONFIG.special.groundBlast`.
+   *
+   * @returns {{mortos:Array, feridos:Array}}
+   */
+  kameBlast(x, z, raio) {
+    const G = CONFIG.special.groundBlast;
+    const mortos = [];
+    const feridos = [];
+    for (const b of this.lista) {
+      if (b.dead) continue;
+      if (Math.hypot(b.x - x, b.z - z) > raio) continue;
+
+      if (b.maxHits <= G.smallArrows) {
+        b.hits = b.maxHits;
+        mortos.push(b);
+        continue;
+      }
+      b.hits += G.bigHits;
+      if (b.hits >= b.maxHits) mortos.push(b);
+      else feridos.push(b);
+    }
+    return { mortos, feridos };
   }
 
   /* --------------------------------------------------------------- rede ---- */

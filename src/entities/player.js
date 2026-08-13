@@ -31,7 +31,7 @@ import * as THREE from "three";
 import { Bow } from "./bow.js";
 import { orientSegment } from "../utils/geometry.js";
 import { solveTwoBoneIK, clamp, damp, smoothstep } from "../utils/math.js";
-import { CONFIG } from "../config.js";
+import { CONFIG, kameTotal } from "../config.js";
 import { getSkin } from "./skins/index.js";
 import { BODY, fillNeutralVertexColors, podarSombras } from "./skins/base.js";
 
@@ -915,17 +915,27 @@ export class Player {
    * a recarga na aljava e o corpo mole. Aqui ela recebe outros alvos, e isso é
    * a animação inteira — nenhum osso novo, nenhum arquivo.
    *
-   * As cinco fases, em segundos (de `CONFIG.special`):
+   * As cinco fases do CORPO, em segundos (de `CONFIG.special`):
    *
-   *   carga 2,0 → disparo 0,15 → sustentação 3,0 → dissipação 1,2 → retorno 0,8
+   *   carga 0,5 → disparo 0,15 → sustentação 3,0 → dissipação 0,36 → retorno 0,08
+   *
+   * A dissipação daqui é a da POSE (`poseDissipate`), que é bem mais curta que
+   * a do feixe: a cauda de luz ainda leva 1,2 s para ir embora, e o arqueiro
+   * não tem nada a fazer nesse tempo — ele já empurrou.
    *
    * O que muda em cada uma está escrito abaixo, na ordem em que o corpo faz.
    */
 
-  /** Em que fase estamos, e o quanto dela já passou. */
+  /**
+   * Em que fase estamos, e o quanto dela já passou.
+   *
+   * A linha do tempo do CORPO usa `poseDissipate`, não `dissipate`: a cauda do
+   * feixe leva 1,2 s para ir embora e o arqueiro não tem nada a fazer nesse
+   * tempo — ele já empurrou. Ver o bloco das fases em `config.js`.
+   */
   kamePhase() {
     const S = CONFIG.special;
-    const total = S.charge + S.release + S.sustain + S.dissipate + S.recover;
+    const total = kameTotal();
     const t = this.kameFraction * total;
     if (t < S.charge) return { fase: "carga", u: t / S.charge, t };
     if (t < S.charge + S.release) {
@@ -936,7 +946,7 @@ export class Player {
     }
     if (t < total - S.recover) {
       const base = S.charge + S.release + S.sustain;
-      return { fase: "dissipando", u: (t - base) / S.dissipate, t };
+      return { fase: "dissipando", u: (t - base) / S.poseDissipate, t };
     }
     return { fase: "retorno", u: (t - (total - S.recover)) / S.recover, t };
   }

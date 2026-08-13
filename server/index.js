@@ -17,7 +17,7 @@ import { stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { attachRoom, WS_PATH } from "./wsAdapter.js";
+import { attachRoom, serveSalas, WS_PATH } from "./wsAdapter.js";
 
 const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -55,6 +55,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === "/healthz") return end(res, 200, "ok");
+  // Quem está jogando o quê — é o que a tela de entrada mostra nas portas.
+  if (sala && serveSalas(sala.host, req, res, pathname)) return;
 
   const file = safeJoin(DIST, pathname === "/" ? "index.html" : pathname);
   // Fora do dist/ significa `..` na URL: nem confirma se existe.
@@ -71,7 +73,10 @@ const server = http.createServer(async (req, res) => {
   return end(res, 404, "dist/ não encontrado — rode `npm run build` antes");
 });
 
-attachRoom(server, { log });
+/* DEPOIS do `createServer` e ANTES do `listen`: o manipulador de requisições
+   acima consulta `sala` para responder `/salas`, e ele só roda quando chega
+   requisição — ou seja, sempre depois desta linha. */
+const sala = attachRoom(server, { log });
 
 server.listen(PORT, HOST, () => {
   console.log(`Arco & Flecha em http://${HOST}:${PORT}  ·  WebSocket em ${WS_PATH}`);

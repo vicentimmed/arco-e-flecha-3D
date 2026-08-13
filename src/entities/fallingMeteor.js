@@ -56,6 +56,47 @@ function discoTexture() {
   return _discoTex;
 }
 
+/* ---------------------------------------------------------------- geometria --
+   AS MALHAS SÃO COMPARTILHADAS, e este cache é a otimização mais importante do
+   arquivo.
+
+   `esculpir()` monta um icosaedro de 960 vértices e passa por cada um deles
+   aplicando alongamento, ruído e crateras. Fazer isso POR ROCHA, num modo em
+   que trinta pedras nascem e estouram ao longo de cada horda com sala cheia,
+   é montar e jogar fora dezenas de milhares de vértices por minuto — CPU no
+   quadro do nascimento e, pior, uma alocação/liberação de buffer na GPU a cada
+   pedra que aparece e a cada pedra que some.
+
+   E é gasto à toa: a forma só depende de (raio, formato), e existem TREZE
+   combinações no jogo inteiro — três classes × três silhuetas, mais os quatro
+   tamanhos de colosso. Cada uma é construída uma vez e emprestada para sempre.
+   Elas nunca são descartadas de propósito: são treze buffers pequenos que valem
+   muito mais parados na memória do que reconstruídos.
+
+   O mesmo vale para o disco da mancha do chão, que é uma `CircleGeometry` nova
+   por rocha para desenhar sempre o mesmo círculo em raios diferentes. */
+const _malhas = new Map();
+function malhaDe(raio, formato) {
+  const chave = `${raio}|${formato}`;
+  let g = _malhas.get(chave);
+  if (!g) {
+    g = esculpir(raio, formato);
+    _malhas.set(chave, g);
+  }
+  return g;
+}
+
+const _discos = new Map();
+function discoDe(raio) {
+  let g = _discos.get(raio);
+  if (!g) {
+    g = new THREE.CircleGeometry(raio, 32);
+    g.rotateX(-Math.PI / 2);
+    _discos.set(raio, g);
+  }
+  return g;
+}
+
 export class FallingMeteor {
   /**
    * @param {THREE.Scene} scene
@@ -78,6 +119,10 @@ export class FallingMeteor {
     this.alvo = new THREE.Vector3();
     this.primeiro = true;
     this._chao = 0;
+    /** A maior altitude já vista desta rocha — a régua da mancha do chão. */
+    this._altRef = CONFIG.modes.meteorRain.spawnAltitude;
+    /** Distância até a câmera, medida no último quadro. Ver `piscar`. */
+    this._camDist = Infinity;
 
     this.group = new THREE.Group();
     /* O tombo gira um grupo INTERNO. Girar o externo giraria junto o halo, que
@@ -96,7 +141,7 @@ export class FallingMeteor {
       metalness: 0.05,
       flatShading: true,
     });
-    const rocha = new THREE.Mesh(esculpir(raio, formato), this.mat);
+    const rocha = new THREE.Mesh(malhaDe(raio, formato), this.mat);
     // Sombra não: a 200 m de altura a mancha que ela projetaria gastaria
     // resolução do mapa da cena inteira para desenhar algo que ninguém
     // associaria à rocha. Quem faz esse trabalho é a mancha do chão, abaixo.
@@ -138,7 +183,8 @@ export class FallingMeteor {
     /* A MANCHA NO CHÃO. Fica na cena, não no grupo da rocha: ela é do PONTO DE
        QUEDA, e a rocha se move em relação a ele. */
     this.marca = new THREE.Mesh(
-      new THREE.CircleGeometry(raio * M.markRadius, 32),
+      // Geometria emprestada do cache — já deitada, por isso não há `rotation`.
+      discoDe(raio * M.markRadius),
       new THREE.MeshBasicMaterial({
         map: discoTexture(),
         color: new THREE.Color(M.glowColor),
@@ -148,7 +194,6 @@ export class FallingMeteor {
         opacity: M.markMinAlpha,
       }),
     );
-    this.marca.rotation.x = -Math.PI / 2;
     scene.add(this.marca);
 
     scene.add(this.group);
@@ -203,13 +248,19 @@ export class FallingMeteor {
    */
   piscar() {
     this.flash = 1;
+    /* Menos faíscas a queima-roupa, pelo mesmo motivo do estouro (ver o
+       "desconto de perto" em `systems/meteorRain.js`): quem acerta uma rocha
+       costuma estar assistindo pela câmera da flecha, ou seja, a meio metro do
+       ponto do impacto. Ali cada faísca cobre a tela, e vinte e duas telas
+       aditivas empilhadas custam mais do que a imagem que entregam. */
+    const perto = this._camDist < this.raio * 6;
     gameEvents.emit(EventType.PARTICLES, {
       position: {
         x: this.group.position.x,
         y: this.group.position.y,
         z: this.group.position.z,
       },
-      count: 22,
+      count: perto ? 8 : 22,
       color: 0xfff0c0,
       speed: 12,
       spread: 1,
@@ -254,7 +305,13 @@ export class FallingMeteor {
     /* A MANCHA acende com a descida: fraca e alaranjada lá em cima, branca e
        pulsando quando o perigo é real. */
     const alt = Math.max(0, this.altitude);
-    const perto = 1 - Math.min(1, alt / M.spawnAltitude);
+    /* A referência é a altitude MAIS ALTA em que esta rocha já foi vista, e não
+       a da chuva: o colosso nasce a 260 m, e medido contra os 185 m das comuns
+       ele passaria o primeiro terço da descida com a mancha já no máximo — ou
+       seja, sem dizer nada sobre a aproximação, que é a única coisa que ela
+       existe para dizer. */
+    if (alt > this._altRef) this._altRef = alt;
+    const perto = 1 - Math.min(1, alt / this._altRef);
     const t = perto * perto; // acende no fim, não linearmente
     let alpha = M.markMinAlpha + (M.markMaxAlpha - M.markMinAlpha) * t;
     if (alt < M.dangerAltitude) {
@@ -266,9 +323,10 @@ export class FallingMeteor {
     /* O RASTRO DE FOGO. Sai do pool de partículas que já existe, então não
        custa uma chamada de desenho nova — o pool inteiro do jogo são duas. */
     this.trailTimer -= dt;
+    if (camera) this._camDist = camera.position.distanceTo(this.group.position);
     if (this.trailTimer <= 0 && camera) {
       this.trailTimer = M.trailInterval;
-      const dist = camera.position.distanceTo(this.group.position);
+      const dist = this._camDist;
       // Longe, metade dos sopros: a 250 m ninguém conta partícula.
       if (dist < 260) {
         gameEvents.emit(EventType.PARTICLES, {
@@ -292,16 +350,22 @@ export class FallingMeteor {
     }
   }
 
+  /**
+   * Some da cena.
+   *
+   * SÓ O QUE É DESTA ROCHA é destruído: os materiais, que carregam estado
+   * próprio (o emissivo escurece com a vida, o halo esquenta no piscar). As
+   * GEOMETRIAS são emprestadas do cache do topo do arquivo e ficam — destruí-las
+   * aqui liberaria um buffer de GPU que a próxima pedra da mesma classe vai
+   * pedir de volta meio segundo depois, e é justamente essa dança que fazia o
+   * quadro engasgar quando uma rocha estourava perto da câmera.
+   */
   dispose(scene) {
     if (this.body) this.physics.removeBody(this.body);
     this.body = null;
     scene.remove(this.group);
     scene.remove(this.marca);
-    this.group.traverse((o) => {
-      o.geometry?.dispose();
-      o.material?.dispose();
-    });
-    this.marca.geometry.dispose();
+    this.group.traverse((o) => o.material?.dispose());
     this.marca.material.dispose();
   }
 }

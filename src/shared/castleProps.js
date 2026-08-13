@@ -117,10 +117,21 @@ export const CASTLE = {
   /** Face EXTERNA. É a linha de onde se mede tudo o que está lá fora. */
   wallZOut: 8,
   /** Espessura — e, portanto, a largura do adarve.
-      Subiu de 3,2 para 5,4 m: com o parapeito ocupando 0,5 m do bordo, sobram
-      4,9 m de piso livre. Com 3,2 sobravam 2,6 e o muro era um corredor —
-      andar de costas enquanto se mira virava uma queda. */
-  wallThick: 5.4,
+      3,2 → 5,4 → 6,8 m. Com o parapeito ocupando 0,5 m do bordo, sobram 6,3 m
+      de piso livre.
+
+      Cada passo teve o mesmo motivo: o muro é o lugar onde a partida inteira
+      acontece, e ele era estreito para o que se faz nele. Com 3,2 andar de
+      costas enquanto se mira virava uma queda de oito metros. Com 5,4 a queda
+      deixou de ser o problema e o TRÂNSITO virou: quatro defensores, dois
+      trabucos e a faixa de tiro dividem o mesmo corredor, e desviar de um
+      companheiro tirava a mira do portão. Com 6,8 cabem duas pessoas lado a
+      lado com folga, e sobra a faixa de dentro para chegar aos engenhos sem
+      atravessar a linha de tiro de ninguém.
+
+      Nada mais precisa mudar junto: `courtZFront`, `WALL_ZC`, a alvenaria, o
+      colisor e o túnel do portão são todos DERIVADOS deste número. */
+  wallThick: 6.8,
 
   /* ------------------------------------------------------------ portão -- */
   /** Meio-vão: 6 m de portão. Cabem 6 atacantes de frente — ver §6.3. */
@@ -155,10 +166,30 @@ export const CASTLE = {
    * A largura em x NÃO mudou de propósito: a face interna do bastião fica em
    * x = 14,4 e a rampa tem 13,3 m de meia-largura ali, então a horda continua
    * passando sem esbarrar em alvenaria nova. */
+  /* E AVANÇAM MAIS: a ponta foi de z = 13,5 para z = 19.
+   *
+   * O primeiro avanço (de 10,6 para 13,5) resolveu o ângulo — de lá se atira
+   * rasante ao longo da face do muro em vez de por cima do próprio pé. O que
+   * ele não resolveu foi a DISTÂNCIA: a boca do portão fica em z = 8, então
+   * mesmo da ponta o aglomerado ainda estava mais abaixo do que à frente, e
+   * quem queria o tiro bom tinha de se debruçar no parapeito.
+   *
+   * Com a ponta em z = 19, andar até lá põe o arqueiro onze metros À FRENTE da
+   * face do muro — ele passa a olhar para TRÁS e para baixo para ver o portão,
+   * que é exatamente o enfiamento em que a fila inteira se enfileira num
+   * segmento de reta. É o posto que o modo pedia e não tinha.
+   *
+   * `towerZ` anda junto com metade do crescimento para a borda de DENTRO ficar
+   * onde estava (z = −2,5): é ela que encosta no muro de flanco e tapa o
+   * buraco de canto por onde se caía do castelo.
+   *
+   * A largura em x continua intocada, e continua pelo mesmo motivo: a face
+   * interna do bastião fica em x = 14,4 e a rampa tem 13,3 m de meia-largura,
+   * então a horda passa sem esbarrar em alvenaria nova. */
   towerHalf: 3.6,
-  towerHalfZ: 8.0,
+  towerHalfZ: 10.75,
   towerX: 18,
-  towerZ: 5.5,
+  towerZ: 8.25,
 
   /* ---------------------------------------------------- muros laterais -- */
   /** Centro dos muros de flanco. O pátio vive entre eles. */

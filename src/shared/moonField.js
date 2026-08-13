@@ -244,6 +244,26 @@ export class MoonField {
   }
 
   /**
+   * O ponto ainda está dentro do MUNDO DESCRITO? (não da barreira)
+   *
+   * As duas perguntas coincidem no vale — lá `isWalkable` é literalmente a
+   * borda da malha — e são opostas aqui: a barreira lunar é uma regra de
+   * JOGADOR a 165 m, mas o chão continua existindo até o anel distante de
+   * 1,6 km e `heightAt` é analítica em qualquer ponto.
+   *
+   * Confundir as duas custou o modo inteiro de chuva de meteoros. A flecha do
+   * bot é integrada no servidor (`botArrow.js`) e o laço parava quando ela
+   * saía do "andável": como a rocha nasce de 242 a 331 m do centro da base, a
+   * flecha sumia ao cruzar os 165 m e NUNCA chegava no alvo. Na tela ela
+   * atravessava a pedra em cheio e nada estourava — o bot só conseguia acertar
+   * nos últimos ~79 m de queda, quando a rocha finalmente entrava no círculo.
+   */
+  isInsideWorld(x, z) {
+    const limite = this.M.world?.skirtOuter ?? this.radius * 6;
+    return this.distanceToCenter(x, z) <= limite;
+  }
+
+  /**
    * É lugar bom para nascer?
    *
    * Dentro da barreira com folga, em terreno plano e — o que importa na Lua —

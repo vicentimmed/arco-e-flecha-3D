@@ -83,9 +83,18 @@ export class MeteorRainManager {
       vistos.add(it.i);
       let m = this.byNetId.get(it.i);
       if (!m) {
+        /* Sem os campos imutáveis não dá para construir a casca — e é melhor
+           ignorar a amostra do que criar uma rocha de raio indefinido. Só
+           chega aqui quem perdeu as três primeiras amostras E o `snapshot`,
+           que sobre um canal entregue e em ordem não é um caso que exista;
+           a guarda está aqui para que, se um dia existir, o sintoma seja uma
+           rocha ausente e não um `NaN` no colisor. */
+        if (it.r == null) continue;
         m = new FallingMeteor(this.scene, this.physics, it.i, it.r, it.f, it.k);
         this.byNetId.set(it.i, m);
         if (it.a) m.setImpactPoint(it.a[0], it.a[1], it.a[2]);
+      } else if (it.a && m.marca.position.lengthSq() === 0) {
+        m.setImpactPoint(it.a[0], it.a[1], it.a[2]);
       }
       if (it.hp != null) m.setHealth(it.hp);
       m.setNetworkTarget(it.p[0], it.p[1], it.p[2]);
@@ -316,9 +325,36 @@ export class MeteorRainManager {
        estoura com o mesmo punhado de partículas de uma de 5 lê como uma pedra
        pequena que explodiu perto. */
     const k = raio / 4;
+    /* ------------------------------------------------- o desconto de perto --
+     *
+     * ESTE É O TRAVAMENTO DA CÂMERA DE FLECHA, e ele não era um defeito de
+     * lógica: era orçamento de pixel.
+     *
+     * A câmera da flecha viaja a poucos metros atrás da ponta, então quando a
+     * flecha estoura a rocha ela está literalmente DENTRO da explosão. As 270
+     * partículas do estouro são quads aditivos e alfa de vários metros de lado;
+     * a essa distância cada uma cobre a tela inteira. Duzentas e setenta telas
+     * cheias de mistura transparente, mais o passe de bloom por cima de tudo
+     * aceso, é um quadro de mais de cem milissegundos em qualquer placa — o
+     * engasgo aparecia exatamente no instante do acerto, e só quando a câmera
+     * estava junto.
+     *
+     * A correção é não desenhar o que não se vê: de perto, as partículas se
+     * ocultam umas às outras e trinta dão a MESMA imagem que duzentas. O
+     * desconto é contínuo e só morde dentro de oito raios — de longe, onde o
+     * estouro é uma flor de fogo que se lê inteira, nada muda.
+     *
+     * (Reduzir o TAMANHO em vez da quantidade não serviria: encolher a
+     * explosão para caber no orçamento é justamente estragar visualmente o que
+     * o pedido mandou preservar. A conta que pesa é `quantidade × área`, e a
+     * quantidade é o fator que o olho não conta de perto.) */
+    const dist = this._cam.distanceTo(p);
+    const proximidade = Math.max(0, 1 - dist / Math.max(1, raio * 8));
+    const orcamento = 1 - 0.86 * proximidade * proximidade;
+
     gameEvents.emit(EventType.PARTICLES, {
       position: p,
-      count: Math.min(160, Math.round(70 * k)),
+      count: Math.max(10, Math.round(Math.min(160, 70 * k) * orcamento)),
       color: 0xffb340,
       speed: 16 + raio * 2,
       spread: 1,
@@ -331,7 +367,7 @@ export class MeteorRainManager {
     });
     gameEvents.emit(EventType.PARTICLES, {
       position: p,
-      count: Math.min(110, Math.round(45 * k)),
+      count: Math.max(8, Math.round(Math.min(110, 45 * k) * orcamento)),
       color: 0x5a5a5a,
       speed: 8 + raio,
       spread: 1,

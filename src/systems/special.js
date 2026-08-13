@@ -18,7 +18,7 @@
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
-import { CONFIG } from "../config.js";
+import { CONFIG, kameTotal } from "../config.js";
 import { C2S } from "../shared/protocol.js";
 import { KamehamehaBeam, distanciaAoFeixe } from "../entities/kamehameha.js";
 
@@ -56,11 +56,12 @@ export class SpecialSystem {
     this.jaAtingiu = new Set();
     this.beamSound = null;
     this.habilitado = false;
+    /** Relógio da onda de chão. Ver `varrerOChao`. */
+    this._ondaEm = 0;
   }
 
   get total() {
-    const S = CONFIG.special;
-    return S.charge + S.release + S.sustain + S.dissipate + S.recover;
+    return kameTotal();
   }
 
   get pronto() {
@@ -102,6 +103,9 @@ export class SpecialSystem {
     this.ativo = true;
     this.t = 0;
     this.disparou = false;
+    // Zerado, e não `interval`: a primeira onda sai no quadro em que a esfera
+    // abre, que é quando o jogador a vê abrir.
+    this._ondaEm = 0;
     this.jaAtingiu.clear();
     this.player.setKame(0.0001);
 
@@ -224,6 +228,7 @@ export class SpecialSystem {
        corredor de queda e segurar vira uma jogada de leitura. */
     if (this.meuFeixe && !this.meuFeixe.morto) {
       this.testarAcertos(this.meuFeixe);
+      this.varrerOChao(this.meuFeixe, dt);
     }
 
     if (this.t >= this.total) {
@@ -231,6 +236,32 @@ export class SpecialSystem {
       this.meuFeixe = null;
       this.player.setKame(0);
     }
+  }
+
+  /**
+   * O feixe está apoiado no CHÃO: a esfera do fim mata em área.
+   *
+   * É o que dá ao especial um uso nos modos de monstro, onde não há rocha para
+   * vaporizar — e é a leitura óbvia de um raio de energia batendo no meio de
+   * uma horda. Enquanto o feixe estiver apoiado, a onda se repete: ele dura
+   * três segundos, e uma onda só no primeiro contato faria a sustentação inteira
+   * não valer nada.
+   *
+   * Quem decide QUEM morreu é a sala (`Room.registerKameBlast`). Aqui só se
+   * anuncia onde a ponta parou — o mesmo contrato da flecha, e pelo mesmo
+   * motivo: este lado tem o terreno, o outro tem a vida dos bichos.
+   */
+  varrerOChao(feixe, dt) {
+    if (!feixe.bateu) return;
+    // Só depois de a frente CHEGAR lá: durante a viagem a esfera ainda não abriu.
+    if (feixe.frente < feixe.alcance - 0.5) return;
+
+    this._ondaEm -= dt;
+    if (this._ondaEm > 0) return;
+    this._ondaEm = CONFIG.special.groundBlast.interval;
+
+    const f = feixe.fim;
+    this.net?.send?.(C2S.KAME_BLAST, { p: [r(f.x), r(f.y), r(f.z)] });
   }
 
   testarAcertos(feixe) {

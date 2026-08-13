@@ -23,16 +23,34 @@
 
    Três estados, e o terceiro é o que o torna um bicho em vez de um míssil:
 
-     vindo    — sai da linha de árvores e cruza a rampa em direção ao castelo;
-     rasante  — escolhe alguém no muro e mergulha; encostou, matou;
-     rondando — circula o castelo por uns segundos antes de tentar de novo.
+     vindo     — sai da linha de árvores e cruza a rampa em direção ao castelo;
+     rasante   — escolhe alguém no muro e mergulha; encostou, matou;
+     recuando  — volta pelo caminho por onde veio, espera, e vem de novo.
 
-   A RONDA é o coração do desenho. Sem ela o morcego é um projétil teleguiado
+   O RECUO é o coração do desenho. Sem ele o morcego é um projétil teleguiado
    que reaparece: você morre, renasce, morre de novo, e nada do que você faça
-   entre as duas mortes importa. Com ela existe uma janela — ele está lá em
-   cima, visível, ao alcance do arco e sem poder machucar ninguém — e é nessa
+   entre as duas mortes importa. Com ele existe uma janela — o bicho está em
+   campo, visível, ao alcance do arco e sem poder machucar ninguém — e é nessa
    janela que a resposta cabe. É a mesma lógica da vazante da maré, na escala de
    um bicho só.
+
+   ------------------------------------------------- por que ele VOLTA, e não ronda
+
+   A primeira versão do recuo era uma ÓRBITA em volta do pátio, e ela falhava no
+   único trabalho que tinha. Circulando a trinta e quatro metros por cima do
+   castelo, o morcego passava a maior parte da janela ATRÁS de quem defende, ou
+   em cima da cabeça dele, ou tapado pela menagem: para acertá-lo era preciso
+   girar o corpo, achá-lo contra o céu escuro e liderar um alvo que cruza
+   lateralmente a dez metros por segundo. A janela existia no relógio e não
+   existia na tela.
+
+   Agora ele volta pelo caminho por onde veio — até o meio da rampa, em direção
+   ao bosque —, para um instante e vem de frente outra vez. Três coisas saem de
+   graça disso: ele fica no MESMO campo de visão em que a horda já está (ninguém
+   precisa virar as costas para o portão), ele é um alvo que se afasta e depois
+   se aproxima em linha quase reta (a liderança some), e a aproximação frontal é
+   um anúncio — dá para vê-lo crescer e decidir gastar a flecha antes de ele
+   chegar.
 
    Este módulo é PURO (só `CONFIG` e o campo de altura), como `meteorSim` e
    `siegeSim`, e por isso roda num script de bancada sem cliente nenhum.
@@ -48,7 +66,7 @@ const r2 = (v) => Math.round(v * 100) / 100;
 const faixa = (a, b) => a + Math.random() * (b - a);
 
 /** A ordem É o código do estado na rede. Nunca reordenar. */
-export const BAT_STATES = ["vindo", "rasante", "rondando"];
+export const BAT_STATES = ["vindo", "rasante", "recuando"];
 
 export class Bat {
   constructor(x, y, z) {
@@ -61,11 +79,12 @@ export class Bat {
     this.dead = false;
     /** Quem ele está caçando agora (id), ou null. */
     this.alvo = null;
-    /** Segundos restantes de ronda. */
+    /** Segundos restantes de recuo — teto, para ele nunca ficar preso lá atrás. */
     this.ronda = 0;
-    /** Ângulo na órbita da ronda. */
-    this.ang = Math.random() * TAU;
-    this.giro = Math.random() < 0.5 ? 1 : -1;
+    /** Para onde ele está recuando. Escolhido uma vez, ao entrar no estado. */
+    this.recuo = null;
+    /** Segundos parado no ponto de recuo antes de voltar. */
+    this.espera = 0;
     /** Prazo do rasante: um mergulho que não conecta não dura para sempre. */
     this.mergulho = 0;
     /** Fase do bater de asas — é o cliente que desenha, mas a fase é daqui
@@ -154,7 +173,7 @@ export class BatSwarm {
 
   passo(b, dt, jogadores, saida) {
     const B = CONFIG.modes.siege.bats;
-    if (b.state === "rondando") return this.rondar(b, dt, jogadores);
+    if (b.state === "recuando") return this.recuar(b, dt, jogadores);
     if (b.state === "rasante") return this.rasar(b, dt, jogadores, saida);
 
     /* VINDO: cruza a rampa em direção ao castelo, na altura de cruzeiro. Ele só
@@ -189,8 +208,8 @@ export class BatSwarm {
     }
     if (!melhor) {
       // Ninguém no muro: dá uma volta e pergunta de novo.
-      b.state = "rondando";
-      b.ronda = B.circleTime * 0.5;
+      // Ninguém no muro: recua e pergunta de novo na volta.
+      this.iniciarRecuo(b, 0.5);
       return;
     }
     b.alvo = melhor.id;
@@ -211,9 +230,7 @@ export class BatSwarm {
     const alvo = jogadores.find((p) => p.id === b.alvo && p.alive !== false);
     b.mergulho -= dt;
     if (!alvo || b.mergulho <= 0) {
-      b.state = "rondando";
-      b.ronda = B.circleTime;
-      b.alvo = null;
+      this.iniciarRecuo(b);
       return;
     }
 
@@ -224,36 +241,93 @@ export class BatSwarm {
     if (d > B.killRadius) return;
 
     saida.mortes.push({ playerId: alvo.id, x: b.x, y: b.y, z: b.z });
-    /* Depois de matar ele SOBE e ronda. A subida não é enfeite: sem ela o
-       morcego ficaria pairando no ponto do abate, e quem renascesse na menagem
-       encontraria a mesma coisa esperando no mesmo lugar. */
-    b.state = "rondando";
-    b.ronda = B.circleTime;
-    b.alvo = null;
+    /* Depois de matar ele VAI EMBORA pelo caminho por onde veio. Não é
+       cortesia: sem isso o morcego ficaria pairando no ponto do abate, e quem
+       renascesse na menagem encontraria a mesma coisa esperando no mesmo
+       lugar. */
+    this.iniciarRecuo(b);
   }
 
   /**
-   * A RONDA. Ele circula o castelo, alto, até tentar de novo.
+   * Manda o morcego voltar pelo caminho por onde veio.
    *
-   * A órbita é em torno do PÁTIO e não do portão: dá a volta inteira no
-   * conjunto, passa por cima da menagem e volta pela rampa. É a trajetória que
-   * o mantém em campo de visão de quem está no muro durante quase todo o
-   * intervalo — que é o que faz a janela ser aproveitável.
+   * O ponto é o MEIO da rampa — entre o muro e a linha de árvores —, e a
+   * fração é o que o torna útil: mais perto e ele nunca sai do colo de quem
+   * defende; mais longe e ele some no bosque, o que transforma a janela em
+   * espera. No meio ele fica visível, afastando-se em linha quase reta, que é
+   * o alvo mais fácil que um arqueiro pode pedir.
+   *
+   * O `x` é PRESERVADO com um empurrão para o eixo: ele volta mais ou menos
+   * por onde entrou (senão o recuo lê como teletransporte lateral), mas
+   * centraliza um pouco para a volta vir de frente para o portão, que é onde
+   * todo mundo já está olhando.
+   *
+   * @param {number} [escala] fração do recuo padrão. Meio recuo quando ele nem
+   *   chegou a mergulhar — não custou nada a ninguém, não merece a janela cheia.
    */
-  rondar(b, dt, jogadores) {
+  iniciarRecuo(b, escala = 1) {
+    const B = CONFIG.modes.siege.bats;
+    b.state = "recuando";
+    b.alvo = null;
+    const frac = B.retreatFrac * escala;
+    const z = CASTLE.wallZOut + (B.spawnZ - CASTLE.wallZOut) * frac;
+    b.recuo = {
+      x: b.x * 0.55,
+      y: (this.terrain?.heightAt(b.x * 0.55, z) ?? GROUND_Y) + B.circleHeight,
+      z,
+    };
+    b.espera = B.loiter;
+    /* Teto de segurança. O recuo termina por CHEGADA, não por relógio — mas um
+       bicho que erra o ponto (empurrado por um mergulho longo, por exemplo) não
+       pode ficar preso lá atrás pelo resto da partida. */
+    b.ronda = B.circleTime * escala + 6;
+  }
+
+  /**
+   * O RECUO. Ele volta, espera, e vem de novo.
+   *
+   * Duas fases num estado só, e o que as separa é a chegada ao ponto. Enquanto
+   * não chegou, voa para lá; chegando, o relógio de `espera` corre com ele
+   * praticamente parado — é o instante em que o alvo fica mais fácil de todos,
+   * e é de propósito que ele exista.
+   */
+  recuar(b, dt, jogadores) {
     const B = CONFIG.modes.siege.bats;
     b.ronda -= dt;
-    b.ang += (b.giro * B.circleSpeed * dt) / B.circleRadius;
 
-    const cx = 0;
-    const cz = (CASTLE.courtZBack + CASTLE.wallZOut) / 2;
-    const tx = cx + Math.cos(b.ang) * B.circleRadius;
-    const tz = cz + Math.sin(b.ang) * B.circleRadius;
-    const ty = GROUND_Y + B.circleHeight;
-    this.voarPara(b, tx, ty, tz, B.circleSpeed, dt);
+    const alvo = b.recuo;
+    if (!alvo) {
+      this.iniciarRecuo(b);
+      return;
+    }
 
-    if (b.ronda > 0) return;
-    this.escolherPresa(b, jogadores);
+    const d = Math.hypot(b.x - alvo.x, b.z - alvo.z);
+    if (d > 6 && b.ronda > 0) {
+      this.voarPara(b, alvo.x, alvo.y, alvo.z, B.circleSpeed, dt);
+      return;
+    }
+
+    /* Chegou: paira. `voarPara` sempre anda para a frente (é o que dá sentido à
+       viragem limitada), então "parar" aqui é dar uma volta curta em torno do
+       ponto — o bicho continua batendo asa, o que é o certo, e não sai do lugar
+       em que o arqueiro já o encontrou. */
+    b.espera -= dt;
+    if (b.espera > 0) {
+      b.ang = (b.ang ?? 0) + dt * 0.9;
+      this.voarPara(
+        b,
+        alvo.x + Math.cos(b.ang) * 7,
+        alvo.y,
+        alvo.z + Math.sin(b.ang) * 7,
+        B.circleSpeed * 0.55,
+        dt,
+      );
+      return;
+    }
+
+    // E vem de novo, de frente. `vindo` já sabe cruzar a rampa e escolher presa.
+    b.state = "vindo";
+    b.recuo = null;
   }
 
   /**

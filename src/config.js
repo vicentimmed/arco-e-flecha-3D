@@ -720,11 +720,18 @@ export const CONFIG = {
          obrigar a passar em cima do pixel exato faria o objeto mais importante
          do modo parecer emperrado. */
       pickupRadius: 2.6, // m
-      captures: 3, // entregas para vencer
-      /* A bandeira largada VOLTA SOZINHA ao centro depois disto. Sem o retorno,
+      captures: 5, // entregas para vencer
+      /* A bandeira largada VOLTA SOZINHA PARA CASA depois disto. Sem o retorno,
          uma bandeira caída num canto do mapa que ninguém viu congela a partida
-         — e ninguém tem como saber que ela está lá. */
-      returnAfter: 30, // s
+         — e ninguém tem como saber que ela está lá.
+
+         Encurtou de 30 s para 18 junto com a virada para duas bandeiras. Lá o
+         retorno era só uma rede de segurança contra a bandeira esquecida; aqui
+         ele é REGRA DE JOGO, porque é o prêmio de quem defendeu: matar o ladrão
+         e não conseguir chegar ao corpo ainda tem de devolver a bandeira. Trinta
+         segundos são tempo de sobra para o time do ladrão trazer outro e
+         recomeçar dali, o que anula a defesa. */
+      returnAfter: 18, // s
       respawnDelay: 4, // s — mais longo que o padrão: morrer defendendo custa
     },
     /* ------------------------------------------------------- alvos em série --
@@ -1214,11 +1221,55 @@ export const CONFIG = {
          sozinho. Dois prazos simultâneos, um deles pedindo doze acertos, é a
          diferença entre difícil e arbitrário. */
       tankHordes: [3, 6, 9, 10],
-      tankRaio: 14.0, // m — Ø 28: mais grosso que tudo o mais em campo
-      tankHits: { 3: 7, 6: 11, 9: 16, 10: 18 }, // para UM jogador
-      // Reescaladas com a altitude, pelo mesmo motivo das outras: as janelas do
-      // colosso continuam sendo 40, 51, 62 e 71 s.
-      tankSpeeds: { 3: 4.6, 6: 3.6, 9: 3.0, 10: 2.6 }, // m/s
+      /* O COLOSSO CRESCE A CADA APARIÇÃO, e o da horda 10 é o maior de todos.
+       *
+       * Um raio só para os quatro fazia da terceira aparição uma repetição da
+       * primeira: mesma silhueta, mesma leitura, só mais flechas. Crescendo, o
+       * modo ganha de graça uma escada que o jogador lê sem HUD nenhum — ele
+       * SABE que aquele é maior que o anterior. O último tem 52 m de diâmetro:
+       * a 100 m ele ocupa 29° do campo de visão, ou seja, meia tela de pedra.
+       *
+       * Custo em triângulo: ZERO. `IcosahedronGeometry(raio, detalhe)` não
+       * depende do raio — uma esfera de 26 m tem exatamente as mesmas faces de
+       * uma de 14. O que o tamanho custa é preenchimento de pixel, e
+       * preenchimento sem sombra é a coisa mais barata do quadro. */
+      tankRaio: 14.0, // m — piso, e o que os aquecimentos usam
+      tankRaios: { 3: 16.0, 6: 18.5, 9: 21.5, 10: 26.0 }, // Ø 32 / 37 / 43 / 52
+
+      /* --------------------------------------------- de mais longe e mais rápido --
+       * O colosso descia a 2,6–4,6 m/s dos mesmos 185 m: setenta segundos de
+       * queda para dezoito flechas, ou seja, morria com metade da janela ainda
+       * por gastar. O que se via era uma pedra enorme parada no céu enquanto
+       * todo mundo já tinha acabado o trabalho — o segundo ato virava espera.
+       *
+       * Ele nasce mais alto (260 m, contra 185 das comuns) e desce quase o
+       * dobro mais rápido. A janela ENCURTA — 32 a 46 s, contra 40 a 71 — e a
+       * vida sobe junto, de forma que o abate caia perto do fim dela e não na
+       * metade. Ver `tankHits` abaixo para a conta.
+       *
+       * 260 m e não mais: a flecha lunar se apaga a 300 m de altitude
+       * (`levels.moon.arrow.maxAltitude`), e um colosso acima desse teto seria
+       * um alvo que o jogo desenha e não deixa acertar. */
+      tankAltitude: 260, // m
+      /* A ENTRADA DELE É MAIS EM PÉ que a das comuns (43°–53° contra 53°–61°).
+         Com o mesmo ângulo delas, 260 m de altitude o jogariam a 470 m ao lado
+         da base — longe demais para ser ameaça e para ser alvo. Assim ele entra
+         de 242 a 345 m, que é a mesma faixa das outras rochas, e ganha os 75 m
+         extras em ALTURA, que é onde eles se veem. */
+      tankTiltMin: 0.75, // rad (43°)
+      tankTiltMax: 0.92, // rad (53°)
+      /* MEDIDO no banco de provas, não estimado. A primeira tentativa punha
+         8,0 a 5,6 m/s e reprovava: 12,5 % de vitórias, com a derrota toda
+         empilhada na horda 10 — porque lá a chuva NÃO PARA durante o colosso
+         (`tankDrizzleFrom`) e cada pedra pingada rouba uns dois segundos de
+         tiro dele. A janela do último precisa pagar esse pedágio. */
+      tankSpeeds: { 3: 7.2, 6: 6.4, 9: 5.6, 10: 4.4 }, // m/s ⇒ 36 / 41 / 46 / 59 s
+
+      /* Contra um alvo de 32 a 52 m de diâmetro ninguém erra: a capacidade real
+         é ~0,475 acertos/s por arqueiro (0,5 tiros/s × 95 %), e não os 0,40 que
+         a chuva usa. Com esta vida o abate consome de 68 % a 86 % da janela —
+         ou seja, ele morre quando já está grande na tela, que era o pedido. */
+      tankHits: { 3: 14, 6: 16, 9: 18, 10: 21 }, // para UM jogador
       /* Só na horda 10 a chuva não para durante o colosso. É o clímax. */
       tankDrizzleFrom: 10,
       tankDrizzleEvery: 15, // s
@@ -1249,10 +1300,15 @@ export const CONFIG = {
       invulnerability: 2.5, // s ao entrar ou renascer
       botRingMin: 35, // m — os bots ficam no anel externo (ver plano §4.7)
       botRingMax: 45,
-      /* Elevação máxima que o bot aceita engajar. Acima disto `elevacaoPara`
-         degenera (ela itera sobre a distância HORIZONTAL, que tende a zero com
-         o alvo a pino) e o `pitchMax` de 86° corta o resto. */
-      botMaxElevation: 1.19, // rad (68°)
+      /* Elevação máxima que o bot aceita engajar.
+         Eram 68°, e o motivo desapareceu: `elevacaoPara` degenerava com o alvo
+         a pino porque iterava o tempo de voo sobre a distância HORIZONTAL, que
+         tende a zero junto com o cosseno. Reescrita pela distância INCLINADA
+         (mesma álgebra, sem o 0/0), ela responde certo em qualquer ângulo, e o
+         filtro pode subir até perto do `pitchMax` de 86° — o que devolve ao bot
+         a metade do céu que ele recusava. A folga que sobra é para a liderança,
+         que sempre mira um pouco além de onde a rocha está. */
+      botMaxElevation: 1.36, // rad (78°)
 
       /* ------------------------------------------------------------ pontos -- */
       points: { 1: 60, 2: 140, 3: 240, tank: 60 }, // por flecha, no tanque
@@ -1470,8 +1526,33 @@ export const CONFIG = {
          magos das torres, os morcegos e o escalador que agora caça pelo adarve
          —, e cada morte de defensor custa onze segundos e meio sem arco. O
          resto do ajuste é playtest, que é o juiz final. */
+      /* A CURVA GIROU EM TORNO DO MEIO: a abertura subiu, o fim desceu.
+       *
+       * As duas metades tinham defeitos opostos, e medidos em jogo:
+       *
+       * • A ABERTURA ERA VAZIA. Com um soldado a cada 4,3 s (e depois 3,3), a
+       *   primeira leva mal enchia a rampa — um arqueiro sozinho resolvia com
+       *   meio arco e sobrava tempo para olhar a paisagem. Um modo cuja tensão
+       *   é uma rampa não pode começar em patamar: o primeiro minuto é
+       *   justamente onde o jogador decide se aquilo vai exigir algo dele.
+       *   Agora a coluna sai do bosque com volume desde o começo.
+       *
+       * • O FIM ERA IMPOSSÍVEL. Um humano com dois bots perdia perto dos cinco
+       *   minutos, ou seja, no ponto em que a curva atravessava 1,8 s — e não
+       *   chegava perto de ver o pôr do sol, que é a única coisa que o modo
+       *   promete. Os cinco últimos pontos afrouxaram de 20 a 28 %.
+       *
+       * O que continua valendo: a curva SÓ SOBE, e o clímax continua sendo o
+       * clímax (1,35 s no fim contra 2,6 no começo é o dobro de pressão). O que
+       * mudou foi a inclinação — ela ficou mais suave, e cobre mais partida. */
+      /* MEDIDO: 2,6 no primeiro ponto reprovava. Ele põe a chegada em 0,385/s,
+         que é exatamente a capacidade de um arqueiro médio (0,39 acertos/s) —
+         ou seja, a fila nasce em ponto de equilíbrio e nunca drena, e o banco
+         acusa "curva errada" com razão. 2,9 dá volume de verdade à abertura
+         (era 4,3 antes deste lote) e ainda deixa a margem que a rampa precisa
+         para o jogador aprender a leitura dela. */
       gapBase: [
-        4.3, 3.5, 2.9, 2.4, 2.05, 1.8, 1.6, 1.4, 1.3, 1.17, 1.05,
+        2.9, 2.8, 2.7, 2.5, 2.3, 2.15, 2.0, 1.85, 1.7, 1.55, 1.4,
       ],
       /* Mais gente = mais poder de fogo, mas os arqueiros dividem 34 m de muro
          e disputam a mesma linha de tiro. Sublinear pelo mesmo motivo (e com o
@@ -1548,7 +1629,12 @@ export const CONFIG = {
            horda zumbi; ver `wolfCounts` e o comentário ao lado. */
         climber: { arrows: 2, speed: 2.0, damage: 0, interval: 1.2, points: 70 },
         hound: { arrows: 1, speed: 6.7, damage: 4, interval: 1.0, points: 60 },
-        shaman: { arrows: 3, speed: 0.9, damage: 0, interval: 3.4, points: 120 },
+        /* O INTERVALO DOBROU (3,4 → 7,0 s) no mesmo lote em que a bola dele
+           passou a matar. Uma bola a cada três segundos e meio era aceitável
+           enquanto ela era enfeite; letal, e com três xamãs em campo
+           (`shamanMax`), seria uma bola a cada segundo caindo no adarve — o
+           defensor não teria janela para nada além de desviar. */
+        shaman: { arrows: 3, speed: 0.9, damage: 0, interval: 7.0, points: 120 },
         ogre: { arrows: 16, speed: 0.9, damage: 45, interval: 3.2, points: 400 },
         catapult: { arrows: 14, speed: 0, damage: 0, interval: 9, points: 200 },
       },
@@ -1568,7 +1654,23 @@ export const CONFIG = {
          castiga quem só olha para o portão. */
       shamanStandoff: 70, // m
       shamanRaiseRadius: 12, // m
-      shamanBolt: { speed: 34, damage: 1 },
+      /* MAIS LENTA, e agora ela MATA (ver `Siege.atualizarUm`).
+       *
+       * Os 34 m/s vinham de quando a bola era enfeite: a 70 m ela chegava em
+       * dois segundos, e como não fazia nada, a velocidade não custava nada.
+       * Com consequência, a velocidade É a justiça do golpe — o dano é aplicado
+       * onde a bola cai, não em quem foi mirado, então o tempo de voo é
+       * literalmente a janela para sair do lugar. A 20 m/s ela leva 3,5 s para
+       * cruzar os 70 m: dá para ver, entender e andar dois passos.
+       *
+       * (Ainda é mais rápida que a do mirante, que faz 18 m/s de 95 m — lá a
+       * janela sai da distância; aqui, da velocidade.) */
+      /* 14 e não 20: a bola passou a ser ABATÍVEL a flecha, e um alvo que
+         cruza setenta metros em três segundos e meio não dá tempo de tensionar
+         o arco (o ciclo de tiro é ~2,4 s). A cinco segundos de voo a escolha
+         "desvio ou atiro nela?" passa a existir de verdade — e é ela que
+         transforma o xamã na disputa que ele deve ser. */
+      shamanBolt: { speed: 14, damage: 1 },
       /* ------------------------------------------------ magos das torres --
          Dois xamãs em mirantes de madeira no pé da rampa (ver `mageTowers` em
          `shared/castleProps.js`). Eles não andam, não têm escalão e não entram
@@ -1599,9 +1701,18 @@ export const CONFIG = {
          torre — o prêmio agora é grande o bastante para valer virar as costas
          para o portão e gastar o tiro. */
       mageRespawn: 180, // s até subir outro no mirante vazio
-      mageBolt: { speed: 18 }, // m/s — lenta o bastante para se desviar
+      /* Lenta o bastante para se desviar — e, desde que virou alvo de flecha,
+         lenta o bastante para se mirar. Ela cruza 95 m em 7,3 s. */
+      mageBolt: { speed: 13 }, // m/s
       /** Raio de morte da bola, no ponto em que ela cai. */
       mageBlast: 2.2, // m
+      /* Raio do COLISOR da bola — o alvo que a flecha precisa encontrar para
+         estourá-la no ar. Bem maior que o núcleo desenhado (0,4 m), e de
+         propósito: ela cruza a rampa a catorze metros por segundo e o acerto é
+         resolvido em passos de física, não continuamente. Um colisor do tamanho
+         do pixel exigiria uma pontaria que o arco deste jogo não foi feito para
+         ter, e a promessa de poder abatê-la quase nunca se cumpriria. */
+      boltHitRadius: 1.4, // m
 
       /* ------------------------------------------------- o mago SE VÊ ------
          O mirante fica a 92 e 98 m do adarve, e essa distância desmontava o
@@ -1654,9 +1765,19 @@ export const CONFIG = {
          quem se mexeu escapa. As duas coisas juntas são o que fazem dele um
          bicho e não uma sentença. */
       bats: {
-        count: 2, // em campo ao mesmo tempo
-        firstAt: 150, // s de partida até o primeiro — depois dos escaladores
-        respawn: 25, // s entre reposições do bando
+        /* MAIS CEDO E EM MAIOR NÚMERO.
+           Com dois em campo, uma ronda de 16 s e reposição a cada 25, o
+           morcego aparecia tão espaçado que deixava de ser uma ameaça e virava
+           fauna: o jogador via um passar, esquecia dele, e a próxima vez que
+           levantava a cabeça era porque tinha morrido. A frequência é o que
+           transforma "aquilo existe" em "aquilo é um problema meu" — e é ela
+           que faz valer a pena guardar uma flecha para o céu.
+           Os 150 s também eram tarde demais: metade da partida sem a única
+           ameaça que chega por cima. Aos 80 s ele entra logo depois dos
+           esqueletos, que é quando o adarve já tem ritmo para ser quebrado. */
+        count: 3, // em campo ao mesmo tempo
+        firstAt: 80, // s de partida até o primeiro
+        respawn: 14, // s entre reposições do bando
         spawnZ: 118, // m — atrás da linha de árvores
         spawnHalfX: 22,
         cruiseYMin: 22, // m acima do chão onde nasce
@@ -1670,11 +1791,25 @@ export const CONFIG = {
         diveSpeed: 17, // m/s no mergulho — ainda bem mais rápido que a travessia
         diveTimeout: 3.2, // s de mergulho antes de desistir
         killRadius: 1.7, // m — encostou, matou
-        circleTime: 16, // s de ronda entre dois ataques
-        circleRadius: 34, // m em torno do pátio
-        /* A RONDA É ALTA. A 17 m ela passava rente ao adarve (que está a 8 m do
-           pátio), e o bicho ficava metido no meio da mira de quem estava
-           tentando atirar na rampa — a janela de trégua virava estorvo. A 27 m
+        /* A janela de trégua entre dois ataques. Encurtou junto com o aumento
+           do bando (16 → 12 s): ela continua existindo, o que muda é que deixa
+           de ser longa o bastante para o jogador esquecer que o bicho existe.
+           Hoje ela é o TETO do recuo, não a duração dele — quem manda é a
+           chegada ao ponto (ver `BatSwarm.recuar`). */
+        circleTime: 12, // s
+        /* ----------------------------------------------------------- recuo --
+           Fração do caminho de volta ao bosque que ele percorre depois de
+           atacar. Meio caminho: perto o bastante para continuar visível e no
+           mesmo campo de visão da rampa, longe o bastante para a volta ser uma
+           APROXIMAÇÃO que dá tempo de mirar. Ver o cabeçalho de `batSim.js`
+           para por que o recuo substituiu a órbita sobre o castelo. */
+        retreatFrac: 0.5,
+        /** Segundos pairando no ponto de recuo antes de voltar. É o instante em
+            que ele é mais fácil de acertar, e ele existe justamente para isso. */
+        loiter: 2.6, // s
+        /* A ALTURA DO RECUO. A 17 m ele passava rente ao adarve (que está a 8 m
+           do pátio) e ficava metido no meio da mira de quem estava tentando
+           atirar na rampa — a janela de trégua virava estorvo. A 27 m
            ele fica claramente ACIMA de tudo: dá para vê-lo, contá-lo e decidir
            gastar uma flecha nele, sem que ele atrapalhe o resto. */
         circleHeight: 27, // m acima do piso do pátio
@@ -1722,6 +1857,14 @@ export const CONFIG = {
       catapultMax: 2,
       shamanMax: 3,
       climberMax: 4,
+
+      /* --------------------------------------------------------- alcance --
+         Multiplicador das faixas de LOD de TODO sitiante — ver
+         `SiegeSystem.atualizarLod` para a conta e o motivo. Em uma frase: a
+         rampa tem 97 m e o `cullDistance` do jogo é calibrado para um javali a
+         trinta, então sem isto o campo de tiro deste modo era desenhado como
+         vulto na maior parte do seu comprimento. */
+      lodScale: 1.7,
 
       /* ------------------------------------------------------------ teto --
          O número grande do pedido, e o limite que a rede e o LOD aguentam.
@@ -1847,12 +1990,17 @@ export const CONFIG = {
   special: {
     kind: "kamehameha",
     /** Onde ele está LIGADO hoje. Ligar noutro modo é acrescentar um id aqui. */
-    modes: ["meteorRain"],
-    /** O que enche a barra, e quanto, por tipo de acerto. */
-    chargeSources: { meteor: 1 },
-    /* ATENÇÃO: 3 é valor de TESTE, para não esperar meia horda por disparo.
-       O alvo de produção é 25. Trocar o modo de teste = trocar este número. */
-    hitsToCharge: 3,
+    modes: ["meteorRain", "zombie", "zombieBoss", "siege"],
+    /* O que enche a barra, e quanto, por evento.
+     *
+     * Na chuva a moeda é a FLECHA que conecta; nos modos de monstro é a ALMA,
+     * ou seja, o abate inteiro — e é ela que o jogador vê subindo até ele
+     * (`systems/souls.js`). São duas moedas diferentes de propósito: uma rocha
+     * pede de uma a vinte flechas e um zumbi pede uma; contar flecha lá e
+     * abate aqui é o que mantém as duas barras enchendo no mesmo ritmo. */
+    chargeSources: { meteor: 1, zombie: 1, besieger: 1 },
+    /** Dez almas enchem a barra. */
+    hitsToCharge: 10,
     /** Ele mata outros jogadores. Virar `false` por modo é uma linha. */
     friendlyFire: true,
 
@@ -1865,6 +2013,32 @@ export const CONFIG = {
      * os setenta segundos que ele existe para cobrar. Três flechas de uma vez
      * é um pedaço honesto da barra dele sem ser a barra inteira. */
     kameTankHits: 3,
+
+    /* ------------------------------------------------- o feixe NO CHÃO --
+     *
+     * Enquanto ele aponta para o terreno, a esfera que abre no ponto final não
+     * é só imagem: ela mata em área. É o que dá ao especial um uso nos modos de
+     * monstro, onde não há rocha para vaporizar — e é a leitura óbvia de um
+     * raio de energia batendo no chão no meio de uma horda.
+     *
+     * A regra tem duas faixas porque as duas coisas que ela acerta são de
+     * naturezas diferentes. O bicho de uma a três flechas — soldado, esqueleto,
+     * zumbi, mastim, escalador — MORRE, sem conta nenhuma: um golpe desta
+     * escala que deixasse um esqueleto de pé seria ridículo. O monstro grande
+     * (ogro, chefão, catapulta) leva o equivalente a quatro flechas: é um
+     * pedaço honesto da barra dele sem ser a barra inteira, exatamente o mesmo
+     * critério do `kameTankHits` no colosso.
+     *
+     * O raio acompanha `beam.blastRadius`, que é o tamanho DESENHADO da esfera:
+     * o que mata tem de ser o que se vê. */
+    groundBlast: {
+      /** Até quantas flechas de vida conta como "bicho pequeno". */
+      smallArrows: 3,
+      /** Flechas de dano no que não é pequeno. */
+      bigHits: 4,
+      /** Segundos entre duas ondas, enquanto o feixe seguir apoiado no chão. */
+      interval: 0.6,
+    },
 
     /* ------------------------------------------------------------- a Terra --
        O feixe apontado para o planeta o DESTRÓI, e a flecha não faz nada.
@@ -1903,8 +2077,27 @@ export const CONFIG = {
       charge: 0.5, // s de concentração
       release: 0.15, // s do empurrão das mãos
       sustain: 3.0, // s de feixe cheio
-      dissipate: 1.2, // s da cauda perseguindo a ponta
-      recover: 0.28, // s até o corpo e o arco voltarem
+      dissipate: 1.2, // s da cauda do FEIXE perseguindo a ponta
+
+      /* --------------------------------- o corpo não espera mais o feixe --
+       *
+       * Depois que o fluxo sai das mãos, o que prendia o arqueiro era a
+       * dissipação INTEIRA (1,2 s) mais o retorno (0,28): um segundo e meio de
+       * pose parada olhando uma cauda de luz que já ia longe. Num modo com
+       * prazo isso é rocha perdida, e — pior — é tempo em que o jogador já
+       * entendeu que acabou e o boneco discorda dele.
+       *
+       * A correção separa as duas coisas que estavam presas no mesmo número: a
+       * CAUDA continua com 1,2 s (é ela que faz o feixe ir embora em vez de
+       * piscar), e a POSE dura 0,36 + 0,08. São 0,44 s do fim do feixe até o
+       * arco na mão, contra 1,48 — os 70 % de corte pedidos, tirados de onde
+       * eles não custam imagem nenhuma. O feixe termina de se apagar sozinho,
+       * com o dono já mirando de novo.
+       *
+       * Os três segundos de sustentação continuam intocados: é ali que o golpe
+       * É o golpe, e é ele o preço do especial. */
+      poseDissipate: 0.36, // s de pose enquanto a cauda ainda vai embora
+      recover: 0.08, // s até o corpo e o arco voltarem
 
     /* -------------------------------------------------------------- feixe -- */
     beam: {
@@ -2624,15 +2817,23 @@ export const CONFIG = {
      * conta se inverte — um arqueiro de guarnição que erra dois de cada três
      * tiros não é ajuda, é enfeite, e o jogador paga a conta sozinho.
      *
-     * Chuva e cerco pedem níveis diferentes pelo mesmo motivo pelo qual pedem
-     * perfis diferentes em `tickBots`: na chuva a rocha tem prazo e a falha é
-     * coletiva e definitiva, então o bot precisa de fato estourar o que mira;
-     * no cerco a derrota é uma TAXA, e um aliado certeiro demais fecharia a
-     * conta sozinho — `bench-cerco.js` já mostra que três defensores medianos
-     * bastam. Quem quiser outra coisa continua tendo a tecla N. */
+     * Chuva e cerco pedem níveis diferentes, e a razão INVERTEU depois que a
+     * flecha do bot passou a chegar no alvo (ela morria na barreira lunar — ver
+     * `MoonField.isInsideWorld`).
+     *
+     * Enquanto ele errava tudo, `hard` na chuva era o mínimo para ele servir de
+     * alguma coisa. Consertado, o mesmo `hard` acerta 93 % das flechas numa
+     * rocha: três bots limpam o céu antes de o jogador levantar a cabeça, e o
+     * modo — cuja graça inteira é a contagem regressiva de cada pedra — vira
+     * plateia. `easy` devolve o céu para quem está jogando e mantém o bot como
+     * a rede de segurança que ele deve ser.
+     *
+     * No cerco é o contrário: lá a derrota é uma TAXA, o defensor divide 34 m de
+     * muro com a fila do portão crescendo, e um aliado que erra dois de cada
+     * três tiros não é ajuda, é enfeite. Quem quiser outra coisa tem a tecla N. */
     modeDifficulty: {
-      meteorRain: "hard",
-      siege: "medium",
+      meteorRain: "easy",
+      siege: "hard",
     },
     /** Teto de adversários de CPU em campo ao mesmo tempo. */
     maxBots: 6,
@@ -2729,6 +2930,21 @@ export function savedQuality() {
   } catch {
     return "high";
   }
+}
+
+/**
+ * Quanto dura o especial PARA O CORPO, do primeiro quadro ao arco de volta.
+ *
+ * Uma função e não uma constante porque três lugares precisavam da mesma soma
+ * — a máquina de estados (`systems/special.js`), a linha do tempo da pose
+ * (`entities/player.js`) e o esmaecimento do HUD (`main.js`) — e eles já
+ * tinham divergido uma vez. Note que a parcela é `poseDissipate` e não
+ * `dissipate`: a cauda do feixe sobrevive à pose de propósito. Ver o bloco das
+ * fases em `CONFIG.special`.
+ */
+export function kameTotal() {
+  const S = CONFIG.special;
+  return S.charge + S.release + S.sustain + S.poseDissipate + S.recover;
 }
 
 /** Velocidade inicial em função do tempo de tensionamento (s). */

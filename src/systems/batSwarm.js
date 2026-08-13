@@ -15,7 +15,7 @@
      nenhuma decisão do jogo consulta.
 
    • **O CORPO INCLINA NO MERGULHO.** O estado vem da sala (`vindo`, `rasante`,
-     `rondando`) e vira ângulo de ataque aqui. É a única coisa que diz, de
+     `recuando`) e vira ângulo de ataque aqui. É a única coisa que diz, de
      longe e sem HUD, que aquele morcego escolheu alguém — e "de longe" importa,
      porque o mergulho leva três segundos e a resposta cabe neles.
 
@@ -31,7 +31,7 @@ import { gameEvents, EventType } from "../core/events.js";
 import { batEntity } from "../shared/protocol.js";
 
 /** Espelha `BAT_STATES` de `server/batSim.js`. A ORDEM é o código na rede. */
-const STATES = ["vindo", "rasante", "rondando"];
+const STATES = ["vindo", "rasante", "recuando"];
 
 /** 1/s — quão depressa a pose amortecida alcança a amostra de rede. */
 const SUAVIZA = 12;

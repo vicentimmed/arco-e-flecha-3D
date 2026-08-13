@@ -111,7 +111,7 @@
  * tenha aparecido na tela. É o pior tipo de incompatibilidade — a que não
  * levanta erro — e é exatamente o que a versão existe para evitar.
  */
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 20;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -180,6 +180,19 @@ export const C2S = {
   /** "Disparei o especial": `{ o:[x,y,z], d:[x,y,z], w }`.
    *  A direção é TRAVADA aqui — girar depois não entorta o feixe. */
   KAME: "kame",
+  /** "O meu feixe está apoiado no chão AQUI": `{ p:[x,y,z] }`.
+   *
+   *  Quem atira é a autoridade sobre onde a ponta do feixe parou — é a mesma
+   *  conta do `C2S.IMPACT` da flecha, e pelo mesmo motivo: o cliente tem o
+   *  terreno e a sala não tem malha. Quem decide QUEM morreu na área continua
+   *  sendo a sala (ver `Room.registerKameBlast`), porque é ela que tem a vida
+   *  de cada bicho.
+   *
+   *  Repetido a cada `special.groundBlast.interval` enquanto o feixe seguir
+   *  apoiado: ele dura três segundos e varre o chão se o jogador tiver mirado
+   *  na rampa, e uma onda só no primeiro contato faria o resto da sustentação
+   *  não valer nada. */
+  KAME_BLAST: "kameBlast",
 
   /* ------------------------------------------------------------------ cerco -- */
   /** "Acertei este sitiante": `{ id, head, d }`. Mesmo contrato da flecha em
@@ -187,6 +200,13 @@ export const C2S = {
    *  e a sala decide o que é compartilhado (se caiu, quanto vale, se o pavês
    *  aparou). Ver `Siege.hit`. */
   SIEGE_HIT: "siegeHit",
+  /** "Estourei a bola de magia no ar": `{ bid }`.
+   *
+   *  Mesmo contrato de sempre — quem atira é a autoridade sobre o próprio
+   *  acerto —, e a sala é quem cancela a morte agendada (`Siege.cancelarRaio`).
+   *  É a única ameaça do modo que se desfaz depois de anunciada, e é ela que dá
+   *  ao mago uma resposta que não seja só sair da frente. */
+  BOLT_HIT: "boltHit",
   /** "Soltei o trabuco": `{ i, o:[x,y,z], d:[x,y,z], v }`.
    *
    *  A pedra é um EVENTO DE UM JOGADOR, como a flecha, e por isso viaja como

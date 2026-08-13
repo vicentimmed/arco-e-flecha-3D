@@ -74,6 +74,17 @@ export function obstaculosDe(terrain, levelId) {
 
 const TAU = Math.PI * 2;
 
+/**
+ * Giro do bot antiaéreo, em rad/s.
+ *
+ * O duelista gira a 2,6 rad/s de propósito: um adversário que encara
+ * instantaneamente é impossível de flanquear, e flanquear é o que se faz num
+ * duelo. Aqui não há ninguém para flanquear — ele é uma peça de artilharia
+ * parada olhando para o céu, e o alvo atravessa o campo de visão a até 21 m/s.
+ * Com 2,6 ele gastava meio ciclo de tiro só girando o tronco.
+ */
+const GIRO_ANTIAEREO = 5.0;
+
 /** Reaproveitado por `Bot.pedraNaFrente`: ele roda por candidato, por quadro. */
 const _alvoTmp = { x: 0, y: 0, z: 0 };
 
@@ -175,6 +186,8 @@ export class Bot {
     this.avancoSorteioEm = Math.random() * (this.pericia.avancoIntervalo ?? 8);
     this._decidiuPausa = false;
 
+    /** A rocha em que ele se comprometeu — ver `escolherRocha`. */
+    this._rochaId = null;
     this._ultimoAlvo = { x: 0, y: 0, z: 0 };
     this._velAlvo = { x: 0, y: 0, z: 0 };
     this._muzzle = { x: 0, y: 0, z: 0 };
@@ -290,7 +303,20 @@ export class Bot {
     let melhorD = Infinity;
     for (const e of alvos) {
       if (!e || e.id === this.id || !e.alive) continue;
-      if (this.semFogoAmigo && e.isBot) continue;
+      /* MESMO TIME NÃO É ALVO.
+       *
+       * A regra era `semFogoAmigo && e.isBot`, e ela dizia "não atire em quem é
+       * CPU". Isso funcionou enquanto time e espécie eram a mesma coisa; no
+       * rouba bandeira deixaram de ser — os lados agora se equilibram por
+       * cabeça, humano ou não —, e a regra antiga fazia o bot atirar no
+       * companheiro humano que corre com a bandeira ao lado dele.
+       *
+       * Quando a sala declara o time (`characterViews`), é ele que manda; sem
+       * declaração, o comportamento antigo continua valendo palavra por palavra
+       * para o duelo de times. */
+      if (this.time && e.time) {
+        if (e.time === this.time) continue;
+      } else if (this.semFogoAmigo && e.isBot) continue;
       const d = dist2(e.position, this.position);
       if (d < melhorD) {
         melhorD = d;
@@ -314,6 +340,11 @@ export class Bot {
    * adversário distraído por pardais não é adversário.
    */
   escolherAlvoDeTiro(alvos, bichos) {
+    /* ARTILHARIA ANTIAÉREA é outra pergunta, e por isso é outro método.
+       O duelista escolhe o alvo mais PERTO; o antiaéreo escolhe o que está
+       prestes a encostar no chão, e não larga dele no meio do tensionamento. */
+    if (this.antiaereo) return this.escolherRocha(bichos);
+
     let melhor = this.escolherAlvo(alvos);
     let melhorD = melhor ? dist2(melhor.position, this.position) : Infinity;
 
@@ -347,7 +378,17 @@ export class Bot {
        * ele estava atrás do próprio merlão, e ficava travado: 26 tiros em três
        * minutos, quando o ciclo dele é de dois segundos. */
       if (this.postado && this.pedraNaFrente(c)) continue;
-      const d = dist2(c, this.position) * penal * this.penalidadeDeSetor(c);
+      /* PRIORIDADE FURA A FILA, e fura a penalidade de setor junto.
+       *
+       * Quem a declara é o que mata gente e chega por onde o posto não olha: o
+       * escalador agarrado ao muro e o morcego em cima da cabeça (ver
+       * `Room.botPrey`). Multiplicar a distância por 0,2 faz um morcego a 30 m
+       * competir como se estivesse a 6; e ignorar `penalidadeDeSetor` é o que
+       * permite ao arqueiro VIRAR — a frente do posto é uma regra de tiro na
+       * rampa, e nem o muro ao lado nem o céu acima têm frente. */
+      const urgente = (c.prioridade ?? 1) < 1;
+      const setor = urgente ? 1 : this.penalidadeDeSetor(c);
+      const d = dist2(c, this.position) * penal * setor * (c.prioridade ?? 1) ** 2;
       if (d < melhorD) {
         melhorD = d;
         melhor = {
@@ -364,6 +405,84 @@ export class Bot {
       }
     }
     return melhor;
+  }
+
+  /**
+   * A rocha em que este bot vai gastar a próxima flecha.
+   *
+   * Três decisões, e cada uma conserta um defeito medido em campo:
+   *
+   * • **COMPROMISSO.** Ele não troca de pedra no meio do tensionamento. A
+   *   escolha do duelista é refeita a cada quadro, e num céu com seis rochas
+   *   descendo a "mais próxima" muda sozinha o tempo todo: o bot recomeçava a
+   *   mira a cada troca, os ângulos nunca chegavam na tolerância de disparo, e
+   *   ele passava a horda inteira de arco tensionado com a mira oscilando. É
+   *   exatamente o que se via na tela — muito tempo mirando, quase nenhum tiro.
+   *   Pior ainda em silêncio: `_ultimoAlvo` é um slot só, então a cada troca a
+   *   velocidade medida do alvo era o salto de uma rocha para a outra, ou seja,
+   *   lixo, e a liderança de tiro saía junto.
+   *
+   * • **URGÊNCIA, não proximidade.** O que decide a partida é a rocha que vai
+   *   encostar primeiro. `prazo` vem da sala e é literalmente isso: segundos
+   *   até o chão. O giro entra como preço em segundos, senão ele atravessa o
+   *   céu inteiro atrás de uma pedra que outro já vai pegar.
+   *
+   * • **PEDRA JÁ COBERTA NÃO ENTRA.** `left` chega descontado das flechas de
+   *   bot ainda em voo (ver `Room.botPrey`). Sem isso, três bots gastavam três
+   *   flechas na mesma rocha de um acerto e a horda passava por cima deles.
+   */
+  escolherRocha(bichos) {
+    if (this._rochaId != null) {
+      const atual = bichos.find((c) => c.id === this._rochaId && c.kind === "meteor");
+      if (atual && (atual.left ?? 1) > 0 && this.podeEngajar(atual)) return this.presa(atual);
+      /* Perdeu o alvo — estourou, encostou ou subiu acima do teto de elevação.
+         O tensionamento em curso não serve para mais nada: zerar é o que evita
+         soltar a flecha na direção de uma pedra que não existe mais. */
+      this._rochaId = null;
+      this.drawTime = 0;
+      this.drawFraction = 0;
+    }
+
+    let melhor = null;
+    let melhorCusto = Infinity;
+    for (const c of bichos) {
+      if (c.kind !== "meteor") continue;
+      if ((c.left ?? 1) <= 0) continue;
+      if (!this.podeEngajar(c)) continue;
+
+      /* O preço do giro, em segundos: `giroAntiaereo` rad/s. Somado ao prazo
+         ele responde "qual dá para pegar antes", que é a pergunta certa. */
+      const dx = c.x - this.position.x;
+      const dz = c.z - this.position.z;
+      let dYaw = Math.atan2(-dx, -dz) - this.yaw;
+      while (dYaw > Math.PI) dYaw -= TAU;
+      while (dYaw < -Math.PI) dYaw += TAU;
+
+      const custo = (c.prazo ?? 99) + Math.abs(dYaw) / GIRO_ANTIAEREO;
+      if (custo < melhorCusto) {
+        melhorCusto = custo;
+        melhor = c;
+      }
+    }
+    if (!melhor) return null;
+    this._rochaId = melhor.id;
+    return this.presa(melhor);
+  }
+
+  /** O invólucro que `mirarEAtirar` espera, a partir de uma presa crua. */
+  presa(c) {
+    return {
+      position: c,
+      isCreature: true,
+      kind: c.kind,
+      id: c.id,
+      alive: true,
+      aimY: c.aimY,
+      raio: c.r,
+      /* A VELOCIDADE DECLARADA. Ver `mirarComLead`: medir por diferença de
+         posição só funciona quando o alvo é sempre o mesmo, e no céu ele não é. */
+      vel: c.vx != null ? { x: c.vx, y: c.vy ?? 0, z: c.vz ?? 0 } : null,
+    };
   }
 
   /** Tem alvenaria entre o arco e este ponto? Só o teste de caixa. */
@@ -615,14 +734,51 @@ export class Bot {
        passo do alvo. Bicho é mais baixo que gente — mirar no peito de um humano
        passa por cima de um porco. */
     const altura = alvo.aimY ?? (alvo.isCreature ? 0.55 : 1.15);
+
+    /* A VELOCIDADE DECLARADA GANHA DA MEDIDA.
+     *
+     * Medir por diferença de posição entre quadros é o que um jogador faz, e é
+     * a coisa certa contra um adversário — ele não te entrega o vetor dele. Só
+     * que `_ultimoAlvo` é UM slot: a conta só vale enquanto o alvo for o mesmo
+     * de ontem. No céu ele não é, e cada troca de rocha produzia uma velocidade
+     * que era o salto entre duas pedras — descartada pelo teto de 900, ou seja,
+     * liderança ZERO no quadro seguinte. Contra uma rocha a 15 m/s com dois
+     * segundos de voo, liderança zero é errar por trinta metros.
+     *
+     * Quem declara `vel` é um objeto balístico com trajetória conhecida (a
+     * rocha, o sitiante). Não há nada de desleal em usá-la: é a mesma
+     * informação que o jogador humano lê olhando a pedra descer. */
+    const vel = alvo.vel ?? this._velAlvo;
+    const k = alvo.vel ? 1 : this.pericia.precisaoLead;
+
     let t = 0;
     for (let i = 0; i < 3; i++) {
-      out.x = alvo.position.x + this._velAlvo.x * t * this.pericia.precisaoLead;
-      out.y = alvo.position.y + altura + this._velAlvo.y * t * this.pericia.precisaoLead;
-      out.z = alvo.position.z + this._velAlvo.z * t * this.pericia.precisaoLead;
+      out.x = alvo.position.x + vel.x * t * k;
+      out.y = alvo.position.y + altura + vel.y * t * k;
+      out.z = alvo.position.z + vel.z * t * k;
       t = distancia(this._muzzle, out) / v;
     }
     return t;
+  }
+
+  /**
+   * Quão perto do ângulo certo ele precisa estar para soltar a corda.
+   *
+   * Os 0,01 rad fixos são a tolerância de um duelo — ~45 cm a 45 m, que é a
+   * largura de um tronco humano. Contra o colosso de 26 m de raio a 200 m eles
+   * exigem um alinhamento cem vezes mais fino do que o alvo pede, e o custo é
+   * pago em segundos de mira parada: o bot fica pendurado no último milirradiano
+   * de uma pedra que ele acertaria de olhos fechados.
+   *
+   * Com o tamanho angular do alvo no lugar do número fixo, a pedra pequena
+   * continua exigindo o que sempre exigiu (o piso é o mesmo 0,01) e o colosso
+   * libera o tiro assim que a mira entra nele. O fator 0,35 mira o miolo, não a
+   * borda — a flecha ainda tem que ACERTAR, não raspar.
+   */
+  toleranciaAngular(alvo, dist) {
+    const raio = alvo.raio ?? 0;
+    if (raio <= 0 || dist < 1e-3) return 0.01;
+    return clamp(Math.atan2(raio, dist) * 0.35, 0.01, 0.05);
   }
 
   /**
@@ -636,14 +792,29 @@ export class Bot {
    */
   elevacaoPara(distH, alturaRel, v) {
     const g = -this.fisica.gravity;
+    const inclinada = Math.hypot(distH, alturaRel);
     const ar = this.fisica.airDensity / 1.225;
-    const vEf = v * (1 - 0.11 * ar * Math.min(1, distH / 100));
+    const vEf = v * (1 - 0.11 * ar * Math.min(1, inclinada / 100));
 
+    /* O TEMPO DE VOO SAI DA DISTÂNCIA INCLINADA, e não da projeção horizontal.
+     *
+     * As duas formas são a MESMA álgebra — a flecha sai a `v` na direção da
+     * mira, então `distH/(v·cos ang)` e `inclinada/v` são idênticos —, mas a
+     * primeira é 0/0 com o alvo a pino: `distH → 0` e `cos ang → 0` juntos. Era
+     * daí que vinha o "o bot não erra por perícia, erra por álgebra": com a
+     * rocha quase em cima da cabeça o tempo estimado sumia, a queda estimada
+     * sumia junto, e ele mirava dois metros abaixo do alvo num tiro de 200 m.
+     * Dois metros contra uma pedra de 2,5 m de raio é a diferença entre estourar
+     * e atravessar.
+     *
+     * Escrita pela inclinada não há denominador que tenda a zero, e o caso
+     * plano continua respondendo exatamente o mesmo número de antes. */
+    let t = inclinada / Math.max(1e-3, vEf);
     let ang = Math.atan2(alturaRel, distH);
     for (let i = 0; i < 4; i++) {
-      const t = distH / Math.max(1e-3, vEf * Math.cos(ang));
       const queda = 0.5 * g * t * t;
       ang = Math.atan2(alturaRel + queda, distH);
+      t = Math.hypot(distH, alturaRel + queda) / Math.max(1e-3, vEf);
     }
     return ang;
   }
@@ -704,7 +875,20 @@ export class Bot {
     // Tensiona até uma força escolhida pela distância: tiro curto não precisa
     // de tensão máxima, e tensão máxima demora quase dois segundos.
     const distBruta = distancia(this._muzzle, alvo.position);
-    const tensaoAlvo = clamp(distBruta / 110, 0.35, 1) * CONFIG.bow.fullDrawTime;
+    /* NO VÁCUO A CONTA É OUTRA, e o divisor tem que dizer isso.
+     *
+     * Os 110 m são calibrados para o vale, onde o arrasto come a velocidade e
+     * um tiro longo exige tensão cheia mesmo. Na Lua não há arrasto nenhum: a
+     * 70 % de tensão a flecha ainda faz 93 m/s e cruza 250 m em 2,7 s. O que a
+     * tensão cheia compra ali não é alcance, é meio segundo a menos de voo — e
+     * custa 0,5 s a mais de tensionamento, ou seja, é um mau negócio.
+     *
+     * O bot antiaéreo compra o CICLO em vez do alcance: com o divisor no dobro
+     * ele solta uma flecha a cada ~2,0 s em vez de ~2,7 s, que é um terço a
+     * mais de flechas na mesma horda. A liderança maior não o incomoda — ele
+     * resolve a antecipação por álgebra, e a rocha vem em linha reta. */
+    const divisor = this.antiaereo ? 230 : 110;
+    const tensaoAlvo = clamp(distBruta / divisor, 0.35, 1) * CONFIG.bow.fullDrawTime;
 
     if (this.recarga > 0) {
       this.drawTime = 0;
@@ -741,8 +925,9 @@ export class Bot {
     const pitchAlvo = this.elevacaoPara(distH, dy, v);
 
     // O giro tem VELOCIDADE FINITA. Um bot que encara instantaneamente é
-    // impossível de flanquear, e flanquear é o que se faz num duelo.
-    const giroMax = 2.6 * dt;
+    // impossível de flanquear, e flanquear é o que se faz num duelo. Contra o
+    // céu não há flanco a proteger e o alvo cruza a 21 m/s — ver `GIRO_ANTIAEREO`.
+    const giroMax = (this.antiaereo ? GIRO_ANTIAEREO : 2.6) * dt;
     let dYaw = yawAlvo - this.yaw;
     while (dYaw > Math.PI) dYaw -= TAU;
     while (dYaw < -Math.PI) dYaw += TAU;
@@ -764,14 +949,27 @@ export class Bot {
        que é exatamente o que resolve a situação. */
     if (!this.temVisada(this._mira)) {
       this.bloqueado = true;
+      /* O antiaéreo LARGA a pedra bloqueada, e é obrigatório largar.
+         O duelista bloqueado circunda e a visada abre sozinha em poucos
+         segundos; este está postado e não anda — se o foguete estiver entre ele
+         e aquela rocha, vai estar até a rocha encostar no chão. Sem soltar o
+         compromisso ele ficaria travado num alvo impossível enquanto o resto do
+         céu desce. */
+      if (this.antiaereo) {
+        this._rochaId = null;
+        this.drawTime = 0;
+        this.drawFraction = 0;
+      }
       return null;
     }
     this.bloqueado = false;
 
     /* SÓ ATIRA COM OS DOIS ÂNGULOS NO LUGAR. Exigir só o yaw deixava a flecha
        sair enquanto a ELEVAÇÃO ainda subia — e a elevação é justamente o que
-       compensa a queda. A tolerância de 0,01 rad vale ~45 cm a 45 m. */
-    if (Math.abs(dYaw) > 0.01 || Math.abs(dPitch) > 0.01) return null;
+       compensa a queda. A tolerância sai do TAMANHO DO ALVO, com piso nos
+       mesmos 0,01 rad de antes — ver `toleranciaAngular`. */
+    const tol = this.toleranciaAngular(alvo, distBruta);
+    if (Math.abs(dYaw) > tol || Math.abs(dPitch) > tol) return null;
 
     return this.atirar(v);
   }
@@ -805,8 +1003,14 @@ export class Bot {
        deixaria o adversário num ritmo antigo enquanto o jogador atira no dobro
        da cadência. */
     this.recarga = CONFIG.bow.reloadTime + 0.18;
-    this.reagirEm = this.pericia.reacao;
+    /* O TEMPO DE REAÇÃO NÃO VALE CONTRA UMA PEDRA.
+       Ele modela o instante em que a pessoa percebe que o adversário mudou de
+       ideia — e uma rocha em queda balística não muda de ideia. Cobrá-lo aqui é
+       só um imposto sobre o ciclo de tiro. */
+    this.reagirEm = this.antiaereo ? 0 : this.pericia.reacao;
     this._decidiuPausa = false;
+    // A pedra escolhida foi servida: a próxima flecha reabre a escolha.
+    this._rochaId = null;
 
     return {
       origem: {
@@ -941,6 +1145,7 @@ export class BotSquad {
       b.semFogoAmigo = semFogoAmigo;
       b.soPresas = perfil?.soPresas === true;
       b.postado = perfil?.postado === true;
+      b.antiaereo = perfil?.antiaereo === true;
       b.maxElevation = perfil?.maxElevation ?? 0;
       const tiro = b.update(dt, alvos, bichos, objetivoDe ? objetivoDe(b) : null);
       if (tiro) tiros.push({ bot: b, tiro });

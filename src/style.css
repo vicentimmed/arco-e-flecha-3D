@@ -2105,6 +2105,35 @@ body {
   color: var(--text-dim);
 }
 
+/* QUEM ESTÁ LÁ AGORA.
+   Vazio quando a sala está vazia, e não "0 jogando": um zero afirma, e a
+   informação que falta é diferente da informação que diz "ninguém". Por isso o
+   elemento também não reserva altura — sem gente, a porta é a de antes. */
+.lobby-porta-gente {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #7ee08a;
+  letter-spacing: 0.02em;
+}
+
+.lobby-porta-gente.tem-gente::before {
+  /* O ponto verde é o que se lê antes do texto, de canto de olho. */
+  content: "● ";
+  font-size: 9px;
+  vertical-align: 1px;
+}
+
+.lobby-porta.porta-vale .lobby-porta-gente {
+  color: #1d5c26;
+}
+
+.lobby-agora {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
 /* A porta principal: preenchida, como o botão único de antes. */
 .lobby-porta.porta-vale {
   border: 0;

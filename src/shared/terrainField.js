@@ -152,6 +152,18 @@ export class TerrainField {
   }
 
   /**
+   * O ponto ainda está dentro do MUNDO DESCRITO?
+   *
+   * Aqui é a mesma pergunta que `isWalkable`, porque no vale o "andável" JÁ É a
+   * borda da malha. O método existe separado porque nas outras fases as duas
+   * respostas divergem — ver `MoonField.isInsideWorld`, onde confundi-las fazia
+   * a flecha do bot sumir na barreira antes de chegar no alvo.
+   */
+  isInsideWorld(x, z) {
+    return this.isWalkable(x, z);
+  }
+
+  /**
    * É chão plano de arena — o critério de "lugar bom para nascer".
    *
    * Combina duas coisas: estar dentro da bacia (`arenaDistance` bem negativa,

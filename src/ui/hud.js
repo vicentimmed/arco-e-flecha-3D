@@ -90,7 +90,7 @@ const ATALHOS = [
       [["7"], "zumbi (só chefão)", ["setMode", "zombieBoss"]],
       [["8"], "caça aos pássaros", ["setMode", "birdHunt"]],
       [["U"], "o último em pé (uma vida)", ["setMode", "lastStand"]],
-      [["Shift", "G"], "rouba bandeira (humanos × CPU)", ["setMode", "captureFlag"]],
+      [["Shift", "G"], "rouba bandeira (azul × vermelho)", ["setMode", "captureFlag"]],
       /* O CERCO NÃO TEM TECLA — os dígitos acabaram e as letras com mnemônico
          também. Até aqui a única porta de entrada dele era a tela inicial, e
          quem trocasse de modo por engano no meio de uma partida não tinha como
@@ -377,9 +377,9 @@ export class HUD {
            informação que se procura num canto é uma informação que chega tarde
            demais para mudar o que se faz com ela. -->
       <div class="chip" id="flag-chip" hidden>
-        <span class="team-lado"><span class="label">Humanos</span><span class="value" id="flag-humans">0</span></span>
+        <span class="team-lado"><span class="label">Azul</span><span class="value" id="flag-humans">0</span></span>
         <span class="team-x">×</span>
-        <span class="team-lado"><span class="value" id="flag-bots">0</span><span class="label">CPU</span></span>
+        <span class="team-lado"><span class="value" id="flag-bots">0</span><span class="label">Vermelho</span></span>
       </div>
 
       <div id="flag-carrier" hidden>
@@ -878,7 +878,7 @@ export class HUD {
         mode === "lastStand"
           ? "   uma vida só · quem sobrar ganha · 1 para sair"
           : mode === "captureFlag"
-          ? "   leve a bandeira à base inimiga · 1 para sair"
+          ? "   roube a bandeira deles e traga para a SUA base · 5 vencem · 1 para sair"
           : mode === "meteorRain"
           ? "   nenhuma pode encostar no chão · 1 para sair"
           : foraDoVale
@@ -993,7 +993,17 @@ export class HUD {
    * @param {object|null} estado `S2C.FLAG`; null esconde tudo
    * @param {string|null} nome quem carrega, resolvido pelo `main`
    */
-  setFlag(estado, nome = null, selfId = null) {
+  /**
+   * A faixa e o chip do rouba bandeira.
+   *
+   * @param {object|null} estado `S2C.FLAG` — ver `FlagField.view()`
+   * @param {Array<string|null>} nomes o portador de cada bandeira, na ordem da
+   *   lista que veio na amostra
+   * @param {number|null} selfId
+   * @param {"humans"|"bots"|null} meuTime de que lado quem está lendo está. Sem
+   *   ele a faixa não tem como saber se a notícia é boa: os times são mistos.
+   */
+  setFlag(estado, nomes = [], selfId = null, meuTime = null) {
     const chip = this.el.flagChip;
     const faixa = this.el.flagCarrier;
     if (!estado) {
@@ -1006,48 +1016,97 @@ export class HUD {
     this.el.flagHumans.textContent = String(estado.scores?.humans ?? 0);
     this.el.flagBots.textContent = String(estado.scores?.bots ?? 0);
 
-    if (estado.carrier == null) {
-      /* Sem portador, a faixa continua — dizendo o OUTRO estado. "A bandeira
-         está no centro" e "a bandeira caiu, volta em 12 s" são duas situações
-         completamente diferentes de jogo, e a segunda é um cronômetro que muda
-         o que vale a pena fazer agora. */
+    const flags = estado.flags ?? [];
+    /* A FAIXA MOSTRA UMA COISA SÓ, e a escolha de qual é a decisão deste
+     * método. São duas bandeiras e cinco estados possíveis entre elas; escrever
+     * tudo daria um parágrafo no meio da tela, e um parágrafo no meio da tela
+     * durante uma corrida não é lido por ninguém.
+     *
+     * A ordem de urgência é a do jogo:
+     *   1. EU estou com uma → é o que eu tenho de fazer agora;
+     *   2. a MINHA está com alguém → é o que meu time tem de resolver agora;
+     *   3. um companheiro está com a do outro → cubra;
+     *   4. a minha está caída → resgate, com cronômetro;
+     *   5. nada acontecendo → a faixa some. */
+    const minha = flags.find((f) => f.team === meuTime) ?? null;
+    const deles = flags.find((f) => f.team !== meuTime) ?? null;
+    const nomeDe = (f) => nomes[flags.indexOf(f)] ?? "alguém";
+
+    const euCarrego = flags.find((f) => selfId != null && f.carrier === selfId);
+    if (euCarrego) {
       faixa.hidden = false;
-      faixa.className = "livre";
-      this.el.flagCarrierName.textContent =
-        estado.atBase === "center" ? "BANDEIRA LIVRE" : "BANDEIRA CAÍDA";
-      this.el.flagCarrierTail.textContent =
-        estado.returnIn != null ? `volta ao centro em ${Math.ceil(estado.returnIn)}s` : "no centro";
+      faixa.className = "humans";
+      this.el.flagCarrierName.textContent = "VOCÊ ESTÁ COM A BANDEIRA";
+      this.el.flagCarrierTail.textContent = "corra para a SUA base";
       return;
     }
 
-    const meu = estado.carrierTeam === "humans";
-    const euMesmo = selfId != null && estado.carrier === selfId;
-    faixa.hidden = false;
-    faixa.className = meu ? "humans" : "bots";
-    this.el.flagCarrierName.textContent = euMesmo
-      ? "VOCÊ ESTÁ COM A BANDEIRA"
-      : `${nome ?? "alguém"} está com a bandeira`;
-    this.el.flagCarrierTail.textContent = euMesmo
-      ? "corra para a base inimiga"
-      : meu
-        ? "cubra!"
-        : "derrube!";
+    if (minha?.state === "carried") {
+      faixa.hidden = false;
+      faixa.className = "bots";
+      this.el.flagCarrierName.textContent = `${nomeDe(minha)} ROUBOU A SUA BANDEIRA`;
+      this.el.flagCarrierTail.textContent = "derrube!";
+      return;
+    }
+
+    if (deles?.state === "carried") {
+      faixa.hidden = false;
+      faixa.className = "humans";
+      this.el.flagCarrierName.textContent = `${nomeDe(deles)} está com a bandeira inimiga`;
+      this.el.flagCarrierTail.textContent = "cubra!";
+      return;
+    }
+
+    if (minha?.state === "dropped") {
+      faixa.hidden = false;
+      faixa.className = "livre";
+      this.el.flagCarrierName.textContent = "A SUA BANDEIRA CAIU";
+      this.el.flagCarrierTail.textContent =
+        minha.returnIn != null
+          ? `encoste para resgatar · volta sozinha em ${Math.ceil(minha.returnIn)}s`
+          : "encoste para resgatar";
+      return;
+    }
+
+    if (deles?.state === "dropped") {
+      faixa.hidden = false;
+      faixa.className = "livre";
+      this.el.flagCarrierName.textContent = "BANDEIRA INIMIGA CAÍDA";
+      this.el.flagCarrierTail.textContent =
+        deles.returnIn != null ? `some em ${Math.ceil(deles.returnIn)}s` : "corra até ela";
+      return;
+    }
+
+    faixa.hidden = true;
   }
 
-  /** O fim da partida de bandeira: qual time levou, e quem matou mais. */
+  /**
+   * O fim da partida de bandeira: qual time levou, e quem entregou mais.
+   *
+   * Os lados deixaram de se chamar "humanos" e "CPU" porque deixaram de ser
+   * isso: no rouba bandeira eles são MISTOS — cada corpo que entra vai para o
+   * lado com menos gente, humano ou não (ver `Room.escalarNoTime`). Azul e
+   * vermelho são as cores que a bandeira, o halo e o placar já usam, então o
+   * nome do time é a única coisa que faltava dizer a mesma língua.
+   *
+   * E o placar ordena por ENTREGAS, com abates de desempate. Num modo de
+   * bandeira, quem correu com ela é quem ganhou a partida — ordenar por abates
+   * premiaria quem passou a partida inteira no próprio quintal.
+   */
   showFlagVictory(msg, selfId = null) {
     const ranking = msg.ranking ?? [];
     if (!ranking.length) return;
-    const time = msg.winner === "humans" ? "HUMANOS" : "CPU";
+    const time = msg.winner === "humans" ? "AZUL" : "VERMELHO";
     const p = msg.scores ?? {};
     const rotulo = (r) => {
+      const c = r.captures ?? 0;
       const k = r.kills ?? 0;
-      const lado = r.team === "humans" ? "humanos" : "CPU";
-      return `${lado} · ${k} ${k === 1 ? "abate" : "abates"}`;
+      const lado = r.team === "humans" ? "azul" : "vermelho";
+      return `${lado} · ${c} ${c === 1 ? "entrega" : "entregas"} · ${k} ${k === 1 ? "abate" : "abates"}`;
     };
     this.showHuntVictory(ranking, selfId, {
-      title: `${time} LEVARAM  ${p.humans ?? 0} × ${p.bots ?? 0}`,
-      winnerLabel: "Mais abates",
+      title: `TIME ${time} VENCEU  ${p.humans ?? 0} × ${p.bots ?? 0}`,
+      winnerLabel: "Mais entregas",
       statLabel: rotulo,
     });
   }

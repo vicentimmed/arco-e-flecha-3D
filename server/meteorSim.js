@@ -51,7 +51,13 @@ export class FallingMeteor {
    * @param {number} hits flechas para estourar
    * @param {number} velocidade m/s
    */
-  constructor(terrain, alvo, raio, hits, velocidade) {
+  /**
+   * @param {{altitude?:number, tiltMin?:number, tiltMax?:number}} [entrada] a
+   *   geometria de entrada, quando ela não é a padrão. Só o colosso passa isto:
+   *   ele nasce 75 m mais alto e com a entrada mais em pé, para que os metros
+   *   extras apareçam como ALTURA e não como afastamento — ver `tankAltitude`.
+   */
+  constructor(terrain, alvo, raio, hits, velocidade, entrada = null) {
     const M = CONFIG.modes.meteorRain;
     this.id = proximoId++;
     this.terrain = terrain;
@@ -62,6 +68,8 @@ export class FallingMeteor {
     this.dead = false;
     this.landed = false;
     this.formato = Math.floor(Math.random() * 3);
+    /** Quantas amostras já saíram com os campos imutáveis. Ver `view`. */
+    this.amostras = 0;
 
     this.alvoX = alvo.x;
     this.alvoZ = alvo.z;
@@ -70,8 +78,12 @@ export class FallingMeteor {
     /* A entrada é INCLINADA. A queda a prumo lê como elevador; inclinada, a
        rocha risca o campo de estrelas — e ganha uma componente horizontal de
        antecipação sem complicar a mira de ninguém. */
-    const altura = M.spawnAltitude + faixa(-M.altitudeJitter, M.altitudeJitter);
-    const tilt = faixa(M.entryTiltMin, M.entryTiltMax);
+    const altura =
+      (entrada?.altitude ?? M.spawnAltitude) + faixa(-M.altitudeJitter, M.altitudeJitter);
+    const tilt = faixa(
+      entrada?.tiltMin ?? M.entryTiltMin,
+      entrada?.tiltMax ?? M.entryTiltMax,
+    );
     const azimute = Math.random() * TAU;
     const recuo = Math.tan(tilt) * altura;
 
@@ -144,7 +156,40 @@ export class FallingMeteor {
     return true;
   }
 
+  /**
+   * A amostra que vai para a rede, dez vezes por segundo.
+   *
+   * SÓ A POSE E A VIDA VIAJAM SEMPRE. Raio, número de flechas, silhueta e ponto
+   * de queda são imutáveis — a rocha não muda de tamanho no meio da descida —,
+   * e mandá-los dez vezes por segundo era mais da metade do pacote gasto
+   * repetindo o que o outro lado já sabe. Numa sala de seis com trinta rochas
+   * no céu isso são dezenas de kB/s por cliente de puro eco.
+   *
+   * Eles vão nas TRÊS PRIMEIRAS amostras da rocha, e isso basta porque o canal
+   * é WebSocket: entregue e em ordem. Quem estava na sala recebe as três; quem
+   * entrar depois recebe a rocha inteira no `snapshot`, que continua completo
+   * (ver `Room.snapshot`). Não existe terceiro caso.
+   */
   view() {
+    const amostra = {
+      i: this.id,
+      p: [r(this.x), r(this.y), r(this.z)],
+      hp: this.maxHits > 0 ? Math.round((1 - this.hits / this.maxHits) * 100) / 100 : 0,
+    };
+    if (this.amostras < 3) {
+      this.amostras++;
+      amostra.r = r(this.raio);
+      amostra.k = this.maxHits;
+      amostra.f = this.formato;
+      // Onde ela vai bater: é a mancha no chão do cliente, e é ela que faz o
+      // impacto ser justo — ninguém morre sem ter tido onde ler o aviso.
+      amostra.a = [r(this.alvoX), r(this.chaoY), r(this.alvoZ)];
+    }
+    return amostra;
+  }
+
+  /** A rocha inteira, para quem acaba de chegar e não viu as três primeiras. */
+  fullView() {
     return {
       i: this.id,
       p: [r(this.x), r(this.y), r(this.z)],
@@ -152,17 +197,23 @@ export class FallingMeteor {
       k: this.maxHits,
       hp: this.maxHits > 0 ? Math.round((1 - this.hits / this.maxHits) * 100) / 100 : 0,
       f: this.formato,
-      // Onde ela vai bater: é a mancha no chão do cliente, e é ela que faz o
-      // impacto ser justo — ninguém morre sem ter tido onde ler o aviso.
       a: [r(this.alvoX), r(this.chaoY), r(this.alvoZ)],
     };
   }
 }
 
-/** O colosso: Ø 28 m, dezenas de flechas, e desce sozinho. */
+/**
+ * O colosso: dezenas de flechas, e desce sozinho.
+ *
+ * O raio é POR HORDA e cresce a cada aparição — de 32 m de diâmetro na horda 3
+ * a 52 m na 10. Um tamanho só para os quatro fazia da última aparição uma
+ * repetição da primeira com mais vida; crescendo, o jogador lê a escada sem
+ * HUD nenhum. E não custa um triângulo: o icosaedro tem as mesmas faces em
+ * qualquer raio.
+ */
 export class TankMeteor extends FallingMeteor {
-  constructor(terrain, alvo, hits, velocidade) {
-    super(terrain, alvo, CONFIG.modes.meteorRain.tankRaio, hits, velocidade);
+  constructor(terrain, alvo, hits, velocidade, raio, entrada) {
+    super(terrain, alvo, raio, hits, velocidade, entrada);
     this.kind = "tank";
   }
 }
@@ -183,6 +234,8 @@ export class MeteorRain {
     this.over = false;
     this.overReason = null;
     this.playerCount = 1;
+    /** Fotografia do `playerCount` no começo da horda — ver `hordePlayerCount`. */
+    this._hordePlayers = null;
     /** @type {{timer:number, classe:number, tank?:boolean}[]} */
     this.pending = [];
     this.hordeTimer = 0;
@@ -216,8 +269,23 @@ export class MeteorRain {
    */
   escala() {
     const M = CONFIG.modes.meteorRain;
-    const n = Math.min(this.playerCount, M.playerScaleMax);
+    const n = Math.min(this.hordePlayerCount, M.playerScaleMax);
     return 1 + M.playerScale * Math.max(0, n - 1);
+  }
+
+  /**
+   * Quantos arqueiros esta HORDA vale.
+   *
+   * `playerCount` é o número ao vivo e muda a cada tique; este é a fotografia
+   * tirada no começo da horda, e é ela que todo o dimensionamento usa. A
+   * diferença aparecia no colosso: ele nasce no meio da horda, então quem
+   * entrasse na sala trinta segundos depois da faixa engordava um segundo ato
+   * já anunciado — o grupo era punido por receber ajuda no pior instante
+   * possível. Com a fotografia, quem chega no meio da 5 engrossa a 6, e nada
+   * do que já foi anunciado muda de tamanho.
+   */
+  get hordePlayerCount() {
+    return this._hordePlayers ?? this.playerCount;
   }
 
   fallSpeed(n) {
@@ -258,7 +326,9 @@ export class MeteorRain {
   tankHits(n) {
     const M = CONFIG.modes.meteorRain;
     const base = M.tankHits[n] ?? 10;
-    return Math.round(base * (1 + M.tankPlayerScale * Math.max(0, this.playerCount - 1)));
+    return Math.round(
+      base * (1 + M.tankPlayerScale * Math.max(0, this.hordePlayerCount - 1)),
+    );
   }
 
   /**
@@ -273,6 +343,7 @@ export class MeteorRain {
   start(nPlayers = 1) {
     const M = CONFIG.modes.meteorRain;
     this.playerCount = Math.max(1, nPlayers | 0);
+    this._hordePlayers = null;
     this.active = true;
     this.over = false;
     this.overReason = null;
@@ -345,6 +416,11 @@ export class MeteorRain {
     const M = CONFIG.modes.meteorRain;
     if (this.horde >= M.hordes) return null;
     this.horde++;
+    /* A FOTOGRAFIA DO NÚMERO DE ARQUEIROS, tirada aqui e só aqui.
+       Tudo o que esta horda vai custar — quantas rochas, de quanto em quanto
+       tempo, e a vida do colosso do segundo ato — sai deste número. Quem entrar
+       na sala daqui em diante engrossa a PRÓXIMA. */
+    this._hordePlayers = this.playerCount;
 
     const mix = this.mixDe(this.horde);
     const gap = this.gap(this.horde);
@@ -388,6 +464,12 @@ export class MeteorRain {
     return m;
   }
 
+  /** O raio do colosso desta horda. Cresce a cada aparição. */
+  tankRaio(n) {
+    const M = CONFIG.modes.meteorRain;
+    return M.tankRaios?.[n] ?? M.tankRaio;
+  }
+
   spawnTank() {
     const M = CONFIG.modes.meteorRain;
     const base = CONFIG.levels.moon.base;
@@ -398,6 +480,9 @@ export class MeteorRain {
       { x: base.x, z: base.z },
       this.tankHits(this.horde),
       M.tankSpeeds[this.horde] ?? 4.0,
+      this.tankRaio(this.horde),
+      // Mais alto e mais em pé que a chuva — ver `tankAltitude` no config.
+      { altitude: M.tankAltitude, tiltMin: M.tankTiltMin, tiltMax: M.tankTiltMax },
     );
     this.meteors.push(m);
     return m;
@@ -548,7 +633,16 @@ export class MeteorRain {
   }
 
   view() {
-    return this.meteors.filter((m) => !m.dead).map((m) => m.view());
+    const lista = [];
+    for (const m of this.meteors) if (!m.dead) lista.push(m.view());
+    return lista;
+  }
+
+  /** O céu inteiro e completo — é o que o `snapshot` de quem chega carrega. */
+  fullView() {
+    const lista = [];
+    for (const m of this.meteors) if (!m.dead) lista.push(m.fullView());
+    return lista;
   }
 }
 

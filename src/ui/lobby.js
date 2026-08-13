@@ -127,9 +127,11 @@ export class Lobby {
             <button type="button" class="lobby-porta ${p.classe}" data-porta="${p.id}" disabled>
               <span class="lobby-porta-rotulo">${p.rotulo}</span>
               <span class="lobby-porta-detalhe">${p.detalhe}</span>
+              <span class="lobby-porta-gente" data-gente="${p.id}"></span>
             </button>`,
           ).join("")}
         </div>
+        <div class="lobby-agora" id="lobby-agora"></div>
         <div class="lobby-status" id="lobby-status">preparando o campo de tiro…</div>
       </div>
     `;
@@ -137,6 +139,10 @@ export class Lobby {
     this.input = root.querySelector("#lobby-name");
     this.buttons = [...root.querySelectorAll("[data-porta]")];
     this.status = root.querySelector("#lobby-status");
+    this.agora = root.querySelector("#lobby-agora");
+    this.gente = new Map(
+      [...root.querySelectorAll("[data-gente]")].map((el) => [el.dataset.gente, el]),
+    );
     this.qualityButtons = [...root.querySelectorAll("[data-quality]")];
 
     this.input.value = readStoredName();
@@ -165,6 +171,64 @@ export class Lobby {
 
     // Foco imediato: quem abre o link já pode digitar.
     requestAnimationFrame(() => this.input.focus());
+
+    this.ouvirSalas();
+  }
+
+  /* -------------------------------------------------------- quem está lá --
+   *
+   * A pergunta que toda pessoa faz antes de escolher uma porta é "tem alguém
+   * jogando?". Sem resposta na tela, escolher é sortear — e numa sala de amigos
+   * o resultado normal é todo mundo cair em lugares diferentes achando que está
+   * sozinho, o que é o pior desfecho possível para um jogo online.
+   *
+   * O número vive NA PORTA e não numa lista separada, porque é ali que a decisão
+   * é tomada. A linha de resumo abaixo existe só para o caso de haver gente numa
+   * combinação de fase e modo que não tem porta própria (alguém trocou de modo
+   * por tecla lá dentro) — senão aquilo sumiria da tela de entrada.
+   */
+  async ouvirSalas() {
+    const puxar = async () => {
+      try {
+        const r = await fetch("/salas", { cache: "no-store" });
+        if (!r.ok) return;
+        this.mostrarSalas(await r.json());
+      } catch {
+        /* Sem servidor ainda, ou offline: a porta simplesmente não diz nada.
+           Um "0 jogando" errado seria pior que o silêncio — ele afirma. */
+      }
+    };
+    await puxar();
+    /* Cinco segundos: rápido o bastante para alguém que está esperando um amigo
+       ver a contagem mudar, e devagar o bastante para não ser tráfego. O
+       intervalo morre com a tela (`hide`). */
+    this._timer = setInterval(puxar, 5000);
+  }
+
+  mostrarSalas(dados) {
+    const salas = dados?.rooms ?? [];
+    const usadas = new Set();
+
+    for (const porta of PORTAS) {
+      const el = this.gente.get(porta.id);
+      if (!el) continue;
+      const sala = salas.find((s) => s.level === porta.level && s.mode === porta.mode);
+      if (sala) usadas.add(sala);
+      el.textContent = sala ? textoDeGente(sala) : "";
+      el.classList.toggle("tem-gente", Boolean(sala));
+    }
+
+    /* Salas fora das portas — alguém trocou o modo por tecla lá dentro. Elas
+       existem e têm gente; deixá-las invisíveis aqui seria esconder metade da
+       resposta de quem só quer saber onde as pessoas estão. */
+    const soltas = salas.filter((s) => !usadas.has(s));
+    if (!soltas.length) {
+      this.agora.textContent = "";
+      return;
+    }
+    this.agora.textContent = `também em jogo: ${soltas
+      .map((s) => `${nomeDoModo(s.mode)} (${textoDeGente(s)})`)
+      .join(" · ")}`;
   }
 
   syncQuality() {
@@ -238,9 +302,44 @@ export class Lobby {
   }
 
   hide() {
+    clearInterval(this._timer);
+    this._timer = null;
     this.root.classList.add("done");
     setTimeout(() => this.root.remove(), 500);
   }
+}
+
+/** "3 jogando" / "1 jogando · 2 bots". Bot não é gente, e o texto diz isso. */
+function textoDeGente(s) {
+  const pessoas = `${s.players} jogando`;
+  return s.bots ? `${pessoas} · ${s.bots} bot${s.bots > 1 ? "s" : ""}` : pessoas;
+}
+
+/**
+ * O nome de um modo que não tem porta na tela.
+ *
+ * A tabela cobre o que se alcança pelas teclas 1–8 lá dentro. O que não estiver
+ * aqui aparece com o próprio id — feio, mas honesto, e é a única saída que não
+ * exige lembrar de editar este arquivo toda vez que um modo nascer.
+ */
+const NOMES_DE_MODO = {
+  free: "campo livre",
+  duel: "duelo",
+  teamDuel: "duelo de times",
+  captureFlag: "rouba a bandeira",
+  lastStand: "último em pé",
+  boarHunt: "caçada ao javali",
+  elkHunt: "caçada ao alce",
+  birdHunt: "caçada aos pássaros",
+  targets: "tiro ao alvo",
+  zombie: "zumbis",
+  zombieBoss: "chefão",
+  meteorRain: "chuva de meteoros",
+  siege: "cerco",
+};
+
+function nomeDoModo(mode) {
+  return NOMES_DE_MODO[mode] ?? mode;
 }
 
 function readStoredName() {

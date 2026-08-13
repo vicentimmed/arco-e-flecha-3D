@@ -273,7 +273,7 @@ const SUN_DAY = 3.1;
 
    O que MUDA no fim de tarde, e é só isto:
 
-   • o Sol DESCE (41° → 7°), e é daí que vem a sombra comprida, que é o efeito
+   • o Sol DESCE (41° → 2,5°), e é daí que vem a sombra comprida, que é o efeito
      inteiro — a muralha passa a projetar trinta metros de sombra sobre a rampa;
    • ele AVERMELHA, porque a luz atravessa mais ar;
    • o céu inverte o gradiente: zênite fundo, horizonte em brasa;
@@ -283,7 +283,16 @@ const SUN_DAY = 3.1;
    O que NÃO muda: a intensidade do Sol cai só 42 %, a sombra continua LIGADA e
    não existe estrela nenhuma. É o que garante o pedido — entardece, não
    escurece. */
-const DUSK_DIR = new THREE.Vector3(-0.86, 0.13, 0.49).normalize();
+/* O FIM DA DESCIDA ficava a 7,5° de elevação, e sete graus e meio não são o
+   horizonte: o disco terminava a partida claramente pendurado no céu, e o que
+   o modo promete — e o que o HUD e este comentário dizem — é que os dez minutos
+   acabam quando o Sol TOCA a linha. Era a única parte do relógio do cerco que
+   não se cumpria na tela.
+   A 2,5° o disco encosta no horizonte no último minuto. Tudo o mais sai de
+   graça e já estava escrito: a sombra da muralha estica mais, a luz esquenta
+   mais, e o instante em que a partida acaba passa a ser um instante que se vê
+   pela janela em vez de um número. */
+const DUSK_DIR = new THREE.Vector3(-0.88, 0.044, 0.47).normalize();
 /* O Sol de cima vai para o LADO, e não para trás da rampa.
    Pôr o poente em +Z (à frente da muralha) daria a imagem bonita da horda
    saindo do sol — e contra a luz o defensor não distingue um esqueleto de um

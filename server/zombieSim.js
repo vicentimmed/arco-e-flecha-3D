@@ -1100,6 +1100,41 @@ export class ZombieNight {
     return { zombie: zumbi, morreu: r.morreu, head: r.head };
   }
 
+  /**
+   * O feixe do especial bateu no chão aqui.
+   *
+   * Duas faixas, e elas não são um ajuste fino — são a leitura da coisa. O que
+   * morre com uma ou duas flechas (zumbi comum, lobo) MORRE: um raio de energia
+   * que abre uma esfera de vinte e dois metros e deixa um zumbi de pé no meio
+   * dela seria ridículo. O chefão leva o equivalente a quatro flechas, que é um
+   * pedaço honesto da barra dele sem ser a barra inteira — o mesmo critério que
+   * `kameTankHits` já aplica ao colosso da chuva.
+   *
+   * @returns {{mortos:Array, feridos:Array}}
+   */
+  kameBlast(x, z, raio) {
+    const G = CONFIG.special.groundBlast;
+    const B = CONFIG.modes.zombie.boss;
+    const mortos = [];
+    const feridos = [];
+    for (const z0 of this.zombies) {
+      if (z0.dead) continue;
+      if (Math.hypot(z0.x - x, z0.z - z) > raio) continue;
+
+      if (z0.kind === "boss") {
+        z0.health -= (B.bodyDamage ?? 1) * G.bigHits;
+        if (z0.health <= 0) mortos.push(z0);
+        else feridos.push(z0);
+        continue;
+      }
+      /* Todo o resto da noite morre com no máximo duas flechas, ou seja, cai
+         inteiro na faixa de "bicho pequeno". Não há terceiro caso aqui — no
+         cerco há, e por isso lá a conta olha `maxHits`. */
+      mortos.push(z0);
+    }
+    return { mortos, feridos };
+  }
+
   kill(id, agora) {
     const zumbi = this.byId(id);
     if (!zumbi || zumbi.dead) return null;

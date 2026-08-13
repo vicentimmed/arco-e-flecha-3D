@@ -28,6 +28,8 @@ import { RoomHost } from "./room.js";
 import { CLOSE_BAD_KEY } from "../src/shared/protocol.js";
 
 export const WS_PATH = "/ws";
+/** Onde a tela de entrada pergunta quem está jogando o quê. Ver `SALAS_PATH`. */
+export const SALAS_PATH = "/salas";
 
 const CHAVES = String(process.env.ROOM_KEY ?? "")
   .split(",")
@@ -88,6 +90,34 @@ export function attachRoom(httpServer, { path = WS_PATH, log } = {}) {
   });
 
   return { host, wss };
+}
+
+/**
+ * O JSON que a tela de entrada lê para dizer quem está jogando o quê.
+ *
+ * HTTP e não WebSocket de propósito: quem pergunta isso ainda não entrou na
+ * sala — está olhando as portas —, e abrir um socket só para contar cabeças
+ * seria criar uma conexão que a chave (`ROOM_KEY`) teria de deixar passar. Uma
+ * requisição sem estado responde a mesma coisa e não abre porta nenhuma.
+ *
+ * Fica aqui, e não em `index.js`, porque o dev server do Vite precisa
+ * exatamente do mesmo comportamento — é a mesma razão pela qual `attachRoom`
+ * mora neste arquivo.
+ *
+ * @returns {boolean} true se a requisição era esta e já foi respondida
+ */
+export function serveSalas(host, req, res, pathname = SALAS_PATH) {
+  if (pathname !== SALAS_PATH) return false;
+  const corpo = JSON.stringify(host.publicStatus());
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    // A resposta muda a cada entrada e saída: guardá-la é mostrar sala cheia
+    // para quem chega num lugar que já esvaziou.
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(corpo),
+  });
+  res.end(corpo);
+  return true;
 }
 
 /** Sem `ROOM_KEY` a sala é aberta — é assim que `npm run dev` segue sem senha. */

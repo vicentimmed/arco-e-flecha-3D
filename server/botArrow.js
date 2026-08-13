@@ -170,8 +170,16 @@ export function simularFlechaDoBot(tiro, ctx) {
       return { kind: "terrain", alvo: null, ponto: { ...p }, velocidade: { ...v }, tempo: t };
     }
 
-    // Saiu do mundo por cima ou pelos lados: some sem cravar em nada.
-    if (p.y > altMax || !terrain.isWalkable(p.x, p.z)) {
+    /* Saiu do MUNDO por cima ou pelos lados: some sem cravar em nada.
+     *
+     * `isInsideWorld`, e não `isWalkable` — a diferença custou o modo de chuva
+     * de meteoros inteiro. Na Lua o "andável" é a BARREIRA DO JOGADOR a 165 m
+     * do centro, e a rocha nasce de 242 a 331 m dali: a flecha do bot morria ao
+     * cruzar o círculo e nunca chegava no alvo. Na tela ela atravessava a pedra
+     * em cheio e nada estourava — o sintoma exato que foi relatado. O chão
+     * continua existindo lá fora (`heightAt` é analítica), então não havia
+     * motivo nenhum para parar de integrar. */
+    if (p.y > altMax || !(terrain.isInsideWorld?.(p.x, p.z) ?? terrain.isWalkable(p.x, p.z))) {
       return { kind: "sumiu", alvo: null, ponto: { ...p }, velocidade: { ...v }, tempo: t };
     }
   }

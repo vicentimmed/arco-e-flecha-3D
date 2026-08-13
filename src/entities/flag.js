@@ -66,10 +66,19 @@ function materialVazado(cor, opacidade) {
 }
 
 export class FlagEntity {
-  constructor(scene) {
+  /**
+   * @param {THREE.Scene} scene
+   * @param {"humans"|"bots"} time de quem é esta bandeira. A cor sai daqui e
+   *   não muda mais: quem a rouba não a repinta — ver o bloco da cor em
+   *   `update`.
+   */
+  constructor(scene, time = "humans") {
     this.scene = scene;
+    this.time = time;
+    /** `"home"` | `"carried"` | `"dropped"` — ver `flagSim.js`. */
+    this.state = "home";
     this.group = new THREE.Group();
-    this.group.name = "bandeira";
+    this.group.name = `bandeira-${time}`;
     this.group.frustumCulled = false;
     scene.add(this.group);
 
@@ -82,7 +91,6 @@ export class FlagEntity {
     /** Estado vindo da sala. Ver `FlagField.view()`. */
     this.carrier = null;
     this.carrierTeam = null;
-    this.atBase = "center";
     this.position = new THREE.Vector3();
     /** Onde desenhar de fato — a posição da sala, ou a do portador na tela. */
     this._alvo = new THREE.Vector3();
@@ -282,12 +290,20 @@ export class FlagEntity {
    * Aplica a amostra da sala.
    * @param {object} msg `S2C.FLAG` — ver `FlagField.view()`
    */
-  applyNetwork(msg, terrain = null) {
-    this.carrier = msg.carrier ?? null;
-    this.carrierTeam = msg.carrierTeam ?? null;
-    this.atBase = msg.atBase ?? null;
-    if (msg.p) this.position.set(msg.p[0], msg.p[1], msg.p[2]);
-    this.montarBases(msg.bases, terrain);
+  /**
+   * Aplica a amostra desta bandeira.
+   *
+   * @param {object} f uma entrada de `FlagField.view().flags`
+   * @param {object|null} bases as duas bases — só a PRIMEIRA das duas entidades
+   *   as monta, senão os feixes seriam desenhados duas vezes no mesmo lugar.
+   */
+  applyNetwork(f, terrain = null, bases = null) {
+    this.time = f.team ?? this.time;
+    this.carrier = f.carrier ?? null;
+    this.carrierTeam = f.carrierTeam ?? null;
+    this.state = f.state ?? "home";
+    if (f.p) this.position.set(f.p[0], f.p[1], f.p[2]);
+    if (bases) this.montarBases(bases, terrain);
     this.mostrar();
   }
 
@@ -323,7 +339,20 @@ export class FlagEntity {
     const carregada = this.carrier != null;
     this._alvo.copy(carregada && posPortador ? posPortador : this.position);
 
-    const cor = carregada ? (COR_TIME[this.carrierTeam] ?? COR_NEUTRA) : COR_NEUTRA;
+    /* A COR É A DO DONO, sempre — e essa é a mudança que veio junto com a
+     * segunda bandeira.
+     *
+     * Com uma bandeira neutra no centro, a cor tinha de dizer QUEM ESTÁ COM
+     * ELA, porque não havia outra coisa a dizer. Com duas, a pergunta que se faz
+     * de longe passou a ser outra: *de quem é aquela?* — e a resposta tem de ser
+     * a mesma o tempo todo, senão a bandeira azul roubada por um vermelho vira
+     * uma bandeira vermelha e o defensor deixa de reconhecer a própria.
+     *
+     * Quem está com ela continua sendo lido, e por dois canais que não brigam
+     * com este: o pulso fica mais rápido, e o halo em volta dos pés do portador
+     * ganha a cor DELE (ver `halo` mais abaixo). */
+    const cor = COR_TIME[this.time] ?? COR_NEUTRA;
+    const corPortador = COR_TIME[this.carrierTeam] ?? COR_NEUTRA;
 
     this.group.position.copy(this._alvo);
 
@@ -381,7 +410,8 @@ export class FlagEntity {
     this.nucleo.material.opacity = (carregada ? 0.5 : 0.3) + pulso * 0.2;
     this.nucleo.material.color.setHex(carregada ? 0xffffff : COR_NEUTRA);
 
-    this.halo.material.color.setHex(cor);
+    // O halo é do PORTADOR: é ele que diz de que lado está quem corre com ela.
+    this.halo.material.color.setHex(carregada ? corPortador : cor);
     /* O halo fica, mas DISCRETO para o próprio portador: sob os próprios pés
        ele é um anel de 2,4 m ocupando o rodapé da tela. Fraco, ele ainda
        confirma "é você que está com ela" no canto do olho; forte, ele briga

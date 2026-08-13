@@ -31,6 +31,22 @@ const taxaTiro = Number(process.argv[3] ?? 0.5); // tiros por segundo, por jogad
 const pAcerto = Number(process.argv[4] ?? 0.78);
 const rodadas = Number(process.argv[5] ?? 200);
 
+/**
+ * A chance de acertar O COLOSSO, que não é a mesma de acertar a chuva.
+ *
+ * Uma probabilidade só para todos os alvos era defensável enquanto o campo ia
+ * de 5 a 28 m de diâmetro. Deixou de ser quando o colosso passou a crescer a
+ * cada aparição e o último ficou com 52 m: a 150 m ele subtende 20° de campo
+ * de visão, e um arqueiro que erra um quinto dos tiros nele não é um arqueiro
+ * ruim, é um modelo errado. Com a probabilidade da chuva, o banco reprovava a
+ * vida do colosso por um motivo que não existe na tela.
+ *
+ * 0,95 e não 1,00 porque ainda se perde flecha: tiro solto no instante em que
+ * a pedra sai do campo de visão, tiro dado enquanto se corre, tiro que sai
+ * durante o giro. O que não se perde mais é o tiro que ERRA o alvo.
+ */
+const pTanque = Number(process.argv[6] ?? 0.95);
+
 const terreno = new MoonField();
 
 /** Uma partida inteira. @returns {{venceu, horda, margem, pico, hordas}} */
@@ -77,7 +93,7 @@ function partida() {
       for (const m of vivos) if (m.altitude < alvo.altitude) alvo = m;
       const h = porHorda.get(chuva.horde);
       if (h) h.flechas++;
-      if (Math.random() < pAcerto) chuva.hit(alvo.id);
+      if (Math.random() < (alvo.kind === "tank" ? pTanque : pAcerto)) chuva.hit(alvo.id);
     }
   }
 

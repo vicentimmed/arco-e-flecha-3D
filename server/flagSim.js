@@ -13,19 +13,40 @@
    proposital: a flecha é um evento de UM jogador, a bandeira é o estado
    compartilhado da partida.
 
+   --------------------------------------------------------------- SÃO DUAS
+
+   O modo era de UMA bandeira neutra no centro: os dois times corriam para o
+   mesmo ponto e levavam o troféu para a base do outro. É um modo legítimo — e
+   não é rouba-bandeira. Faltava-lhe exatamente a coisa que dá nome ao gênero:
+   **nada era SEU**, então não havia o que defender. Todo mundo corria para o
+   meio, e a partida inteira acontecia num raio de dez metros.
+
+   Agora cada time tem a sua, na própria base, e a base é também o gol. Isso
+   parte o campo em dois pela primeira vez e cria a decisão que o modo existe
+   para ter: **quantos vão e quantos ficam**. Sair todo mundo é voltar e
+   encontrar a própria bandeira já do outro lado do mapa; ficar todo mundo é
+   nunca pontuar.
+
    ----------------------------------------------------------------- os estados
 
-   A bandeira está sempre em exatamente um destes três lugares:
+   Cada bandeira está sempre em exatamente um destes três lugares:
 
-   • NO CENTRO (`atBase: "center"`) — parada, esperando alguém.
-   • COM ALGUÉM (`carrier` != null) — a posição dela é a de quem carrega, e
+   • EM CASA (`state: "home"`) — no mastro da própria base.
+   • COM ALGUÉM (`state: "carried"`) — a posição dela é a de quem carrega, e
      quem carrega fica marcado para o mapa inteiro ver. Ver `entities/flag.js`.
-   • CAÍDA (`carrier` null e `atBase` null) — no chão, onde o portador morreu,
-     com um cronômetro de volta ao centro correndo.
+   • CAÍDA (`state: "dropped"`) — no chão, onde o portador morreu, com um
+     cronômetro de volta para casa correndo.
 
-   Não há um quarto estado. "Na base do time" não existe porque a bandeira é uma
-   só e neutra: entregá-la na base inimiga marca ponto e ela volta ao centro na
-   mesma linha, sem um instante em que ela pertença a alguém.
+   E são TRÊS as maneiras de uma bandeira caída sair do chão, que é onde mora a
+   tensão do modo:
+
+     • um ADVERSÁRIO a pega e continua a corrida de onde o companheiro parou;
+     • um DONO encosta nela e ela volta para casa na hora — o resgate;
+     • ninguém chega a tempo e ela volta sozinha.
+
+   O resgate é o que faz valer a pena correr atrás de quem levou a sua: sem ele,
+   matar o ladrão a dois passos da base dele seria inútil, porque o próximo
+   ladrão pegaria a bandeira exatamente ali.
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
@@ -35,25 +56,74 @@ function dist2D(ax, az, bx, bz) {
   return Math.hypot(ax - bx, az - bz);
 }
 
+/** Os dois lados. A ordem não significa nada; a lista existe para iterar. */
+export const TIMES = ["humans", "bots"];
+
+/** O outro. Uma função para não haver dois lugares escrevendo o mesmo ternário. */
+export function adversario(time) {
+  return time === "humans" ? "bots" : "humans";
+}
+
+/** Uma bandeira: de quem é, onde mora e onde está agora. */
+class Bandeira {
+  constructor(time, casa) {
+    this.time = time;
+    this.casa = { ...casa };
+    this.position = { ...casa };
+    /** `"home"` | `"carried"` | `"dropped"` */
+    this.state = "home";
+    /** Id de quem carrega, ou null. */
+    this.carrier = null;
+    /** O time de quem carrega — sempre o adversário, mas o campo poupa contas. */
+    this.carrierTeam = null;
+    /** Segundos até uma caída voltar sozinha para casa. */
+    this.retorno = 0;
+  }
+
+  paraCasa() {
+    this.state = "home";
+    this.carrier = null;
+    this.carrierTeam = null;
+    this.retorno = 0;
+    this.position = { ...this.casa };
+  }
+
+  view() {
+    return {
+      team: this.time,
+      p: [
+        Math.round(this.position.x * 100) / 100,
+        Math.round(this.position.y * 100) / 100,
+        Math.round(this.position.z * 100) / 100,
+      ],
+      home: [this.casa.x, this.casa.y, this.casa.z],
+      state: this.state,
+      carrier: this.carrier,
+      carrierTeam: this.carrierTeam,
+      // Só quando está caída: é o único momento em que a conta importa na tela.
+      returnIn: this.state === "dropped" ? Math.max(0, Math.round(this.retorno * 10) / 10) : null,
+    };
+  }
+}
+
 export class FlagField {
   constructor() {
     this.ativo = false;
-    /** Onde a bandeira está quando ninguém a carrega. */
-    this.position = { x: 0, y: 0, z: 0 };
     this.center = { x: 0, y: 0, z: 0 };
-    /** Id de quem carrega, ou null. */
-    this.carrier = null;
-    /** `"humans"` | `"bots"` — o time de quem carrega, para a cor na tela. */
-    this.carrierTeam = null;
-    /** `"center"` quando está parada no meio; null quando caída ou carregada. */
-    this.atBase = "center";
-    /** Segundos até uma bandeira caída voltar sozinha ao centro. */
-    this.retorno = 0;
     /** As duas bases: `{ humans: {x,y,z}, bots: {x,y,z} }`. */
     this.bases = null;
+    /** @type {{humans: Bandeira, bots: Bandeira}|null} */
+    this.flags = null;
     this.scores = { humans: 0, bots: 0 };
     this.over = false;
     this.winner = null;
+  }
+
+  /** A bandeira que este id está carregando, se alguma. */
+  bandeiraDe(id) {
+    if (!this.flags) return null;
+    for (const t of TIMES) if (this.flags[t].carrier === id) return this.flags[t];
+    return null;
   }
 
   /**
@@ -91,11 +161,13 @@ export class FlagField {
     this.bases = { humans: par.a, bots: par.b };
     this.center = this.assentar(terrain, centro.x, centro.z);
 
-    this.position = { ...this.center };
-    this.carrier = null;
-    this.carrierTeam = null;
-    this.atBase = "center";
-    this.retorno = 0;
+    /* CADA BANDEIRA NASCE NA PRÓPRIA BASE, e não a alguns metros dela: a base é
+       o gol e o mastro é a referência visual do gol. Separar as duas coisas
+       obrigaria o jogador a aprender duas marcas para o mesmo lugar. */
+    this.flags = {
+      humans: new Bandeira("humans", par.a),
+      bots: new Bandeira("bots", par.b),
+    };
     this.scores = { humans: 0, bots: 0 };
     this.over = false;
     this.winner = null;
@@ -178,9 +250,9 @@ export class FlagField {
 
   stop() {
     this.ativo = false;
-    this.carrier = null;
-    this.carrierTeam = null;
+    this.flags = null;
     this.over = false;
+    this.winner = null;
   }
 
   /* ------------------------------------------------------------- o passo -- */
@@ -194,78 +266,114 @@ export class FlagField {
    * @returns {Array<object>} eventos para a sala anunciar
    */
   update(dt, jogadores, timeDe) {
-    if (!this.ativo || this.over) return [];
-    const C = CONFIG.modes.captureFlag;
+    if (!this.ativo || this.over || !this.flags) return [];
     const eventos = [];
+    for (const t of TIMES) {
+      this.passoDaBandeira(this.flags[t], dt, jogadores, timeDe, eventos);
+      if (this.over) break; // alguém fechou as cinco: a partida acabou agora
+    }
+    return eventos;
+  }
+
+  passoDaBandeira(f, dt, jogadores, timeDe, eventos) {
+    const C = CONFIG.modes.captureFlag;
 
     /* --------------------------------------------------- com um portador -- */
-    if (this.carrier != null) {
-      const dono = jogadores.find((p) => p.id === this.carrier);
+    if (f.state === "carried") {
+      const dono = jogadores.find((p) => p.id === f.carrier);
       /* O portador sumiu da amostra (saiu da sala no meio da corrida). A
-         bandeira não pode ir embora com ele: ela volta ao centro, que é o único
-         lugar em que todo mundo sabe procurá-la. */
+         bandeira não pode ir embora com ele: volta para casa, que é o único
+         lugar em que os dois times sabem procurá-la. */
       if (!dono || !dono.alive) {
-        eventos.push({ kind: "return", p: [this.center.x, this.center.y, this.center.z] });
-        this.paraOCentro();
-        return eventos;
+        f.paraCasa();
+        eventos.push({ kind: "return", team: f.time, p: [f.casa.x, f.casa.y, f.casa.z] });
+        return;
       }
 
-      this.position.x = dono.x;
-      this.position.y = dono.y;
-      this.position.z = dono.z;
+      f.position.x = dono.x;
+      f.position.y = dono.y;
+      f.position.z = dono.z;
 
-      // Chegou na base ADVERSÁRIA: é entrega.
-      const alvo = this.carrierTeam === "humans" ? this.bases.bots : this.bases.humans;
-      if (dist2D(dono.x, dono.z, alvo.x, alvo.z) <= C.baseRadius) {
-        const time = this.carrierTeam;
+      /* CHEGOU EM CASA — a casa DELE, não a do dono da bandeira. É esta linha
+         que separa o modo do anterior: antes se entregava na base inimiga, e
+         por isso ninguém tinha nada a proteger. */
+      const gol = this.bases[f.carrierTeam];
+      if (dist2D(dono.x, dono.z, gol.x, gol.z) <= C.baseRadius) {
+        const time = f.carrierTeam;
+        const quem = f.carrier;
         this.scores[time]++;
+        f.paraCasa();
         eventos.push({
           kind: "capture",
-          by: this.carrier,
+          by: quem,
           team: time,
-          p: [alvo.x, alvo.y, alvo.z],
+          flag: f.time,
+          p: [gol.x, gol.y, gol.z],
           scores: { ...this.scores },
         });
-        this.paraOCentro();
         if (this.scores[time] >= C.captures) {
           this.over = true;
           this.winner = time;
         }
       }
-      return eventos;
+      return;
     }
 
     /* ---------------------------------------------------------- no chão -- */
-    // Caída: o cronômetro de volta ao centro corre.
-    if (this.atBase !== "center") {
-      this.retorno -= dt;
-      if (this.retorno <= 0) {
-        eventos.push({ kind: "return", p: [this.center.x, this.center.y, this.center.z] });
-        this.paraOCentro();
-        return eventos;
+    if (f.state === "dropped") {
+      f.retorno -= dt;
+      if (f.retorno <= 0) {
+        f.paraCasa();
+        eventos.push({ kind: "return", team: f.time, p: [f.casa.x, f.casa.y, f.casa.z] });
+        return;
       }
     }
 
-    /* Quem encostar, leva. O primeiro da lista ganha o empate — e um empate
-       real, no mesmo passo de 100 ms, com dois jogadores a menos de 2,6 m da
-       bandeira e um do outro, é raro o bastante para não merecer regra. */
+    /* Quem encostar resolve — e o que acontece depende do TIME de quem encostou.
+       O primeiro da lista ganha o empate: um empate real, no mesmo passo de
+       100 ms, com dois corpos a menos de 2,6 m da bandeira e um do outro, é raro
+       o bastante para não merecer regra. */
     for (const p of jogadores) {
       if (!p.alive) continue;
       /* A altura CONTA aqui, e só aqui: no vale não muda nada, mas na Lua dá
          para passar de jetpack cinquenta metros acima da bandeira, e pegá-la de
          lá seria pegá-la sem nunca ter descido ao chão em que ela está. */
-      if (Math.abs(p.y - this.position.y) > 3.0) continue;
-      if (dist2D(p.x, p.z, this.position.x, this.position.z) > C.pickupRadius) continue;
+      if (Math.abs(p.y - f.position.y) > 3.0) continue;
+      if (dist2D(p.x, p.z, f.position.x, f.position.z) > C.pickupRadius) continue;
 
-      this.carrier = p.id;
-      this.carrierTeam = timeDe(p.id);
-      this.atBase = null;
-      this.retorno = 0;
-      eventos.push({ kind: "pickup", by: p.id, team: this.carrierTeam });
-      break;
+      const time = timeDe(p.id);
+
+      if (time === f.time) {
+        /* O DONO encostou. Em casa não acontece nada — ele está passando pelo
+           próprio mastro, que é onde ele renasce. Caída, ele a RESGATA: ela
+           volta para casa na hora.
+
+           Sem o resgate, matar o ladrão a dois passos da base dele não
+           adiantaria nada — o próximo ladrão pegaria a bandeira exatamente ali,
+           e defender viraria adiar. Com ele, correr atrás de quem levou a sua é
+           a jogada defensiva do modo. */
+        if (f.state === "dropped") {
+          f.paraCasa();
+          eventos.push({
+            kind: "rescue",
+            by: p.id,
+            team: time,
+            flag: f.time,
+            p: [f.casa.x, f.casa.y, f.casa.z],
+          });
+        }
+        return;
+      }
+
+      // Adversário: leva. Vale tanto para roubar do mastro quanto para
+      // continuar a corrida de onde o companheiro caiu.
+      f.state = "carried";
+      f.carrier = p.id;
+      f.carrierTeam = time;
+      f.retorno = 0;
+      eventos.push({ kind: "pickup", by: p.id, team: time, flag: f.time });
+      return;
     }
-
-    return eventos;
   }
 
   /**
@@ -279,39 +387,22 @@ export class FlagField {
    * @returns {object|null} o evento a anunciar, ou null se não era o portador
    */
   soltar(id, posicao) {
-    if (!this.ativo || this.carrier !== id) return null;
-    const p = posicao ?? this.position;
-    this.carrier = null;
-    this.carrierTeam = null;
-    this.atBase = null;
-    this.retorno = CONFIG.modes.captureFlag.returnAfter;
-    this.position = { x: p.x, y: p.y, z: p.z };
-    return { kind: "drop", by: id, p: [p.x, p.y, p.z] };
+    if (!this.ativo) return null;
+    const f = this.bandeiraDe(id);
+    if (!f) return null;
+    const p = posicao ?? f.position;
+    f.state = "dropped";
+    f.carrier = null;
+    f.carrierTeam = null;
+    f.retorno = CONFIG.modes.captureFlag.returnAfter;
+    f.position = { x: p.x, y: p.y, z: p.z };
+    return { kind: "drop", by: id, flag: f.time, p: [p.x, p.y, p.z] };
   }
 
-  paraOCentro() {
-    this.carrier = null;
-    this.carrierTeam = null;
-    this.atBase = "center";
-    this.retorno = 0;
-    this.position = { ...this.center };
-  }
-
-  /** O que trafega a 10 Hz. Pequeno de propósito: é UM objeto. */
+  /** O que trafega a 10 Hz. Dois objetos pequenos, e nada mais. */
   view() {
     return {
-      p: [
-        Math.round(this.position.x * 100) / 100,
-        Math.round(this.position.y * 100) / 100,
-        Math.round(this.position.z * 100) / 100,
-      ],
-      carrier: this.carrier,
-      carrierTeam: this.carrierTeam,
-      atBase: this.atBase,
-      // Só quando está caída: é o único momento em que a conta importa na tela.
-      returnIn: this.atBase === "center" || this.carrier != null
-        ? null
-        : Math.max(0, Math.round(this.retorno * 10) / 10),
+      flags: this.flags ? TIMES.map((t) => this.flags[t].view()) : [],
       bases: this.bases,
       scores: { ...this.scores },
       captures: CONFIG.modes.captureFlag.captures,

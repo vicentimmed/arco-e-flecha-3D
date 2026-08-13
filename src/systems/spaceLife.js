@@ -617,20 +617,25 @@ export function esculpir(raio, formato) {
     });
   }
 
-  const v = new THREE.Vector3();
+  /* Sem `clone()` no laço, e a diferença não é estética: são 960 vértices, ou
+     seja, 960 `Vector3` descartáveis por rocha esculpida. Numa horda em que
+     trinta pedras nascem ao longo de um minuto isso é lixo suficiente para o
+     coletor aparecer como engasgo no meio do modo — e o único trabalho que ele
+     fazia era normalizar um vetor que já estava na mão. */
+    const v = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    const nrm = v.clone().normalize();
+    const inv = 1 / (v.length() || 1);
+    const nx = v.x * inv;
+    const ny = v.y * inv;
+    const nz = v.z * inv;
     let escala = 1 + (rnd() - 0.5) * 0.16;
     for (const c of crateras) {
-      const d = Math.hypot(nrm.x - c.x, nrm.y - c.y, nrm.z - c.z);
+      const d = Math.hypot(nx - c.x, ny - c.y, nz - c.z);
       if (d < c.r) escala -= c.d * (1 - d / c.r) ** 2;
     }
-    v.copy(nrm).multiplyScalar(raio * escala);
-    v.x *= eixos[0];
-    v.y *= eixos[1];
-    v.z *= eixos[2];
-    pos.setXYZ(i, v.x, v.y, v.z);
+    const k = raio * escala;
+    pos.setXYZ(i, nx * k * eixos[0], ny * k * eixos[1], nz * k * eixos[2]);
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();

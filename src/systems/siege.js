@@ -44,9 +44,9 @@ import {
   WALL_TOP,
   gateInfo,
   trebuchetPosts,
-  mageTowers,
 } from "../shared/castleProps.js";
 import { lodLevel, applyLod } from "../utils/lod.js";
+import { RAPIER } from "../core/physics.js";
 
 /** Espelha `KINDS` de `server/siegeSim.js`. A ORDEM é o código na rede. */
 const KINDS = [
@@ -64,28 +64,23 @@ const STATES = ["walk", "attack", "climb", "cast", "down", "rise", "bones"];
 const TAU = Math.PI * 2;
 
 /**
- * Este xamã é um MAGO DE MIRANTE?
+ * Este xamã precisa ser visto de longe? SEMPRE, e é por isso que a função
+ * deixou de perguntar pelo mirante.
  *
- * A pergunta é respondida pela GEOMETRIA e não por um campo de rede, e é de
- * propósito: o quadro binário do cerco tem 11 bytes por bicho e o byte de flags
- * está cheio (3 bits de espécie, 3 de estado, morto, fogo — ver `packFrame`).
- * Um décimo segundo byte para 120 sitiantes, dez vezes por segundo, para
- * distinguir DOIS deles, seria pagar 1,2 KB/s por uma coisa que os dois lados
- * já sabem: `mageTowers()` é compartilhado, o mago nasce exatamente em cima da
- * torre (`Siege.nascerMago`) e nunca sai de lá.
+ * Ela testava se o corpo estava em cima de uma das torres, porque o mago do
+ * mirante era o único xamã que nascia fora do alcance em que o jogo desenha um
+ * corpo articulado. Só que o xamã de CHÃO para a setenta metros do portão
+ * (`shamanStandoff`) — e setenta metros também está acima do `cullDistance`
+ * de qualquer preset. Ele sofria exatamente as duas perdas descritas em
+ * `virarMagoDeTorre`: o cajado dourado sumia no LOD e o manto azul-marinho
+ * desaparecia contra o bosque noturno.
  *
- * A tolerância é folgada em `y` (a pose chega interpolada) e apertada em `x/z`
- * — nenhum xamã de chão chega perto dos ombros do corredor, que é onde os
- * mirantes ficam.
+ * O resultado era o defeito relatado: a bola verde chegava de um lugar onde não
+ * havia nada visível. Com o facho, a coisa que atira a bola tem a cor da bola —
+ * e quem aprende uma aprende a outra.
  */
-function magoDeMirante(kind, x, y, z) {
-  if (kind !== "shaman") return false;
-  for (const t of mageTowers()) {
-    if (Math.abs(x - t.x) < 1.5 && Math.abs(z - t.z) < 1.5 && y > t.platY - 1) {
-      return true;
-    }
-  }
-  return false;
+function precisaDeFacho(kind) {
+  return kind === "shaman";
 }
 
 const _m4 = new THREE.Matrix4();
@@ -190,7 +185,7 @@ export class SiegeSystem {
     this.pedras = [];
     for (const f of this.fogos) this.root.remove(f.mesh);
     this.fogos = [];
-    for (const p of this.projeteis) this.root.remove(p.mesh);
+    for (const p of this.projeteis) this.descartarProjetil(p);
     this.projeteis = [];
     for (const inst of this.instancias.values()) {
       inst.mesh.count = 0;
@@ -264,7 +259,7 @@ export class SiegeSystem {
       let b = this.byId.get(id);
       if (!b) {
         b = new BesiegerMesh(this.root, this.physics, `s${id}`, kind, x, y, z);
-        if (magoDeMirante(kind, x, y, z)) b.virarMagoDeTorre();
+        if (precisaDeFacho(kind)) b.virarMagoDeTorre();
         this.byId.set(id, b);
       }
       if (dead && !b.dead) {
@@ -298,7 +293,7 @@ export class SiegeSystem {
       let b = this.byId.get(item.id);
       if (!b) {
         b = new BesiegerMesh(this.root, this.physics, `s${item.id}`, kind, x, y, z);
-        if (magoDeMirante(kind, x, y, z)) b.virarMagoDeTorre();
+        if (precisaDeFacho(kind)) b.virarMagoDeTorre();
         this.byId.set(item.id, b);
       }
       b.setNetworkTarget(x, y, z, item.y, STATES[item.s] ?? "walk", item.f === 1);
@@ -359,6 +354,12 @@ export class SiegeSystem {
       this.clarao(msg.to[0], msg.to[1], msg.to[2], 3.2);
       return;
     }
+    if (msg.kind === "boltPop") {
+      /* Alguém estourou a bola no ar. O clarão é o mesmo do impacto, um pouco
+         menor: é a mesma energia se desfazendo, só que sem ninguém embaixo. */
+      this.estourarBola(msg.bid, msg.to);
+      return;
+    }
     if (msg.kind === "boltImpact") {
       /* A bola do mago chegou. O clarão sai SEMPRE, tenha matado ou não: ele é
          a resposta à pergunta "por onde aquilo passou?", e quem escapou por um
@@ -416,7 +417,79 @@ export class SiegeSystem {
     const from = new THREE.Vector3(...msg.from);
     const to = new THREE.Vector3(...msg.to);
     const dur = msg.flight ?? from.distanceTo(to) / (msg.speed ?? 34);
-    this.projeteis.push({ mesh, from, to, t: 0, dur, arco: msg.kind === "rock" });
+    const p = { mesh, from, to, t: 0, dur, arco: msg.kind === "rock", bid: msg.bid ?? null };
+
+    /* A BOLA GANHA CORPO — e é só a bola de magia que ganha.
+     *
+     * Sem colisor ela é pintura: a flecha atravessa e o jogador conclui, com
+     * razão, que aquilo não é uma coisa. Com ele, a bola vira a única ameaça do
+     * modo que se pode DESFAZER no ar, e o mago deixa de cobrar apenas "saia da
+     * frente" para cobrar uma decisão — desviar ou gastar a flecha.
+     *
+     * O raio do colisor é bem maior que o do núcleo desenhado, e de propósito:
+     * o alvo cruza a rampa a catorze metros por segundo e o acerto é resolvido
+     * em passos de física, não continuamente. Um colisor do tamanho exato do
+     * pixel exigiria uma pontaria que o arco deste jogo não foi feito para ter,
+     * e o resultado seria uma promessa que quase nunca se cumpre.
+     *
+     * A pedra de catapulta NÃO ganha: ela pesa vinte e cinco quilos, e uma
+     * flecha que a apaga no ar seria uma mentira física que ninguém pediu. */
+    if (msg.kind === "bolt" && msg.bid != null && this.physics) {
+      const B = CONFIG.modes.siege.boltHitRadius ?? 1.4;
+      p.body = this.physics.createBody(
+        RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(from.x, from.y, from.z),
+      );
+      p.collider = this.physics.createCollider(
+        RAPIER.ColliderDesc.ball(B).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+        p.body,
+      );
+      this.physics.register(p.collider, { kind: "siegeBolt", bid: msg.bid });
+    }
+
+    this.projeteis.push(p);
+  }
+
+  /** Tira um projétil de cena, com o corpo de física que ele tiver. */
+  descartarProjetil(p) {
+    this.root.remove(p.mesh);
+    if (p.body) this.physics.removeBody(p.body);
+    p.body = null;
+    /* `traverse` e não os dois `dispose` diretos: a bola do mago carrega um
+       halo pendurado nela, e liberar só o pai deixaria uma esfera de dez faces
+       na GPU por bola disparada — algumas centenas por partida. */
+    p.mesh.traverse((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+    });
+  }
+
+  /** A flecha de alguém acertou esta bola: ela se desfaz no ar. */
+  estourarBola(bid, to) {
+    const i = this.projeteis.findIndex((p) => p.bid === bid);
+    const onde = i >= 0 ? this.projeteis[i].mesh.position : { x: to[0], y: to[1], z: to[2] };
+    this.clarao(onde.x, onde.y, onde.z, 1.9);
+    gameEvents.emit(EventType.PARTICLES, {
+      position: { x: onde.x, y: onde.y, z: onde.z },
+      count: 26,
+      color: 0x8affd8,
+      speed: 10,
+      spread: 1,
+      size: 0.38,
+      grow: 1.8,
+      life: 0.6,
+      gravity: CONFIG.physics.gravity * 0.15,
+      drag: 0.9,
+      alpha: 1,
+      additive: true,
+    });
+    gameEvents.emit(EventType.AUDIO_PLAY, {
+      sound: "rockBurst",
+      position: { x: onde.x, y: onde.y, z: onde.z },
+      volume: 0.5,
+    });
+    if (i < 0) return;
+    this.descartarProjetil(this.projeteis[i]);
+    this.projeteis.splice(i, 1);
   }
 
   /**
@@ -933,18 +1006,13 @@ export class SiegeSystem {
       // diferença que diz ao jogador qual dos dois dá para se abaixar.
       if (p.arco) _v.y += Math.sin(f * Math.PI) * p.from.distanceTo(p.to) * 0.16;
       p.mesh.position.copy(_v);
+      // O colisor acompanha o desenho: é ele que a flecha encontra.
+      p.body?.setNextKinematicTranslation(_v);
       if (f < 1) {
         vivos.push(p);
         continue;
       }
-      this.root.remove(p.mesh);
-      /* `traverse` e não os dois `dispose` diretos: a bola do mago carrega um
-         halo pendurado nela, e liberar só o pai deixaria uma esfera de dez
-         faces na GPU por bola disparada — algumas centenas por partida. */
-      p.mesh.traverse((o) => {
-        o.geometry?.dispose();
-        o.material?.dispose();
-      });
+      this.descartarProjetil(p);
     }
     this.projeteis = vivos;
   }
@@ -990,8 +1058,28 @@ export class SiegeSystem {
     camera.getWorldPosition(_cam);
     for (const inst of this.instancias.values()) inst.n = 0;
 
+    /* O CERCO VÊ MAIS LONGE QUE O RESTO DO JOGO, e precisa ver.
+     *
+     * `cullDistance` é calibrado para o vale, onde o alvo é um javali a trinta
+     * metros: a 60 m (preset alto) o corpo articulado sai do render e o bicho
+     * vira uma instância fundida. Aqui isso caía no meio da rampa — ela tem
+     * 97 m do bosque ao portão —, então mais de um terço do campo de tiro
+     * mostrava vultos em vez de soldados. Num modo que é literalmente sobre
+     * atirar longe, é a distância onde a leitura importa MAIS, não menos.
+     *
+     * `lodScale` empurra as três faixas de uma vez: com 1,7 o corpo inteiro
+     * sobrevive até 102 m no preset alto e 76 no baixo — ou seja, a rampa
+     * praticamente inteira. O preço é desenhar mais corpos articulados, e é um
+     * preço que este cenário tem como pagar: o castelo não tem a vegetação nem
+     * a fauna do vale, e a horda que de fato ocupa a rampa ao mesmo tempo é uma
+     * ou duas dezenas, não os 120 do teto. */
+    const escalaDoModo = CONFIG.modes.siege.lodScale ?? 1;
     for (const b of this.byId.values()) {
-      const nivel = lodLevel(b.position.distanceTo(_cam), b._lod ?? 0, b.lodScale);
+      const nivel = lodLevel(
+        b.position.distanceTo(_cam),
+        b._lod ?? 0,
+        b.lodScale * escalaDoModo,
+      );
       applyLod(b, Math.min(nivel, 2));
       if (nivel < 2) {
         b.setVisible(true);

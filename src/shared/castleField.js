@@ -212,6 +212,22 @@ export class CastleField {
   }
 
   /**
+   * O ponto ainda está dentro do MUNDO DESCRITO?
+   *
+   * Só a borda da malha, SEM a cláusula de despenhadeiro: a inclinação é regra
+   * de pé no chão, não de coisa voando. Quem usa isto é a flecha integrada no
+   * servidor (`botArrow.js`), e para ela um flanco de 72° do esporão não é o
+   * fim do mundo — é uma parede que ela vai acertar pelo teste de terreno, um
+   * passo depois, no lugar certo. Ver `MoonField.isInsideWorld`.
+   */
+  isInsideWorld(x, z) {
+    const W = CASTLE_WORLD;
+    if (x <= W.minX + 1 || x >= W.maxX - 1) return false;
+    if (z <= W.minZ + 1 || z >= W.maxZ - 1) return false;
+    return true;
+  }
+
+  /**
    * É chão bom para nascer?
    *
    * Duas superfícies servem: o topo do esporão (pátio) e a rampa. As duas são

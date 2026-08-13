@@ -48,6 +48,7 @@ import { ElkManager } from "./systems/elkManager.js";
 import { BirdManager } from "./systems/birdManager.js";
 import { ZombieManager } from "./systems/zombieManager.js";
 import { MeteorRainManager } from "./systems/meteorRain.js";
+import { SoulSystem } from "./systems/souls.js";
 import { BatSwarmManager } from "./systems/batSwarm.js";
 import { SiegeSystem } from "./systems/siege.js";
 import { SpecialSystem } from "./systems/special.js";
@@ -228,6 +229,13 @@ class Game {
     /* Os morcegos do cerco. Vazio fora do modo, e o custo disso é um `if` —
        mesma economia da chuva, logo acima. */
     this.morcegos = new BatSwarmManager(this.scene, physics, this.arrows);
+    /* AS ALMAS. Um monstro morre e a bolinha vai para quem matou — é o único
+       retorno de abate que se lê a duzentos metros, e é ela que enche a barra
+       do especial. Ver o cabeçalho de `systems/souls.js`.
+
+       O destino é resolvido por FUNÇÃO e não por lista: a alma persegue o
+       arqueiro, que continua andando enquanto ela viaja. */
+    this.souls = new SoulSystem(this.scene, (id) => this.ondeEsta(id));
     /** Estado do modo vindo da sala: horda, rochas, e o instante da largada. */
     this.meteorState = null;
     this.torches = new TorchRing(this.scene, physics, this.terrain);
@@ -362,8 +370,17 @@ class Game {
     /* A bandeira. UM objeto que sobrevive à troca de modo — ele nasce
        escondido e é a primeira amostra da sala que o acende. Ver
        `entities/flag.js`, que é onde mora a resposta para "quem está com ela?". */
-    this.flag = new FlagEntity(this.scene);
+    /* AS DUAS BANDEIRAS. Uma por time, cada uma na base do dono — ver o
+       cabeçalho de `server/flagSim.js` para por que passaram a ser duas. */
+    this.flags = {
+      humans: new FlagEntity(this.scene, "humans"),
+      bots: new FlagEntity(this.scene, "bots"),
+    };
     this.flagState = null;
+    /** De que lado cada corpo está, no rouba bandeira. Ver `aplicarEquipes`. */
+    this.equipes = new Map();
+    /** O meu lado. `null` fora dos modos com times. */
+    this.meuTime = null;
 
     /* O ESPECIAL. Ele não conhece modo nenhum — quem diz onde ele existe é
        `CONFIG.special.modes`, e quem diz o que enche a barra é a sala. Ver
@@ -515,6 +532,14 @@ class Game {
       if (e.ownerId !== this.player.entityId) return;
       if (e.targetKind !== "bat" || e.batId == null) return;
       this.net.send(C2S.BAT_HIT, { id: e.batId });
+    });
+
+    /* Estourei a bola de magia no ar. Mesmo contrato: quem atira anuncia, e a
+       sala cancela a morte que aquela bola tinha agendada. */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (e.targetKind !== "siegeBolt" || e.boltId == null) return;
+      this.net.send(C2S.BOLT_HIT, { bid: e.boltId });
     });
 
     // Alvo da série: quem acertar primeiro leva. O servidor arbitra, porque
@@ -720,12 +745,14 @@ class Game {
          é a única mensagem que ele tem antes de a partida continuar sem se
          explicar. Sem a bandeira, o objeto que decide o modo não existiria na
          tela dele; sem a lista de vivos, ele não saberia que está assistindo. */
+      /* A ESCALAÇÃO VEM ANTES DA BANDEIRA, sempre: `aplicarBandeiras` pergunta
+         qual é o meu time para decidir o que a faixa diz, e sem ela leria
+         `null` e anunciaria a bandeira do adversário como se fosse a sua. */
+      this.aplicarEquipes(msg.snapshot.teams);
       if (msg.snapshot.flag) {
-        this.flagState = msg.snapshot.flag;
-        this.flag.applyNetwork(msg.snapshot.flag, this.terrain);
+        this.aplicarBandeiras(msg.snapshot.flag);
       } else {
-        this.flag.esconder();
-        this.flagState = null;
+        this.esconderBandeiras();
       }
       if (msg.snapshot.standStatus) this.applyStandStatus(msg.snapshot.standStatus);
       this.series.setTarget(msg.snapshot.series ?? null);
@@ -812,7 +839,11 @@ class Game {
         gameEvents.emit(EventType.AUDIO_PLAY, {
           sound: "playerDeath",
           position: onde,
-          volume: 1.1,
+          /* Um pouco abaixo do resto de propósito (era 1,1).
+             O grito é o som mais longo do jogo e toca no instante em que o
+             jogador já tem uma tela de morte, um marcador e o placar para ler —
+             acima de tudo isso ele deixa de ser informação e vira susto. */
+          volume: 0.75,
         });
       }
 
@@ -1044,6 +1075,10 @@ class Game {
     });
 
     net.on(S2C.ZOMBIE_DEATH, (msg) => {
+      /* A ALMA SAI ANTES DO CORPO TOMBAR — ou seja, antes de `kill`, que é
+         quando o boneco ainda está de pé e a posição dele é a do abate. */
+      const corpo = this.zombies.byNetId.get(msg.id)?.group?.position;
+      this.soltarAlma(corpo, msg.killer, msg.boss ? 2.4 : 1);
       this.zombies.kill(msg.id, msg.head);
       if (msg.boss) this.hud.setBossHp(null);
       this.killFeed.push([
@@ -1084,6 +1119,12 @@ class Game {
     net.on(S2C.BATS, (msg) => this.morcegos.applyNetwork(msg.b));
 
     net.on(S2C.BAT_DEATH, (msg) => {
+      /* A posição vem NA MENSAGEM (`p`), e não do corpo em cena: o morcego morre
+         a trinta metros de altura e some no mesmo quadro — quem o desenha já o
+         descartou quando esta linha roda. */
+      if (msg.p) {
+        this.soltarAlma({ x: msg.p[0], y: msg.p[1], z: msg.p[2] }, msg.killer, 1.4);
+      }
       this.morcegos.morrer(msg);
       if (msg.killerName) {
         this.hud.toast(`${msg.killerName} derrubou um morcego`, "hit");
@@ -1119,6 +1160,9 @@ class Game {
     });
 
     net.on(S2C.SIEGE_DEATH, (msg) => {
+      // Antes de `onDeath`, pelo mesmo motivo do zumbi: o corpo ainda está de pé.
+      const corpo = this.siege.byId.get(msg.id)?.group?.position;
+      this.soltarAlma(corpo, msg.killer, msg.kind === "ogre" ? 2.2 : 1);
       this.siege.onDeath(msg);
       if (!msg.killerName) return;
       this.killFeed.push([
@@ -1194,6 +1238,21 @@ class Game {
     });
 
     net.on(S2C.METEOR_BURST, (msg) => {
+      /* A ALMA DA ROCHA.
+       *
+       * Ela existia só nos modos de monstro, e por uma leitura estreita demais
+       * de "monstro": na chuva o que morre é uma pedra, mas o papel é
+       * exatamente o mesmo — é o abate que enche a barra do especial
+       * (`chargeSources.meteor`), e é a duzentos metros que ele acontece, ou
+       * seja, é justamente aqui que uma confirmação visível de longe vale mais.
+       * O colosso solta uma alma grande, como o ogro e o chefão. */
+      if (msg.killer != null && msg.p) {
+        this.soltarAlma(
+          { x: msg.p[0], y: msg.p[1], z: msg.p[2] },
+          msg.killer,
+          msg.tank ? 2.6 : 1,
+        );
+      }
       this.meteors.burst(msg);
       if (msg.killerName) {
         this.killFeed.push([
@@ -1310,11 +1369,7 @@ class Game {
     });
 
     /* --------------------------------------------------- rouba bandeira -- */
-    net.on(S2C.FLAG, (msg) => {
-      this.flagState = msg;
-      this.flag.applyNetwork(msg, this.terrain);
-      this.hud.setFlag(msg, this.nomeDe(msg.carrier), this.net.me?.id);
-    });
+    net.on(S2C.FLAG, (msg) => this.aplicarBandeiras(msg));
     net.on(S2C.FLAG_EVENT, (msg) => this.onFlagEvent(msg));
     net.on(S2C.FLAG_OVER, (msg) => {
       this.huntVictoryOpen = true;
@@ -1347,6 +1402,7 @@ class Game {
 
     net.on(S2C.TEAM_SCORES, (msg) => {
       this.teamScores = { humans: msg.humans ?? 0, bots: msg.bots ?? 0 };
+      this.aplicarEquipes(msg.teams);
       this.hud.setTeamScores(this.mode === "teamDuel" ? this.teamScores : null);
     });
 
@@ -1455,20 +1511,41 @@ class Game {
   onFlagEvent(msg) {
     const eu = msg.by != null && msg.by === this.net.me?.id;
     const nome = eu ? "Você" : (msg.byName ?? "alguém");
-    const meuTime = msg.team === "humans";
+    /* DO MEU LADO OU DO OUTRO — e agora isto é uma pergunta de verdade.
+       Enquanto os times eram humanos × CPU, `team === "humans"` respondia por
+       todo mundo que estava lendo a tela. Com times mistos, o mesmo evento é
+       boa notícia para metade da sala e má para a outra metade. */
+    const meuTime = this.meuTime != null && msg.team === this.meuTime;
+    // A bandeira DE QUEM. É o que separa "roubaram a minha" de "peguei a dele".
+    const minhaBandeira = this.meuTime != null && msg.flag === this.meuTime;
 
     if (msg.kind === "pickup") {
-      this.hud.toast(`${nome} pegou a BANDEIRA`, meuTime ? "hit" : "miss");
+      this.hud.toast(
+        minhaBandeira
+          ? `${nome} PEGOU A SUA BANDEIRA`
+          : `${nome} pegou a bandeira inimiga`,
+        meuTime ? "hit" : "miss",
+      );
     } else if (msg.kind === "drop") {
-      this.hud.toast(`${nome} derrubou a bandeira`, "miss");
+      this.hud.toast(`${nome} derrubou a bandeira`, minhaBandeira ? "hit" : "miss");
+    } else if (msg.kind === "rescue") {
+      this.hud.toast(
+        minhaBandeira ? `${nome} RESGATOU a sua bandeira` : `${nome} resgatou a bandeira`,
+        meuTime ? "hit" : "miss",
+      );
     } else if (msg.kind === "capture") {
       const p = msg.scores ?? {};
+      const meu = this.meuTime === "bots" ? p.bots : p.humans;
+      const dele = this.meuTime === "bots" ? p.humans : p.bots;
       this.hud.toast(
-        `${nome} ENTREGOU!  ${p.humans ?? 0} × ${p.bots ?? 0}`,
+        `${nome} ENTREGOU!  ${meu ?? 0} × ${dele ?? 0}`,
         meuTime ? "hit" : "miss",
       );
     } else if (msg.kind === "return") {
-      this.hud.toast("a bandeira voltou ao centro", "miss");
+      this.hud.toast(
+        minhaBandeira ? "a sua bandeira voltou para casa" : "a bandeira voltou para a base",
+        minhaBandeira ? "hit" : "miss",
+      );
     }
 
     if (msg.p) {
@@ -1491,6 +1568,83 @@ class Game {
     if (victimId === this.net.me?.id) return vec3Payload(this.player.position);
     const remoto = this.remotes.get(victimId);
     return remoto ? vec3Payload(remoto.player.position) : null;
+  }
+
+  /**
+   * Onde um arqueiro (ou bot) está AGORA. Nulo se ele não está em cena.
+   *
+   * É `deathPosition` sem o nome de morte, porque a alma precisa da mesma
+   * resposta por um motivo oposto: ela persegue quem MATOU, e o alvo continua
+   * andando enquanto ela viaja. Ver `SoulSystem`.
+   */
+  /**
+   * A amostra das duas bandeiras.
+   *
+   * O `S2C.FLAG` traz uma LISTA (`flags`), e as bases vão só para a primeira
+   * entidade — os dois feixes de base são os mesmos dois pontos, e montá-los
+   * duas vezes seria desenhar cada um em cima de si mesmo.
+   */
+  aplicarBandeiras(msg) {
+    this.flagState = msg;
+    const lista = msg?.flags ?? [];
+    for (let i = 0; i < lista.length; i++) {
+      const f = lista[i];
+      const alvo = this.flags[f.team];
+      if (!alvo) continue;
+      alvo.applyNetwork(f, this.terrain, i === 0 ? msg.bases : null);
+    }
+    /* QUEM está com CADA uma: a faixa da HUD precisa do nome, e o nome mora no
+       elenco. Ver `hud.setFlag`. */
+    this.hud.setFlag(
+      msg,
+      lista.map((f) => this.nomeDe(f.carrier)),
+      this.net.me?.id,
+      this.meuTime,
+    );
+  }
+
+  esconderBandeiras() {
+    for (const t of ["humans", "bots"]) this.flags[t].esconder();
+    this.flagState = null;
+  }
+
+  /**
+   * A escalação, vinda da sala.
+   *
+   * Ela responde à única pergunta que a tela não consegue deduzir sozinha desde
+   * que os times passaram a ser mistos: *qual das duas bandeiras é a minha?*.
+   * Antes bastava olhar para `isBot`; agora um bot pode ser companheiro e um
+   * humano pode ser adversário. Ver `Room.broadcastTeamScores`.
+   */
+  aplicarEquipes(pares) {
+    this.equipes = new Map(pares ?? []);
+    this.meuTime = this.equipes.get(this.net.me?.id) ?? null;
+  }
+
+  /** O time de alguém, ou null fora dos modos com lados. */
+  timeDe(id) {
+    return this.equipes?.get(id) ?? null;
+  }
+
+  ondeEsta(id) {
+    if (id == null) return null;
+    if (id === this.net.me?.id) return this.player.position;
+    const remoto = this.remotes.get(id);
+    return remoto ? remoto.player.position : null;
+  }
+
+  /**
+   * Um monstro morreu: solta a alma.
+   *
+   * O corpo já está na tela e quem matou também — então isto não custa uma
+   * mensagem nova de rede. `S2C.ZOMBIE_DEATH` e `S2C.SIEGE_DEATH` já carregam
+   * o id de quem matou, e a posição do corpo é a do boneco que este cliente
+   * está desenhando. A alma é puramente visual: quem conta a barra do especial
+   * é a sala (`Room.addKameCharge`), pelo mesmo abate.
+   */
+  soltarAlma(corpo, matadorId, escala = 1) {
+    if (!corpo || matadorId == null) return;
+    this.souls.spawn(corpo, matadorId, escala);
   }
 
   /**
@@ -1720,6 +1874,7 @@ class Game {
     this.zombies.update(dt, this.renderer.camera);
     this.meteors.update(dt, this.renderer.camera);
     this.morcegos.update(dt);
+    this.souls.update(dt, this.renderer.camera);
     this.updateSiege(dt);
     this.special?.update(dt);
     this.updateMeteorHud(dt);
@@ -1755,12 +1910,15 @@ class Game {
     /* A bandeira DEPOIS dos remotos: ela gruda no boneco interpolado de quem a
        carrega, e o boneco acabou de ser movido neste quadro. Um quadro atrás
        seria um quadro de bandeira flutuando fora da mão. */
-    this.flag.update(
-      dt,
-      this.posicaoDoPortador(this.flagState?.carrier),
-      this.flagState?.carrier != null && this.flagState.carrier === this.net.me?.id,
-      this.renderer.camera,
-    );
+    for (const time of ["humans", "bots"]) {
+      const f = this.flags[time];
+      this.flags[time].update(
+        dt,
+        this.posicaoDoPortador(f.carrier),
+        f.carrier != null && f.carrier === this.net.me?.id,
+        this.renderer.camera,
+      );
+    }
     this.pushState();
 
     this.updateHud();
@@ -2257,6 +2415,9 @@ class Game {
     } else {
       this.siege.stop();
       this.morcegos.clear();
+      // Alma a caminho de um arqueiro que acabou de trocar de fase é uma
+      // bolinha atravessando o mapa novo em direção a nada.
+      this.souls.clear();
       this.siegeState = null;
       this.hud.setSiege(null);
       this.hud.setSiegeHint(null);
@@ -2276,8 +2437,7 @@ class Game {
    */
   applyArenaModes(mode) {
     if (mode !== "captureFlag") {
-      this.flag.esconder();
-      this.flagState = null;
+      this.esconderBandeiras();
       this.hud.setFlag(null);
     }
     if (mode !== "lastStand") {
@@ -2453,6 +2613,18 @@ class Game {
     this.zombies.clear();
     this.meteors.dispose();
     this.morcegos.dispose();
+    /* `clear` e NÃO `dispose`, e a diferença aqui é um defeito real que custou
+       uma sessão: os outros gerenciadores refazem os próprios lotes na primeira
+       vez que precisam deles, e as almas não — os 64 sprites nascem no
+       construtor e vivem a sessão inteira. Chamar `dispose` na troca de fase
+       esvaziava o lote e deixava a lista de vagas cheia: a primeira morte no
+       cenário novo pedia um sprite que já não existia e o handler de rede
+       quebrava no meio (`SoulSystem.spawn`).
+
+       Nada se perde ao apenas limpar: as almas não pertencem a fase nenhuma —
+       morre monstro no vale, no castelo e na Lua — e os sprites estão na cena,
+       que sobrevive à troca. */
+    this.souls.clear();
     this.special?.cancel();
     this.torches.clear();
     this.series.clear();

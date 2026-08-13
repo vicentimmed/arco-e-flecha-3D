@@ -64,6 +64,9 @@ export function resolveArrowHit(ctx) {
   if (other.kind === "bat") {
     return resolveBatHit(ctx);
   }
+  if (other.kind === "siegeBolt") {
+    return resolveBoltHit(ctx);
+  }
   return resolveSceneryHit(ctx);
 }
 
@@ -84,6 +87,29 @@ function resolveBatHit({ arrow, other, impact, deps }) {
   deps.spawnPuff?.(impact, null);
   deps.removeArrow?.(arrow);
   return { kind: "bat", netId: other.netId ?? null };
+}
+
+/**
+ * Bola de magia: a flecha a ESTOURA no ar, e some com ela.
+ *
+ * A flecha não crava e não segue: as duas coisas colidiram e as duas se
+ * desfazem, que é a leitura de uma flecha entrando numa bola de energia. Uma
+ * haste caindo do céu depois seria um detalhe que ninguém acompanharia, e uma
+ * flecha atravessando diria que aquilo não era sólido — que é exatamente o que
+ * o jogador concluía antes, quando a bola não tinha colisor nenhum.
+ *
+ * Quem decide se a morte agendada some é a SALA (`Siege.cancelarRaio`); aqui só
+ * se anuncia o acerto, como em todo o resto do jogo.
+ */
+function resolveBoltHit({ arrow, other, impact, deps }) {
+  emitImpact(arrow, "siegeBolt", other.bid, impact, null, {
+    label: "bola de magia",
+    boltId: other.bid ?? null,
+    hit: true,
+  });
+  deps.spawnPuff?.(impact, null);
+  deps.removeArrow?.(arrow);
+  return { kind: "siegeBolt", bid: other.bid ?? null };
 }
 
 /**

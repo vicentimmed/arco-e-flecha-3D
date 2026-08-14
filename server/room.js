@@ -3660,10 +3660,23 @@ export class Room {
 
   /** O ponto entrou na barra. Ver `addKameCharge` para por que ele demora. */
   creditarKame(id, passo) {
-    const S = CONFIG.special;
     if (!specialEnabled(this.mode)) return;
-    // Quem saiu da sala no meio do voo não tem mais barra para encher.
-    if (!this.players.has(id) && !this.bots.byId(id)) return;
+    /* Quem saiu da sala no meio do voo não tem mais barra para encher.
+     *
+     * POR `playerById` E NÃO POR `players.has`: o mapa `players` é chaveado pela
+     * CONEXÃO (`players.set(conn, player)`), não pelo id. `players.has(id)` é
+     * portanto SEMPRE falso, e como um humano também não está em `bots.byId`, a
+     * guarda descartava em silêncio todo ponto de todo jogador de carne e osso —
+     * em todo modo e vindo de qualquer fonte. O bot escapava por ser o único que
+     * a segunda metade da condição encontrava, e era isso que fazia o defeito
+     * parecer coisa do modo em vez de coisa da chave.
+     *
+     * É a mesma pegadinha do `players.has(vitima.conn)` anotada no cerco (ver o
+     * comentário em `registerSiegeAttack`): o mapa aceita qualquer chave e
+     * responde `false` sem reclamar, então errar a chave não dá erro — dá
+     * silêncio. `playerById` responde pelos dois tipos de corpo e é a única
+     * busca por id que esta sala tem. */
+    if (!this.playerById(id)) return;
     const atual = this.kameCharge.get(id) ?? 0;
     if (atual >= this.kameMax()) return;
     const novo = Math.min(this.kameMax(), atual + passo);

@@ -494,14 +494,25 @@ class Game {
     gameEvents.on(EventType.ARROW_IMPACT, (e) => {
       if (e.ownerId !== this.player.entityId) return;
       if (this.levels.id !== "sandbox") return;
-      if (e.targetKind !== "terrain" || e.targetId !== "sandbox") return;
       const terrain = this.levels.current?.terrain;
       if (!terrain?.addCrater) return;
+
+      const noChao = e.targetKind === "terrain" && e.targetId === "sandbox";
+      const naPedra = e.targetKind === "scenery" && e.targetId === "rocha";
+      if (!noChao && !naPedra) return;
+
       const power = Math.hypot(e.velocity[0], e.velocity[1], e.velocity[2]);
+
+      /* Acertou a pedra em cheio: ela estoura ANTES de o buraco existir. Fazer
+         na outra ordem deixaria a cratera nascer por baixo dela no mesmo
+         quadro em que ela ainda está inteira. */
+      if (naPedra) terrain.shatterRockAt(e.impact, this.physics);
+
       const crater = terrain.addCrater(e.impact.x, e.impact.z, power);
       terrain.rebuildCollider(this.physics);
-      // A grama que caiu dentro do buraco não flutua sobre ele: morre.
+      // Nem grama nem pedra ficam penduradas sobre o buraco: as duas vão junto.
       terrain.cullVegetation?.(crater);
+      terrain.shatterRocksIn?.(crater, this.physics);
     });
 
     /* A morte causada por bot NÃO é tratada aqui.

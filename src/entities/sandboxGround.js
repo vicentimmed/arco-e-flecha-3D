@@ -22,6 +22,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { RAPIER } from "../core/physics.js";
 import { CONFIG } from "../config.js";
 import { SandboxField } from "../shared/sandboxField.js";
+import { gameEvents, EventType } from "../core/events.js";
 import { smoothstep, clamp, makeRandom } from "../utils/math.js";
 
 const PALETTE = {
@@ -35,6 +36,7 @@ const PALETTE = {
 
 const GRASS_HEIGHT = 0.42; // m
 const _c1 = new THREE.Color();
+const _dummy = new THREE.Object3D();
 
 /* --------------------------------------------------- detalhe do terreno ---- */
 
@@ -226,11 +228,19 @@ export class SandboxTerrain extends SandboxField {
    */
   build(parent, physics, sway) {
     this.buildGround(parent, physics);
-    this.rockGroup = scatterRocks(parent, physics, this, makeRandom(771));
+    const rochas = scatterRocks(parent, physics, this, makeRandom(771));
+    this.rockGroup = rochas.group;
+    this.rocks = rochas.rocks;
     const grass = scatterGrass(parent, this, makeRandom(772), sway);
     this.grassMesh = grass.mesh;
     this.grassInstances = grass.instances;
+    this.debris = new RockDebris(parent, this);
     return this;
+  }
+
+  /** Por quadro: só os cacos de pedra no ar têm o que animar. */
+  update(dt) {
+    this.debris?.update(dt);
   }
 
   buildGround(parent, physics) {
@@ -404,6 +414,93 @@ export class SandboxTerrain extends SandboxField {
     this.grassInstances = kept;
   }
 
+  /* ------------------------------------------------------ pedra que estoura -- */
+
+  /**
+   * Estoura uma pedra: ela some da malha, sai da física e vira cacos.
+   *
+   * O sumiço é escala ZERO no próprio índice, e não recompactação como na
+   * grama. A diferença é o colisor: cada pedra tem um corpo próprio amarrado
+   * ao seu índice, e recompactar embaralharia essa correspondência para todas
+   * as pedras seguintes do mesmo lote. Vinte e seis instâncias, algumas
+   * invisíveis, não custam nada.
+   */
+  shatterRock(rock, physics) {
+    if (!rock?.alive) return false;
+    rock.alive = false;
+
+    if (rock.body) physics.removeBody(rock.body);
+    rock.body = null;
+
+    _dummy.position.set(rock.x, rock.y, rock.z);
+    _dummy.rotation.set(0, 0, 0);
+    _dummy.scale.setScalar(0);
+    _dummy.updateMatrix();
+    rock.mesh.setMatrixAt(rock.index, _dummy.matrix);
+    rock.mesh.instanceMatrix.needsUpdate = true;
+
+    this.debris?.burst(rock.x, rock.y + rock.radius * 0.35, rock.z, rock.radius, rock.tint);
+
+    /* A poeira sai do sistema de partículas de sempre, por cima dos cacos: os
+       cacos dão o volume, a poeira esconde o instante em que a pedra deixa de
+       existir — sem ela, dá para ver a malha sumir. */
+    gameEvents.emit(EventType.PARTICLES, {
+      position: { x: rock.x, y: rock.y + rock.radius * 0.4, z: rock.z },
+      count: Math.round(10 + rock.radius * 8),
+      color: 0x8c8878,
+      colorJitter: 0.35,
+      speed: 3.2,
+      spread: 0.9,
+      size: rock.radius * 0.5,
+      grow: 2.2,
+      life: 0.85,
+      gravity: -2.2,
+      drag: 1.6,
+      alpha: 0.75,
+    });
+    return true;
+  }
+
+  /**
+   * A pedra atingida em cheio por uma flecha.
+   *
+   * Acha pela POSIÇÃO do contato em vez de por um id no colisor: o impacto
+   * chega por `EventType.ARROW_IMPACT`, que carrega o ponto mas não a
+   * instância, e o ponto basta — as pedras estão a metros umas das outras. A
+   * tolerância existe porque o contato é na casca da pedra, não no centro.
+   */
+  shatterRockAt(point, physics) {
+    let melhor = null;
+    let melhorD = Infinity;
+    for (const rock of this.rocks ?? []) {
+      if (!rock.alive) continue;
+      const d = Math.hypot(point.x - rock.x, point.y - rock.y, point.z - rock.z);
+      if (d > rock.radius * 1.9 + 0.6 || d >= melhorD) continue;
+      melhorD = d;
+      melhor = rock;
+    }
+    return melhor ? this.shatterRock(melhor, physics) : false;
+  }
+
+  /**
+   * Toda pedra que a cratera alcançou vai junto.
+   *
+   * O teste é de SOBREPOSIÇÃO, não de centro dentro do raio: uma pedra na
+   * borda do buraco tem o chão retirado por baixo de metade dela e fica
+   * pendurada no ar — que é exatamente o defeito que isto conserta.
+   */
+  shatterRocksIn(crater, physics) {
+    if (!crater || !this.rocks) return 0;
+    let n = 0;
+    for (const rock of this.rocks) {
+      if (!rock.alive) continue;
+      const d = Math.hypot(rock.x - crater.x, rock.z - crater.z);
+      if (d > crater.raio + rock.radius) continue;
+      if (this.shatterRock(rock, physics)) n++;
+    }
+    return n;
+  }
+
   /** Cor macro por vértice: grama no miolo, rocha na serra, tingido de cratera. */
   surfaceColor(x, z, h, normal, out) {
     const n = this.noise;
@@ -448,8 +545,196 @@ export class SandboxTerrain extends SandboxField {
     this.body = null;
     this.collider = null;
     this.rockGroup = null;
+    this.rocks = null;
     this.grassMesh = null;
     this.grassInstances = null;
+    this.debris = null;
+  }
+}
+
+/* ---------------------------------------------------- estilhaço de pedra ---- */
+
+const DEBRIS_CAPACITY = 320;
+const DEBRIS_GRAVITY = -19; // m/s² — exagerado de propósito: caco de pedra cai seco
+
+/**
+ * Os cacos de uma pedra que estourou.
+ *
+ * NÃO usa `systems/particles.js`: aquele lote é de quads virados para a
+ * câmera, ótimo para poeira e brasa e errado para isto — o pedido é pedra
+ * quebrando, e pedra tem volume, quina e sombra. Aqui cada caco é um
+ * icosaedro de verdade num `InstancedMesh` (um desenho só para todos), com
+ * balística própria e giro, quicando no relevo por `heightAt`.
+ *
+ * A poeira continua saindo do sistema de partículas, por cima disto — as duas
+ * coisas juntas é o que lê como explosão em vez de "as peças se soltaram".
+ */
+class RockDebris {
+  constructor(parent, terrain) {
+    this.terrain = terrain;
+    const geometry = new THREE.IcosahedronGeometry(1, 0);
+    /* SEM `vertexColors`: a cor de cada caco vem de `setColorAt` (o
+       `instanceColor` do InstancedMesh), que o Three ativa sozinho. Ligar
+       `vertexColors` aqui faria o shader procurar um atributo `color` que o
+       icosaedro não tem — e atributo ausente lê zero, ou seja, pedra PRETA.
+       É o mesmo motivo de `scatterBoulders` no vale não ligar essa flag. */
+    const material = new THREE.MeshStandardMaterial({
+      roughness: 0.95,
+      metalness: 0,
+      flatShading: true,
+    });
+    this.mesh = new THREE.InstancedMesh(geometry, material, DEBRIS_CAPACITY);
+    this.mesh.name = "sandbox-rock-debris";
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = false;
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // Sem culling: a caixa da instância zero não descreve onde os cacos estão,
+    // e o lote inteiro sumiria de vez em quando conforme a câmera gira.
+    this.mesh.frustumCulled = false;
+    this.mesh.count = 0;
+    parent.add(this.mesh);
+
+    this.live = 0;
+    this.p = new Float32Array(DEBRIS_CAPACITY * 3);
+    this.v = new Float32Array(DEBRIS_CAPACITY * 3);
+    this.rot = new Float32Array(DEBRIS_CAPACITY * 3);
+    this.spin = new Float32Array(DEBRIS_CAPACITY * 3);
+    this.col = new Float32Array(DEBRIS_CAPACITY * 3);
+    this.size = new Float32Array(DEBRIS_CAPACITY);
+    this.life = new Float32Array(DEBRIS_CAPACITY);
+    this.maxLife = new Float32Array(DEBRIS_CAPACITY);
+  }
+
+  /** Estoura uma pedra de raio `radius` centrada em (x, y, z). */
+  burst(x, y, z, radius, tint) {
+    const n = Math.min(24, Math.round(8 + radius * 8));
+    for (let i = 0; i < n; i++) {
+      if (this.live >= DEBRIS_CAPACITY) break;
+      const k = this.live++;
+      const k3 = k * 3;
+
+      /* TAMANHOS VARIADOS, e não sorteados uniformemente: `u²` empurra a
+         distribuição para os cacos miúdos e deixa uns poucos grandes. É essa
+         mistura que lê como pedra partindo; tamanho uniforme lê como
+         cascalho derramado. */
+      const u = Math.random();
+      const s = radius * (0.05 + 0.2 * u * u);
+      this.size[k] = s;
+
+      // Nasce espalhado pelo VOLUME da pedra, não todo do mesmo ponto.
+      this.p[k3] = x + (Math.random() * 2 - 1) * radius * 0.55;
+      this.p[k3 + 1] = y + (Math.random() * 2 - 1) * radius * 0.45;
+      this.p[k3 + 2] = z + (Math.random() * 2 - 1) * radius * 0.55;
+
+      // Para fora e para cima. O caco pequeno sai mais rápido que o graúdo —
+      // mesma energia repartida em menos massa.
+      const ang = Math.random() * Math.PI * 2;
+      const horiz = 0.35 + Math.random() * 0.75;
+      const dx = Math.cos(ang) * horiz;
+      const dz = Math.sin(ang) * horiz;
+      const dy = 0.55 + Math.random() * 1.0;
+      const inv = 1 / (Math.hypot(dx, dy, dz) || 1);
+      const speed = (2.6 + Math.random() * 3.6) * (1 + (1 - u) * 0.6);
+      this.v[k3] = dx * inv * speed;
+      this.v[k3 + 1] = dy * inv * speed;
+      this.v[k3 + 2] = dz * inv * speed;
+
+      this.rot[k3] = Math.random() * Math.PI * 2;
+      this.rot[k3 + 1] = Math.random() * Math.PI * 2;
+      this.rot[k3 + 2] = Math.random() * Math.PI * 2;
+      this.spin[k3] = (Math.random() * 2 - 1) * 9;
+      this.spin[k3 + 1] = (Math.random() * 2 - 1) * 9;
+      this.spin[k3 + 2] = (Math.random() * 2 - 1) * 9;
+
+      // Cada caco puxa um pouco mais claro ou mais escuro que a pedra-mãe.
+      const j = 0.75 + Math.random() * 0.5;
+      this.col[k3] = tint.r * j;
+      this.col[k3 + 1] = tint.g * j;
+      this.col[k3 + 2] = tint.b * j;
+      _c1.setRGB(this.col[k3], this.col[k3 + 1], this.col[k3 + 2]);
+      this.mesh.setColorAt(k, _c1);
+
+      const vida = 1.6 + Math.random() * 1.4;
+      this.life[k] = vida;
+      this.maxLife[k] = vida;
+    }
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+
+  swapRemove(i) {
+    const last = --this.live;
+    if (i !== last) {
+      const i3 = i * 3;
+      const l3 = last * 3;
+      for (let c = 0; c < 3; c++) {
+        this.p[i3 + c] = this.p[l3 + c];
+        this.v[i3 + c] = this.v[l3 + c];
+        this.rot[i3 + c] = this.rot[l3 + c];
+        this.spin[i3 + c] = this.spin[l3 + c];
+        this.col[i3 + c] = this.col[l3 + c];
+      }
+      this.size[i] = this.size[last];
+      this.life[i] = this.life[last];
+      this.maxLife[i] = this.maxLife[last];
+      _c1.setRGB(this.col[i3], this.col[i3 + 1], this.col[i3 + 2]);
+      this.mesh.setColorAt(i, _c1);
+      if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  update(dt) {
+    if (!this.live) {
+      if (this.mesh.count !== 0) this.mesh.count = 0;
+      return;
+    }
+    const freio = Math.exp(-0.5 * dt);
+
+    for (let i = this.live - 1; i >= 0; i--) {
+      this.life[i] -= dt;
+      if (this.life[i] <= 0) {
+        this.swapRemove(i);
+        continue;
+      }
+      const i3 = i * 3;
+
+      this.v[i3 + 1] += DEBRIS_GRAVITY * dt;
+      this.v[i3] *= freio;
+      this.v[i3 + 2] *= freio;
+      this.p[i3] += this.v[i3] * dt;
+      this.p[i3 + 1] += this.v[i3 + 1] * dt;
+      this.p[i3 + 2] += this.v[i3 + 2] * dt;
+
+      // Quica no relevo — inclusive dentro da cratera que acabou de abrir,
+      // porque `heightAt` já responde com o buraco.
+      const chao = this.terrain.heightAt(this.p[i3], this.p[i3 + 2]) + this.size[i] * 0.5;
+      if (this.p[i3 + 1] < chao) {
+        this.p[i3 + 1] = chao;
+        this.v[i3 + 1] = -this.v[i3 + 1] * 0.3;
+        this.v[i3] *= 0.66;
+        this.v[i3 + 2] *= 0.66;
+        this.spin[i3] *= 0.55;
+        this.spin[i3 + 1] *= 0.55;
+        this.spin[i3 + 2] *= 0.55;
+      }
+
+      this.rot[i3] += this.spin[i3] * dt;
+      this.rot[i3 + 1] += this.spin[i3 + 1] * dt;
+      this.rot[i3 + 2] += this.spin[i3 + 2] * dt;
+
+      // Encolhe só no fim da vida: sumir de um quadro para o outro pisca no
+      // canto do olho, e o caco parado no chão vira lixo permanente.
+      const t = this.life[i] / this.maxLife[i];
+      const escala = this.size[i] * (t < 0.22 ? t / 0.22 : 1);
+
+      _dummy.position.set(this.p[i3], this.p[i3 + 1], this.p[i3 + 2]);
+      _dummy.rotation.set(this.rot[i3], this.rot[i3 + 1], this.rot[i3 + 2]);
+      _dummy.scale.setScalar(escala);
+      _dummy.updateMatrix();
+      this.mesh.setMatrixAt(i, _dummy.matrix);
+    }
+
+    this.mesh.count = this.live;
+    this.mesh.instanceMatrix.needsUpdate = true;
   }
 }
 
@@ -476,16 +761,26 @@ function makeRockGeometry(random) {
   return geo;
 }
 
-/** Matacões instanciados na encosta, cada um com o próprio collider fixo (casco convexo). */
+/**
+ * Matacões instanciados na encosta, cada um com o próprio collider fixo
+ * (casco convexo).
+ *
+ * Devolve `{ group, rocks }`. A lista importa: uma pedra pode ESTOURAR depois
+ * (flechada direta ou cratera que a alcança), e para isso é preciso saber, de
+ * cada uma, onde ela está, em qual `InstancedMesh` e em qual índice ela foi
+ * escrita, e qual corpo de física tirar do mundo.
+ */
 function scatterRocks(parent, physics, terrain, random) {
   const COUNT = CONFIG.levels.sandbox.rocks.count;
   const VARIANTS = 5;
   const geos = Array.from({ length: VARIANTS }, () => makeRockGeometry(random));
+  /* SEM `vertexColors` — ver o comentário em `RockDebris`: a cor vem por
+     instância (`setColorAt`), e ligar a flag aqui deixava toda pedra preta,
+     porque o icosaedro não tem atributo `color` para o shader ler. */
   const material = new THREE.MeshStandardMaterial({
     roughness: 0.95,
     metalness: 0,
     flatShading: true,
-    vertexColors: true,
   });
   applySandboxDetail(material);
 
@@ -514,6 +809,7 @@ function scatterRocks(parent, physics, terrain, random) {
   const group = new THREE.Group();
   const dummy = new THREE.Object3D();
   const v = new THREE.Vector3();
+  const rocks = [];
 
   for (let g = 0; g < VARIANTS; g++) {
     const list = buckets[g];
@@ -526,7 +822,8 @@ function scatterRocks(parent, physics, terrain, random) {
     for (let i = 0; i < list.length; i++) {
       const b = list[i];
       const base = terrain.heightAt(b.x, b.z);
-      dummy.position.set(b.x, base - b.radius * 0.3, b.z);
+      const y = base - b.radius * 0.3;
+      dummy.position.set(b.x, y, b.z);
       dummy.rotation.set(b.tiltX, b.ry, b.tiltZ);
       dummy.scale.setScalar(b.radius);
       dummy.updateMatrix();
@@ -544,22 +841,36 @@ function scatterRocks(parent, physics, terrain, random) {
         hull[kk + 2] = v.z;
       }
       const desc = RAPIER.ColliderDesc.convexHull(hull);
-      if (!desc) continue;
-      const body = physics.createBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(dummy.position.x, dummy.position.y, dummy.position.z),
-      );
-      const collider = physics.createCollider(
-        desc.setFriction(0.9).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      let body = null;
+      if (desc) {
+        body = physics.createBody(
+          RAPIER.RigidBodyDesc.fixed().setTranslation(b.x, y, b.z),
+        );
+        const collider = physics.createCollider(
+          desc.setFriction(0.9).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+          body,
+        );
+        physics.register(collider, { kind: "scenery", name: "rocha" });
+      }
+
+      rocks.push({
+        x: b.x,
+        y,
+        z: b.z,
+        radius: b.radius,
+        tint: b.tint,
+        mesh,
+        index: i,
         body,
-      );
-      physics.register(collider, { kind: "scenery", name: "rocha" });
+        alive: true,
+      });
     }
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     group.add(mesh);
   }
   parent.add(group);
-  return group;
+  return { group, rocks };
 }
 
 /* -------------------------------------------------------------- mato ---- */

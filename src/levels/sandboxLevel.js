@@ -47,6 +47,7 @@ export class SandboxLevel {
   }
 
   update(dt, wind) {
+    this.terrain?.update(dt);
     this.sway.time.value += dt;
     const speed = Math.hypot(wind.x, wind.z) || 1e-6;
     const amp = 0.055 + 0.11 * Math.min(1, Math.max(0, speed / 12));

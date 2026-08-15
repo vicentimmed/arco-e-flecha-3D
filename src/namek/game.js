@@ -30,7 +30,7 @@
 
 import * as THREE from "three";
 
-import { NAMEK, specialInfo } from "../shared/namek/config.js";
+import { NAMEK, specialInfo, craterFor } from "../shared/namek/config.js";
 import { NamekField } from "../shared/namek/field.js";
 import { NC2S, NS2C, packFighter, vecFrom } from "../shared/namek/protocol.js";
 import { gameEvents, EventType } from "../core/events.js";
@@ -42,7 +42,7 @@ import { Fighter } from "./character/index.js";
 import { FighterController } from "./movement.js";
 import { NamekCamera } from "./camera.js";
 import { NamekInput } from "./input.js";
-import { NamekHud } from "./ui/index.js";
+import { NamekHud, NamekMenu } from "./ui/index.js";
 import { KiMeter } from "./ki.js";
 import { NamekClient } from "./net/client.js";
 import { RemoteFighters } from "./net/remote.js";
@@ -85,6 +85,12 @@ export class NamekGame {
     /* --------------------------------------------------------- o mundo --- */
     this.field = new NamekField();
     this.world = new NamekWorld(this.scene, this.field);
+    /* A fila de crateras tem teto, e quem sai da altura precisa sair da malha
+       junto — senão o buraco fica desenhado sobre um chão que a física já
+       considera liso. Ver `NamekField.onRetire`. `applyCrater` recalcula o disco
+       a partir do relevo base e das crateras que AINDA existem, então reaplicá-lo
+       sobre a que saiu é exatamente o que a devolve ao lugar. */
+    this.field.onRetire = (velha) => this.world.applyCrater(velha);
     this.fx = new NamekFx(this.scene, this.field);
     this.powers = new PowerSystem(this.scene, this.field);
 
@@ -95,6 +101,21 @@ export class NamekGame {
     this.cam = new NamekCamera(this.camera3, this.field);
     this.input = new NamekInput(canvas);
     this.hud = new NamekHud(uiRoot);
+    /* A ÚNICA superfície de comando do modo. Pôr bot e virar o clima moram aqui
+       porque o pedido fechou o teclado em "só o menu geral" — e sem um lugar
+       para elas, a IA inteira e a tempestade ficariam escritas e inalcançáveis.
+       Ver o cabeçalho de `ui/menu.js`. */
+    this.menu = new NamekMenu(uiRoot, {
+      addBot: () => this.net.send(NC2S.BOT, {}),
+      removeBot: () => this.net.send(NC2S.BOT, { remove: true }),
+      setWeather: (id) => this.net.send(NC2S.WEATHER, { id }),
+      sair: () => {
+        this.net.disconnect();
+        location.reload();
+      },
+    });
+    /** Clima em cena, só para o menu acender o botão certo. */
+    this.weather = NAMEK.weather.padrao;
 
     /* ----------------------------------------------------------- rede --- */
     this.net = new NamekClient();
@@ -128,6 +149,29 @@ export class NamekGame {
 
     this.running = false;
     this.lastTime = 0;
+
+    /* ------------------------------------------------------- rascunhos ---
+     *
+     * Objetos que o passo reescreve em vez de recriar. São quatro literais por
+     * quadro — o alvo da câmera, a minha cápsula na lista de alvos, o ponto da
+     * trava e o registro do HUD —, ~240 por segundo, contra os "0 B em regime"
+     * do §3 que todo o resto do modo pagou caro para respeitar.
+     *
+     * E o `bind`: `this.frame.bind(this)` dentro do próprio `frame` cria uma
+     * função NOVA a cada quadro. Amarrado uma vez, no construtor, ele é o mesmo
+     * para sempre. */
+    this._frameBound = this.frame.bind(this);
+    this._alvoCam = {
+      position: null, yaw: 0, pitch: 0, velocity: null, flying: false, boosting: false,
+    };
+    this._minhaCapsula = {
+      id: 0, x: 0, y: 0, z: 0,
+      raio: NAMEK.fighter.radius,
+      altura: NAMEK.fighter.height,
+      vivo: true, invuln: false,
+    };
+    this._pontoTrava = { x: 0, y: 0, z: 0 };
+    this._alvoHud = { id: 0, nome: "", cor: 0, vida: 0, vidaMax: NAMEK.fighter.maxHealth };
 
     this._onResize = () => this.resize();
     window.addEventListener("resize", this._onResize);
@@ -196,7 +240,12 @@ export class NamekGame {
       this.myId = msg.you.id;
       this.myName = msg.you.name;
       this.me.setColor(msg.you.color ?? 0xff7a1a);
-      this.health = msg.you.health ?? NAMEK.fighter.maxHealth;
+      /* A vida NÃO vem no `welcome` — a visão pública de um lutador é
+         identidade (id, nome, cor, corpo), não estado. Quem entra nasce inteiro
+         por definição, e a partir daí quem manda é o `VITALS` a 10 Hz. Havia um
+         `msg.you.health` aqui lendo um campo que nunca existiu: funcionava por
+         acidente, pelo `??`, e escondia de onde a vida realmente vem. */
+      this.health = NAMEK.fighter.maxHealth;
 
       /* O CHÃO JÁ DEFORMADO. Quem entra no meio de uma partida precisa do mesmo
          relevo que os outros têm — é o critério 6 do §12 do plano. A lista vem
@@ -204,10 +253,20 @@ export class NamekGame {
       this.field.loadCraters(msg.craters);
       for (const c of this.field.craters) this.world.applyCrater(c);
 
-      this.world.setWeather(msg.weather ?? NAMEK.weather.padrao, true);
+      /* `.id` — o `welcome` traz o clima como `{ id, w }`, não como a string
+         que o `NS2C.WEATHER` de cada troca manda. Passar o objeto inteiro não
+         estourava: `setWeather` valida contra `NAMEK.weather.ids`, não achava o
+         objeto lá e desistia CALADO. O sintoma era quem entrasse no meio de uma
+         tempestade ver dia claro enquanto todo mundo via o planeta explodindo. */
+      this.weather = msg.weather?.id ?? NAMEK.weather.padrao;
+      this.world.setWeather(this.weather, true);
       this.remotes.reconcile((msg.fighters ?? []).filter((f) => f.id !== this.myId));
       this.hud.setScores(this.placar(msg.scores));
-      this.nascer(msg.you.spawn);
+      /* Quem nasce é o `NS2C.SPAWN`, que a sala manda logo depois do `welcome`
+         — e é ele que traz o ponto, o rumo e o fim da invulnerabilidade. Havia
+         um `this.nascer(msg.you.spawn)` aqui, lendo um campo inexistente e
+         saindo na primeira linha: o nascimento funcionava, mas por outro
+         caminho, e a leitura morta escondia qual. */
     });
 
     net.on(NS2C.JOIN, (msg) => {
@@ -265,7 +324,25 @@ export class NamekGame {
 
     net.on(NS2C.BURST, (msg) => {
       if (msg.owner === this.myId) return;
-      this.powers.spawnBurst({ owner: msg.owner, origem: vecFrom(msg.o), local: false });
+      /* `p`, não `o`. A onda é a única das três retransmissões que carrega o
+         ponto em `p` — porque é o campo que o `NC2S.BURST` do cliente usa, e a
+         sala repassa o que recebeu. Lendo `o`, o `vecFrom(undefined)` estourava
+         um TypeError DENTRO do tratador da mensagem: a onda dos outros nunca
+         aparecia, e o resto daquele pacote morria junto. */
+      const origem = vecFrom(msg.p);
+      this.powers.spawnBurst({ owner: msg.owner, origem, local: false });
+      /* O EMPURRÃO EM MIM É CALCULADO AQUI, e não pelo sistema de poderes.
+       *
+       * Lá o empurrão só é resolvido para a onda de quem é DONO dela, e o dono
+       * nunca está entre os próprios alvos — então a conta que existe no
+       * `PowerSystem` jamais produz uma vítima que seja eu. O resultado era uma
+       * "defesa de pressão" (§6 do plano) que empurrava bot, porque a sala mexe
+       * na velocidade deles, e não empurrava gente NENHUMA.
+       *
+       * Cada cliente aplicar em si mesmo é o mesmo repartição de autoridade do
+       * resto do modo: quem manda na minha posição sou eu (§8). Recalcular custa
+       * uma raiz quadrada num acontecimento raro. */
+      this.empurraoDaOnda(origem);
     });
 
     net.on(NS2C.HURT, (msg) => {
@@ -282,7 +359,14 @@ export class NamekGame {
       const r = this.remotes.get(msg.id);
       if (r) {
         r.health = msg.health;
-        r.fighter.hit(msg.d ? vecFrom(msg.d) : null, msg.amount > 20);
+        /* A DIREÇÃO É DEDUZIDA, não recebida.
+         *
+         * O `HURT` traz quem bateu (`by`), não o vetor — e mandar o vetor seria
+         * três números a mais numa mensagem que já sai a 6 Hz por vítima, para
+         * dizer o que as duas pontas já sabem: onde estão os dois corpos. Sem
+         * deduzir, o `hit(null)` deixava toda dor igual, que é justamente o que
+         * o `Fighter.hit` documenta que não pode acontecer. */
+        r.fighter.hit(this.direcaoDoGolpe(msg.by, r.pose), msg.amount > 20);
       }
     });
 
@@ -294,7 +378,11 @@ export class NamekGame {
         this.remotes.get(msg.victim)?.fighter.die(dir);
         if (this.lockId === msg.victim) this.lockId = null;
       }
-      this.hud.killFeed(this.nomeDe(msg.killer), this.nomeDe(msg.victim), msg.kind);
+      /* Os DOIS como objeto, e não como nome solto: o feed pinta cada lado com
+         a cor do lutador e destaca a sua própria linha por id. Passando string,
+         `pessoa()` devolvia cor nula para todo mundo e a metade colorida do
+         placar de mortes nunca chegava a aparecer. */
+      this.hud.killFeed(this.quem(msg.killer), this.quem(msg.victim), msg.kind);
     });
 
     net.on(NS2C.SPAWN, (msg) => {
@@ -316,6 +404,8 @@ export class NamekGame {
     });
 
     net.on(NS2C.WEATHER, (msg) => {
+      this.weather = msg.id;
+      this.menu.setWeather(msg.id);
       this.world.setWeather(msg.id);
       this.hud.banner(
         msg.id === "tempestade" ? "O PLANETA ESTÁ EXPLODINDO" : "O CÉU ABRIU",
@@ -384,6 +474,108 @@ export class NamekGame {
     return this.remotes.get(id)?.name ?? "alguém";
   }
 
+  /** Quem é este id, do jeito que o feed e o placar sabem desenhar. */
+  quem(id) {
+    if (id === this.myId) return { id, nome: this.myName, cor: this.me.cor ?? null };
+    const r = this.remotes.get(id);
+    return r ? { id, nome: r.name, cor: r.color } : { id: null, nome: "alguém", cor: null };
+  }
+
+  /**
+   * O tranco que uma onda alheia me dá.
+   *
+   * Cai com a distância — cheio no centro, zero na borda —, e é isso que faz a
+   * onda ser DEFESA e não arma: quem está colado leva o empurrão inteiro e sai
+   * de cima; quem está a doze metros mal sente. O dano quem cobra é a sala.
+   */
+  empurraoDaOnda(origem) {
+    if (this.down) return;
+    const K = NAMEK.ki;
+    const c = this.controller.position;
+    const dx = c.x - origem.x;
+    const dy = c.y + NAMEK.fighter.chest - origem.y;
+    const dz = c.z - origem.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (d > K.burstRadius) return;
+    /* Distância zero é o caso em que dois lutadores ocupam o mesmo ponto: sem
+       esta guarda a normalização divide por zero e a velocidade vira NaN — e um
+       NaN em posição não é um empurrão errado, é um corpo que some da tela e
+       nunca mais volta. Para cima, que é a única direção sem ambiguidade. */
+    const forca = K.burstPush * (1 - d / K.burstRadius);
+    if (d < 0.001) {
+      this.controller.push(0, forca, 0, NAMEK.fighter.stunTime * 0.4);
+      return;
+    }
+    const inv = forca / d;
+    this.controller.push(dx * inv, dy * inv, dz * inv, NAMEK.fighter.stunTime * 0.4);
+  }
+
+  /**
+   * Derruba o cenário que o estouro alcançou.
+   *
+   * A peça cai por ÁREA — pelo raio da cratera —, e não por colisão de cada
+   * projétil contra cada rocha. É a decisão certa por dois motivos, e o segundo
+   * é o que decide:
+   *
+   * 1. É o que a referência faz: no Budokai Tenkaichi 3 o cenário desaparece em
+   *    volta do ponto onde o golpe estourou, não onde a bola encostou.
+   * 2. Testar 200 projéteis contra ~550 peças por quadro é uma varredura de
+   *    110 000 pares; aqui são ~550 testes no instante raro de um estouro. E o
+   *    caso que a colisão por projétil pegaria e este não — uma bola de ki
+   *    passando de raspão numa árvore sem tocar o chão — é justamente o que NÃO
+   *    deve derrubar uma árvore.
+   *
+   * Quem decide de verdade é a sala (`NC2S.PROP_HIT` → `NS2C.PROP_DOWN`): a
+   * peça só some da tela quando ela confirma, e é isso que faz a vila cair igual
+   * para todo mundo. Aqui só se pede.
+   */
+  derrubarPorPerto(ponto, power) {
+    const raio = craterFor(power).raio;
+    /* Uma peça grande na borda ainda é atingida: o teste é contra o raio dela
+       mais o do estouro, não contra o centro. */
+    const props = this.world.props;
+    for (let i = 0; i < props.length; i++) {
+      const p = props[i];
+      if (p.vida <= 0) continue;
+      const dx = p.x - ponto.x;
+      const dy = p.y - ponto.y;
+      const dz = p.z - ponto.z;
+      const alcance = raio + p.raio;
+      if (dx * dx + dy * dy + dz * dz > alcance * alcance) continue;
+      this.net.send(NC2S.PROP_HIT, { kind: p.kind, i: p.i });
+    }
+  }
+
+  /**
+   * De onde veio a pancada: versor de quem bateu para quem levou.
+   *
+   * `null` quando o agressor não é ninguém que esteja em cena — morrer para o
+   * chão ou para uma queda não tem direção, e inventar uma jogaria o corpo para
+   * um lado ao acaso.
+   */
+  direcaoDoGolpe(byId, alvo) {
+    if (byId === null || byId === undefined) return null;
+    const de =
+      byId === this.myId
+        ? this.controller.position
+        : this.remotes.get(byId)?.pose ?? null;
+    if (!de) return null;
+    const dx = alvo.x - de.x;
+    const dy = alvo.y - de.y;
+    const dz = alvo.z - de.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    // Mesmo ponto: não há direção. Ver a guarda gêmea em `empurraoDaOnda`.
+    if (d < 0.001) return null;
+    return { x: dx / d, y: dy / d, z: dz / d };
+  }
+
+  /** Quantos em campo são de CPU. Alimenta o menu. */
+  botCount() {
+    let n = 0;
+    for (const r of this.remotes.byId.values()) if (r.isBot) n++;
+    return n;
+  }
+
   placar(lista) {
     return (lista ?? []).map((s) => ({ ...s, nome: s.name, eu: s.id === this.myId }));
   }
@@ -433,7 +625,12 @@ export class NamekGame {
   pontoDaTrava() {
     const r = this.lockId !== null ? this.remotes.get(this.lockId) : null;
     if (!r || r.down) return null;
-    return { x: r.pose.x, y: r.pose.y + NAMEK.fighter.chest, z: r.pose.z };
+    // Rascunho reescrito: este ponto é lido pela câmera e pela mira todo quadro.
+    const p = this._pontoTrava;
+    p.x = r.pose.x;
+    p.y = r.pose.y + NAMEK.fighter.chest;
+    p.z = r.pose.z;
+    return p;
   }
 
   /* ------------------------------------------------------------ disparos -- */
@@ -578,7 +775,7 @@ export class NamekGame {
   start() {
     this.running = true;
     this.lastTime = performance.now();
-    requestAnimationFrame(this.frame.bind(this));
+    requestAnimationFrame(this._frameBound);
   }
 
   frame(now) {
@@ -597,12 +794,23 @@ export class NamekGame {
         this._erroReportado = true;
       }
     }
-    requestAnimationFrame(this.frame.bind(this));
+    requestAnimationFrame(this._frameBound);
   }
 
   step(dt) {
     const acoes = this.input.actions();
     const agora = this.net.serverTime;
+
+    /* O MENU, antes de tudo. Ele solta o ponteiro e cala o teclado do jogo (é o
+       que `setMenuOpen` faz lá dentro), então tratá-lo depois das ações deixaria
+       um quadro de comandos passando por baixo da tela aberta. */
+    if (acoes.menuPressed) {
+      this.input.setMenuOpen(this.menu.toggle());
+      if (this.menu.aberto) {
+        this.menu.setRoster(this.remotes.byId.size + 1, this.botCount());
+        this.menu.setWeather(this.weather);
+      }
+    }
 
     /* ---------------------------------------------------------- morto --- */
     if (this.down) {
@@ -642,17 +850,14 @@ export class NamekGame {
         p: [pouso.p.x, pouso.p.y, pouso.p.z],
         speed: pouso.speed,
       });
+      // Cair de cem metros no meio da vila derruba a vila. Mesma regra do
+      // estouro, mesma autoridade: aqui só se pede, quem confirma é a sala.
+      this.derrubarPorPerto(pouso.p, power);
     }
 
-    /* ---------------------------------------------------------- ações --- */
-    if (!this.down) {
-      if (acoes.lockPressed) this.alternarTrava();
-      if (acoes.burstPressed) this.onda();
-      for (let i = 0; i < NAMEK.specialOrder.length; i++) {
-        if (acoes.special[i]) this.soltarEspecial(i);
-      }
-      if (acoes.fire && !this.casting && !this.ki.carregando) this.atirar(dt);
-    }
+    /* A TRAVA vem antes da câmera porque é ela que decide o enquadramento deste
+       quadro. O DISPARO vem depois — ver `dispararAgora`, no fim do passo. */
+    if (!this.down && acoes.lockPressed) this.alternarTrava();
 
     /* O especial em curso: a fração alimenta a pose (e viaja na rede como um
        número só — o mesmo truque do `q` do Kamehameha do arqueiro). */
@@ -690,22 +895,49 @@ export class NamekGame {
     /* --------------------------------------------------------- os outros -- */
     this.remotes.update(dt, this.camera3.position);
 
+    /* ---------------------------------------------------------- câmera ---- *
+     *
+     * ELA VEM ANTES DO DISPARO, e a ordem dos três blocos aqui não é arbitrária:
+     * o corpo se move, a lente acompanha, e só então se atira. `handPoint` sai
+     * da pose que o `me.update` acabou de montar e `aimDirection` sai do eixo
+     * óptico que a lente acabou de escolher.
+     *
+     * Estava ao contrário — o disparo acontecia no bloco de ações, lá em cima,
+     * lendo a pose e a mira do quadro ANTERIOR. A 96 m/s um quadro são 1,6 m: a
+     * bola saía de onde a mão estava, não de onde ela está, e mirava onde a
+     * lente apontava antes de o jogador terminar de girar. */
+    const ac = this._alvoCam;
+    ac.position = c.position;
+    ac.yaw = c.yaw;
+    ac.pitch = c.pitch;
+    ac.velocity = c.velocity;
+    ac.flying = c.flying;
+    ac.boosting = c.boostBlend > 0.3;
+    this.cam.update(dt, ac, this.pontoDaTrava());
+
+    /* ---------------------------------------------------------- disparo --- */
+    if (!this.down) {
+      if (acoes.burstPressed) this.onda();
+      for (let i = 0; i < NAMEK.specialOrder.length; i++) {
+        if (acoes.special[i]) this.soltarEspecial(i);
+      }
+      if (acoes.fire && !this.casting && !this.ki.carregando) this.atirar(dt);
+    }
+
     /* --------------------------------------------------------- poderes ---- */
     const alvos = this.remotes.alvos();
     /* Eu também sou alvo — dos projéteis dos outros —, mas o sistema só reporta
        acerto de quem é dono do tiro, e o dono de um tiro alheio não sou eu. A
        minha cápsula entra na lista para o feixe ser BLOQUEADO por mim e para o
        empurrão da onda me alcançar; quem me machuca é sempre a sala. */
-    alvos.push({
-      id: this.myId,
-      x: c.position.x,
-      y: c.position.y,
-      z: c.position.z,
-      raio: NAMEK.fighter.radius,
-      altura: NAMEK.fighter.height,
-      vivo: !this.down,
-      invuln: this.me.invuln,
-    });
+    const eu = this._minhaCapsula;
+    eu.id = this.myId;
+    eu.x = c.position.x;
+    eu.y = c.position.y;
+    eu.z = c.position.z;
+    eu.vivo = !this.down;
+    eu.invuln = this.me.invuln;
+    alvos.push(eu);
     const eventos = this.powers.update(dt, alvos, this.myId);
     this.reportar(eventos);
 
@@ -713,30 +945,25 @@ export class NamekGame {
     this.fx.update(dt, this.camera3.position);
     this.world.update(dt, this.camera3.position, agora);
 
-    this.cam.update(dt, {
-      position: c.position,
-      yaw: c.yaw,
-      pitch: c.pitch,
-      velocity: c.velocity,
-      flying: c.flying,
-      boosting: c.boostBlend > 0.3,
-    }, this.pontoDaTrava());
+    /* A câmera JÁ foi atualizada, lá em cima, antes do disparo — ver o
+       comentário longo lá. Havia uma segunda chamada aqui, sobra da ordem
+       antiga: ela rodava o amortecimento duas vezes por quadro, o que dobrava
+       na prática a rigidez de toda constante de suavização da lente. */
 
     /* ------------------------------------------------------------- HUD ---- */
     this.hud.setVitals(this.health, NAMEK.fighter.maxHealth, this.ki.valor, this.ki.max);
     this.hud.setSpecials(this.specialIndex, this.ki.podeEspecial());
     const trava = this.lockId !== null ? this.remotes.get(this.lockId) : null;
-    this.hud.setTarget(
-      trava
-        ? {
-            id: trava.id,
-            nome: trava.name,
-            cor: trava.color,
-            vida: trava.health,
-            vidaMax: NAMEK.fighter.maxHealth,
-          }
-        : null,
-    );
+    if (trava) {
+      const ah = this._alvoHud;
+      ah.id = trava.id;
+      ah.nome = trava.name;
+      ah.cor = trava.color;
+      ah.vida = trava.health;
+      this.hud.setTarget(ah);
+    } else {
+      this.hud.setTarget(null);
+    }
     this.hud.update(dt);
 
     /* ------------------------------------------------------------ rede ---- */
@@ -772,25 +999,34 @@ export class NamekGame {
     }
 
     for (const g of ev.chao) {
-      /* A cratera aparece AGORA na minha tela e a sala confirma depois. Esperar
-         a volta da rede poria meio segundo entre o feixe encostar no chão e o
-         chão reagir — e é exatamente nesse meio segundo que o jogador está
-         olhando para o ponto de impacto. O `addCrater` é idempotente por id, e
-         o id local é negativo para nunca colidir com o carimbo da sala. */
+      /* A POEIRA SAI AGORA; O BURACO ESPERA O CARIMBO DA SALA.
+       *
+       * Havia uma cratera local aqui, cavada na hora com um id negativo "para
+       * nunca colidir com o carimbo da sala" — e era o contrário do que a
+       * idempotência precisa. Colidir é justamente o ponto: com ids diferentes,
+       * o `NS2C.CRATER` que volta é um id inédito e `addCrater` cava DE NOVO no
+       * mesmo lugar. Medido: quem atirou ficava com 4,64 m a mais de fundo que
+       * todo mundo, e queimava o teto de 96 crateras em metade do tempo — o
+       * critério 5 do §12 (duas abas, a mesma cratera) morria justamente na aba
+       * de quem disparou.
+       *
+       * Esperar não custa nada visível: o clarão e a poeira são locais e
+       * imediatos, e é sob eles que o buraco aparece. São dois ou três quadros
+       * de rede embaixo de uma nuvem que dura um segundo. */
       this.fx.groundImpact(g.p.x, g.p.y, g.p.z, g.power);
-      const c = this.field.addCrater(this._craterLocal--, g.p.x, g.p.z, g.power);
-      if (c) this.world.applyCrater(c);
       this.net.send(NC2S.GROUND_HIT, { p: [g.p.x, g.p.y, g.p.z], power: g.power });
+      this.derrubarPorPerto(g.p, g.power);
     }
 
-    for (const e of ev.empurroes) {
-      if (e.victim !== this.myId) continue;
-      this.controller.push(e.push.x, e.push.y, e.push.z, 0.2);
-    }
+    /* `ev.empurroes` não é reportado, e isso é de propósito: a SALA já resolve a
+       onda inteira — dano e empurrão, para todo mundo — a partir do `NC2S.BURST`
+       que ela recebeu (ver `NamekRoom`, o trecho do `burstRadius`). Mandar os
+       acertos daqui cobraria o mesmo dano duas vezes.
+     *
+     * O que a sala NÃO consegue fazer é mover um humano, porque a posição dele é
+     * dele (§8). Esse pedaço é o `empurraoDaOnda`, disparado pelo `NS2C.BURST`
+     * alheio — e os dois juntos fecham o efeito sem se sobreporem. */
   }
-
-  /** Contador das crateras que ainda não têm carimbo da sala. Ver `reportar`. */
-  _craterLocal = -1;
 
   /**
    * A pose sai a 20 Hz, não por quadro.
@@ -813,6 +1049,7 @@ export class NamekGame {
     this.net.disconnect();
     this.input.dispose();
     this.hud.dispose();
+    this.menu.dispose();
     this.remotes.dispose();
     this.powers.dispose();
     this.fx.dispose();

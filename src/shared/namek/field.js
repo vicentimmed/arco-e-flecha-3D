@@ -65,6 +65,20 @@ export class NamekField {
     /** @type {Map<number, object>} id da sala → cratera, contra duplicata */
     this.byId = new Map();
 
+    /**
+     * Chamado quando uma cratera é APOSENTADA pela fila. Ver `addCrater`.
+     *
+     * Existe porque quem guarda a altura e quem guarda a malha são dois, e a
+     * aposentadoria só acontecia num deles: o campo esquecia a cratera e a malha
+     * ficava com o buraco. Numa partida de dez minutos a fila gira nove vezes, e
+     * o resultado era ~770 buracos que só existiam para os olhos — o jogador
+     * caindo dentro de depressões que a física jurava serem chão liso.
+     *
+     * O servidor deixa isto nulo: ele não tem malha para consertar.
+     * @type {((cratera: object) => void) | null}
+     */
+    this.onRetire = null;
+
     /* As MONTANHAS não saem de ruído puro. Ruído dá relevo, não dá silhueta —
        e o que faz um cenário de Namekusei ser reconhecível são picos separados,
        com vale entre eles, não uma crista contínua. Sorteados uma vez, com
@@ -186,6 +200,11 @@ export class NamekField {
       const velha = this.craters.shift();
       this.byId.delete(velha.id);
       this.unindexCrater(velha);
+      /* AVISA QUEM DESENHA. A cratera saiu da altura; se ninguém re-esculpir o
+         disco dela, ela continua na malha para sempre. Ver `onRetire`. A ordem
+         importa: o aviso vem DEPOIS do `unindexCrater`, para que o
+         `heightAt` que o desenhista vai consultar já seja o de sem-ela. */
+      this.onRetire?.(velha);
     }
     return c;
   }

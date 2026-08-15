@@ -52,6 +52,8 @@ class RemoteFighter {
     this.id = info.id;
     this.name = info.name ?? "Lutador";
     this.color = info.color ?? 0xff7a1a;
+    /** É de CPU? A sala diz no `roster`; o menu conta para saber o que oferecer. */
+    this.isBot = info.isBot === true;
 
     this.fighter = new Fighter(parent, this.color, false);
     this.fighter.displayName = this.name;
@@ -203,16 +205,33 @@ export class RemoteFighters {
     this.relogioSala = relogioSala;
     /** @type {Map<number, RemoteFighter>} */
     this.byId = new Map();
-    /* A lista de alvos que os poderes testam. Reconstruída no lugar a cada
-       quadro em vez de alocada: ela é lida 200 vezes por quadro pelo sistema de
-       projéteis, e um array novo por quadro seria lixo garantido. */
+    /* A lista de alvos que os poderes testam, e o BANCO de registros dela.
+     *
+     * O array era reaproveitado e os objetos dentro dele não: `push({...})` por
+     * remoto por quadro são ~14 literais, ~840 por segundo, exatamente o tipo de
+     * lixo que produz o engasgo periódico que ninguém consegue reproduzir. O
+     * banco cresce até o tamanho da maior sala e para de crescer para sempre. */
     this._alvos = [];
+    this._banco = [];
   }
 
   add(info) {
     if (this.byId.has(info.id)) return this.byId.get(info.id);
     const r = new RemoteFighter(this.parent, info);
     this.byId.set(info.id, r);
+
+    /* O QUE VEIO NO ROSTER É APROVEITADO, e antes era jogado fora.
+     *
+     * A sala manda `state`, `health` e `ki` de cada um junto do nome e da cor, e
+     * ler só os três primeiros custava dois defeitos visíveis a quem entra no
+     * meio da partida: todo mundo com a barra cheia até o primeiro `VITALS`
+     * (100 ms depois), e — pior — todo mundo AMONTOADO NA ORIGEM DO MUNDO até a
+     * primeira pose de 20 Hz chegar, porque sem amostra nenhuma o interpolador
+     * não tem o que desenhar. */
+    if (Number.isFinite(info.health)) r.health = info.health;
+    if (Number.isFinite(info.ki)) r.ki = info.ki;
+    if (info.state) r.pushSample(info.state.w ?? 0, info.state);
+
     return r;
   }
 
@@ -318,16 +337,25 @@ export class RemoteFighters {
     for (const r of this.byId.values()) {
       if (r.down && !incluirCaidos) continue;
       const p = r.pose;
-      lista.push({
-        id: r.id,
-        x: p.x,
-        y: p.y,
-        z: p.z,
-        raio: NAMEK.fighter.radius,
-        altura: NAMEK.fighter.height,
-        vivo: !r.down,
-        invuln: p.invuln,
-      });
+      const n = lista.length;
+      // Um registro por posição da lista, criado na primeira vez e reescrito
+      // para sempre. Ver `_banco`.
+      let alvo = this._banco[n];
+      if (!alvo) {
+        alvo = this._banco[n] = {
+          id: 0, x: 0, y: 0, z: 0,
+          raio: NAMEK.fighter.radius,
+          altura: NAMEK.fighter.height,
+          vivo: true, invuln: false,
+        };
+      }
+      alvo.id = r.id;
+      alvo.x = p.x;
+      alvo.y = p.y;
+      alvo.z = p.z;
+      alvo.vivo = !r.down;
+      alvo.invuln = p.invuln;
+      lista.push(alvo);
     }
     return lista;
   }

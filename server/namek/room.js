@@ -68,27 +68,17 @@ let proximoId = 1;
 /** Contador de crateras. Ver `NS2C.CRATER`: é ele que torna `addCrater` idempotente. */
 let proximaCratera = 1;
 
-/* Tamanho do nome. Não sai de `NAMEK.net` porque `config.js` é arquivo
-   existente e o §11 não deixa acrescentar nada lá; e não sai de `CONFIG.net` do
-   arqueiro porque importar a configuração do outro jogo para ler UM número é
-   exatamente o tipo de encosto que o §0 proíbe. Dezesseis é o mesmo número, e
-   ele está aqui por escrito em vez de emprestado. */
-const NOME_MAX = 16;
-
-/* s — silêncio que derruba uma conexão. O cliente manda `ping`; quem some por
-   mais que isto perdeu a rede e a vaga volta para a sala. */
-const SILENCIO = 40;
-
-/**
- * m — folga entre o acerto declarado e onde a vítima realmente estava.
+/* Os três vêm de `NAMEK.net`, e não de cópias locais.
  *
- * O mesmo raciocínio do `CONFIG.net.hitTolerance` do arqueiro (4 m), com a
- * conta refeita para ESTA velocidade: quem atira vê o alvo `interpDelay`
- * (100 ms) no passado, e um lutador em arranque anda 96 m/s — quase dez metros
- * só de atraso de interpolação, mais o que o ping acrescentar. Uma folga
- * apertada aqui não pegaria trapaceiro; pegaria o jogo inteiro.
- */
-const TOLERANCIA = 14;
+ * Havia cópias aqui, com um comentário afirmando que `shared/namek/config.js`
+ * era "arquivo existente" que o §11 do plano proibia mexer. Não é: aquele
+ * arquivo NASCEU com este modo, e o §11 fala dos arquivos do arqueiro. O preço
+ * do engano já tinha aparecido — a tolerância local valia 14 e a do config, 12,
+ * duas fontes de verdade para o mesmo número, com a sala usando a sua e o resto
+ * do mundo lendo a outra. */
+const NOME_MAX = NAMEK.net.nameMaxLength;
+const SILENCIO = NAMEK.net.silenceTimeout;
+const TOLERANCIA = NAMEK.net.hitTolerance;
 
 /** s — o mínimo de tempo caído antes de o `RESPAWN` antecipado valer. */
 const RESPAWN_MINIMO = 1.6;
@@ -104,6 +94,28 @@ const RESPAWN_MINIMO = 1.6;
  * assunto do golpe.
  */
 const CRATERAS_POR_SEGUNDO = 5;
+
+/**
+ * m — o maior alcance que qualquer golpe deste jogo tem.
+ *
+ * Derivado da tabela em vez de escrito: é o teto de "até onde um lutador pode
+ * ter causado alguma coisa", e ele precisa crescer sozinho no dia em que um
+ * especial de alcance maior entrar em `NAMEK.specials`. Um número à mão aqui
+ * envelheceria calado, e o sintoma seria o golpe novo sendo recusado pela sala
+ * sem nada dizer por quê.
+ */
+const ALCANCE_MAXIMO = Math.max(
+  ...Object.values(NAMEK.specials).map((s) => s.range),
+  NAMEK.blast.speed * NAMEK.blast.life,
+);
+
+/** Distância ao quadrado entre um vetor da rede `[x,y,z]` e um ponto. */
+function dist2(a, p) {
+  const dx = a[0] - p.x;
+  const dy = a[1] - p.y;
+  const dz = a[2] - p.z;
+  return dx * dx + dy * dy + dz * dz;
+}
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const round = (v) => Math.round(v * 1000) / 1000;
@@ -152,6 +164,8 @@ export class NamekRoom {
        no mesmo lugar. */
     this.weather = NAMEK.weather.padrao;
     this.weatherAt = 0;
+    /** Instante a partir do qual outra troca de clima é aceita. Ver `pedirClima`. */
+    this.climaLivreEm = 0;
     this.proximoRaio = 0;
 
     /** Peças de cenário já derrubadas, para não anunciar duas vezes. */
@@ -401,6 +415,21 @@ export class NamekRoom {
    */
   pedirClima(id, agora) {
     if (!NAMEK.weather.ids.includes(id) || id === this.weather) return;
+
+    /* UMA TROCA POR VEZ, e o tempo mínimo é o da própria transição.
+     *
+     * O clima é da SALA e qualquer um o vira. Sem trava, um cliente alternando
+     * dia e tempestade num laço produziu 39 trocas em 0,4 s — todas
+     * retransmitidas para todo mundo, com o céu de catorze pessoas piscando
+     * entre verde e vermelho. Não é trapaça, é um botão que qualquer um pode
+     * segurar sem querer.
+     *
+     * A carência é o `fade`: enquanto o céu ainda está VIRANDO, um pedido novo
+     * não descreve nada que dê para ver. Terminada a transição, quem quiser
+     * trocar de novo troca. */
+    if (agora < this.climaLivreEm) return;
+    this.climaLivreEm = agora + NAMEK.weather.fade * 1000;
+
     this.weather = id;
     this.weatherAt = agora;
     /* O primeiro raio não sai junto com a transição: o céu leva
@@ -611,7 +640,15 @@ export class NamekRoom {
     const p = clamp(power, 0, 64);
     if (p <= 0) return null;
 
-    if (dono && p < 1 && !this.podeCravar(dono)) return null;
+    /* A COTA VALE PARA TODA CRATERA, não só para as pequenas.
+     *
+     * A condição era `p < 1`, o que deixava a porta escancarada justamente para
+     * as grandes: 60 pedidos de potência 16 em 1,2 s viravam 54 crateras — o
+     * teto de 96 da sala gasto em dois segundos, e a malha do terreno de TODOS
+     * os clientes re-esculpida 54 vezes seguidas. A rajada legítima continua
+     * passando inteira pela folga de meio segundo do balde, e um especial de
+     * verdade sai muitas vezes abaixo do limite. */
+    if (dono && !this.podeCravar(dono)) return null;
 
     /* A cota é medida ANTES de o buraco existir. Depois de `addCrater` o
        `heightAt` deste ponto já é o fundo da cratera, e mandar isso faria a
@@ -1095,7 +1132,15 @@ export class NamekRoom {
     this.broadcastAll({
       t: NS2C.BLAST,
       owner: player.id,
-      id: msg.id,
+      /* NÚMERO, e nunca o que veio da rede.
+       *
+       * O `id` casa o acerto com o disparo e para isso ele só precisa ser um
+       * inteiro. Repassá-lo intacto fazia da sala um AMPLIFICADOR: um cliente
+       * mandou um `id` de 200 000 caracteres e ela o retransmitiu para cada uma
+       * das outras catorze conexões — três megabytes de subida do servidor a
+       * partir de um pacote. É o mesmo cuidado que `vec()` já toma com as
+       * coordenadas, aplicado ao campo que tinha escapado. */
+      id: Number.isFinite(msg.id) ? msg.id : 0,
       o: vec(msg.o),
       d: vec(msg.d),
       hand: msg.hand === 1 ? 1 : 0,
@@ -1214,10 +1259,46 @@ export class NamekRoom {
     if (!vitima || vitima === player || !vitima.alive) return;
     if (agora < vitima.invulnUntil) return;
 
-    const alcance = e.info.range + TOLERANCIA;
-    const eu = this.pontoDe(player);
+    /* O FEIXE É UM SEGMENTO, NÃO UMA ESFERA — e essa era a metade que faltava.
+     *
+     * Só a distância era conferida, e com isso quem declarasse a vítima podia
+     * escolher qualquer um dentro do alcance, inclusive às próprias costas.
+     * Medido: um Kamehameha apontado para +z queimava alguém 400 m em −z, e uma
+     * Genki Dama sozinha atingiu as quatro vítimas espalhadas em direções
+     * opostas — 96 de dano cada, de 100 de vida.
+     *
+     * A conta é a distância da vítima ao EIXO do golpe, medida da ORIGEM e na
+     * DIREÇÃO que ficaram travadas no disparo (`e.o`, `e.d`) — e não da posição
+     * atual de quem atirou, que já andou desde então.
+     *
+     * Distância ao eixo, e não um cone: um cone de ângulo fixo é largo demais
+     * longe e apertado demais perto, enquanto o raio de morte do golpe é o mesmo
+     * em qualquer distância — que é exatamente como o feixe se comporta na tela
+     * de quem atira. A folga é a mesma `TOLERANCIA` do resto.
+     *
+     * `t` é quanto se anda pelo eixo até o pé da perpendicular: negativo é a
+     * vítima atrás da boca do golpe, e além do alcance é longe demais. */
     const p = this.pontoDe(vitima);
-    if (Math.hypot(p.x - eu.x, p.y - eu.y, p.z - eu.z) > alcance) return;
+    const vx = p.x - e.o[0];
+    const vy = p.y - e.o[1];
+    const vz = p.z - e.o[2];
+
+    const dn = Math.hypot(e.d[0], e.d[1], e.d[2]);
+    /* Direção degenerada não pode virar divisão por zero. `vetorOk` garante que
+       os três números são finitos, não que eles formam um versor: um cliente
+       pode mandar [0,0,0], e sem esta saída o `t` viraria NaN e toda comparação
+       com NaN é falsa — ou seja, o golpe passaria a acertar todo mundo. */
+    if (dn < 1e-6) return;
+    const dx = e.d[0] / dn;
+    const dy = e.d[1] / dn;
+    const dz = e.d[2] / dn;
+
+    const t = vx * dx + vy * dy + vz * dz;
+    if (t < 0 || t > e.info.range + TOLERANCIA) return;
+
+    const raio = (e.info.hitRadius ?? 4) + TOLERANCIA;
+    const fora = Math.hypot(vx - dx * t, vy - dy * t, vz - dz * t);
+    if (fora > raio) return;
 
     /* Feixe cobra por SEGUNDO (`dps`); disco e Genki Dama cortam DE UMA VEZ
        (`damage`). São dois golpes de natureza diferente e a mesma mensagem
@@ -1265,7 +1346,24 @@ export class NamekRoom {
     if (!vetorOk(msg.p)) return;
     const power = Number(msg.power);
     if (!Number.isFinite(power) || power <= 0) return;
-    /* O teto é a potência do golpe mais forte do jogo (a Genki Dama, 12), com
+
+    /* MORTO NÃO CAVA. A cratera é a marca de um golpe, e quem está caído não
+       está dando golpe nenhum — sem esta linha, um cliente parado na tela de
+       morte continuava esculpindo o terreno de todo mundo. */
+    if (!player.alive) return;
+
+    /* E NÃO CAVA DO OUTRO LADO DO MAPA. O ponto tem de estar ao alcance de
+       alguma coisa que este lutador poderia ter disparado; o maior alcance do
+       jogo é o da Genki Dama. Sem o teste, uma cratera declarada a 928 m — o
+       caso medido — era carimbada e retransmitida sem discussão. */
+    const eu = this.pontoDe(player);
+    const alcance = ALCANCE_MAXIMO + TOLERANCIA;
+    if (dist2(msg.p, eu) > alcance * alcance) return;
+
+    /* A cota por lutador é cobrada dentro de `cratera()`, para valer também
+       para o bot e para o baque de queda. Ver o comentário lá.
+
+       O teto é a potência do golpe mais forte do jogo (a Genki Dama, 12), com
        uma folga para a queda. `craterFor` já apara em 64 e `craterMax` apara o
        raio em 34 m; isto apara mais cedo, porque uma potência absurda vinda da
        rede também vira uma cratera absurda no índice espacial. */

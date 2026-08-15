@@ -21,3 +21,4 @@
 export { NamekHud } from "./hud.js";
 export { NamekScoreboard, NamekKillFeed, nomeDoGolpe, corHex } from "./scoreboard.js";
 export { aplicarEstiloNamek } from "./style.js";
+export { NamekMenu } from "./menu.js";

@@ -2,10 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dev",
+      "name": "arco-flecha",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 5173
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "arco-flecha-com-chave",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "ROOM_KEY=teste123 npm run dev -- --port 5199"],
+      "port": 5199
     }
   ]
 }

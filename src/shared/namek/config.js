@@ -303,13 +303,19 @@ export const NAMEK = {
     heartbeat: 15,
     /** s — backoff de reconexão; depois repete o último. */
     reconnectDelays: [0.4, 0.8, 1.6, 3, 5],
-    /** m — folga entre o acerto declarado e onde a vítima estava de fato.
-     *  Generosa de propósito: quem atira vê o alvo `interpDelay` no passado, e
-     *  a 96 m/s de boost isso são quase dez metros. Serve para a sala não se
-     *  contradizer, não para impedir trapaça. */
-    hitTolerance: 12,
-    /** s antes de destruir a sala vazia. */
-    emptyRoomGrace: 30,
+    /**
+     * m — folga entre o acerto declarado e onde a vítima estava de fato.
+     *
+     * O mesmo raciocínio do `CONFIG.net.hitTolerance` do arqueiro (4 m), com a
+     * conta refeita para ESTA velocidade: quem atira vê o alvo `interpDelay`
+     * (100 ms) no passado, e um lutador em arranque anda 96 m/s — quase dez
+     * metros só de atraso de interpolação, mais o que o ping acrescentar. Uma
+     * folga apertada aqui não pegaria trapaceiro; pegaria o jogo inteiro.
+     */
+    hitTolerance: 14,
+    /** s — silêncio que derruba uma conexão. O cliente manda `ping`; quem some
+     *  por mais que isto perdeu a rede e a vaga volta para a sala. */
+    silenceTimeout: 40,
   },
 
   /* -------------------------------------------------------------------- bots */

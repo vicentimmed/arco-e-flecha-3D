@@ -397,6 +397,21 @@ export class NamekGame {
 
     net.on(NS2C.DEATH, (msg) => {
       const dir = msg.d ? vecFrom(msg.d) : null;
+
+      /* O PRÊMIO DO ABATE, no quadro em que o corpo começa a cair.
+       *
+       * A sala já encheu a barra dela (ver `matar`) e o `VITALS` traria o valor
+       * em até 100 ms — mas o `sincronizar` PERSEGUE em vez de escrever, então a
+       * barra local levaria meio segundo para chegar ao topo e o especial
+       * recusaria durante esse tempo com a tela dizendo que dá. Encher aqui é o
+       * "instantaneamente" do pedido; as duas pontas já concordam, e a amostra
+       * seguinte não tem o que corrigir. */
+      if (msg.killer === this.myId && msg.victim !== this.myId && !this.down) {
+        this.ki.encher();
+        this.hud.toast("derrubou — ki cheio");
+        this.audio.kiEncheu();
+      }
+
       if (msg.victim === this.myId) {
         this.morrer(dir);
         this.audio.morreu(this.controller.position);
@@ -927,6 +942,14 @@ export class NamekGame {
     this.me.flyBlend = c.flyBlend;
     this.me.boostBlend = c.boostBlend;
     this.me.chargeBlend = this.ki.blend;
+    /* A AURA DE BARRA CHEIA. É o pedido de "mostrar que ele está com o ki
+       cheio", e ela ganha um canal próprio em vez de virar mais um `if` na
+       aura: quem desenha o corpo não conhece a barra, e a mesma informação
+       chega aos lutadores remotos pelo `VITALS` (ver `RemoteFighters.update`).
+       O limiar é o do ESPECIAL, o mesmo que o selo "KI CHEIO" do HUD usa — e
+       como `freeFlightAt` hoje pede a mesma barra cheia, a aura acesa acaba
+       dizendo as duas coisas: o golpe grande está pronto e o Shift não cobra. */
+    this.me.kiFull = this.ki.podeEspecial();
     this.me.specialFraction = this.casting ? this.casting.t / this.casting.dur : 0;
     this.me.specialIndex = this.casting ? this.casting.indice : -1;
     this.me.down = this.down;

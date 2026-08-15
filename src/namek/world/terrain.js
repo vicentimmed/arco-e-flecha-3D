@@ -261,14 +261,11 @@ export class NamekTerrain {
   alturaDeVertice(v) {
     const x = this.positions[v * 3];
     const z = this.positions[v * 3 + 2];
-    let h = this.base[v];
-    const perto = this.field.cratersNear(x, z);
-    if (perto) {
-      for (let i = 0; i < perto.length; i++) {
-        h += this.field.craterDelta(perto[i], x, z);
-      }
-    }
-    return h;
+    /* `craterSum` e não uma soma escrita aqui: ela é a MESMA conta que o
+       `heightAt` da física faz, teto de fundura incluído. Ter a soma nos dois
+       lugares é ter dois chões — o desenhado e o pisado —, e a diferença só
+       apareceria como um lutador afundado no barro. */
+    return this.base[v] + this.field.craterSum(x, z);
   }
 
   /* --------------------------------------------------------------- normal -- */

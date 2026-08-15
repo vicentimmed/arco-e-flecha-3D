@@ -165,6 +165,10 @@ export class Fighter {
     this.handPose = 0;
     this.down = false;
     this.invuln = false;
+    /** A barra está CHEIA? Acende a aura de prontidão — ver `atualizarAura`.
+     *  Quem escreve é o dono: o laço principal para o lutador local, o
+     *  `VITALS` para os remotos. */
+    this.kiFull = false;
 
     /* --------------------------------------------- espelhos amortecidos ---- */
     this._run = 0;
@@ -174,6 +178,8 @@ export class Fighter {
     this._esp = 0;
     this._hurt = 0;
     this._hand = 0;
+    /** Espelho amortecido de `kiFull`. Lento de propósito — ver `atualizarAura`. */
+    this._cheio = 0;
     this._andar = 0;
     this._queda = 0;
     this._pitch = 0;
@@ -347,6 +353,12 @@ export class Fighter {
     this._hurt = damp(this._hurt, clamp(this.hurtBlend, 0, 1), 16, dt);
     this._hand = damp(this._hand, clamp(this.handPose, 0, 1), 18, dt);
     this._pitch = damp(this._pitch, this.pitch, 20, dt);
+    /* A prontidão ACENDE depressa e apaga devagar (3,5 contra 1,6): encher a
+       barra é um acontecimento e tem de ser visto no quadro em que acontece;
+       gastá-la é o começo de um golpe, e a aura morrendo junto com o disparo
+       leria como a aura ter sido o golpe. */
+    const cheio = this.kiFull ? 1 : 0;
+    this._cheio = damp(this._cheio, cheio, cheio ? 3.5 : 1.6, dt);
 
     /* Marcha: quanto se anda sai da VELOCIDADE, não de um canal.
      *
@@ -619,16 +631,28 @@ export class Fighter {
     const vz = this.velocity.z;
     const rapidez = Math.sqrt(vx * vx + vy * vy + vz * vz);
 
-    /* QUATRO fontes acendem a mesma aura, e a maior manda. Somá-las estouraria
+    /* CINCO fontes acendem a mesma aura, e a maior manda. Somá-las estouraria
        a tela quando alguém carrega ki no meio de um arranque, que é uma coisa
        que acontece o tempo todo.
 
-       VOAR É UMA DELAS, e antes não era: a aura só existia na carga e no
-       arranque, então o lutador cruzava o céu em voo de cruzeiro sem ki nenhum
-       em volta. Na referência ninguém voa apagado — quem está no ar está com o
-       ki aceso, mais forte quanto mais rápido vai. */
+       VOAR É UMA DELAS: a aura só existia na carga e no arranque, então o
+       lutador cruzava o céu em voo de cruzeiro sem ki nenhum em volta. Na
+       referência ninguém voa apagado — quem está no ar está com o ki aceso,
+       mais forte quanto mais rápido vai. */
     const voando = this._fly * (0.4 + 0.34 * clamp(rapidez / NAMEK.fighter.flySpeed, 0, 1));
-    let i = Math.max(this._charge, this._boost * 0.9, voando);
+
+    /* A PRONTIDÃO é a mais fraca das cinco, e tem de ser.
+     *
+     * Ela fica acesa por minutos — é o estado de quem está com a barra cheia —,
+     * enquanto as outras são gestos de segundos. No talo ela apagaria a
+     * diferença entre "estou pronto" e "estou carregando", que é a leitura de
+     * jogo mais importante que a aura carrega: 0,38 é um contorno que se vê a
+     * cem metros e ainda deixa a carga (1,0) ser três vezes mais forte que ele.
+     *
+     * E ela é o mesmo sinal do voo de graça (`freeFlightAt`), então o brilho em
+     * volta de um adversário quer dizer as duas coisas ao mesmo tempo: ele pode
+     * soltar o golpe grande, e ele pode te perseguir sem pagar nada por isso. */
+    let i = Math.max(this._charge, this._boost * 0.9, voando, this._cheio * 0.38);
     if (this._esp > 0.01) {
       // No especial a aura sobe com a carga e recua quando o golpe já saiu: a
       // energia foi embora com o feixe.

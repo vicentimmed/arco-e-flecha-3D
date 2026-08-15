@@ -76,7 +76,7 @@ export const CONTROLES = [
       [["Shift"], "correr no chão"],
       [["Espaço"], "subir"],
       [["Ctrl"], "descer"],
-      [["F"], "decolar e pousar"],
+      [["F"], "decolar do chão · no ar, mergulhar"],
       [["Botão dir."], "arrancada de ki"],
     ],
   },
@@ -88,7 +88,10 @@ export const CONTROLES = [
       [["E"], "segure: defender — o dano quase todo aparado"],
       [["1", "2", "3", "4"], "armar o especial"],
       [["Q"], "onda de choque"],
-      [["R"], "travar o alvo"],
+      /* Uma tecla, três coisas — e é por isso que a linha diz as três. Ver
+         `LockOn.alternar`: o mapa deste modo é fechado a pedido ("só o menu
+         geral"), então a troca de alvo não podia ganhar tecla nova. */
+      [["R"], "travar o alvo · de novo: trocar · no fim: soltar"],
     ],
   },
   {
@@ -434,6 +437,35 @@ export class NamekHud {
       <i class="nk-h nk-h1"></i><i class="nk-h nk-h2"></i>
       <i class="nk-ponto"></i>`;
 
+    /* O ANEL DA TRAVA — o retículo do pedido, e ele NÃO é o `nk-mira` acima.
+     *
+     * *"O modo de travar a mira não está muito bom. Primeiro o retículo não deve
+     * ser aquele. Deve ser um círculo vermelho em volta do player."*
+     *
+     * A queixa é precisa e o defeito era estrutural: a mira travada era o mesmo
+     * retículo do centro da tela, pintado de vermelho e com os traços puxados
+     * para dentro. Só que com a trava o tiro NÃO vai para o centro da tela — ele
+     * vai para o alvo (é a razão de existir da trava, e o cabeçalho de
+     * `camera.js` já dizia que `aimPoint` deixa de ser o eixo óptico). Um
+     * retículo parado no meio da tela enquanto o tiro sai em outra direção é uma
+     * mira que MENTE, e era isso que estava acontecendo.
+     *
+     * Este anel é ancorado no CORPO do adversário: ele acompanha a projeção do
+     * peito dele, cresce e encolhe com a distância, e some junto com a trava.
+     * Quatro cantoneiras por fora dele são o que faz um círculo vermelho ler
+     * como "alvo" e não como "botão".
+     *
+     * Ele é posicionado por `transform` e nada mais — nem `left`, nem `top` —
+     * porque isso é o único caminho que o navegador resolve na composição, sem
+     * recalcular layout. Ele se move em TODO quadro, e é a coisa mais quente do
+     * HUD inteiro. */
+    this.anelEl = document.createElement("div");
+    this.anelEl.className = "nk-alvo-anel";
+    this.anelEl.hidden = true;
+    this.anelEl.innerHTML = `
+      <i class="nk-c nk-c1"></i><i class="nk-c nk-c2"></i>
+      <i class="nk-c nk-c3"></i><i class="nk-c nk-c4"></i>`;
+
     this.faixaEl = document.createElement("div");
     this.faixaEl.className = "nk-faixa nk-contorno";
     this.faixaEl.hidden = true;
@@ -452,6 +484,10 @@ export class NamekHud {
          a informação mais importante da tela atrás da menos importante. */
       this.bussolaEl,
       this.miraEl,
+      /* O anel entra DEPOIS da mira: quando os dois coincidem na tela (o alvo
+         bem no eixo), quem tem de ficar por cima é o anel — ele é a informação
+         nova, e a mira do centro é a de sempre. */
+      this.anelEl,
       this.placaEu,
       this.placaAlvo,
       this.faixaEl,
@@ -483,6 +519,8 @@ export class NamekHud {
     this._prontoDeclarado = null;
     this._prontoEscrito = false;
     this._mira = null;
+    /** O que está escrito no anel da trava, para não reescrever o que não mudou. */
+    this._anel = null;
     this._flash = 0;
     this._flashEscrito = -1;
     this._faixaT = 0;
@@ -944,6 +982,65 @@ export class NamekHud {
     this._mira = estado;
     this.miraEl.classList.toggle("nk-travado", estado === "travado");
     this.miraEl.classList.toggle("nk-carregando", estado === "carregando");
+  }
+
+  /**
+   * O ANEL VERMELHO em volta do adversário travado.
+   *
+   * @param {object|null} a `null` esconde. Com trava:
+   *   `x`, `y`   posição em NDC (−1 a 1), como `project` devolve
+   *   `raio`     raio em PIXELS — quem o calcula é o laço, que é quem conhece a
+   *              ótica da câmera. Ver `NamekGame.anelDaTrava`.
+   *   `distante` o alvo está perto do limite do alcance? (pisca)
+   *   `perdendo` o alvo está fora do quadro e o relógio da perda está correndo?
+   *   `dist`     metros, só para o rótulo
+   *
+   * Tudo aqui é comparado antes de ser escrito. O anel se move em todo quadro e
+   * um `style` escrito por quadro para cada uma das cinco propriedades é a
+   * receita de o HUD custar mais que a cena — a mesma disciplina dos pinos da
+   * bússola, e pelo mesmo motivo.
+   */
+  setLockRing(a) {
+    if (!a) {
+      if (!this.anelEl.hidden) {
+        this.anelEl.hidden = true;
+        this._anel = null;
+      }
+      return;
+    }
+    if (this.anelEl.hidden) this.anelEl.hidden = false;
+
+    const e = this._anel ?? (this._anel = { x: null, y: null, r: null, d: null, p: null });
+
+    /* De NDC para pixels da camada. O `y` inverte: em NDC ele cresce para cima,
+       e em CSS para baixo. */
+    const px = Math.round(((a.x + 1) / 2) * this.el.clientWidth);
+    const py = Math.round(((1 - a.y) / 2) * this.el.clientHeight);
+    /* Meio pixel de resolução no raio: escrevê-lo cru manda um estilo novo a
+       cada centímetro que o adversário se move, e ninguém enxerga a diferença. */
+    const r = Math.max(14, Math.round(a.raio * 2) / 2);
+
+    if (px !== e.x || py !== e.y || r !== e.r) {
+      e.x = px;
+      e.y = py;
+      e.r = r;
+      /* `translate(-50%, -50%)` DEPOIS do deslocamento: a ordem importa, e
+         invertida ela desloca metade do tamanho do anel em vez de centralizá-lo. */
+      this.anelEl.style.transform = `translate(${px}px, ${py}px) translate(-50%, -50%)`;
+      this.anelEl.style.width = `${r * 2}px`;
+      this.anelEl.style.height = `${r * 2}px`;
+    }
+
+    const distante = a.distante === true;
+    if (distante !== e.d) {
+      e.d = distante;
+      this.anelEl.classList.toggle("nk-longe", distante);
+    }
+    const perdendo = a.perdendo === true;
+    if (perdendo !== e.p) {
+      e.p = perdendo;
+      this.anelEl.classList.toggle("nk-perdendo", perdendo);
+    }
   }
 
   /**

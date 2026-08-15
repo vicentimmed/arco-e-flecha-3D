@@ -37,7 +37,9 @@
 
 import * as THREE from "three";
 import { NAMEK } from "../shared/namek/config.js";
-import { clamp, damp } from "../utils/math.js";
+import { clamp, damp, smoothstep } from "../utils/math.js";
+
+const GRAU = Math.PI / 180;
 
 /* ------------------------------------------------------------- o braço ----- */
 /** m — distância atrás do peito em voo de cruzeiro. */
@@ -118,14 +120,34 @@ const ROLL_SUAV = 5;
  *  três graus de ângulo — soco, não enjoo. */
 const TREMOR_AMPLITUDE = 0.35;
 
-/* --------------------------------------------------------------- trava ----- */
-/** m a mais de braço por metro de separação entre os dois. */
-const LOCK_GANHO = 0.17;
-/** m — braço máximo com a trava. Além disto os dois viram pontos. */
-const LOCK_DIST_MAX = 17;
-/** Onde a câmera olha, entre o peito do lutador (0) e o alvo (1). Puxado para
- *  o alvo porque é nele que a briga acontece; o lutador fica no terço de baixo. */
-const LOCK_VIES = 0.42;
+/* --------------------------------------------------------------- trava -----
+ *
+ * Os números moram em `NAMEK.lock.camera` agora, e não mais aqui, porque
+ * deixaram de ser "constantes de tato da lente" e viraram a regra de
+ * enquadramento do modo — a mesma que `lockon.js` e o HUD leem. Ver o bloco
+ * `lock` do config, que tem o argumento de cada um.
+ *
+ * O QUE MUDOU, e é a mudança mais funda que este arquivo já teve:
+ *
+ * A câmera antiga ia para cima da LINHA que liga o lutador ao alvo e olhava
+ * para um ponto a 42 % do caminho. O resultado é o que o pedido descreve como
+ * o que não se quer: voar de lado mostrava o lutador de perfil cruzando a tela,
+ * e dar a volta no inimigo girava a lente na mesma velocidade angular do
+ * jogador. Era câmera presa ao inimigo.
+ *
+ * Agora são três peças, e nenhuma delas aponta para o alvo:
+ *
+ * 1. **O BRAÇO MISTURA** o olhar do próprio lutador com a linha até o alvo, e a
+ *    mistura depende da distância (`alinhaPerto`/`alinhaLonge`). Colado, a lente
+ *    fica atrás de QUEM O JOGADOR CONTROLA — ele manobra, ela vai junto; longe,
+ *    ela se alinha com a linha, que é o único jeito de os dois caberem.
+ * 2. **A ZONA MORTA.** O ponto de interesse só arrasta a lente quando sai de um
+ *    cone de `zona` graus em torno de onde ela já olha — e aí só o bastante para
+ *    voltar à borda do cone. É isto que faz o alvo poder derivar pela tela sem
+ *    a imagem ir junto.
+ * 3. **O TETO DE GIRO** (`giroMax`). A lente não acompanha um giro brusco: ela
+ *    fica para trás de propósito e alcança depois.
+ */
 
 export class NamekCamera {
   /**
@@ -179,6 +201,23 @@ export class NamekCamera {
     this._desejada = new THREE.Vector3();
     this._olhar = new THREE.Vector3();
     this._pivo = new THREE.Vector3();
+    /* Os rascunhos da TRAVA. `_olharTrava` é o único deles que tem MEMÓRIA: ele
+       é o ponto que a zona morta segura entre um quadro e o outro, e é a razão
+       de a lente ficar parada enquanto o alvo deriva. Os outros quatro são
+       contas do quadro. */
+    this._olharTrava = new THREE.Vector3();
+    this._alvoOlhar = new THREE.Vector3();
+    this._enquadre = new THREE.Vector3();
+    this._linha = new THREE.Vector3();
+    this._eixo = new THREE.Vector3();
+    this._dirA = new THREE.Vector3();
+    this._dirB = new THREE.Vector3();
+    /** A trava está viva desde o quadro anterior? Ver `_enquadrarTrava`. */
+    this._travaViva = false;
+    /** rad — o quanto o alvo está fora da direção da lente. Alimenta o FOV. */
+    this._desvioTrava = 0;
+    /** graus de campo de visão que a trava acrescenta neste quadro. */
+    this._fovTrava = 0;
     this._frente = new THREE.Vector3(0, 0, -1);
     this._direita = new THREE.Vector3(1, 0, 0);
     this._cima = new THREE.Vector3(0, 1, 0);
@@ -238,8 +277,17 @@ export class NamekCamera {
     const distancia =
       (DISTANCIA + DISTANCIA_BOOST * this._boost) * (1 - this._solo * FECHO_SOLO);
 
-    if (lockTarget) this._enquadrarTrava(alvo, lockTarget, distancia);
-    else this._enquadrarLivre(distancia);
+    if (lockTarget) {
+      this._enquadrarTrava(alvo, lockTarget, distancia, passo);
+    } else {
+      /* A trava caiu: o ponto que a zona morta guardava não vale mais nada, e
+         guardá-lo faria a próxima trava começar mirando onde a anterior parou —
+         um salto de lente no instante em que o jogador aperta a tecla. */
+      this._travaViva = false;
+      this._fovTrava = 0;
+      this._desvioTrava = 0;
+      this._enquadrarLivre(distancia);
+    }
 
     /* ANTECIPAÇÃO — e sem ela o enquadramento inteiro é uma mentira.
      *
@@ -339,6 +387,13 @@ export class NamekCamera {
     this._boost = 0;
     this._roll = 0;
     this._yawAnterior = null;
+    /* A zona morta da trava também é memória de onde a lente estava, e depois de
+       um teleporte ela descreve um enquadramento que não existe mais. Reiniciada
+       aqui, o primeiro quadro depois do renascimento monta o quadro novo de uma
+       vez, como todo o resto. */
+    this._travaViva = false;
+    this._fovTrava = 0;
+    this._desvioTrava = 0;
   }
 
   /* ------------------------------------------------------------- interno -- */
@@ -363,50 +418,182 @@ export class NamekCamera {
     this.aimPoint.copy(this._olhar);
   }
 
-  /** Enquadramento com trava: os dois no quadro. */
-  _enquadrarTrava(alvo, lock, distancia) {
-    /* A linha que liga os dois. A câmera vai atrás do LUTADOR nela — nunca ao
-       lado: de lado, o alvo cruza a tela toda a cada volta que ele dá. */
-    this._olhar.set(
-      lock.x - this._pivo.x,
-      lock.y - this._pivo.y,
-      lock.z - this._pivo.z,
-    );
-    const separacao = this._olhar.length();
+  /**
+   * Enquadramento com trava: os dois no quadro, **sem apontar para o alvo**.
+   *
+   * Ver o bloco de comentário das constantes lá em cima — as três peças (braço
+   * misturado, zona morta, teto de giro) estão aqui, nesta ordem.
+   */
+  _enquadrarTrava(alvo, lock, distancia, passo) {
+    const C = NAMEK.lock.camera;
 
-    /* Ângulos que apontam o corpo para o alvo, para quem quiser usá-los. A
-       convenção é a mesma do resto: frente = (−sin yaw, 0, −cos yaw). */
+    /* A linha que liga os dois. */
+    this._linha.set(lock.x - this._pivo.x, lock.y - this._pivo.y, lock.z - this._pivo.z);
+    const separacao = this._linha.length();
+
+    /* Ângulos que apontam o CORPO para o alvo, para quem quiser usá-los. A
+       câmera não mexe no corpo de ninguém — isto é informação, não comando. */
     if (separacao > 1e-4) {
-      const o = this._olhar;
+      const o = this._linha;
       const plano = Math.sqrt(o.x * o.x + o.z * o.z);
-      this.lockYaw = Math.atan2(-this._olhar.x, -this._olhar.z);
-      this.lockPitch = Math.atan2(this._olhar.y, plano);
+      this.lockYaw = Math.atan2(-o.x, -o.z);
+      this.lockPitch = Math.atan2(o.y, plano);
     }
 
     if (separacao < 1e-3) {
       this._enquadrarLivre(distancia);
       return;
     }
-    this._olhar.multiplyScalar(1 / separacao);
+    this._linha.multiplyScalar(1 / separacao);
 
-    /* O braço CRESCE com a separação, e é isso que mantém os dois no quadro sem
-       mexer na lente. Com teto: a partir de uns cem metros o alvo é um ponto de
-       qualquer jeito, e continuar recuando só afastaria o lutador também. */
-    const braco = Math.min(distancia + separacao * LOCK_GANHO, LOCK_DIST_MAX);
+    /* ---------------------------------------------------------- 1. o braço
+     *
+     * A DIREÇÃO do braço mistura o olhar do lutador com a linha até o alvo, e a
+     * mistura é função da separação. É a peça que desfaz a "câmera presa":
+     * colado, a lente fica atrás de quem o jogador controla; longe, ela se
+     * alinha com a linha porque é o único jeito de os dois caberem no quadro.
+     *
+     * `smoothstep` entre `perto` e `longe` e não um degrau: uma troca seca de
+     * regime no meio de uma aproximação é a lente girando sozinha justamente
+     * quando o jogador está mirando. */
+    const t = smoothstep(C.perto, C.longe, separacao);
+    const k = C.alinhaPerto + (C.alinhaLonge - C.alinhaPerto) * t;
+    this._eixo
+      .copy(this._frente)
+      .multiplyScalar(1 - k)
+      .addScaledVector(this._linha, k);
+    if (this._eixo.lengthSq() < 1e-8) this._eixo.copy(this._linha);
+    else this._eixo.normalize();
+
+    /* O braço CRESCE com a separação — é o "combate distante: a câmera deve
+       abrir ainda mais" do §5. Com teto: a partir de certa distância o alvo é um
+       ponto de qualquer jeito, e continuar recuando só afastaria o lutador. */
+    const braco = Math.min(distancia + separacao * C.ganho, C.distMax);
 
     this._desejada
       .copy(this._pivo)
-      .addScaledVector(this._olhar, -braco)
+      .addScaledVector(this._eixo, -braco)
       .addScaledVector(this._mundoCima, ALTURA * 0.9)
       .addScaledVector(this._direita, LADO * 0.5);
 
-    /* A mira é o ALVO — é para isso que a trava existe. O ENQUADRAMENTO é o
-       ponto entre os dois; são coisas diferentes e não podem ser a mesma (ver
-       o cabeçalho). */
+    /* A MIRA é o ALVO — é para isso que a trava existe, e ela não passa por
+       zona morta nenhuma: o tiro vai onde o alvo está, não onde a lente está
+       olhando. O ENQUADRAMENTO é outra coisa, e é o que vem abaixo. */
     this.aimPoint.set(lock.x, lock.y, lock.z);
-    this._olhar
+
+    /* ------------------------------------------------------ 2. a zona morta
+     *
+     * O PONTO DE INTERESSE MISTURA duas coisas, e a mistura é a mesma rampa do
+     * braço (`k`, de perto para longe). Foi a correção mais importante deste
+     * bloco, e ela veio de uma MEDIDA: com o ponto de interesse ancorado só na
+     * linha até o alvo, girar a mira 60° para longe do inimigo movia o alvo
+     * apenas 0,12 de NDC — ou seja, ele continuava praticamente no centro da
+     * tela. A câmera estava presa ao inimigo, que é exatamente o que o pedido
+     * proíbe.
+     *
+     * • PERTO, o interesse é o OLHAR DO PRÓPRIO LUTADOR — o mesmo ponto de
+     *   convergência da câmera livre. Virar a mira vira a câmera, o alvo
+     *   atravessa a tela e pode sair dela, e é assim que tem de ser: no combate
+     *   colado o que precisa ser legível é o que o jogador está fazendo.
+     * • LONGE, ele é o ponto entre os dois (`vies` 0,34, puxado para o lutador).
+     *   A essa distância o alvo é pequeno, e sem esse puxão ele simplesmente
+     *   sai do quadro e não volta.
+     *
+     * `k` é a MESMA constante que decide a direção do braço, e ser a mesma
+     * importa: braço e olhar apontando para regimes diferentes produzem um
+     * enquadramento em que o lutador está de costas para o lugar que a lente
+     * está olhando.
+     *
+     * E este não é o ponto para onde a lente olha: é para onde ela olharia se
+     * não houvesse zona. `_alvoOlhar` é o desejo; `_olharTrava` é o que ela de
+     * fato persegue, e ele só se mexe quando o desejo sai de um cone de `zona`
+     * graus em torno dele. */
+    this._alvoOlhar
       .copy(this._pivo)
-      .lerp(this.aimPoint, LOCK_VIES);
+      .addScaledVector(this._frente, CONVERGENCIA)
+      .lerp(this._enquadre.copy(this._pivo).lerp(this.aimPoint, C.vies), k);
+
+    if (!this._travaViva) {
+      /* Primeiro quadro da trava: nada a suavizar. Sem isto, travar em alguém do
+         outro lado da arena arrastaria a lente pelo mapa inteiro — o mesmo
+         defeito que `markTeleport` existe para evitar no nascimento. */
+      this._olharTrava.copy(this._alvoOlhar);
+      this._travaViva = true;
+    } else {
+      this._puxarZona(this._alvoOlhar, passo, C);
+    }
+    this._olhar.copy(this._olharTrava);
+
+    /* ------------------------------------------------- 3. o campo de visão
+     *
+     * *"Se necessário, aumentar temporariamente o campo de visão."* O quanto o
+     * alvo está longe da direção da lente decide o quanto ela abre: com os dois
+     * alinhados não abre nada, e com o alvo raspando a borda do quadro abre
+     * `fovExtra`. É o que evita a última alternativa (recuar mais ainda) quando
+     * o jogador passa colado pelo inimigo. */
+    this._fovTrava = C.fovExtra * clamp(this._desvioTrava / (C.zona * GRAU * 4), 0, 1);
+  }
+
+  /**
+   * A ZONA MORTA angular, e é ela que separa uma lente que ACOMPANHA de uma que
+   * persegue.
+   *
+   * A conta é toda em ângulo e não em posição, porque é ângulo o que se vê: dois
+   * pontos a dez metros um do outro são metade da tela a vinte metros e um pixel
+   * a quatrocentos. Medida em metros, a zona seria enorme de perto e inútil de
+   * longe — exatamente ao contrário do que se quer.
+   *
+   * Enquanto o desejo estiver dentro de `zona` graus do ponto atual, **nada
+   * acontece**: o alvo deriva pela tela e a imagem fica parada. Passou, a lente
+   * gira só o excedente, e ainda por cima limitada a `giroMax` rad/s — então um
+   * adversário cruzando rente não varre a tela, ele sai dela e volta.
+   */
+  _puxarZona(desejo, dt, C) {
+    const a = this._olharTrava;
+    const p = this._pivo;
+
+    /* Os dois como DIREÇÕES a partir do pivô. O ponto de interesse anda junto
+       com o lutador (ele é uma interpolação a partir do peito dele), e medir a
+       zona sobre as posições faria o simples ato de voar contar como desvio. */
+    this._dirA.set(a.x - p.x, a.y - p.y, a.z - p.z);
+    this._dirB.set(desejo.x - p.x, desejo.y - p.y, desejo.z - p.z);
+    const la = this._dirA.length();
+    const lb = this._dirB.length();
+    if (la < 1e-4 || lb < 1e-4) {
+      a.copy(desejo);
+      this._desvioTrava = 0;
+      return;
+    }
+    this._dirA.multiplyScalar(1 / la);
+    this._dirB.multiplyScalar(1 / lb);
+
+    const cos = clamp(this._dirA.dot(this._dirB), -1, 1);
+    const ang = Math.acos(cos);
+    this._desvioTrava = ang;
+
+    const zona = C.zona * GRAU;
+    /* A DISTÂNCIA acompanha sempre, mesmo dentro da zona: o alvo se afastando
+       não é um desvio angular, e deixar o ponto de interesse preso no raio
+       antigo faria a lente olhar para um lugar entre os dois que já não existe.
+       O que a zona segura é a DIREÇÃO, que é o que produz movimento na tela. */
+    const raio = la + (lb - la) * Math.min(1, dt * 4);
+
+    if (ang <= zona) {
+      /* Dentro da zona: só o raio. A direção fica exatamente onde estava. */
+      a.set(p.x + this._dirA.x * raio, p.y + this._dirA.y * raio, p.z + this._dirA.z * raio);
+      return;
+    }
+
+    /* Fora: gira o EXCEDENTE (`ang − zona`), limitado pelo teto de velocidade
+       angular. É a soma das duas travas do §6 — "limites de velocidade de
+       rotação" e "não manter o inimigo rigidamente no centro". */
+    const passo = Math.min(ang - zona, C.giroMax * dt);
+    const f = passo / ang;
+    this._dirA.x += (this._dirB.x - this._dirA.x) * f;
+    this._dirA.y += (this._dirB.y - this._dirA.y) * f;
+    this._dirA.z += (this._dirB.z - this._dirA.z) * f;
+    this._dirA.normalize();
+    a.set(p.x + this._dirA.x * raio, p.y + this._dirA.y * raio, p.z + this._dirA.z * raio);
   }
 
   /** Encurta o braço se o relevo subir entre o corpo e a lente. */
@@ -519,7 +706,7 @@ export class NamekCamera {
        crua — assim um mergulho sem boost também respira. A matriz de projeção
        só é refeita quando o número muda de verdade: ela é recalculada em CPU e
        este é um caminho de todo quadro. */
-    const fov = this.baseFov + FOV_BOOST * this._boost + this._fovVel;
+    const fov = this.baseFov + FOV_BOOST * this._boost + this._fovVel + this._fovTrava;
     if (Math.abs(fov - this._fov) > 0.01) {
       this._fov = fov;
       cam.fov = fov;

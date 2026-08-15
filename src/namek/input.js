@@ -383,6 +383,68 @@ export class NamekInput {
   }
 
   /**
+   * A ASSISTÊNCIA DE MIRA da trava — o §8 do pedido, aplicado onde ele tem de
+   * ser aplicado: **no olhar do jogador, e não no corpo dele.**
+   *
+   * Este arquivo é o dono do `yaw` e do `pitch` — o mouse escreve aqui, e o
+   * `FighterController` só copia (`if (Number.isFinite(a.yaw)) this.yaw = a.yaw`).
+   * Fosse a assistência aplicada no controlador, ela seria sobrescrita pelo
+   * próximo movimento de mouse e o jogador sentiria o corpo brigando com a
+   * câmera. Aplicada aqui, ela e o mouse SOMAM no mesmo número, que é o que faz
+   * a correção parecer o personagem se ajeitando em vez de o jogo tomando o
+   * controle.
+   *
+   * E é por isso que ela é um TETO DE GIRO (`taxa`, em rad/s) e nunca uma
+   * atribuição de ângulo: `taxa · dt` é sempre pequeno comparado ao que um
+   * movimento de mouse produz num quadro, então virar de propósito sempre vence.
+   * A escada de valores — 0,7 rad/s voando, 4,5 atacando, 8 no corpo a corpo —
+   * mora em `NAMEK.lock.assist`, e quem a escolhe é `LockOn`.
+   *
+   * O `pitch` é corrigido a METADE da taxa do `yaw`, e isso não é economia: o
+   * jogador tolera o rumo se ajeitando sozinho e não tolera o horizonte subindo
+   * e descendo sem ele mandar. O yaw é onde a assistência paga, e o pitch é onde
+   * ela incomoda.
+   *
+   * @param {object} acoes o objeto que `actions()` devolveu NESTE quadro — os
+   *   ângulos são escritos nele também, senão a correção só valeria no quadro
+   *   seguinte (o objeto é lido pelo controlador logo depois desta chamada).
+   * @param {{x,y,z}} alvo o ponto a mirar (o peito do adversário)
+   * @param {{x,y,z}} origem o peito de quem mira
+   * @param {number} taxa rad/s
+   * @param {number} dt
+   */
+  assistirMira(acoes, alvo, origem, taxa, dt) {
+    if (!(taxa > 0) || !(dt > 0) || this._suspenso) return;
+    const dx = alvo.x - origem.x;
+    const dy = alvo.y - origem.y;
+    const dz = alvo.z - origem.z;
+    const plano = Math.sqrt(dx * dx + dz * dz);
+    if (plano < 1e-3) return;
+
+    /* Convenção do repositório: frente = (−sin yaw, 0, −cos yaw). */
+    const yawAlvo = Math.atan2(-dx, -dz);
+    const pitchAlvo = Math.atan2(dy, plano);
+
+    /* A diferença dobrada para (−π, π]. Sem isto, um alvo do outro lado do
+       norte faria a assistência girar o caminho longo — o jogador veria o
+       personagem dar quase uma volta inteira para corrigir três graus. */
+    let dYaw = yawAlvo - this._yaw;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+
+    const passo = taxa * dt;
+    this._yaw += clamp(dYaw, -passo, passo);
+
+    const dPitch = clamp(pitchAlvo - this._pitch, -passo * 0.5, passo * 0.5);
+    this._pitch = clamp(this._pitch + dPitch, -PITCH_LIMITE, PITCH_LIMITE);
+
+    if (acoes) {
+      acoes.yaw = this._yaw;
+      acoes.pitch = this._pitch;
+    }
+  }
+
+  /**
    * Engata a mira: pede o ponteiro e segue em frente se ele for negado.
    *
    * Chamado pelo clique no canvas, e exposto porque quem fecha um diálogo (o

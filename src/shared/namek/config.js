@@ -837,6 +837,150 @@ export const NAMEK = {
   /** A ordem dos especiais nas teclas 1–4 e no HUD. */
   specialOrder: ["kamehameha", "galick", "disk", "genki"],
 
+  /* ===================================================================== trava
+     A TRAVA DE ALVO — e a regra que manda em tudo aqui é uma frase:
+
+         **LOCK-ON ≠ CÂMERA FIXA NO INIMIGO.**
+
+     A trava é ASSISTÊNCIA DE COMBATE. Ela diz quem é o alvo; ela não diz para
+     onde o corpo vai, não puxa ninguém para lugar nenhum e não tira do jogador
+     um grau de liberdade sequer. O que ela entrega é: os ataques sabem em quem
+     mirar, a câmera sabe o que manter no quadro, e o corpo ganha uma correção
+     de rumo — forte na hora do golpe, quase nula enquanto se voa.
+
+     O que estava aqui antes atendia a metade disso e falhava na outra: a câmera
+     saía de trás do lutador e ia para cima da LINHA que o liga ao alvo, olhando
+     para um ponto a 42 % do caminho. Voar de lado passava a mostrar o lutador de
+     perfil cruzando a tela; dar a volta no inimigo girava a lente junto, à
+     mesma velocidade angular do jogador. Era câmera presa ao inimigo, que é
+     justamente o que não se quer.
+
+     Os três blocos abaixo são os três sistemas que o §17 do pedido separa —
+     seleção de alvo, câmera, assistência de mira — e eles são independentes de
+     propósito: a câmera LÊ a trava e não manda nela, o combate LÊ a trava e não
+     manda nela, e o movimento não a conhece.
+
+     Quem implementa é `src/namek/lockon.js` (o alvo), `src/namek/camera.js`
+     (o enquadramento) e `src/namek/game.js` (a costura). */
+  lock: {
+    /* ----------------------------------------------------- seleção de alvo */
+    /** m — alcance máximo. Além disto a trava fica INSTÁVEL (ver `perda`) e
+     *  eventualmente cai. É bem maior que a distância de briga (55 m) porque
+     *  perseguir alguém que fugiu é justamente quando a trava mais serve. */
+    alcance: 420,
+    /** graus — meio-ângulo do cone de aquisição. Generoso, mas não "atrás de
+     *  mim": travar em quem está às costas seria travar por engano. */
+    cone: 55,
+    /* Peso da DISTÂNCIA AO CENTRO DA TELA contra a distância no espaço, na hora
+     * de escolher.
+     *
+     * O jogador aponta para quem ele quer brigar — essa é a intenção declarada,
+     * e ela ganha. Mas com peso 1 (só o centro da tela), um adversário a 300 m
+     * exatamente no eixo vencia um a 20 m três graus fora, o que é sempre a
+     * escolha errada numa briga colada. 0,72 é o meio: manda quem está mirado,
+     * e o desempate é a proximidade. */
+    viesDaMira: 0.72,
+
+    /* ------------------------------------------------------------- a perda
+       "Não perder o lock simplesmente porque o inimigo saiu por alguns frames
+       da tela" — o pedido é explícito, e por isso a perda é um RELÓGIO e não uma
+       condição instantânea. O alvo pode sair do quadro, passar por trás de uma
+       montanha e voltar; o que derruba a trava é ele ficar inalcançável por
+       tempo suficiente. */
+    perda: {
+      /** s fora do quadro (ou fora de alcance) antes de a trava cair. */
+      tempo: 2.5,
+      /** Fração de NDC além da qual o alvo conta como "fora do quadro". Maior
+       *  que 1 de propósito: uma margem além da borda da tela, para quem está
+       *  raspando o canto não começar a contagem. */
+      margem: 1.3,
+      /** Fração de `alcance` a partir da qual a trava começa a piscar no HUD.
+       *  É o "a indicação visual pode informar que o alvo está distante". */
+      avisoEm: 0.8,
+    },
+
+    /* ------------------------------------------------------- assistência ---
+     * A correção de rumo que a trava dá ao CORPO, em rad/s de velocidade
+     * angular. Ela nunca é uma atribuição de ângulo: é um teto de giro, e um
+     * teto de giro pode sempre ser vencido pelo mouse — que é o que garante que
+     * o jogador continua no controle.
+     *
+     * Os quatro valores são a escada do §8 do pedido: fraca voando, forte
+     * atacando, mais forte ainda no corpo a corpo.
+     */
+    assist: {
+      /* rad/s — só voando.
+       *
+       * 0,25 rad/s são 14°/s, e o número veio de uma MEDIDA: com 0,7 (40°/s),
+       * virar a mira 60° para longe do inimigo era desfeito pela assistência em
+       * um segundo e meio. Isso não é "correção leve", é o software decidindo
+       * para onde o jogador olha — e o §8 do pedido é explícito sobre a
+       * assistência ter de ser fraca justamente quando se está só voando.
+       *
+       * Com 14°/s ela endireita quem está à deriva ao longo de vários segundos
+       * e não briga com ninguém que decidiu virar: um movimento de mouse comum
+       * gira dez vezes isso num quadro só. */
+      passiva: 0.25,
+      /** rad/s — durante e logo depois de um ataque. */
+      ataque: 4.5,
+      /** rad/s — dentro do alcance de corpo a corpo. */
+      perto: 8,
+      /** m — o que conta como corpo a corpo para a assistência. */
+      alcancePerto: 20,
+      /** s — quanto a assistência forte dura depois do último ataque. Sem esta
+       *  cauda, a correção viveria um quadro e não corrigiria nada. */
+      janela: 0.35,
+      /** Fração da assistência que sobra quando o jogador está MANOBRANDO (com
+       *  entrada lateral ou vertical). É o "mais fraca quando está tentando
+       *  escapar ou se reposicionando": quem vira de propósito não é
+       *  desvirado. */
+      manobra: 0.2,
+    },
+
+    /* ------------------------------------------------------------- câmera --
+     * O ENQUADRAMENTO, e ele é o coração do pedido §4–§6.
+     *
+     * A câmera NÃO aponta para o inimigo. Ela mantém uma ZONA da tela em que o
+     * alvo deve permanecer, e só se mexe quando ele sai dessa zona — e aí só o
+     * bastante para trazê-lo de volta à borda dela. É a diferença entre uma
+     * lente que persegue e uma que acompanha.
+     */
+    camera: {
+      /** graus — meia-abertura da ZONA MORTA angular. Enquanto o ponto de
+       *  interesse estiver dentro dela, a lente não gira nada. 9° numa tela de
+       *  68° de campo é um quinto da largura: espaço de sobra para o alvo
+       *  derivar sem arrastar a imagem junto. */
+      zona: 9,
+      /** rad/s — teto da velocidade de giro da lente. É o que impede a câmera de
+       *  acompanhar um giro brusco do alvo: ela fica para trás, de propósito, e
+       *  alcança depois. Sem teto, um adversário passando rente varre a tela. */
+      giroMax: 2.2,
+      /** m a mais de braço por metro de separação. */
+      ganho: 0.14,
+      /** m — braço máximo. */
+      distMax: 26,
+      /** Onde a lente olha, entre o peito do lutador (0) e o alvo (1). Puxado
+       *  para o lutador — ele é quem o jogador controla, e o alvo só precisa
+       *  CABER no quadro, não ocupar o centro. */
+      vies: 0.34,
+      /** Quanto o braço da câmera segue a linha até o alvo em vez do olhar do
+       *  próprio lutador, no combate COLADO (0) e no DISTANTE (1).
+       *
+       *  É a peça que desfaz a "câmera presa": de perto ela fica atrás do
+       *  OLHAR do jogador (ele manobra, a lente vai junto) e de longe ela se
+       *  alinha com a linha até o alvo (que é o único jeito de os dois caberem
+       *  no quadro). No meio, mistura. */
+      alinhaPerto: 0.15,
+      alinhaLonge: 0.8,
+      /** m — onde acaba o "perto" e começa o "longe" da mistura acima. */
+      perto: 25,
+      longe: 130,
+      /** graus de campo de visão a mais quando o alvo está no limite do quadro.
+       *  É o "se necessário, aumentar temporariamente o campo de visão". */
+      fovExtra: 12,
+    },
+  },
+
   /* -------------------------------------------------------------- destruição
      Ver §7 do plano. A conta da cratera é COMPARTILHADA de propósito: os dois
      lados precisam chegar ao mesmo buraco, ou duas abas veem chões diferentes. */

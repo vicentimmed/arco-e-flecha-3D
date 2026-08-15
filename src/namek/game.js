@@ -41,6 +41,7 @@ import { PowerSystem } from "./powers/index.js";
 import { Fighter } from "./character/index.js";
 import { FighterController } from "./movement.js";
 import { NamekCamera } from "./camera.js";
+import { LockOn } from "./lockon.js";
 import { NamekInput } from "./input.js";
 import { NamekHud, NamekMenu } from "./ui/index.js";
 import { EVENTO_MENU } from "./ui/menu.js";
@@ -153,8 +154,20 @@ export class NamekGame {
     this.deadUntil = 0;
     this.invulnUntil = 0;
 
-    /** Alvo travado (R). null = sem trava. */
-    this.lockId = null;
+    /**
+     * A TRAVA DE ALVO — o sistema, em `lockon.js`.
+     *
+     * Era um `this.lockId = null` mais um `alternarTrava()` aqui dentro, e
+     * funcionava enquanto a trava fosse um interruptor. Ela deixou de ser:
+     * agora tem alcance, tolerância a perda, troca de alvo, uma escada de
+     * assistência de mira e um estado de "alvo distante" que o HUD desenha. Ver
+     * o cabeçalho de `lockon.js` para por que isso saiu daqui.
+     *
+     * `lockId` continua existindo como PROPRIEDADE derivada (logo abaixo)
+     * porque meia dúzia de lugares deste arquivo o leem — e todos eles querem
+     * exatamente "o id travado", que é o que ele continua sendo.
+     */
+    this.lock = new LockOn();
     /** Especial armado (índice em `NAMEK.specialOrder`). */
     this.specialIndex = 0;
     /** O especial em execução: `{ kind, t, dur, dir }` ou null. */
@@ -194,6 +207,8 @@ export class NamekGame {
       vivo: true, invuln: false,
     };
     this._pontoTrava = { x: 0, y: 0, z: 0 };
+    /** O que o HUD desenha do anel da trava. Reaproveitado — ver `anelDaTrava`. */
+    this._anelHud = { x: 0, y: 0, raio: 0, distante: false, perdendo: false };
     /* A bússola: a lista devolvida ao HUD e o banco de registros dela. Os dois
        são reaproveitados entre quadros — ver `bussola`. */
     this._bussola = [];
@@ -679,6 +694,26 @@ export class NamekGame {
 
   /* --------------------------------------------------------------- ajuda -- */
 
+  /**
+   * O id travado, ou null.
+   *
+   * Uma leitura do sistema de trava, e não um campo — é o que permitiu mover a
+   * máquina de estados para `lockon.js` sem reescrever os oito lugares deste
+   * arquivo que só querem saber "em quem estou travado".
+   *
+   * Ele tem `set` porque três desses lugares SOLTAM a trava (o alvo saiu da
+   * sala, o alvo morreu, eu morri), e escrever `null` é a forma mais legível de
+   * dizer isso. Qualquer outro valor é recusado de propósito: prender um alvo é
+   * uma decisão que passa por `alternarTrava`, que é quem sabe validar.
+   */
+  get lockId() {
+    return this.lock.id;
+  }
+
+  set lockId(v) {
+    if (v === null) this.lock.soltar();
+  }
+
   nomeDe(id) {
     if (id === this.myId) return this.myName;
     return this.remotes.get(id)?.name ?? "alguém";
@@ -933,42 +968,100 @@ export class NamekGame {
    * espaço: o jogador aponta para quem ele quer brigar, e o mais próximo é
    * frequentemente alguém às costas dele.
    */
+  /**
+   * O `R`: trava, TROCA ou solta — nesta ordem, e num gesto só.
+   *
+   * A escolha e a troca moram em `LockOn.alternar`; aqui fica o que é do jogo e
+   * não do sistema: o som, o retículo e o aviso na tela. Ver o cabeçalho de
+   * `lockon.js` para por que a mesma tecla faz as três coisas (resumo: o mapa
+   * de teclas deste modo é fechado a pedido, e a regra "troca enquanto houver
+   * para quem trocar, solta quando acaba a fila" resolve o §12 sem inventar
+   * tecla nenhuma).
+   */
   alternarTrava() {
-    if (this.lockId !== null) {
-      this.lockId = null;
+    const origem = this._origemDaTrava();
+    const r = this.lock.alternar(
+      this.remotes.byId.values(),
+      origem,
+      this.cam.aimDirection(),
+    );
+    if (r === "nada") return;
+
+    if (r === "soltou") {
       this.hud.setCrosshair("livre");
+      this.hud.setLockRing(null);
       return;
     }
-    const dir = this.cam.aimDirection();
-    let melhor = null;
-    let melhorCos = 0.72; // ~44° de meio-ângulo: generoso, mas não "atrás de mim"
-    for (const r of this.remotes.byId.values()) {
-      if (r.down) continue;
-      const dx = r.pose.x - this.controller.position.x;
-      const dy = r.pose.y + NAMEK.fighter.chest - (this.controller.position.y + NAMEK.fighter.chest);
-      const dz = r.pose.z - this.controller.position.z;
-      const d = Math.hypot(dx, dy, dz) || 1;
-      const cos = (dx * dir.x + dy * dir.y + dz * dir.z) / d;
-      if (cos > melhorCos) {
-        melhorCos = cos;
-        melhor = r;
-      }
-    }
-    this.lockId = melhor?.id ?? null;
-    if (this.lockId !== null) this.audio.travou();
-    this.hud.setCrosshair(this.lockId !== null ? "travado" : "livre");
+    this.audio.travou();
+    this.hud.setCrosshair("travado");
+    if (r === "trocou") this.hud.toast(`alvo: ${this.nomeDe(this.lock.id)}`);
   }
 
-  /** O ponto do alvo travado, ou null. */
+  /** O peito de quem está travando — a origem de toda medida da trava. */
+  _origemDaTrava() {
+    const c = this.controller.position;
+    const o = this._pontoTrava;
+    o.x = c.x;
+    o.y = c.y + NAMEK.fighter.chest;
+    o.z = c.z;
+    return o;
+  }
+
+  /** O ponto do alvo travado, ou null. Rascunho do sistema: não guarde. */
   pontoDaTrava() {
-    const r = this.lockId !== null ? this.remotes.get(this.lockId) : null;
-    if (!r || r.down) return null;
-    // Rascunho reescrito: este ponto é lido pela câmera e pela mira todo quadro.
-    const p = this._pontoTrava;
-    p.x = r.pose.x;
-    p.y = r.pose.y + NAMEK.fighter.chest;
-    p.z = r.pose.z;
-    return p;
+    return this.lock.ponto();
+  }
+
+  /**
+   * O ANEL da trava, em coordenadas de tela — o que o HUD desenha.
+   *
+   * O RAIO SAI DA ÓTICA e não de um número fixo, e é isso que faz o anel
+   * descrever uma pessoa em vez de ser um adesivo: um lutador de 1,78 m a `d`
+   * metros ocupa `1,78 / d` radianos, e a tela inteira ocupa
+   * `2·tan(fov/2)` na mesma unidade de plano de projeção. A conta abaixo é essa
+   * razão virada em pixels, com um piso — a partir de umas centenas de metros o
+   * corpo tem meia dúzia de pixels e o anel precisa continuar visível para o
+   * jogador saber para onde virar.
+   *
+   * Ele é generoso de propósito (1,9 × a meia-altura): um anel colado no corpo
+   * some atrás do próprio adversário quando ele está de frente. O que se quer é
+   * um círculo EM VOLTA dele, que é o pedido literal.
+   */
+  anelDaTrava() {
+    if (this.lock.id === null || this.down) return null;
+    const ndc = this.lock.naTela();
+    if (!ndc) return null;
+
+    const cam = this.camera3;
+    const alturaMundo = NAMEK.fighter.height * 1.9;
+    const d = Math.max(1, this.lock.separacao);
+    /* Metade da altura da tela, em unidades de mundo, à distância do alvo. */
+    const meiaTela = Math.tan((cam.fov * Math.PI) / 360) * d;
+    const raio = ((alturaMundo * 0.5) / meiaTela) * (window.innerHeight * 0.5);
+
+    const a = this._anelHud;
+    /* FORA DO QUADRO o anel é fixado na BORDA por onde o alvo saiu. Deixá-lo na
+       posição projetada seria pior que escondê-lo: atrás da lente a projeção
+       espelha, e o anel apareceria do lado oposto ao adversário — apontando o
+       jogador para longe de quem ele está caçando, exatamente quando ele mais
+       precisa da informação. */
+    if (this.lock.foraDoQuadro) {
+      const ex = ndc.atras ? -ndc.x : ndc.x;
+      const ey = ndc.atras ? -ndc.y : ndc.y;
+      const m = Math.max(Math.abs(ex), Math.abs(ey), 1e-3);
+      a.x = (ex / m) * 0.92;
+      a.y = (ey / m) * 0.92;
+      /* Atrás da lente não há tamanho aparente honesto: um raio fixo pequeno é
+         a resposta que não inventa nada. */
+      a.raio = 22;
+    } else {
+      a.x = ndc.x;
+      a.y = ndc.y;
+      a.raio = raio;
+    }
+    a.distante = this.lock.distante;
+    a.perdendo = this.lock.foraDe > 0;
+    return a;
   }
 
   /* ------------------------------------------------------------ disparos -- */
@@ -984,6 +1077,11 @@ export class NamekGame {
     if (!this.ki.gastar(NAMEK.ki.blastCost)) return;
 
     this.blastCooldown = 1 / NAMEK.blast.rate;
+    /* ATACOU: arma a janela de assistência forte (§8 do pedido). A janela existe
+       porque a rajada sai a 6 Hz e a assistência precisa sobreviver ao intervalo
+       entre dois tiros — sem ela, a correção duraria um quadro e não corrigiria
+       nada. Ver `LockOn.atacou`. */
+    this.lock.atacou();
     const mao = this.nextHand;
     this.nextHand = mao === 0 ? 1 : 0;
 
@@ -1031,8 +1129,29 @@ export class NamekGame {
    * Sem trava, sai pela mira. E em nenhum dos dois casos a bola procura sozinha
    * — a perseguição dela é fraca e limitada, ver o §6.1 do plano.
    */
+  /**
+   * Para onde o tiro sai.
+   *
+   * Com trava ele sai na direção do ALVO — é o que o BT3 faz, e é o que torna o
+   * combate aéreo jogável: mirar à mão em alguém que se move a 64 m/s enquanto
+   * você também se move não é habilidade, é sorte. É também o §10 do pedido
+   * inteiro: *"o jogador está voando para a esquerda, o inimigo está à direita,
+   * ele continua voando para a esquerda mas dispara um Ki Blast direcionado ao
+   * inimigo."* Nada aqui olha para onde o corpo está indo.
+   *
+   * MAS NÃO É UM MÍSSIL PERFEITO, e essa é a diferença que este método passou a
+   * fazer. `LockOn.alvoDeAtaque` recusa o alvo que está fora do quadro: quem
+   * saiu de vista continua TRAVADO (o relógio da perda não venceu, a câmera
+   * ainda o procura) e deixa de receber tiro dirigido. O §9 é explícito sobre
+   * isso — *"deve existir uma margem de erro… o inimigo ainda pode esquivar"* —
+   * e um tiro que sai pelas costas do atirador atrás de alguém que ele não vê é
+   * o oposto de assistência.
+   *
+   * Sem trava (ou com o alvo fora de vista), sai pela mira, e a perseguição
+   * fraca de cada projétil (§6.1) continua sendo tudo o que perdoa a pontaria.
+   */
   direcaoDeTiro(origem) {
-    const trava = this.pontoDaTrava();
+    const trava = this.lock.alvoDeAtaque() !== null ? this.pontoDaTrava() : null;
     if (trava) {
       const dx = trava.x - origem.x;
       const dy = trava.y - origem.y;
@@ -1052,7 +1171,10 @@ export class NamekGame {
    * recalculá-lo (ver o comentário de `NC2S.BLAST`).
    */
   escolherAlvoDaBola(origem, dir) {
-    if (this.lockId !== null) return this.lockId;
+    /* `alvoDeAtaque` e não `lockId`: um alvo travado mas fora de vista não
+       recebe perseguição. Ver `direcaoDeTiro`, que tem o argumento. */
+    const travado = this.lock.alvoDeAtaque();
+    if (travado !== null) return travado;
     const H = NAMEK.blast.homing;
     const cosCone = Math.cos((H.cone * Math.PI) / 180);
     let melhor = null;
@@ -1119,6 +1241,10 @@ export class NamekGame {
       return;
     }
     this.ki.gastarTudo();
+    /* A janela de assistência também vale para o especial, e vale principalmente
+       para ele: a direção é travada no início da pose, então o rumo do corpo no
+       instante do disparo é o rumo do golpe pelos próximos 2,4 s. */
+    this.lock.atacou();
 
     const origem = this.me.chestPoint();
     const dir = this.direcaoDeTiro(origem);
@@ -1141,11 +1267,12 @@ export class NamekGame {
      * É a mesma regra do §6.1 aplicada a um golpe caro, e ela precisa ser
      * resolvida aqui e viajar na mensagem: dois clientes escolhendo sozinhos
      * dariam duas trajetórias para o mesmo golpe. */
+    const travado = this.lock.alvoDeAtaque();
     const alvo = !info.homing
       ? null
       : info.homing.soTrava
-        ? this.lockId
-        : this.lockId ?? this.escolherAlvoDeEspecial(origem, dir, info);
+        ? travado
+        : travado ?? this.escolherAlvoDeEspecial(origem, dir, info);
     /* `duracaoDaPose` e não `windup + sustain`: o Kienzan, o Galick Gun e a
        Genki Dama SAEM da mão e voam sozinhos, e prender o corpo pela vida do
        projétil deixaria o lutador na pose de arremesso por até dez segundos
@@ -1283,6 +1410,31 @@ export class NamekGame {
      * A trava dura o que a POSE dura (`duracaoDaPose`), não o que o projétil
      * dura: quem segura um feixe fica preso enquanto ele estiver aceso, e quem
      * ARREMESSA um disco fica preso só a fração de segundo do arremesso. */
+    /* A ASSISTÊNCIA DE MIRA — a trava ajeitando o rumo, antes de o corpo andar.
+     *
+     * Ela usa o estado da trava do quadro ANTERIOR (a revalidação vem depois,
+     * junto com a câmera), e isso é aceitável pelo mesmo motivo de sempre: um
+     * quadro a 60 Hz é 16 ms, e o que ela corrige são graus por segundo. Trazer
+     * `lock.update` para cá custaria a matriz de câmera deste quadro, que ainda
+     * não existe — e é justamente a dependência circular que o §17 do pedido
+     * manda evitar.
+     *
+     * Quem está no meio de um especial não recebe assistência: a direção do
+     * golpe foi travada no início da pose (ver `soltarEspecial`), e girar o
+     * corpo depois disso mexeria no personagem sem mexer no feixe. */
+    if (!this.down && !this.casting && this.lock.id !== null && !this.lock.foraDoQuadro) {
+      const p = this.pontoDaTrava();
+      if (p) {
+        this.input.assistirMira(
+          acoes,
+          p,
+          this._origemDaTrava(),
+          this.lock.assistencia,
+          dt,
+        );
+      }
+    }
+
     this.controller.travado = this.casting !== null;
     const pouso = this.down ? null : this.controller.update(dt, acoes, this.ki);
 
@@ -1305,8 +1457,30 @@ export class NamekGame {
     }
 
     /* A TRAVA vem antes da câmera porque é ela que decide o enquadramento deste
-       quadro. O DISPARO vem depois — ver `dispararAgora`, no fim do passo. */
+       quadro. O DISPARO vem depois. */
     if (!this.down && acoes.lockPressed) this.alternarTrava();
+
+    /* A REVALIDAÇÃO da trava, e a escada de assistência. Ela roda com a matriz
+     * de câmera do quadro ANTERIOR — de propósito, e é a ordem certa: a câmera
+     * deste quadro ainda não foi resolvida (ela vem lá embaixo, depois da pose),
+     * e o que a trava pergunta à câmera é *"o alvo saiu do quadro?"*, que é uma
+     * pergunta sobre o que o jogador ACABOU DE VER. Um quadro de atraso num
+     * relógio de dois segundos e meio não muda nada; inverter a ordem para
+     * "consertar" isso criaria uma dependência circular entre os dois sistemas,
+     * que é exatamente o que o §17 do pedido manda não fazer.
+     *
+     * `manobra` é o freio do §8: quem está com entrada lateral ou vertical está
+     * manobrando de propósito, e não pode ser desvirado pela assistência. */
+    if (this.down) {
+      this.lock.soltar();
+    } else {
+      this.lock.update(dt, {
+        origem: this._origemDaTrava(),
+        buscar: (id) => this.remotes.get(id),
+        camera: this.camera3,
+        manobra: acoes.strafe !== 0 || acoes.up !== 0,
+      });
+    }
 
     /* O especial em curso: a fração alimenta a pose (e viaja na rede como um
        número só — o mesmo truque do `q` do Kamehameha do arqueiro). */
@@ -1423,10 +1597,21 @@ export class NamekGame {
     /* A BÚSSOLA vem depois da câmera e antes do resto do HUD: ela projeta pela
        lente deste quadro, e a lente acabou de ser resolvida lá em cima. */
     this.hud.setMarcas(this.bussola());
+    /* O ANEL VERMELHO em volta do adversário travado — o retículo do pedido.
+       Depois da câmera, como a bússola e pelo mesmo motivo: ele projeta pela
+       lente deste quadro. */
+    this.hud.setLockRing(this.anelDaTrava());
 
     this.hud.setVitals(this.health, NAMEK.fighter.maxHealth, this.ki.valor, this.ki.max);
     this.hud.setSpecials(this.specialIndex, this.ki.podeEspecial());
     const trava = this.lockId !== null ? this.remotes.get(this.lockId) : null;
+    /* A trava pode ter caído sozinha neste quadro (alvo morreu, sumiu, ou o
+       relógio da perda venceu — ver `LockOn.update`). O retículo do centro tem
+       de voltar junto: sem esta linha ele ficaria escondido para sempre, porque
+       quem o devolvia era só o caminho do `R`. */
+    this.hud.setCrosshair(
+      this.lockId !== null ? "travado" : this.ki.carregando ? "carregando" : "livre",
+    );
     if (trava) {
       const ah = this._alvoHud;
       ah.id = trava.id;

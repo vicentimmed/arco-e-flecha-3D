@@ -596,18 +596,24 @@ const CSS = `
   transition: opacity 0.14s ease-out;
 }
 
-/* Travado: vermelho, anel fechado e os traços puxados para dentro — a mira
-   "morde" o alvo. É a leitura mais rápida que existe para "é nele". */
-.nk-mira.nk-travado { color: #ff4a35; }
-.nk-mira.nk-travado .nk-t1 { transform: translateY(7px); }
-.nk-mira.nk-travado .nk-t2 { transform: translateY(-7px); }
-.nk-mira.nk-travado .nk-h1 { transform: translateX(7px); }
-.nk-mira.nk-travado .nk-h2 { transform: translateX(-7px); }
-.nk-mira.nk-travado .nk-mira-anel {
-  opacity: 1;
-  border-style: solid;
-  animation: nk-girar 3.2s linear infinite;
-}
+/* TRAVADO: a mira do centro SAI DA TELA.
+ *
+ * Ela era pintada de vermelho com os traços puxados para dentro — "a mira morde
+ * o alvo", dizia o comentário —, e isso era exatamente o problema que o pedido
+ * aponta: *"o retículo não deve ser aquele; deve ser um círculo vermelho em
+ * volta do player."*
+ *
+ * A razão não é de gosto. Com a trava, o tiro NÃO sai pelo eixo óptico: ele sai
+ * na direção do alvo (ver 'direcaoDeTiro', e o cabeçalho de 'camera.js' sobre
+ * 'aimPoint' deixar de ser o centro da tela). Uma cruz no meio da tela enquanto
+ * o tiro vai para outro lugar é uma mira que mente, e ela mentia mais quanto
+ * mais o alvo derivasse para fora do centro — que, com a zona morta da câmera
+ * nova, passou a ser o tempo todo.
+ *
+ * Quem diz para onde o tiro vai, travado, é o anel em volta do adversário
+ * ('.nk-alvo-anel'). Duas miras na tela ao mesmo tempo, uma delas errada, é pior
+ * que nenhuma. */
+.nk-mira.nk-travado { display: none; }
 
 /* Carregando: dourado e girando. Carregar ki trava o lutador no lugar (§5), e a
    mira girando é o que diz que o corpo não vai responder até soltar. */
@@ -615,6 +621,84 @@ const CSS = `
 .nk-mira.nk-carregando .nk-mira-anel { opacity: 1; animation: nk-girar 1.1s linear infinite; }
 
 @keyframes nk-girar { to { transform: rotate(360deg); } }
+
+/* ============================================================ anel da trava
+ *
+ * O CÍRCULO VERMELHO EM VOLTA DO ADVERSÁRIO — o retículo do pedido.
+ *
+ * Ele não fica no centro da tela: ele é ancorado no corpo de quem está travado,
+ * e a razão está em 'NamekHud.setLockRing'. O que este bloco resolve é fazer um
+ * círculo vermelho de tamanho variável ler como MIRA e não como enfeite, e são
+ * três coisas:
+ *
+ * • **o contorno duplo** — um anel vermelho com uma sombra preta por fora e um
+ *   brilho vermelho por dentro. Vermelho puro sobre o clarão de um Kamehameha
+ *   some, e sobre o céu verde de Namekusei ele vibra; a borda preta resolve os
+ *   dois, e é a mesma lição que o retículo do centro já tinha aprendido.
+ * • **as quatro cantoneiras** — quatro cantos de um quadrado imaginário em volta
+ *   do círculo. É a diferença entre "um círculo" e "uma mira travada": nenhum
+ *   objeto do mundo tem cantoneiras, então elas são lidas como interface na
+ *   hora, sem precisar de nada escrito.
+ * • **nada de 'transition' na posição** — o anel persegue um corpo que voa a
+ *   64 m/s, e uma transição de CSS por cima disso faria o anel ficar atrasado em
+ *   relação ao adversário de um jeito que o olho lê como "o jogo travou". A cor
+ *   e a opacidade, essas sim, transicionam.
+ */
+
+.nk-alvo-anel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  border: 2px solid #ff3b28;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 0 12px rgba(255, 59, 40, 0.55);
+  pointer-events: none;
+  /* 'will-change' porque ele muda de transform em TODO quadro: é o aviso ao
+     navegador para deixar o elemento numa camada própria e não repintar o HUD
+     inteiro por causa dele. */
+  will-change: transform, width, height;
+}
+.nk-alvo-anel[hidden] { display: none !important; }
+
+/* As cantoneiras. 'inset' negativo as põe FORA do círculo — coladas nele, elas
+   somem contra a própria borda. */
+.nk-alvo-anel .nk-c {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #ff3b28;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+}
+.nk-alvo-anel .nk-c1 { left: -7px;  top: -7px;    border-right: 0; border-bottom: 0; }
+.nk-alvo-anel .nk-c2 { right: -7px; top: -7px;    border-left: 0;  border-bottom: 0; }
+.nk-alvo-anel .nk-c3 { left: -7px;  bottom: -7px; border-right: 0; border-top: 0; }
+.nk-alvo-anel .nk-c4 { right: -7px; bottom: -7px; border-left: 0;  border-top: 0; }
+
+/* ALVO DISTANTE: o anel pisca devagar. É a "indicação visual de que o alvo está
+   distante" do §13 — a trava ainda vale, mas está perto do limite de alcance e
+   pode cair. Piscar e não mudar de cor: cor nova é informação nova para
+   aprender, e piscar todo mundo já entende como "atenção". */
+.nk-alvo-anel.nk-longe { animation: nk-alvo-pulso 1.1s ease-in-out infinite; }
+
+/* PERDENDO: o alvo saiu do quadro e o relógio da perda está correndo (§14). O
+   anel fica tracejado e desbota — ele está descrevendo alguém que já não se vê,
+   e um anel sólido sobre o vazio seria mentira. Ele continua na tela de
+   propósito: é a borda do quadro por onde o adversário saiu, e é para lá que o
+   jogador tem de virar. */
+.nk-alvo-anel.nk-perdendo {
+  border-style: dashed;
+  opacity: 0.55;
+  animation: nk-alvo-pulso 0.5s ease-in-out infinite;
+}
+
+@keyframes nk-alvo-pulso {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 /* ============================================================= dano recebido */
 

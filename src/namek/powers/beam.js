@@ -107,9 +107,23 @@ class Feixe {
     this.group = new THREE.Group();
     this.group.visible = false;
 
-    this.nucleo = this.montar(geos.tubo, 3, 0.9);
-    this.casca = this.montar(geos.tubo, 2, 0.34);
-    this.halo = this.montar(geos.tubo, 1, 0.11);
+    /* AS TRÊS CAMADAS SOMAM — e era isso que apagava a cor do golpe.
+     *
+     * Mistura aditiva não escolhe entre as camadas: ela empilha. Núcleo a 0,90
+     * mais casca a 0,34 mais halo a 0,11 são 1,35 de branco somado sobre um céu
+     * que já é claro, e o canal satura muito antes de a matiz chegar à tela. O
+     * Kamehameha (`#6fd8ff`) saía como **um tubo branco liso, uniforme de ponta
+     * a ponta** — medido na imagem —, e o mesmo valia para todos os outros: a
+     * cor existia no material e nunca aparecia.
+     *
+     * A soma agora fecha em 0,74, e a divisão entre elas mudou de figura: o
+     * núcleo é ESTREITO e quente (é ele que pode estourar em branco, e deve — é
+     * o miolo), enquanto casca e halo, que são a área grande, ficam translúcidos
+     * e portanto COLORIDOS. É assim que um feixe azul lê como azul com o miolo
+     * branco, que é o que a referência mostra. */
+    this.nucleo = this.montar(geos.tubo, 3, 0.5);
+    this.casca = this.montar(geos.tubo, 2, 0.17);
+    this.halo = this.montar(geos.tubo, 1, 0.07);
 
     /* A PONTA faz DOIS papéis, e é por isso que ela existe como um objeto só:
        durante a carga é a esfera entre as mãos (a pose), e depois é o nariz do
@@ -273,10 +287,21 @@ class Feixe {
     if (this.t < S.windup) {
       const u = this.t / S.windup;
       this.ponta.position.y = 0;
-      // Cresce com u² e treme: energia sendo comprimida, não um balão inflando.
-      const r = S.hitRadius * 0.62 * u * u * (1 + Math.sin(this.t * 30) * 0.06);
+      /* A ESFERA DE CARGA É UMA BOLA NA MÃO, NÃO UMA PAREDE.
+       *
+       * Ela era `hitRadius · 0,62` — 2,2 m de raio para o Kamehameha — a sete
+       * metros da lente. São 34° de um campo de visão de 68°: **metade da tela**,
+       * em branco chapado de borda dura, com o lutador inteiro atrás. Durante
+       * todo o windup o jogador não via o próprio personagem, nem a pose, nem
+       * para onde estava mirando; e a pose de carga existe justamente para ser
+       * vista (é o aviso que dá ao outro a chance de sair da frente).
+       *
+       * A 0,22 ela fica com 0,79 m — do tamanho das duas mãos em concha, que é
+       * o que a referência mostra. E a opacidade cai junto: aditivo a 0,95 é
+       * branco puro, e branco puro não tem cor nenhuma para o golpe carregar. */
+      const r = S.hitRadius * 0.22 * u * u * (1 + Math.sin(this.t * 30) * 0.06);
       this.ponta.scale.setScalar(Math.max(0.001, r));
-      this.ponta.material.opacity = 0.55 + u * 0.4;
+      this.ponta.material.opacity = 0.3 + u * 0.25;
       if (this.local) relato.luz(this.ox, this.oy, this.oz, S.cor, 0.35 * u);
       return false;
     }

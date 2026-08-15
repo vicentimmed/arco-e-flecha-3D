@@ -170,13 +170,26 @@ export class Aura {
       const a = (i / LINGUAS) * TAU;
       /* Alturas alternadas e irregulares. Dez línguas iguais dariam uma coroa
          de plástico; a diferença de tamanho é o que faz o olho ler fogo. */
-      const alto = 0.62 + ((i * 7) % 5) * 0.16;
-      const raio = 0.1 + ((i * 3) % 4) * 0.02;
-      const geo = new THREE.ConeGeometry(raio, alto, 4, 1, true);
+      /* CHAMA, NÃO CACO DE VIDRO.
+       *
+       * Eram cones de QUATRO lados: de perfil, um cone de quatro lados é um
+       * triângulo de aresta viva, e dez deles em aditivo branco viravam um
+       * punhado de estilhaços chapados por cima do corpo — na pose do
+       * Kamehameha, que é a mais icônica do jogo, o tronco e os braços sumiam
+       * atrás deles. Sete lados já leem como volume arredondado ao custo de
+       * três triângulos a mais por língua.
+       *
+       * E elas foram AFASTADAS do corpo (0,34 → 0,52 m) e afinadas: a aura tem
+       * de emoldurar a silhueta, não cobri-la. Com `depthWrite: false` e mistura
+       * aditiva, tudo o que ela cruza ela apaga — então o único lugar seguro
+       * para ela é fora do contorno do lutador. */
+      const alto = 0.74 + ((i * 7) % 5) * 0.18;
+      const raio = 0.075 + ((i * 3) % 4) * 0.014;
+      const geo = new THREE.ConeGeometry(raio, alto, 7, 1, true);
       geo.translate(0, alto * 0.5, 0);
       // Inclinadas para fora: subindo e abrindo, como toda chama sobe.
       const dir = _v.set(Math.cos(a) * 0.34, 1, Math.sin(a) * 0.34).normalize();
-      const base = new THREE.Vector3(Math.cos(a) * 0.34, -0.45 + (i % 3) * 0.22, Math.sin(a) * 0.34);
+      const base = new THREE.Vector3(Math.cos(a) * 0.52, -0.45 + (i % 3) * 0.22, Math.sin(a) * 0.52);
       const m = new THREE.Matrix4().compose(
         base,
         _q.setFromUnitVectors(CIMA, dir),
@@ -252,7 +265,11 @@ export class Aura {
     // As línguas GIRAM. É o movimento que separa "aura" de "casulo".
     this.linguas.rotation.y = t * 2.4;
     this.linguas.scale.set(largo * pulso, (0.7 + 0.75 * i) * pulso, largo * pulso);
-    this.matChama.opacity = 0.42 * i * this._opacidade;
+    /* 0,42 → 0,26. Aditivo sobre um céu já claro satura em branco muito antes
+       de a cor do lutador aparecer, e era isso que fazia a aura ler como vidro
+       em vez de fogo: a matiz existia no material e nunca chegava à tela. Mais
+       fraca, ela SOMA em vez de substituir — e a cor volta. */
+    this.matChama.opacity = 0.26 * i * this._opacidade;
 
     /* As faíscas sobem e voltam por baixo. O módulo é o truque inteiro: uma
        coluna que se repete a cada `ALTURA_FAISCA` metros parece infinita e não
@@ -261,7 +278,9 @@ export class Aura {
     this.faiscas.position.y = subida;
     this.faiscas.rotation.y = -t * 1.3;
     this.faiscas.scale.setScalar(0.7 + 0.6 * i);
-    this.matFaisca.opacity = 0.55 * i * this._opacidade;
+    // Pelo mesmo motivo da chama: faísca branca cheia em aditivo é um recorte
+    // de papel, não uma fagulha.
+    this.matFaisca.opacity = 0.34 * i * this._opacidade;
 
     /* O RASTRO. A chama tomba para trás (o −Y do corpo, que no voo rasante é a
        direção de onde ele veio) e estica. Nenhum objeto novo: é a mesma aura

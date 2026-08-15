@@ -1,5 +1,10 @@
 /* ---------------------------------------------------------------------------
-   O som de Namekusei — inteiro sintetizado, sem um único arquivo.
+   O som de Namekusei — sintetizado, com UMA exceção: a trilha de fundo
+   (`aurora_de_combate.mp3`, ver `NamekAudio.constructor`). Música é composição,
+   não energia — não existe receita de ruído filtrado que substitua uma
+   melodia de verdade, e é por isso que o arqueiro também usa mp3 para a dele
+   (`systems/audio.js`). Todo o resto — bola de ki, feixe, carga, explosão,
+   trovão — continua síntese pura, pelo motivo abaixo.
 
    ------------------------------------------------------------ por que síntese
 
@@ -67,6 +72,7 @@
 
 import * as THREE from "three";
 import { NAMEK } from "../shared/namek/config.js";
+import trilhaUrl from "../assets/audio/aurora_de_combate.mp3";
 
 /** Vozes simultâneas do pool geral. */
 const VOZES = 14;
@@ -85,6 +91,15 @@ const VOZES_SOLENES = 3;
    é para TODO MUNDO: o alcance dela é o diâmetro da arena com folga, e a queda
    por distância é muito mais lenta que a dos sons comuns (ver `_vozSolene`). */
 const ALCANCE_SOLENE = 1400;
+
+/* A ÚNICA exceção à síntese (ver o comentário do topo do arquivo): uma trilha
+   de fundo é música, não energia, e não existe receita de ruído filtrado que
+   substitua uma composição de verdade. O volume é DELIBERADAMENTE baixo pelo
+   mesmo motivo do arqueiro (`systems/audio.js`, `MUSIC_VOLUME_DAY`): o que
+   precisa ser ouvido é a rajada, o especial e o acerto — são eles que dizem ao
+   jogador o que acabou de acontecer, e uma trilha no volume dos efeitos os
+   encobre justamente nos instantes que importam. */
+const VOLUME_TRILHA = 0.1;
 
 /* ------------------------------------------------------------- síntese ----- */
 
@@ -565,6 +580,35 @@ export class NamekAudio {
     /* Cota da dor PRÓPRIA, separada de tudo. Ver `levouDano`. */
     this._ultimaDor = 0;
     this._ultimaDorForte = false;
+
+    /* A trilha de fundo. `setLoop(true)` é o que faz ela recomeçar sozinha ao
+       terminar, sem emenda audível — o Web Audio repete o buffer no próprio
+       relógio da placa. Fica pendurada no listener e não no mundo: música não
+       tem posição. */
+    this.musica = new THREE.Audio(this.listener);
+    this.musica.setLoop(true);
+    this.musica.setVolume(VOLUME_TRILHA);
+    // Baixa em paralelo com o resto da partida — falhar ou demorar não pode
+    // segurar a entrada em campo. Ver `_carregarTrilha`.
+    this._carregarTrilha();
+  }
+
+  /**
+   * Baixa e decodifica a trilha, e toca se o áudio já estiver destravado.
+   *
+   * Mesmo padrão do arqueiro (`systems/audio.js`, `_loadMusic`): o download
+   * corre à parte, e o `catch` deixa o jogo mudo em vez de quebrar por causa
+   * de um mp3 que não chegou.
+   */
+  async _carregarTrilha() {
+    try {
+      const resposta = await fetch(trilhaUrl);
+      const bytes = await resposta.arrayBuffer();
+      this.musica.setBuffer(await this.ctx.decodeAudioData(bytes));
+      if (this.destravado && this.ligado && !this.musica.isPlaying) this.musica.play();
+    } catch {
+      /* sem trilha; o jogo não sente */
+    }
   }
 
   /**
@@ -579,6 +623,7 @@ export class NamekAudio {
     this.destravado = true;
     const começar = () => {
       if (!this.buf) this.buf = this._sintetizar();
+      if (this.ligado && this.musica.buffer && !this.musica.isPlaying) this.musica.play();
     };
     if (this.ctx.state === "suspended") this.ctx.resume().then(começar).catch(() => {});
     else começar();
@@ -1076,6 +1121,9 @@ export class NamekAudio {
          acabou de apertar "mudo" não quer ter. */
       for (const v of this.solenes) if (v.a.isPlaying) v.a.stop();
       for (const [, a] of this._canais) if (a.isPlaying) a.stop();
+      if (this.musica.isPlaying) this.musica.pause();
+    } else if (this.destravado && this.musica.buffer && !this.musica.isPlaying) {
+      this.musica.play();
     }
   }
 
@@ -1085,6 +1133,7 @@ export class NamekAudio {
       if (L.a.isPlaying) L.a.stop();
     }
     this.loops.clear();
+    if (this.musica.isPlaying) this.musica.stop();
     for (const v of this.pool) {
       if (v.a.isPlaying) v.a.stop();
       v.suporte.parent?.remove(v.suporte);

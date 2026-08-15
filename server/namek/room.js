@@ -323,7 +323,13 @@ export class NamekRoom {
       const bo = f.isBot ? f.boostBlend : (f.state?.bo ?? 0);
       const ch = f.isBot ? f.chargeBlend : (f.state?.ch ?? 0);
 
-      if (bo > 0.05) {
+      /* BARRA CHEIA VOA DE GRAÇA — o mesmo limiar que o cliente lê em
+         `KiMeter.voaDeGraca`, e ter os dois lados no mesmo `freeFlightAt` é o
+         que impede a barra do HUD de descer enquanto a barra que vale fica
+         parada. Vale para o bot pelo mesmo caminho: ele não paga arranque com o
+         especial no topo, que é justamente quando ele está caçando alguém. */
+      const deGraca = f.ki >= K.max * K.freeFlightAt - 1e-6;
+      if (bo > 0.05 && !deGraca) {
         const custo = K.boostDrain * bo * dt;
         if (custo > 0) {
           f.ki = Math.max(0, f.ki - custo);
@@ -728,6 +734,26 @@ export class NamekRoom {
     if (por && por !== vitima) {
       por.score.kills++;
       if (por.isBot) por.tDecisao = 0; // procura o próximo na hora
+
+      /* DERRUBOU, ENCHEU. **No instante do tombo, e por inteiro.**
+       *
+       * É o pedido literal ("assim que ele começar a cair a barra já deve
+       * encher instantaneamente"), e ele fecha o laço que o modo não tinha:
+       * abate → barra cheia → aura acesa → voo de graça → chegar no próximo. Sem
+       * ele, quem acabou de ganhar uma briga era exatamente quem tinha menos ki
+       * na arena, e o prêmio por vencer era ter de parar para carregar à vista
+       * de todo mundo.
+       *
+       * Aqui, e não num tratador de mensagem, porque `matar` é o caminho ÚNICO
+       * de toda morte — rajada, feixe, disco, onda. Era isso o "às vezes não
+       * acontece": qualquer regra escrita só no caminho da rajada deixaria de
+       * fora metade das mortes do jogo.
+       *
+       * `ultimoGasto` volta para trás junto: sem isso a regeneração passiva
+       * ficaria `idleDelay` segundos travada por um gasto que o prêmio já pagou.
+       */
+      por.ki = NAMEK.ki.max;
+      por.ultimoGasto = -Infinity;
     }
 
     const ponto = p ?? this.pontoDe(vitima);

@@ -240,6 +240,30 @@ export const NAMEK = {
     burstDamage: 12,
     /** Fração da barra que um ESPECIAL exige — 1 é a barra inteira. */
     specialThreshold: 1,
+
+    /**
+     * **Com a barra CHEIA o voo é de graça.**
+     *
+     * O pedido é literal: "uma vez que ele está com o ki totalmente cheio ele
+     * pode usar o modo Voo com shift o quanto quiser que não vai gastar o ki.
+     * Só gasta o ki quando ele soltar um poder."
+     *
+     * E ele conserta um problema real da economia: `boostDrain` são 14/s contra
+     * uma barra de 100, ou seja **sete segundos** de arranque acabam com o
+     * especial. Quem quisesse chegar perto de alguém para soltar um Kamehameha
+     * gastava no caminho justamente a barra que o golpe exige — o modo pedia
+     * que você parasse para carregar toda vez que quisesse usar o que carregou.
+     *
+     * Cheio, o arranque não cobra nada e a barra vira o que ela deve ser: uma
+     * MUNIÇÃO, gasta por quem atira, não por quem se desloca. O primeiro tiro
+     * tira a barra do topo e o voo volta a custar — então o estado de graça é
+     * exatamente a janela entre "estou pronto" e "usei".
+     *
+     * Vale para os dois lados da rede: o cliente (`KiMeter.voaDeGraca`) e a
+     * sala (`economiaDeKi`) leem o MESMO limiar, senão a barra do HUD
+     * discordaria da barra que a sala cobra.
+     */
+    freeFlightAt: 1,
   },
 
   /* ------------------------------------------------------------------ defesa
@@ -555,6 +579,39 @@ export const NAMEK = {
      * 9,6 de potência e 19 m de cratera — grande, e ainda longe dos 30 m que a
      * Genki Dama guarda para si. */
     slamPower: 0.13,
+    /* ------------------------------------------------- não se cava duas vezes
+       Fração do MAIOR raio dentro da qual duas crateras são a MESMA cratera.
+
+       Sem esta regra as crateras SOMAM, porque `heightAt` soma o perfil de
+       todas as que alcançam o ponto — e o resultado medido é um poço. Uma queda
+       a 80 m/s abre 12 m de raio por 4,2 m de fundura; cair quatro vezes no
+       mesmo lugar levava o chão de +5,3 m para −13,7 m, e o lutador ficava
+       dezenove metros abaixo do relevo, dentro da terra, sem nada na tela além
+       de parede de barro. É exatamente o defeito relatado, e ele não precisa de
+       má-fé nenhuma para acontecer: a briga acontece na clareira, todo mundo
+       mergulha no mesmo lugar, e o próprio renascimento cai de 120 m.
+
+       Com a regra, cavar dentro de um buraco que já é fundo o bastante não faz
+       nada (o golpe ainda levanta poeira, ver `reportar`), e um golpe MAIOR
+       aposenta o buraco menor que ele engole em vez de somar com ele. O chão
+       fica com a fundura da maior cratera, nunca com a soma delas.
+
+       0,7 e não 1: o critério é "o centro do novo caiu dentro do miolo do
+       velho". Com 1, uma cratera tangente pela borda já seria absorvida e duas
+       explosões vizinhas nunca apareceriam como dois buracos. */
+    craterMerge: 0.7,
+
+    /**
+     * m — fundura máxima do relevo escavado, somadas todas as crateras.
+     *
+     * O corrimão da regra acima, para o que ela não pega: crateras que se
+     * cruzam só de raspão continuam somando na região comum, e uma sequência
+     * delas ainda desceria sem fim. 11 m está um pouco acima da cratera mais
+     * funda que um golpe do jogo abre sozinho (a Genki Dama, 10,4 m), então
+     * nenhum buraco legítimo é achatado por ele — ele só existe para que o
+     * terreno não vire um poço em partida nenhuma.
+     */
+    craterDepthMax: 11,
   },
 
   /* ------------------------------------------------------------------- morte */

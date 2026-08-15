@@ -93,6 +93,18 @@ const _euler = new THREE.Euler(0, 0, 0, "YXZ");
 const _qTombo = new THREE.Quaternion();
 const _cor = new THREE.Color();
 
+/* Os argumentos da aura, pelo mesmo motivo de todos os rascunhos acima: um
+ * literal aqui seriam quinze objetos por quadro — novecentos por segundo — só
+ * para atravessar uma chamada síncrona. */
+const _auraCtx = {
+  intensidade: 0,
+  voo: 0,
+  rapidez: 0,
+  velocidade: null,
+  camera: null,
+  opacidade: 1,
+};
+
 /** O contexto que as funções de pose leem. Um por lutador — ele guarda a fase. */
 function criarContexto() {
   return {
@@ -158,6 +170,10 @@ export class Fighter {
     this.tonto = false;
     /** Guarda de pé (bit 8 da rede): os dois braços cruzados à frente. */
     this.defendendo = false;
+    /** A barra está CHEIA? Acende a aura de prontidão — ver `atualizarAura`.
+     *  Quem escreve é o dono: o laço principal para o lutador local, o
+     *  `VITALS` para os remotos. */
+    this.kiFull = false;
 
     /* --------------------------------------------- espelhos amortecidos ---- */
     this._run = 0;
@@ -168,6 +184,8 @@ export class Fighter {
     this._hurt = 0;
     this._hand = 0;
     this._guarda = 0;
+    /** Espelho amortecido de `kiFull`. Lento de propósito — ver `atualizarAura`. */
+    this._cheio = 0;
     this._andar = 0;
     this._queda = 0;
     this._pitch = 0;
@@ -318,6 +336,10 @@ export class Fighter {
     this.specialIndex = -1;
     this.specialFraction = 0;
     this._esp = 0;
+    /* O rastro é da vida anterior. A aura ainda descobriria sozinha pelo salto
+       de posição (ver `empurrarAmostra`), mas quem renasce ao lado de onde caiu
+       ficaria com a cauda antiga pendurada por quase um segundo. */
+    this.aura.reset();
   }
 
   /* --------------------------------------------------------------- quadro -- */
@@ -338,7 +360,10 @@ export class Fighter {
     this.atualizarCanais(dt);
     const p = this.montarPose();
     this.aplicar(p, false);
-    this.atualizarAura(dt);
+    /* A aura vem DEPOIS de `aplicar`: ela lê a posição e o quaternion que ele
+       acabou de escrever para saber onde nasce a cauda e para converter a
+       direção do voo do mundo para o corpo. */
+    this.atualizarAura(dt, cameraPos);
     this.atualizarDetalhe(cameraPos);
     this.atualizarPiscar();
 
@@ -371,6 +396,12 @@ export class Fighter {
     this._guarda = damp(this._guarda, this.defendendo ? 1 : 0, this.defendendo ? 15 : 7, dt);
     this._hand = damp(this._hand, clamp(this.handPose, 0, 1), 18, dt);
     this._pitch = damp(this._pitch, this.pitch, 20, dt);
+    /* A prontidão ACENDE depressa e apaga devagar (3,5 contra 1,6): encher a
+       barra é um acontecimento e tem de ser visto no quadro em que acontece;
+       gastá-la é o começo de um golpe, e a aura morrendo junto com o disparo
+       leria como a aura ter sido o golpe. */
+    const cheio = this.kiFull ? 1 : 0;
+    this._cheio = damp(this._cheio, cheio, cheio ? 3.5 : 1.6, dt);
 
     /* Marcha: quanto se anda sai da VELOCIDADE, não de um canal.
      *
@@ -694,15 +725,44 @@ export class Fighter {
 
   /* --------------------------------------------------------------- aura ---- */
 
-  atualizarAura(dt) {
-    /* Três fontes acendem a mesma aura, e a maior manda. Somá-las estouraria a
-       tela quando alguém carrega ki no meio de um arranque, que é uma coisa que
-       acontece o tempo todo. */
-    /* A guarda também ACENDE, e mais fraca que a carga de propósito: ela custa
-       ki (é o que a torna uma escolha) e a aura é a única coisa que diz isso de
-       longe. Forte demais e ela viraria a leitura de "carregando", que é o
-       oposto do que está acontecendo. */
-    let i = Math.max(this._charge, this._boost * 0.9, this._guarda * 0.42);
+  atualizarAura(dt, cameraPos) {
+    const vx = this.velocity.x;
+    const vy = this.velocity.y;
+    const vz = this.velocity.z;
+    const rapidez = Math.sqrt(vx * vx + vy * vy + vz * vz);
+
+    /* SEIS fontes acendem a mesma aura, e a maior manda. Somá-las estouraria
+       a tela quando alguém carrega ki no meio de um arranque, que é uma coisa
+       que acontece o tempo todo.
+
+       VOAR É UMA DELAS: a aura só existia na carga e no arranque, então o
+       lutador cruzava o céu em voo de cruzeiro sem ki nenhum em volta. Na
+       referência ninguém voa apagado — quem está no ar está com o ki aceso,
+       mais forte quanto mais rápido vai. */
+    const voando = this._fly * (0.4 + 0.34 * clamp(rapidez / NAMEK.fighter.flySpeed, 0, 1));
+
+    /* A PRONTIDÃO é a mais fraca das cinco, e tem de ser.
+     *
+     * Ela fica acesa por minutos — é o estado de quem está com a barra cheia —,
+     * enquanto as outras são gestos de segundos. No talo ela apagaria a
+     * diferença entre "estou pronto" e "estou carregando", que é a leitura de
+     * jogo mais importante que a aura carrega: 0,38 é um contorno que se vê a
+     * cem metros e ainda deixa a carga (1,0) ser três vezes mais forte que ele.
+     *
+     * E ela é o mesmo sinal do voo de graça (`freeFlightAt`), então o brilho em
+     * volta de um adversário quer dizer as duas coisas ao mesmo tempo: ele pode
+     * soltar o golpe grande, e ele pode te perseguir sem pagar nada por isso. */
+    /* A GUARDA é a sexta, e entra mais fraca que a carga de propósito: ela
+       custa ki (é o que a torna uma escolha) e a aura é a única coisa que diz
+       isso de longe. Forte demais, ela viraria a leitura de "carregando" — que
+       é o oposto exato do que está acontecendo. */
+    let i = Math.max(
+      this._charge,
+      this._boost * 0.9,
+      voando,
+      this._cheio * 0.38,
+      this._guarda * 0.42,
+    );
     if (this._esp > 0.01) {
       // No especial a aura sobe com a carga e recua quando o golpe já saiu: a
       // energia foi embora com o feixe.
@@ -724,7 +784,17 @@ export class Fighter {
       this.aura.setColor(this.color);
     }
 
-    this.aura.update(dt, clamp(i, 0, 1), this._boost, this._nivel >= 2 ? 0.75 : 1);
+    _auraCtx.intensidade = clamp(i, 0, 1);
+    /* O canal de VOO, e não o de arranque: a cauda e o sopro pertencem a quem
+       está no ar, e o arranque só os torna mais compridos porque anda mais
+       rápido. Era o `_boost` sozinho que fazia o rastro nascer e morrer com o
+       botão em vez de com o movimento. */
+    _auraCtx.voo = this._fly;
+    _auraCtx.rapidez = rapidez;
+    _auraCtx.velocidade = this.velocity;
+    _auraCtx.camera = cameraPos ?? null;
+    _auraCtx.opacidade = this._nivel >= 2 ? 0.75 : 1;
+    this.aura.update(dt, _auraCtx);
   }
 
   /* ---------------------------------------------------------- lod e piscar */

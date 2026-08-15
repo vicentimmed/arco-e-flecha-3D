@@ -811,7 +811,14 @@ export class NamekInput {
         /* A TRAVA DE ALVO, que era o Tab. Sem `preventDefault`: o `R` não
            significa nada para o navegador, e essa é a diferença inteira entre
            as duas teclas — a que precisava ser defendida do navegador foi
-           trocada por uma que ele não disputa. Ver a seção do cabeçalho. */
+           trocada por uma que ele não disputa. Ver a seção do cabeçalho.
+
+           NOTA DE MERGE: o ramo `namekusei-controls-reference` também tirou a
+           trava do Tab, e escolheu o `E`. As duas mudanças nasceram do mesmo
+           incômodo e chegaram a teclas diferentes; ficou o `R` porque aqui o
+           `E` passou a ser a DEFESA, que é uma tecla SEGURADA e por isso precisa
+           do lugar mais confortável ao lado do WASD. A trava é um toque e pode
+           morar um dedo mais longe. */
         this._pTravar = true;
         break;
       case "Escape":

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bancada de voo — Namekusei</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ui: #7bd88f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #0d1410;
+        color: #e8e6e1;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+      canvas { display: block; }
+      #painel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: 250px;
+        padding: 12px 14px 14px;
+        background: rgba(8, 16, 12, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        backdrop-filter: blur(8px);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ui);
+      }
+      .linha { margin-bottom: 9px; }
+      .linha > label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #a7a49d;
+        margin-bottom: 3px;
+      }
+      input[type="range"] { width: 100%; }
+      .botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+      button {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.3);
+        color: #cfccc5;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.on {
+        border-color: var(--ui);
+        background: rgba(123, 216, 143, 0.16);
+        color: var(--ui);
+      }
+      #conta {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 10px;
+        line-height: 1.5;
+        color: #a7a49d;
+        white-space: pre-line;
+      }
+      #conta b { color: #e8e6e1; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <div id="painel">
+      <h1>Bancada de voo</h1>
+
+      <div class="linha">
+        <label>trajeto</label>
+        <div class="botoes">
+          <button id="t-reta" class="on">reta</button>
+          <button id="t-circulo">círculo</button>
+          <button id="t-onda">onda</button>
+          <button id="t-parado">parado</button>
+        </div>
+      </div>
+
+      <div class="linha">
+        <label>velocidade <span data-eco="vel">34</span> m/s</label>
+        <input id="vel" type="range" min="0" max="96" step="1" value="34" />
+      </div>
+
+      <div class="linha">
+        <label>rolagem forçada <span data-eco="giro">0</span> rad/s</label>
+        <input id="giro" type="range" min="0" max="6" step="0.1" value="0" />
+      </div>
+
+      <div class="linha">
+        <label>câmera — distância <span data-eco="dist">26</span> m</label>
+        <input id="dist" type="range" min="5" max="140" step="1" value="26" />
+      </div>
+
+      <div class="linha">
+        <label>câmera</label>
+        <div class="botoes">
+          <button id="c-lado" class="on">de lado</button>
+          <button id="c-tras">de trás</button>
+          <button id="c-frente">de frente</button>
+          <button id="c-cima">de cima</button>
+        </div>
+      </div>
+
+      <div class="linha">
+        <label>cena</label>
+        <div class="botoes">
+          <button id="esquadrao">esquadrão</button>
+          <button id="carga">carregar ki</button>
+          <button id="pausa">pausar</button>
+        </div>
+      </div>
+
+      <div id="conta"></div>
+    </div>
+    <script type="module" src="./voo.js"></script>
+  </body>
+</html>

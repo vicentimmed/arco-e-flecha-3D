@@ -546,15 +546,26 @@ export class FighterController {
     }
     let impulso = false;
     if (querImpulso) {
-      /* O DRENO. `drenar` (quando existe) é o dreno CONTÍNUO: tira o que houver
-         e responde se ainda dá para continuar. `gastar` é tudo-ou-nada — certo
-         para uma bola de ki, errado para um subpasso de 0,23 de barra, porque
-         ele recusaria o último décimo e deixaria um resto que nunca queima. O
-         contrato só promete `gastar`, então o caminho de trás existe. */
-      const porSegundo = NAMEK.ki.boostDrain;
-      if (ki?.drenar) impulso = !!ki.drenar(porSegundo, h);
-      else if (ki?.gastar) impulso = !!ki.gastar(porSegundo * h);
-      else impulso = true;
+      /* DE GRAÇA COM A BARRA CHEIA. É o pedido literal ("pode usar o modo Voo
+         com shift o quanto quiser que não vai gastar o ki") e a razão de ele
+         existir está em `freeFlightAt`: a barra é munição, e gastá-la para
+         chegar perto de alguém é gastá-la para não poder usar. Perguntar ao
+         `ki` em vez de comparar `valor` com `max` aqui mantém o limiar num
+         lugar só — e é o MESMO que a sala usa. */
+      if (ki?.voaDeGraca?.()) {
+        impulso = true;
+      } else {
+        /* O DRENO. `drenar` (quando existe) é o dreno CONTÍNUO: tira o que
+           houver e responde se ainda dá para continuar. `gastar` é tudo-ou-nada
+           — certo para uma bola de ki, errado para um subpasso de 0,23 de
+           barra, porque ele recusaria o último décimo e deixaria um resto que
+           nunca queima. O contrato só promete `gastar`, então o caminho de trás
+           existe. */
+        const porSegundo = NAMEK.ki.boostDrain;
+        if (ki?.drenar) impulso = !!ki.drenar(porSegundo, h);
+        else if (ki?.gastar) impulso = !!ki.gastar(porSegundo * h);
+        else impulso = true;
+      }
     }
     this.boosting = impulso;
 

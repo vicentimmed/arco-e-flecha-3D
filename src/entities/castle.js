@@ -394,9 +394,48 @@ export class Castle {
        poente desenhar alguma coisa nela: uma sombra horizontal embaixo, sombras
        verticais ritmadas no meio, e uma linha contínua no alto. */
     const zOut = C.wallZOut;
-    // O embasamento, alargado e chanfrado — a pedra sempre engrossa no pé.
-    lote.box("pedraEscura", C.wallHalfX + 0.35, 0.9, C.wallThick / 2 + 0.42, 0, GROUND_Y + 0.9, WALL_ZC);
-    lote.box("pedra", C.wallHalfX + 0.2, 0.3, C.wallThick / 2 + 0.24, 0, GROUND_Y + 1.95, WALL_ZC);
+    /* O embasamento, alargado e chanfrado — a pedra sempre engrossa no pé.
+     *
+     * EM DOIS PANOS, saltando o vão do portão, e a partição não é estética: sem
+     * ela o modo não fecha.
+     *
+     * As duas fiadas eram UMA caixa de ponta a ponta do muro, e elas têm a
+     * espessura do muro MAIS folga nos dois lados (`wallThick / 2 + 0,42` vai de
+     * z = 0,78 a 8,42, e a face interna está em z = 1,2). O que a caixa
+     * atravessava, portanto, era o TÚNEL DO PORTÃO: vista do pátio, a boca do
+     * portão começava 2,25 m acima do piso — um patamar de pedra bem no lugar
+     * onde se repara a folha de carvalho.
+     *
+     * E era intransponível por construção: o pulo do jogador sobe 0,90 m
+     * (`CONFIG.player.jumpSpeed` = 4,2 m/s), menos da metade. Como a decoração
+     * não tem colisor, não havia nem o consolo de subir nela — só uma parede que
+     * existia na tela e em lugar nenhum. Quem corria para reparar com o relógio
+     * andando via o portão fora de alcance e não tinha como saber por quê.
+     *
+     * A partição é a MESMA que `castleBlockers()` já faz com o pano do muro — de
+     * `gateHalfX` até a ponta — e por isso as ombreiras continuam revestidas: a
+     * pedra do pé encosta no vão dos dois lados e para ali, que é o que o
+     * embasamento de um portal faz de verdade. A face externa, que é o que estas
+     * fiadas existem para desenhar, não perde um centímetro. */
+    for (const [tinta, folgaX, alt, folgaZ, yBase] of [
+      ["pedraEscura", 0.35, 1.8, 0.42, GROUND_Y],
+      ["pedra", 0.2, 0.6, 0.24, GROUND_Y + 1.65],
+    ]) {
+      const hy = alt / 2;
+      for (const s of [-1, 1]) {
+        const x0 = s * C.gateHalfX;
+        const x1 = s * (C.wallHalfX + folgaX);
+        lote.box(
+          tinta,
+          Math.abs(x1 - x0) / 2,
+          hy,
+          C.wallThick / 2 + folgaZ,
+          (x0 + x1) / 2,
+          yBase + hy,
+          WALL_ZC,
+        );
+      }
+    }
 
     // Pilastras: uma a cada 4,25 m, saltando o vão do portão.
     for (let i = -4; i <= 4; i++) {

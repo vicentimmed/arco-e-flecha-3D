@@ -11,6 +11,11 @@
    2. **O ESPECIAL só sai com a barra CHEIA.** Não "com ki suficiente": cheia.
       Ver `podeEspecial`.
 
+   2b. **Barra cheia VOA DE GRAÇA.** O arranque com Shift só cobra enquanto a
+      barra não está no topo; cheia, ela não desce voando — desce atirando. Ver
+      `voaDeGraca` e o comentário de `freeFlightAt`, que explica por que a barra
+      é munição e não combustível.
+
    3. **A rajada básica NÃO exige barra cheia**, custa uma lasca (`blastCost`) e
       é o ataque do dia a dia. O §5 do plano explica por que essa divisão é
       obrigatória: se o tiro comum também pedisse barra cheia, o jogador ficaria
@@ -65,6 +70,32 @@ export class KiMeter {
    */
   podeEspecial() {
     return this.fracao >= NAMEK.ki.specialThreshold - 1e-6;
+  }
+
+  /**
+   * O arranque sai de graça? **Sai, com a barra cheia** — ver `freeFlightAt`.
+   *
+   * A pergunta é feita por subpasso pelo `FighterController`, e a resposta é a
+   * mesma que a sala dá em `economiaDeKi`: um lado que cobrasse e o outro não
+   * faria a barra do HUD brigar com a barra que vale.
+   */
+  voaDeGraca() {
+    return this.fracao >= NAMEK.ki.freeFlightAt - 1e-6;
+  }
+
+  /**
+   * Enche a barra na hora. É o prêmio por DERRUBAR alguém (§ do laço principal).
+   *
+   * Sem amortecimento e sem esperar o `VITALS`: o pedido é "assim que ele
+   * começar a cair a barra já deve encher instantaneamente", e meio segundo de
+   * barra subindo é meio segundo em que o especial ainda recusa — que é o
+   * "às vezes não acontece" do relato. A sala faz a mesma coisa no mesmo
+   * instante (ver `matar`), então os dois valores já nascem iguais e o
+   * `sincronizar` seguinte não tem nada para corrigir.
+   */
+  encher() {
+    this.valor = this.max;
+    this.desdeGasto = 0;
   }
 
   /**

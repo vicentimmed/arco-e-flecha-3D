@@ -229,7 +229,10 @@ export class NamekField {
    * @param {number} x
    * @param {number} z
    * @param {number} power    potência do golpe
-   * @returns {object|null} a cratera criada, ou null se o id já existia
+   * @returns {object|null} a cratera criada, ou null quando não há buraco novo
+   *   a esculpir — o id já existia, ou o chão ali já está pelo menos tão fundo
+   *   quanto este golpe cavaria (ver `craterMerge`). Quem chama trata os dois
+   *   casos igual: não há nada a desenhar nem a retransmitir.
    */
   /**
    * O raio que uma potência abre NESTE ponto — já com o crescimento da encosta.
@@ -264,24 +267,62 @@ export class NamekField {
     const { raio, fundura } = craterFor(power);
     const c = this.esculpirNaco({ id, x, z, raio, fundura });
 
+    /* NÃO SE CAVA DUAS VEZES NO MESMO BURACO.
+     *
+     * O perfil das crateras SOMA em `craterSum`, então duas no mesmo ponto dão
+     * o dobro da fundura, três dão o triplo, e não havia nada segurando isso —
+     * ver o comentário de `craterMerge`, que traz a medida. A regra é simples e
+     * é a mesma nos dois lados da rede: se o centro do golpe novo caiu dentro
+     * do miolo de uma cratera que já é tão funda quanto ele, o chão ali já está
+     * cavado e nada acontece; se o golpe novo é MAIOR, ele aposenta as menores
+     * que engoliu em vez de somar com elas. */
+    /* A varredura é sobre a LISTA INTEIRA e não sobre o índice espacial, e é de
+       propósito: o índice responde "que crateras COBREM este ponto", e a
+       pergunta aqui é outra — "que crateras têm o CENTRO perto deste ponto".
+       Uma cratera pequena a vinte metros não cobre o centro de uma Genki Dama e
+       mesmo assim é engolida por ela. São 96 crateras no pior caso, algumas
+       vezes por segundo (a sala tem balde, ver `podeCravar`); o índice existe
+       para o `heightAt`, que roda milhares de vezes por quadro, não para cá. */
+    const engolidas = [];
+    for (let i = 0; i < this.craters.length; i++) {
+      const o = this.craters[i];
+      const dx = o.x - x;
+      const dz = o.z - z;
+      const limite = Math.max(o.raio, raio) * NAMEK.destruction.craterMerge;
+      if (dx * dx + dz * dz > limite * limite) continue;
+      if (o.fundura >= fundura) return null;
+      engolidas.push(o);
+    }
+    for (let i = 0; i < engolidas.length; i++) this.aposentar(engolidas[i], false);
+
     this.craters.push(c);
     this.byId.set(id, c);
     this.indexCrater(c);
+
+    /* O aviso das engolidas vem DEPOIS de a nova estar indexada: quem desenha
+       vai reler a altura do disco delas, e a altura certa é a que já tem o
+       buraco novo no lugar dos velhos. */
+    for (let i = 0; i < engolidas.length; i++) this.onRetire?.(engolidas[i]);
 
     /* A FILA. Sem teto, `heightAt` degrada ao longo da partida — e ela é a
        função mais chamada do modo inteiro. A mais velha some primeiro porque é
        a que o jogador tem menos chance de estar olhando. */
     while (this.craters.length > NAMEK.destruction.craterLimit) {
-      const velha = this.craters.shift();
-      this.byId.delete(velha.id);
-      this.unindexCrater(velha);
-      /* AVISA QUEM DESENHA. A cratera saiu da altura; se ninguém re-esculpir o
-         disco dela, ela continua na malha para sempre. Ver `onRetire`. A ordem
-         importa: o aviso vem DEPOIS do `unindexCrater`, para que o
-         `heightAt` que o desenhista vai consultar já seja o de sem-ela. */
-      this.onRetire?.(velha);
+      /* O aviso vem DEPOIS do desindexamento, para que o `heightAt` que o
+         desenhista vai consultar já seja o de sem-ela. Ver `onRetire`. */
+      this.aposentar(this.craters[0], true);
     }
     return c;
+  }
+
+  /** Tira uma cratera do campo. `avisar` dispara o `onRetire` na hora. */
+  aposentar(c, avisar = true) {
+    const i = this.craters.indexOf(c);
+    if (i < 0) return;
+    this.craters.splice(i, 1);
+    this.byId.delete(c.id);
+    this.unindexCrater(c);
+    if (avisar) this.onRetire?.(c);
   }
 
   /** As crateras cujo raio pode alcançar (x, z). */
@@ -414,13 +455,30 @@ export class NamekField {
    * 96 crateras testadas por consulta; com ele, tipicamente zero ou uma.
    */
   heightAt(x, z) {
-    let h = this.baseHeight(x, z);
+    return this.baseHeight(x, z) + this.craterSum(x, z);
+  }
+
+  /**
+   * Quanto as crateras mexem no relevo neste ponto. **Com teto de fundura.**
+   *
+   * Existe como método próprio porque a malha do cliente precisa exatamente
+   * desta conta (ver `NamekTerrain.alturaDeVertice`): ela guarda o relevo base
+   * por vértice e só soma o que as crateras mudaram. Duas somas escritas em dois
+   * arquivos seriam duas topografias no dia em que uma delas mudasse — que é o
+   * mesmo motivo de `craterFor` ser compartilhada.
+   *
+   * O teto vale só para BAIXO: a borda levantada de uma cratera é relevo
+   * legítimo e nunca some com nada. Ver `craterDepthMax`.
+   */
+  craterSum(x, z) {
     const perto = this.cratersNear(x, z);
-    if (!perto) return h;
+    if (!perto) return 0;
+    let d = 0;
     for (let i = 0; i < perto.length; i++) {
-      h += this.craterDelta(perto[i], x, z);
+      d += this.craterDelta(perto[i], x, z);
     }
-    return h;
+    const teto = -NAMEK.destruction.craterDepthMax;
+    return d < teto ? teto : d;
   }
 
   /**

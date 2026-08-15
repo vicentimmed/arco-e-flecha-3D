@@ -56,6 +56,7 @@ import { ValueNoise } from "../../utils/noise.js";
 import { clamp, smoothstep } from "../../utils/math.js";
 import { NAMEK } from "../../shared/namek/config.js";
 import { NAMEK_SOL_DIR, NAMEK_BRUMA_SOL, NAMEK_BRUMA_BRASA } from "./sky.js";
+import { DETALHE_GLSL, texturaDeDetalhe, descartarDetalhe } from "./detail.js";
 
 const TAU = Math.PI * 2;
 
@@ -290,14 +291,11 @@ export class NamekTerrain {
   alturaDeVertice(v) {
     const x = this.positions[v * 3];
     const z = this.positions[v * 3 + 2];
-    let h = this.base[v];
-    const perto = this.field.cratersNear(x, z);
-    if (perto) {
-      for (let i = 0; i < perto.length; i++) {
-        h += this.field.craterDelta(perto[i], x, z);
-      }
-    }
-    return h;
+    /* `craterSum` e não uma soma escrita aqui: ela é a MESMA conta que o
+       `heightAt` da física faz, teto de fundura incluído. Ter a soma nos dois
+       lugares é ter dois chões — o desenhado e o pisado —, e a diferença só
+       apareceria como um lutador afundado no barro. */
+    return this.base[v] + this.field.craterSum(x, z);
   }
 
   /* --------------------------------------------------------------- normal -- */
@@ -359,20 +357,30 @@ export class NamekTerrain {
   /* ------------------------------------------------------------------ cor -- */
 
   /**
-   * Cor por vértice — e não textura, porque o repositório inteiro não carrega
-   * um único arquivo de imagem (§3: zero texturas).
+   * Cor por vértice — a REGIÃO do planeta: campo, rocha, praia, fundo raso.
    *
-   * Tudo aqui é resolvido UMA vez, na construção, e depois custa zero por
-   * quadro. É onde mora metade da leitura do planeta, e é por isso que dá para
-   * caprichar sem pesar. `applyCrater` não mexe em cor de propósito: o buraco é
-   * lido pela normal e pela sombra própria, e repintar o anel a cada explosão
-   * custaria um terceiro buffer subindo para a placa por golpe.
+   * A divisão de trabalho com `world/detail.js` é o que faz as duas coisas
+   * caberem: aqui se resolve o que muda em dezenas ou centenas de metros, e
+   * isso é calculado UMA vez na construção e custa zero por quadro; o que
+   * muda dentro de um metro quadrado é do grão triplanar, que é por
+   * fragmento. Tentar descrever o grão aqui exigiria célula de 20 cm — cento
+   * e sessenta vezes mais vértices no campo.
+   *
+   * `applyCrater` não mexe em cor de propósito: o buraco é lido pela normal e
+   * pela sombra própria, e repintar o anel a cada explosão custaria um
+   * terceiro buffer subindo para a placa por golpe.
    */
   corDeSuperficie(x, z, h, ny, out, celula = 2.8) {
     const n = this.noise;
     const inclinacao = 1 - ny; // 0 = plano, 1 = parede
     const mancha = n.fbm2(x * 0.0042, z * 0.0042, 2);
     const grao = n.fbm2(x * 0.062, z * 0.062, 2);
+    /* Uma TERCEIRA escala, no meio das outras duas (~55 m) e com origem
+       deslocada para não correlacionar com nenhuma delas. Com só duas, a
+       transição entre a mancha larga e o grão fino deixava uma faixa de
+       distância — justamente a de voo baixo — em que o campo lia como um
+       degradê liso. Mesmo remédio que o vale usa (`grain` + `patch`). */
+    const veio = n.fbm2(x * 0.018 - 61.3, z * 0.018 + 27.9, 2);
 
     /* O MIÚDO, e ele é a resposta direta a "parece que não tem tanta textura".
      *
@@ -391,11 +399,25 @@ export class NamekTerrain {
     const fino = 1 - smoothstep(3.0, 5.5, celula);
     const miudo = fino > 0.001 ? n.fbm2(x * 0.145, z * 0.145, 2) * fino : 0;
 
-    /* O campo. Base em três escalas, e a mancha larga continua mandando. */
+    /* O campo, em QUATRO escalas, e a mancha larga continua mandando.
+     *
+     * As quatro chegaram por dois caminhos e ficaram todas: a mancha de 240 m e
+     * o grão de 16 m são de sempre, o VEIO de 55 m veio do ramo do grão de
+     * superfície (ele tapa a faixa de média distância, em que as outras duas
+     * deixavam um degradê liso), e o MIÚDO de 7 m veio do retoque de cenário
+     * (é a escala do passo, a única que se enxerga voando baixo). Elas cobrem
+     * faixas diferentes e nenhuma substitui a outra — por isso a soma, e não a
+     * escolha entre elas. */
     out
       .copy(PALETA.campo)
-      .lerp(PALETA.campoClaro, clamp(0.4 + 0.62 * mancha + 0.24 * grao + 0.16 * miudo, 0, 1))
-      .lerp(PALETA.campoFundo, clamp(0.28 - 0.7 * mancha + 0.18 * grao, 0, 1) * 0.8);
+      .lerp(
+        PALETA.campoClaro,
+        clamp(0.4 + 0.58 * mancha + 0.26 * veio + 0.2 * grao + 0.16 * miudo, 0, 1),
+      )
+      .lerp(
+        PALETA.campoFundo,
+        clamp(0.28 - 0.62 * mancha - 0.2 * veio + 0.16 * grao, 0, 1) * 0.8,
+      );
 
     /* AS MANCHAS CLARAS, por LIMIAR e não por mistura.
      *
@@ -405,27 +427,31 @@ export class NamekTerrain {
      * que rasga a borda dessas ilhas são justamente as escalas curtas dentro
      * do limiar — sem o grão e o miúdo somados aqui, o contorno seria uma
      * curva de nível suave e a mancha viraria uma poça. */
-    const ilha = smoothstep(0.16, 0.46, mancha * 0.9 + grao * 0.5 + miudo * 0.45);
+    const ilha = smoothstep(0.16, 0.46, mancha * 0.9 + veio * 0.4 + grao * 0.5 + miudo * 0.45);
     if (ilha > 0.001) out.lerp(PALETA.campoSol, ilha * 0.62);
 
     /* O MUSGO das depressões. O oposto da ilha, e vem no mesmo pacote: um campo
        que só tem manchas claras parece descolorido em faixas. */
     const baixio = smoothstep(-0.18, -0.5, mancha + grao * 0.35) * smoothstep(0.72, 0.95, ny);
     if (baixio > 0.001) out.lerp(PALETA.musgo, baixio * 0.55);
-
     /* A ROCHA aflora pela inclinação E pela altitude. Só pela inclinação, um
        cume achatado de 120 m continuaria coberto de campo verde-azulado, o que
        lê como um morro de grama e apaga a leitura de montanha.
-       O `veio` é o que faz a linha entre grama e pedra ser RASGADA: `ridged2`
-       tem cristas finas e ramificadas, então ele empurra a rocha para baixo em
+       A `crista` é o que faz a linha entre grama e pedra ser RASGADA: `ridged2`
+       tem cristas finas e ramificadas, então ela empurra a rocha para baixo em
        línguas e a deixa recuar em bolsões. Com o `smoothstep` sozinho, a
        fronteira era uma curva de nível limpa — a assinatura de um chão pintado
-       por fórmula. */
-    const veio = n.ridged2(x * 0.021, z * 0.021, 2);
+       por fórmula.
+       Ela se chamava `veio` e foi renomeada no merge: o ramo do grão de
+       superfície declarou um `veio` lá em cima, de outra escala e outro ruído
+       (`fbm2`, 55 m, para a cor do campo). Dois `const veio` na mesma função é
+       erro de sintaxe, e dois nomes iguais para coisas diferentes seria pior
+       que o erro. */
+    const crista = n.ridged2(x * 0.021, z * 0.021, 2);
     const rochoso = clamp(
       Math.max(smoothstep(0.3, 0.6, inclinacao), smoothstep(52, 96, h)) +
         0.12 * grao +
-        0.22 * veio +
+        0.22 * crista +
         0.1 * miudo,
       0,
       1,
@@ -700,17 +726,25 @@ export class NamekTerrain {
   /* ------------------------------------------------------------ material --- */
 
   /**
-   * `MeshStandardMaterial` com dois enxertos: as fissuras de magma e o dial da
-   * tempestade.
+   * `MeshStandardMaterial` com TRÊS enxertos: o grão da superfície, as
+   * fissuras de magma e o dial da tempestade.
    *
    * `onBeforeCompile` em vez de um `ShaderMaterial` inteiro porque a
    * iluminação, a névoa e o tonemap do repositório já estão resolvidos no
    * material padrão — reescrevê-los para ganhar uma linha de emissivo seria
    * assinar a manutenção deles.
    *
-   * O ponto de injeção é `<emissivemap_fragment>`: é o chunk que existe em
-   * todas as versões recentes do Three e o único ponto em que
-   * `totalEmissiveRadiance` já foi declarado e ainda não foi usado.
+   * Os três enxertos moram na MESMA função porque `onBeforeCompile` é um só.
+   * É por isso que `world/detail.js` devolve trechos de GLSL em vez de aplicar
+   * o enxerto sozinho: quem monta o shader tem de ser o dono do material.
+   *
+   * Pontos de injeção, e por que cada um:
+   * • `<color_fragment>`  — logo depois de a cor de VÉRTICE entrar em
+   *   `diffuseColor`; o grão multiplica o que a região já decidiu.
+   * • `<normal_fragment_maps>` — depois de a normal geométrica estar pronta;
+   *   é onde o relevo falso do grão pode perturbá-la.
+   * • `<emissivemap_fragment>` — o único ponto em que
+   *   `totalEmissiveRadiance` já foi declarado e ainda não foi usado.
    */
   criarMaterial() {
     const mat = new THREE.MeshStandardMaterial({
@@ -731,6 +765,8 @@ export class NamekTerrain {
     });
 
     const uStorm = this.uStorm;
+    const uDetalhe = DETALHE_GLSL.uniforms(texturaDeDetalhe());
+
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.storm = uStorm;
       shader.uniforms.magmaCor = { value: PALETA.magma.clone() };
@@ -740,6 +776,7 @@ export class NamekTerrain {
       shader.uniforms.solDirMundo = { value: NAMEK_SOL_DIR.clone() };
       shader.uniforms.brumaDia = { value: NAMEK_BRUMA_SOL.clone() };
       shader.uniforms.brumaBrasa = { value: NAMEK_BRUMA_BRASA.clone() };
+      Object.assign(shader.uniforms, uDetalhe);
 
       shader.vertexShader = shader.vertexShader
         .replace(
@@ -747,7 +784,8 @@ export class NamekTerrain {
           `#include <common>
            attribute float aMagma;
            varying float vMagma;
-           varying vec3 vMundoChao;`,
+           varying vec3 vMundoChao;
+           ${DETALHE_GLSL.vertexCommon}`,
         )
         .replace(
           "#include <begin_vertex>",
@@ -757,7 +795,8 @@ export class NamekTerrain {
               aponta. modelMatrix e não um atalho assumindo identidade: a malha
               hoje está na origem, mas quem a reposicionar um dia não vai
               procurar o defeito num degradê de horizonte. */
-           vMundoChao = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+           vMundoChao = (modelMatrix * vec4(transformed, 1.0)).xyz;
+           ${DETALHE_GLSL.vertexBody}`,
         );
 
       shader.fragmentShader = shader.fragmentShader
@@ -770,7 +809,18 @@ export class NamekTerrain {
            uniform vec3 brumaDia;
            uniform vec3 brumaBrasa;
            varying float vMagma;
-           varying vec3 vMundoChao;`,
+           varying vec3 vMundoChao;
+           ${DETALHE_GLSL.fragmentCommon}`,
+        )
+        .replace(
+          "#include <color_fragment>",
+          `#include <color_fragment>
+           ${DETALHE_GLSL.fragmentColor}`,
+        )
+        .replace(
+          "#include <normal_fragment_maps>",
+          `#include <normal_fragment_maps>
+           ${DETALHE_GLSL.fragmentNormal}`,
         )
         .replace(
           "#include <emissivemap_fragment>",
@@ -823,10 +873,15 @@ export class NamekTerrain {
        `MeshStandardMaterial` com os mesmos parâmetros e enxertos DIFERENTES
        ganham o mesmo programa, e o segundo passa a rodar o shader do primeiro:
        aqui isso seria o terreno desenhado sem `aMagma` (ou uma vegetação
-       desenhada com ele, procurando um atributo que a malha dela não tem).
+       desenhada com ele, procurando um atributo que a malha dela não tem), ou o
+       chão voltando a ser chapado sem nenhum erro no console.
        É a convenção do repositório inteiro — ver `entities/environment.js` e
-       `namek/character/rig.js`, que já pagam esta linha. */
-    mat.customProgramCacheKey = () => "namek-terreno-magma-bruma";
+       `namek/character/rig.js`, que já pagam esta linha.
+       A chave NOMEIA OS TRÊS enxertos que este material carrega, e isso é o que
+       a mantém honesta: magma, bruma e detalhe chegaram por caminhos diferentes
+       e convivem no mesmo shader — uma chave que citasse só um deles voltaria a
+       ser a mentira que ela existe para impedir. */
+    mat.customProgramCacheKey = () => "namek-terreno-magma-bruma-detalhe";
 
     this.material = mat;
     return mat;
@@ -962,6 +1017,10 @@ export class NamekTerrain {
   }
 
   dispose() {
+    /* A textura de detalhe é de MÓDULO (uma só para o modo inteiro), então
+       quem a solta é o dispose — este modo não tem o registro de recursos
+       compartilhados do jogo do arqueiro (§0), a limpeza é explícita. */
+    descartarDetalhe();
     this.geometry?.dispose();
     this.material?.dispose();
     this.mesh?.parent?.remove(this.mesh);

@@ -953,16 +953,22 @@ const CSS = `
 .nk-ajuda {
   position: absolute;
   left: 50%;
-  top: 50%;
-  z-index: 8;
-  transform: translate(-50%, -50%);
+  /* TOPO, não centro. O menu (Esc) também se centraliza na tela e fica em
+     cima dela — z-index 40 contra o 8 antigo daqui —, então os dois disputando
+     o mesmo miolo escondia esta ficha inteira atrás do cartão do menu. Ancorada
+     no topo ela sobra sempre visível ACIMA do cartão, os dois abrem juntos no
+     mesmo Esc e nenhum tampa o outro. */
+  top: 3vh;
+  z-index: 41;
+  transform: translateX(-50%);
+  overflow-y: auto;
   /* LARGURA EXPLÍCITA, e não 'max-width'. Um bloco posicionado sem largura
      encolhe até o conteúdo, e uma grade de 'auto-fit' dentro de um contêiner de
      largura indefinida resolve para UMA coluna — o painel virava uma tira alta
      que estourava a altura da tela e cortava o título. Com a largura definida,
      as três colunas cabem lado a lado e ele nunca passa de meia tela. */
   width: min(94vw, 800px);
-  max-height: 92vh;
+  max-height: 40vh;
   padding: 18px 22px 16px;
   background: rgba(6, 12, 22, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.18);

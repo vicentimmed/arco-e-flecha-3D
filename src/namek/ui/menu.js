@@ -68,12 +68,16 @@ const NOTA_DIF = {
 const CSS = `
 .nk-menu {
   position: absolute; inset: 0; z-index: 40;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 4vh;
   background: rgba(4, 12, 10, 0.62);
   backdrop-filter: blur(3px);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   pointer-events: auto;
 }
+/* O cartão fica na METADE DE BAIXO por causa do vizinho: a ficha de teclas
+   (.nk-ajuda) se abre junto no mesmo Esc e mora no topo — ver style.js.
+   Centralizado, os dois disputariam o mesmo miolo da tela. */
 .nk-menu[hidden] { display: none !important; }
 .nk-menu-card {
   width: min(420px, 92vw);

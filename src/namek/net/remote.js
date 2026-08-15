@@ -329,6 +329,16 @@ export class RemoteFighters {
       f.invuln = p.invuln;
       f.tonto = p.tonto;
       f.defendendo = p.defendendo;
+      /* A aura de barra cheia dos OUTROS sai do `VITALS`, não da pose: o ki de
+         cada um já viaja lá a 10 Hz (`applyVitals`), e um canal a mais na pose
+         seria pagar 20 Hz por um booleano que muda uma vez por briga. Ver
+         `Fighter.kiFull` — é a leitura de quem está pronto para o especial, e a
+         informação mais útil que se pode dar sobre um adversário.
+
+         (Caído e defendendo vêm da POSE, logo acima, e a diferença é a
+         frequência: os dois mudam no meio de uma troca de golpes e precisam
+         chegar no ritmo dela, não a 10 Hz.) */
+      f.kiFull = r.ki >= NAMEK.ki.max * NAMEK.ki.specialThreshold - 1e-3;
       f.update(dt, cameraPos);
     }
   }

@@ -47,6 +47,7 @@ import { DEFAULT_LEVEL, LEVEL_IDS, levelPhysics } from "../shared/levels.js";
 import { ValleyLevel } from "./valleyLevel.js";
 import { MoonLevel } from "./moonLevel.js";
 import { CastleLevel } from "./castleLevel.js";
+import { SandboxLevel } from "./sandboxLevel.js";
 
 /**
  * O registro das classes visuais. Uma linha por fase.
@@ -60,6 +61,7 @@ export const LEVELS = {
   [ValleyLevel.id]: ValleyLevel,
   [MoonLevel.id]: MoonLevel,
   [CastleLevel.id]: CastleLevel,
+  [SandboxLevel.id]: SandboxLevel,
 };
 
 export { DEFAULT_LEVEL };
@@ -159,10 +161,12 @@ export class LevelManager {
     this.current = null;
 
     progresso(0.2, "trocando o mundo…");
-    await respirar();
+    // SEM await aqui: fecha a janela em que um pacote de rede (a rede não
+    // para durante a troca) criaria corpos que o recreate() logo orfanaria.
     const Fase = levelClass(id);
     ctx.physics.recreate(levelPhysics(Fase.id).gravity);
     ctx.sync.clear();
+    await respirar();
 
     progresso(0.3, "construindo a fase…");
     await respirar();

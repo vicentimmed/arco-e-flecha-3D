@@ -127,6 +127,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { makeRandom, clamp } from "../../utils/math.js";
 import { NAMEK } from "../../shared/namek/config.js";
 import { NAMEK_SOL_DIR } from "./sky.js";
+import { aplicarDetalhe } from "./detail.js";
 import {
   criarEstilhacos,
   passoEstilhaco,
@@ -1257,11 +1258,16 @@ export class NamekScenery {
     }
 
     this.criarEspecie("rocha", geos, baldes, {
-      material: new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        roughness: 1,
-        metalness: 0,
-      }),
+      // O mesmo grão do chão (ver `world/detail.js`): pedra lisa ao lado de um
+      // terreno com grão denuncia as duas coisas de uma vez.
+      material: aplicarDetalhe(
+        new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 1,
+          metalness: 0,
+        }),
+        "namek-rocha-detalhe",
+      ),
       // Um terço do raio enterrado: pedra assentada tem parte no chão.
       enterrar: (p) => p.raio * p.escala * 0.34,
       pegada: (p) => p.raio * p.escala * 0.85,

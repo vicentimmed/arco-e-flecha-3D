@@ -156,6 +156,9 @@ const ATALHOS = [
       // A mesma tecla leva e traz — ver `askLevelChange`.
       [["9"], "Lua (ir e voltar)", ["setLevel", "moon"]],
       [[], "Castelo", ["setLevel", "castle"]],
+      // Cenário de TESTE — serra pequena para avaliar textura + cratera
+      // dinâmica sem tocar nas fases de verdade. Ver `shared/sandboxField.js`.
+      [[], "Sandbox (teste)", ["setLevel", "sandbox"]],
     ],
   },
   {

@@ -101,6 +101,10 @@ export class Input {
       toggleMusic: false,
       askRespawn: false, // K — renascer noutro lugar
       askResetScores: false, // Y — zerar o placar de todos
+      // Só o menu escreve aqui: não há tecla, pelo mesmo motivo de `setMode`
+      // logo abaixo — Namekusei é outro jogo, e entrar nele é uma recarga
+      // (ver `src/namek/boot.js: goToNamek`), não uma troca de modo.
+      goToNamek: false,
       setMode: null, // "free" | "duel" | "boarHunt"
       /* A chuva de meteoros COM NÍVEL: "easy" | "normal" | "hard".
          Separada do `setMode` porque carrega um segundo dado, e porque entrar
@@ -618,6 +622,7 @@ export class Input {
     a.toggleMusic = false;
     a.askRespawn = false;
     a.askResetScores = false;
+    a.goToNamek = false;
     a.setLevel = null;
     a.toggleBot = null;
     a.cycleBotDifficulty = 0;

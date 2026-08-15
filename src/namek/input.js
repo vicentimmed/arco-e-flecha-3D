@@ -240,6 +240,9 @@ export class NamekInput {
     this._pTravar = false;
     this._pMenu = false;
     this._pEspecial = -1;
+    /** Toques em crase acumulados dentro da janela de 600 ms. Ver `_crase`. */
+    this._craseN = 0;
+    this._craseEm = -Infinity;
 
     /**
      * O OBJETO REAPROVEITADO. Uma única alocação na vida da classe.
@@ -826,6 +829,15 @@ export class NamekInput {
            Com o ponteiro travado quem dispara o menu é o `pointerlockchange`. */
         this._pMenu = true;
         break;
+      case "Backquote":
+      case "IntlBackslash":
+        /* O ÚNICO atalho do arqueiro que continua valendo aqui — ver
+           `src/systems/input.js: crase()`, de onde este veio. É o mesmo gesto
+           de três toques em 600 ms, e abre o mesmo menu geral que o Esc abre
+           neste modo: aqui não existe um segundo painel de comandos para
+           mostrar, então o destino é o que já existe. */
+        this._crase();
+        break;
       case "Digit1":
       case "Digit2":
       case "Digit3":
@@ -834,13 +846,33 @@ export class NamekInput {
         break;
       default:
         /* E MAIS NADA. Toda outra tecla do jogo do arqueiro — T, K, L, O, P,
-           crase, 5–9, 0 — passa direto: aqui ela não existe. É o pedido.
+           5–9, 0 — passa direto: aqui ela não existe. É o pedido. A crase é a
+           única exceção, tratada acima.
 
            Não procure `KeyE` (a guarda) nem `KeyC`, `KeyW`, `ShiftLeft` neste
            switch: elas são SEGURADAS e já foram tratadas na linha que põe a
            tecla no conjunto, lá em cima. O switch é só das bordas. */
         break;
     }
+  }
+
+  /**
+   * Três toques em crase, dentro de 600 ms, abrem o menu geral — o mesmo
+   * gesto e a mesma janela do arqueiro (`src/systems/input.js: crase()`),
+   * reimplementados aqui porque este modo não tem instância nenhuma daquele
+   * arquivo (ver o cabeçalho de `boot.js`: nada do arqueiro existe dentro de
+   * Namekusei). O destino é `this._pMenu`, o mesmo pulso que o Esc dispara —
+   * não há um segundo painel de comandos aqui para abrir.
+   */
+  _crase() {
+    const agora = performance.now();
+    if (agora - this._craseEm > 600) this._craseN = 0;
+    this._craseEm = agora;
+    this._craseN += 1;
+
+    if (this._craseN < 3) return;
+    this._craseN = 0;
+    this._pMenu = true;
   }
 
   _teclaSobe(e) {

@@ -7,7 +7,11 @@
    o jogo já tem devem ser ignorados; deixe somente o atalho que aparece o menu
    geral do game"*. `systems/input.js` do arqueiro tem quinze atalhos — 1 a 9
    trocam modo e fase, R limpa flechas, T liga traçados, K renasce, L solta um
-   alce, O adianta a horda, crase abre o painel. Nenhum deles vale aqui.
+   alce, O adianta a horda, crase abre o painel. Nenhum deles vale aqui — SALVO
+   a própria crase: pedido posterior trouxe o gesto dos três toques de volta,
+   porque ele é justamente "o atalho que abre o menu geral", só que redirigido
+   para o menu Esc deste modo em vez do painel do arqueiro. A reimplementação
+   mora em `NamekInput._crase` (`src/namek/input.js`), e não aqui.
 
    Só que duas coisas deste modo PRECISAM ser alcançáveis, e no arqueiro elas
    seriam teclas: **pôr um bot** e **virar o clima**. Sem elas, quem entra sozinho

@@ -159,6 +159,12 @@ const ATALHOS = [
       // Cenário de TESTE — serra pequena para avaliar textura + cratera
       // dinâmica sem tocar nas fases de verdade. Ver `shared/sandboxField.js`.
       [[], "Sandbox (teste)", ["setLevel", "sandbox"]],
+      // NAMEKUSEI NÃO É UMA FASE — é outro jogo, entrado por recarga (ver
+      // `src/namek/boot.js: goToNamek`). Mora nesta lista porque é aqui que
+      // quem procura "aonde ir" olha primeiro, e sem uma linha o único jeito
+      // de achá-la seguia sendo a porta no lobby, longe de quem já está
+      // jogando e abriu este menu pela crase.
+      [[], "Namekusei (recarrega a página)", ["goToNamek", true]],
     ],
   },
   {
@@ -672,7 +678,13 @@ export class HUD {
      * arena nova — e deixar o menu por cima disso o obrigaria a fechá-lo às
      * cegas. Todo o resto (bot, porco, música, traçado) é justamente o que se
      * quer encadear sem fechar nada. */
-    this.comandosQueFecham = new Set(["setMode", "setLevel", "setMeteorRain", "setSiege"]);
+    this.comandosQueFecham = new Set([
+      "setMode",
+      "setLevel",
+      "setMeteorRain",
+      "setSiege",
+      "goToNamek",
+    ]);
     /** Chamado ao abrir e ao fechar, para o input soltar/retomar o ponteiro. */
     this.onCommandMenuToggle = null;
     this.el.cmdCorpo.appendChild(

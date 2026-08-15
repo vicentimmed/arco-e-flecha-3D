@@ -2119,6 +2119,10 @@ class Game {
     if (a.toggleDebug) this.debug.toggle();
     if (a.toggleCommandMenu) this.hud.toggleCommandMenu();
     if (a.toggleHelp) this.hud.toggleHelp();
+    /* Só o menu de comandos escreve aqui (ver `Input.actions.goToNamek`).
+       `import()` dinâmico para não pesar o pacote do arqueiro com o de
+       Namekusei — a mesma razão do `import()` em `main()`. */
+    if (a.goToNamek) import("./namek/boot.js").then((m) => m.goToNamek());
 
     if (a.askRespawn) this.askRespawn();
     if (a.askResetScores) this.askResetScores();

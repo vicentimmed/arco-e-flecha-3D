@@ -27,6 +27,13 @@ import { sanitizeName } from "../shared/protocol.js";
 
 const STORAGE_KEY = "arco-flecha:nome";
 
+/* Guarda, do outro lado da recarga de troca de jogo, qual porta a pessoa
+   escolheu — para a recarga completar a entrada sozinha em vez de deixar um
+   segundo clique pendente. Ver `submit`. `sessionStorage` porque é só a
+   intenção de UMA travessia: se sobrevivesse a uma recarga manual futura ela
+   entraria de novo sem ninguém ter clicado em nada. */
+const AUTO_ENTER_KEY = "arco-flecha:auto-entrar";
+
 /**
  * As portas, na ordem em que aparecem.
  *
@@ -162,6 +169,13 @@ export class Lobby {
     );
     this.qualityButtons = [...root.querySelectorAll("[data-quality]")];
 
+    /* Se a recarga de troca de jogo foi disparada por um clique daqui (ver
+       `submit`), a porta escolhida está guardada — retoma a entrada assim
+       que o mundo ficar pronto, em vez de esperar um segundo clique que a
+       pessoa já deu do outro lado da recarga. */
+    this.autoEnterPortaId = sessionStorage.getItem(AUTO_ENTER_KEY);
+    sessionStorage.removeItem(AUTO_ENTER_KEY);
+
     this.input.value = readStoredName();
     this.syncQuality();
     this.input.addEventListener("input", () => this.refresh());
@@ -270,6 +284,12 @@ export class Lobby {
     this.status.textContent = "";
     this.status.classList.remove("error");
     this.refresh();
+
+    if (this.autoEnterPortaId) {
+      const porta = PORTAS.find((p) => p.id === this.autoEnterPortaId);
+      this.autoEnterPortaId = null;
+      if (porta) this.submit(porta);
+    }
   }
 
   setError(text) {
@@ -328,6 +348,9 @@ export class Lobby {
     const jogoAtual = q.get("jogo");
     const jogoAlvo = porta.jogo ?? null;
     if (jogoAlvo !== jogoAtual) {
+      // Marca a porta escolhida para o lobby do outro lado da recarga entrar
+      // sozinho assim que o mundo ficar pronto — um clique é o bastante.
+      sessionStorage.setItem(AUTO_ENTER_KEY, porta.id);
       if (jogoAlvo) q.set("jogo", jogoAlvo);
       else q.delete("jogo");
       location.search = q.toString();

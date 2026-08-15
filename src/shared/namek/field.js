@@ -25,28 +25,50 @@
    ---------------------------------------------------------------- as crateras
 
    Cratera é ALTURA, não objeto — a mesma ideia da Lua. A diferença é que aqui
-   elas nascem em jogo, e isso muda duas coisas:
+   elas nascem em jogo, e a pergunta que isso levanta é quanto custa carregá-las.
 
-   • **O índice espacial precisa aceitar inserção.** O da Lua é construído uma
-     vez e nunca muda. Este é um `Map` de células com listas, e uma cratera
-     entra em todas as células que o raio dela toca.
+   **A resposta é um MAPA DE DESLOCAMENTO, e não uma lista.** A grade cobre a
+   arena com célula de 2 m e guarda, em cada uma, quantos metros o chão baixou
+   ali. Abrir uma cratera é assá-la na grade uma vez (`bakeCrater`); consultar
+   a altura é ler quatro células e interpolar (`displacementAt`).
 
-   • **Elas têm de acabar.** Uma partida de dez minutos com quatro jogadores
-     soltando especiais chegaria a milhares, e `heightAt` é chamada por vértice
-     de malha, por passo de bot e por bala em voo. O limite é
-     `NAMEK.destruction.craterLimit`, em fila: a mais velha sai quando a 97ª
-     entra. Ver `addCrater`.
+   O desenho anterior guardava a lista de crateras num índice espacial e somava,
+   a cada `heightAt`, o efeito de todas as próximas. Isso tinha uma consequência
+   que o jogo não queria: como o custo crescia com a destruição acumulada, era
+   preciso APOSENTAR buracos — a 97ª cratera apagava a 1ª. O jogador via o
+   planeta se regenerar sozinho enquanto olhava para ele.
+
+   Com a grade, o custo de consultar é o mesmo com dez ou dez mil crateras, e
+   por isso **nada é aposentado**: o que foi cavado fica cavado até o fim da
+   partida. O que passou a ter teto é a PROFUNDIDADE (`DESL_MIN`), não a
+   quantidade — insistir no mesmo ponto aprofunda o buraco até um limite, em
+   vez de abrir um poço sem fundo.
+
+   O registro `craters` continua existindo, mas só para a rede: é ele que viaja
+   no `welcome` para quem entra no meio da partida. A grade em si tem 231 mil
+   células e não caberia numa mensagem.
    --------------------------------------------------------------------------- */
 
 import { ValueNoise } from "../../utils/noise.js";
 import { makeRandom, smoothstep } from "../../utils/math.js";
 import { NAMEK, craterFor } from "./config.js";
 
-/* Célula do índice de crateras. 24 m é da ordem da cratera comum (bola de ki
-   abre 3 m, Kamehameha 13 m): células muito menores multiplicariam as inserções
-   de uma cratera grande, e muito maiores devolveriam listas longas demais para
-   `heightAt` varrer. */
-const CELL = 24; // m
+/* ------------------------------------------------- o mapa de deslocamento --
+
+   m — lado da célula. 2 m contra os 2,6 m da célula da malha na clareira: a
+   grade é ligeiramente mais fina que a malha que a desenha, então não é ela
+   que limita o detalhe do buraco. */
+const DESL_RES = 2;
+/* m — meia-extensão coberta. A sala recusa cratera fora do raio da arena
+   (460 m), então 480 cobre tudo o que pode ser cavado, com folga. */
+const DESL_HALF = 480;
+/** Células por lado. 481² = 231 mil floats ≈ 925 KB, alocados uma vez. */
+const DESL_N = Math.floor((DESL_HALF * 2) / DESL_RES) + 1;
+/* m — o quanto o chão pode afundar e a borda pode subir, ACUMULADO.
+   Sem os limites, insistir no mesmo ponto abriria um poço sem fundo — as
+   crateras se somam, e nada as impediria de somar para sempre. */
+const DESL_MIN = -80;
+const DESL_MAX = 25;
 
 export class NamekField {
   constructor(seed = NAMEK.world.seed) {
@@ -62,26 +84,20 @@ export class NamekField {
        ou no topo de um pico — foi o primeiro defeito visto depois da troca. */
     this.spawnCenter = { x: 0, z: 0, radius: 150, minRadius: 25 };
 
-    /** @type {Map<number, object[]>} célula → crateras que a tocam */
-    this.grid = new Map();
-    /** @type {object[]} a fila, em ordem de chegada. Ver `addCrater`. */
+    /**
+     * O TERRENO CAVADO, em metros de deslocamento por célula.
+     *
+     * É o que substituiu a lista de crateras consultada a cada `heightAt`.
+     * Uma cratera é assada aqui uma vez (`bakeCrater`) e vira parte do chão;
+     * a consulta de altura passa a custar quatro leituras, sempre, tenha a
+     * partida aberto dez buracos ou dez mil.
+     */
+    this.desl = new Float32Array(DESL_N * DESL_N);
+
+    /** @type {object[]} o registro, em ordem de chegada. Só para a rede. */
     this.craters = [];
     /** @type {Map<number, object>} id da sala → cratera, contra duplicata */
     this.byId = new Map();
-
-    /**
-     * Chamado quando uma cratera é APOSENTADA pela fila. Ver `addCrater`.
-     *
-     * Existe porque quem guarda a altura e quem guarda a malha são dois, e a
-     * aposentadoria só acontecia num deles: o campo esquecia a cratera e a malha
-     * ficava com o buraco. Numa partida de dez minutos a fila gira nove vezes, e
-     * o resultado era ~770 buracos que só existiam para os olhos — o jogador
-     * caindo dentro de depressões que a física jurava serem chão liso.
-     *
-     * O servidor deixa isto nulo: ele não tem malha para consertar.
-     * @type {((cratera: object) => void) | null}
-     */
-    this.onRetire = null;
 
     /* As MONTANHAS não saem de ruído puro. Ruído dá relevo, não dá silhueta —
        e o que faz um cenário de Namekusei ser reconhecível são picos separados,
@@ -134,46 +150,64 @@ export class NamekField {
     return lista;
   }
 
-  /* --------------------------------------------------------------- índice -- */
+  /* ------------------------------------------------- mapa de deslocamento -- */
 
-  key(cx, cz) {
-    /* Empacota duas coordenadas de célula num inteiro. A arena tem 1800 m de
-       lado, ou 75 células — cabe folgado nos 16 bits de cada metade, e uma
-       chave numérica é bem mais barata que a string `"12,7"` que o `Map`
-       teria de hashear a cada consulta de altura. */
-    return ((cx + 2048) << 16) | (cz + 2048);
+  /**
+   * Quanto o chão baixou (ou subiu, na borda) neste ponto, por interpolação
+   * bilinear na grade.
+   *
+   * Bilinear e não vizinho-mais-próximo: a grade tem célula de 2 m e a malha
+   * tem 2,6 m na clareira, então amostrar em degrau deixaria a cratera com
+   * borda de escada — um buraco quadriculado.
+   */
+  displacementAt(x, z) {
+    const fx = (x + DESL_HALF) / DESL_RES;
+    const fz = (z + DESL_HALF) / DESL_RES;
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    if (ix < 0 || iz < 0 || ix >= DESL_N - 1 || iz >= DESL_N - 1) return 0;
+    const tx = fx - ix;
+    const tz = fz - iz;
+    const i00 = iz * DESL_N + ix;
+    const a = this.desl[i00];
+    const b = this.desl[i00 + 1];
+    const c = this.desl[i00 + DESL_N];
+    const d = this.desl[i00 + DESL_N + 1];
+    const cima = a + (b - a) * tx;
+    const baixo = c + (d - c) * tx;
+    return cima + (baixo - cima) * tz;
   }
 
-  /** Insere uma cratera em todas as células que o raio dela toca. */
-  indexCrater(c) {
-    const min = Math.floor((c.x - c.raio) / CELL);
-    const max = Math.floor((c.x + c.raio) / CELL);
-    const zmin = Math.floor((c.z - c.raio) / CELL);
-    const zmax = Math.floor((c.z + c.raio) / CELL);
-    for (let cx = min; cx <= max; cx++) {
-      for (let cz = zmin; cz <= zmax; cz++) {
-        const k = this.key(cx, cz);
-        let lista = this.grid.get(k);
-        if (!lista) this.grid.set(k, (lista = []));
-        lista.push(c);
-      }
-    }
-  }
+  /**
+   * ASSA uma cratera na grade — é aqui que ela deixa de ser evento e vira
+   * terreno.
+   *
+   * Custa O(células do disco) UMA vez, e depois some: não importa quantas
+   * crateras a partida acumulou, `displacementAt` continua lendo quatro
+   * números. É o oposto da lista, que cobrava a conta em toda consulta de
+   * altura pelo resto da partida.
+   *
+   * As crateras se SOMAM, e é isso que faz o buraco crescer quando se insiste
+   * no mesmo ponto. Os limites existem para que insistir não abra um poço sem
+   * fundo: o chão para de descer em `DESL_MIN` e a borda para de subir em
+   * `DESL_MAX`.
+   */
+  bakeCrater(c) {
+    const ix0 = Math.max(0, Math.floor((c.x - c.raio + DESL_HALF) / DESL_RES));
+    const ix1 = Math.min(DESL_N - 1, Math.ceil((c.x + c.raio + DESL_HALF) / DESL_RES));
+    const iz0 = Math.max(0, Math.floor((c.z - c.raio + DESL_HALF) / DESL_RES));
+    const iz1 = Math.min(DESL_N - 1, Math.ceil((c.z + c.raio + DESL_HALF) / DESL_RES));
 
-  /** Tira uma cratera aposentada do índice. */
-  unindexCrater(c) {
-    const min = Math.floor((c.x - c.raio) / CELL);
-    const max = Math.floor((c.x + c.raio) / CELL);
-    const zmin = Math.floor((c.z - c.raio) / CELL);
-    const zmax = Math.floor((c.z + c.raio) / CELL);
-    for (let cx = min; cx <= max; cx++) {
-      for (let cz = zmin; cz <= zmax; cz++) {
-        const k = this.key(cx, cz);
-        const lista = this.grid.get(k);
-        if (!lista) continue;
-        const i = lista.indexOf(c);
-        if (i >= 0) lista.splice(i, 1);
-        if (!lista.length) this.grid.delete(k);
+    for (let iz = iz0; iz <= iz1; iz++) {
+      const pz = iz * DESL_RES - DESL_HALF;
+      const linha = iz * DESL_N;
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const px = ix * DESL_RES - DESL_HALF;
+        const d = this.craterDelta(c, px, pz);
+        if (d === 0) continue;
+        const k = linha + ix;
+        const v = this.desl[k] + d;
+        this.desl[k] = v < DESL_MIN ? DESL_MIN : v > DESL_MAX ? DESL_MAX : v;
       }
     }
   }
@@ -190,6 +224,9 @@ export class NamekField {
    * que atirou já a aplicou localmente para não esperar o retorno da rede) e a
    * segunda não pode aprofundar o buraco.
    *
+   * **Não aposenta mais nada.** A cratera é assada na grade e fica lá para
+   * sempre — ver o cabeçalho do arquivo.
+   *
    * @param {number} id       carimbo da sala; o mesmo em todas as telas
    * @param {number} x
    * @param {number} z
@@ -203,30 +240,18 @@ export class NamekField {
 
     this.craters.push(c);
     this.byId.set(id, c);
-    this.indexCrater(c);
-
-    /* A FILA. Sem teto, `heightAt` degrada ao longo da partida — e ela é a
-       função mais chamada do modo inteiro. A mais velha some primeiro porque é
-       a que o jogador tem menos chance de estar olhando. */
-    while (this.craters.length > NAMEK.destruction.craterLimit) {
-      const velha = this.craters.shift();
-      this.byId.delete(velha.id);
-      this.unindexCrater(velha);
-      /* AVISA QUEM DESENHA. A cratera saiu da altura; se ninguém re-esculpir o
-         disco dela, ela continua na malha para sempre. Ver `onRetire`. A ordem
-         importa: o aviso vem DEPOIS do `unindexCrater`, para que o
-         `heightAt` que o desenhista vai consultar já seja o de sem-ela. */
-      this.onRetire?.(velha);
-    }
+    this.bakeCrater(c);
     return c;
   }
 
-  /** As crateras cujo raio pode alcançar (x, z). */
-  cratersNear(x, z) {
-    return this.grid.get(this.key(Math.floor(x / CELL), Math.floor(z / CELL)));
-  }
-
-  /** Todas, para mandar a quem entra no meio da partida. */
+  /**
+   * Todas, para mandar a quem entra no meio da partida.
+   *
+   * O registro é append-only agora que nada é aposentado, e é ele — não a
+   * grade — que viaja: a grade tem 231 mil células e não caberia numa mensagem
+   * de entrada, enquanto o registro tem uma entrada por golpe que abriu buraco
+   * (especiais e quedas, algumas centenas numa partida longa).
+   */
   craterList() {
     return this.craters.map((c) => ({ i: c.id, p: [c.x, c.z], r: c.raio, f: c.fundura }));
   }
@@ -240,6 +265,10 @@ export class NamekField {
    * que `craterFor` for ajustada, quem já está em campo continua com o chão
    * antigo e o retardatário chegaria com um chão novo — a única divergência
    * possível, fechada aqui.
+   *
+   * A ORDEM importa e é a da lista: as crateras se somam na grade, e somar não
+   * é comutativo depois que os limites de `bakeCrater` entram. A sala manda na
+   * ordem em que carimbou, que é a mesma em que todo mundo já assou.
    */
   loadCraters(lista) {
     for (const c of lista ?? []) {
@@ -247,7 +276,7 @@ export class NamekField {
       const cratera = { id: c.i, x: c.p[0], z: c.p[1], raio: c.r, fundura: c.f };
       this.craters.push(cratera);
       this.byId.set(c.i, cratera);
-      this.indexCrater(cratera);
+      this.bakeCrater(cratera);
     }
   }
 
@@ -343,20 +372,16 @@ export class NamekField {
   }
 
   /**
-   * A altura de verdade: relevo base mais as crateras que alcançam este ponto.
+   * A altura de verdade: relevo base mais o que já foi cavado.
    *
-   * É a função mais chamada do modo — malha, bot, bala, pé de jogador — e por
-   * isso ela é o lugar onde o índice espacial paga a si mesmo: sem ele seriam
-   * 96 crateras testadas por consulta; com ele, tipicamente zero ou uma.
+   * É a função mais chamada do modo — malha, bot, bala, pé de jogador — e
+   * agora ela custa o MESMO em qualquer ponto da partida: uma consulta de
+   * ruído mais quatro leituras de array. Antes ela varria a lista de crateras
+   * próximas, e o preço subia com a destruição acumulada — o que obrigava a
+   * aposentar buracos para o jogo não degradar.
    */
   heightAt(x, z) {
-    let h = this.baseHeight(x, z);
-    const perto = this.cratersNear(x, z);
-    if (!perto) return h;
-    for (let i = 0; i < perto.length; i++) {
-      h += this.craterDelta(perto[i], x, z);
-    }
-    return h;
+    return this.baseHeight(x, z) + this.displacementAt(x, z);
   }
 
   /**

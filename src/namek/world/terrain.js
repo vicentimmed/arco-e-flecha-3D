@@ -260,14 +260,7 @@ export class NamekTerrain {
   alturaDeVertice(v) {
     const x = this.positions[v * 3];
     const z = this.positions[v * 3 + 2];
-    let h = this.base[v];
-    const perto = this.field.cratersNear(x, z);
-    if (perto) {
-      for (let i = 0; i < perto.length; i++) {
-        h += this.field.craterDelta(perto[i], x, z);
-      }
-    }
-    return h;
+    return this.base[v] + this.field.displacementAt(x, z);
   }
 
   /* --------------------------------------------------------------- normal -- */

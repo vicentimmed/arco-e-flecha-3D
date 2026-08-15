@@ -86,12 +86,10 @@ export class NamekGame {
     /* --------------------------------------------------------- o mundo --- */
     this.field = new NamekField();
     this.world = new NamekWorld(this.scene, this.field);
-    /* A fila de crateras tem teto, e quem sai da altura precisa sair da malha
-       junto — senão o buraco fica desenhado sobre um chão que a física já
-       considera liso. Ver `NamekField.onRetire`. `applyCrater` recalcula o disco
-       a partir do relevo base e das crateras que AINDA existem, então reaplicá-lo
-       sobre a que saiu é exatamente o que a devolve ao lugar. */
-    this.field.onRetire = (velha) => this.world.applyCrater(velha);
+    /* NÃO HÁ MAIS APOSENTADORIA de cratera, e por isso não há mais gancho de
+       aposentadoria aqui. A cratera é assada num mapa de deslocamento
+       (`NamekField.bakeCrater`) e passa a ser parte do relevo: ela não sai
+       nunca, e `heightAt` custa o mesmo com dez ou dez mil buracos abertos. */
     this.fx = new NamekFx(this.scene, this.field);
     this.powers = new PowerSystem(this.scene, this.field);
 

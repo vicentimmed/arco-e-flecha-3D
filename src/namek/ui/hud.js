@@ -466,6 +466,36 @@ export class NamekHud {
       <i class="nk-c nk-c1"></i><i class="nk-c nk-c2"></i>
       <i class="nk-c nk-c3"></i><i class="nk-c nk-c4"></i>`;
 
+    /* OS CÍRCULOS DE TODO MUNDO — e o aceso é para onde o tiro vai.
+     *
+     * É a metade visível da mira assistida (ver `NAMEK.lock.mira`). O pedido
+     * descreve a peça e o motivo dela numa frase só: *"todos os players já têm
+     * um círculo, correto? Quando está perto, talvez é mudar aquele círculo de
+     * cor quando o mouse estiver perto dele, só pra ele identificar que os tiros
+     * vão nele."*
+     *
+     * Sem isso a assistência seria invisível, e uma assistência invisível é
+     * pior que nenhuma: o jogador não teria como saber por que um tiro curvou
+     * nem como escolher para quem atirar. Com ela, o gesto que o pedido descreve
+     * — varrer o mouse por três adversários e atirar em cada um — vira legível.
+     *
+     * O anel APAGADO é fino e discreto de propósito: com quinze em campo, quinze
+     * círculos berrantes seriam a briga escondida atrás da interface. Ele existe
+     * para marcar onde as pessoas estão; quem informa é o aceso.
+     *
+     * Pool fixo, como os pinos da bússola e pelo mesmo motivo: um nó por
+     * lutador possível, criado uma vez, escondido quando sobra. */
+    this.aneisEl = document.createElement("div");
+    this.aneisEl.className = "nk-aneis";
+    this._aneis = [];
+    for (let i = 0; i < NAMEK.net.maxPlayers; i++) {
+      const el = document.createElement("div");
+      el.className = "nk-lutador-anel";
+      el.hidden = true;
+      this.aneisEl.appendChild(el);
+      this._aneis.push({ el, x: null, y: null, r: null, sob: null, visivel: false });
+    }
+
     this.faixaEl = document.createElement("div");
     this.faixaEl.className = "nk-faixa nk-contorno";
     this.faixaEl.hidden = true;
@@ -483,6 +513,10 @@ export class NamekHud {
          e um pino passando por cima do retrato do adversário travado esconderia
          a informação mais importante da tela atrás da menos importante. */
       this.bussolaEl,
+      /* Os círculos de todo mundo vêm ANTES da mira e do anel da trava: eles são
+         o fundo da leitura (onde as pessoas estão), e os outros dois são o
+         primeiro plano (para onde o tiro vai). */
+      this.aneisEl,
       this.miraEl,
       /* O anel entra DEPOIS da mira: quando os dois coincidem na tela (o alvo
          bem no eixo), quem tem de ficar por cima é o anel — ele é a informação
@@ -1040,6 +1074,70 @@ export class NamekHud {
     if (perdendo !== e.p) {
       e.p = perdendo;
       this.anelEl.classList.toggle("nk-perdendo", perdendo);
+    }
+  }
+
+  /**
+   * OS CÍRCULOS DE TODO MUNDO — e o aceso é para onde o tiro vai.
+   *
+   * Ver o comentário longo na construção de `aneisEl`. Aqui só a escrita, e ela
+   * é toda por comparação: quinze anéis reposicionados a 60 Hz são novecentas
+   * escritas de estilo por segundo se ninguém verificar antes se o valor mudou.
+   *
+   * @param {Array<{id,x,y,dist,visivel,sob,cor}>} lista o que `LockOn.naTelaTodos`
+   *   publica — a MESMA projeção que escolheu o alvo da assistência, e é isso que
+   *   garante que o anel aceso e o alvo do tiro nunca discordem.
+   * @param {number|null} travadoId quem está com a trava dura, para não ganhar
+   *   dois marcadores em cima do mesmo corpo.
+   */
+  setAneis(lista, travadoId = null) {
+    const marcas = lista ?? SEM_MARCAS;
+    const h = this.el.clientHeight;
+    const w = this.el.clientWidth;
+
+    for (let i = 0; i < this._aneis.length; i++) {
+      const a = this._aneis[i];
+      const d = marcas[i];
+
+      /* O anel do alvo TRAVADO não sai aqui: ele já tem o círculo vermelho com
+         cantoneiras (`setLockRing`), e dois marcadores no mesmo corpo é a tela
+         dizendo duas vezes a mesma coisa por cima de si mesma. */
+      const mostrar = !!d && d.visivel && d.id !== travadoId;
+      if (!mostrar) {
+        if (a.visivel) {
+          a.visivel = false;
+          a.el.hidden = true;
+        }
+        continue;
+      }
+      if (!a.visivel) {
+        a.visivel = true;
+        a.el.hidden = false;
+      }
+
+      const px = Math.round(((d.x + 1) / 2) * w);
+      const py = Math.round(((1 - d.y) / 2) * h);
+      /* `d.raio` já vem em frações da MEIA-ALTURA da tela, resolvido pela ótica
+         viva da câmera em `LockOn._sobAMira` — inclusive o campo de visão, que
+         abre com a arrancada. Aqui só se converte para pixels. O piso de 10 px é
+         o que mantém o marcador visível quando o adversário é um ponto: um
+         círculo de três pixels não marca nada. */
+      const r = Math.max(10, Math.round(d.raio * h * 0.5));
+
+      if (px !== a.x || py !== a.y || r !== a.r) {
+        a.x = px;
+        a.y = py;
+        a.r = r;
+        a.el.style.transform = `translate(${px}px, ${py}px) translate(-50%, -50%)`;
+        a.el.style.width = `${r * 2}px`;
+        a.el.style.height = `${r * 2}px`;
+      }
+
+      const sob = d.sob === true;
+      if (sob !== a.sob) {
+        a.sob = sob;
+        a.el.classList.toggle("nk-sob", sob);
+      }
     }
   }
 

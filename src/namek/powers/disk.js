@@ -413,6 +413,7 @@ class Disco {
          mesmo valendo 1 porque o registro da fila é REAPROVEITADO: um `fundo` de
          3,5 deixado pelo Kamehameha do quadro anterior viraria um poço aqui. */
       e.fundo = 1;
+      e.kind = this.kind;
     }
     gameEvents.emit(EventType.PARTICLES, {
       position: { x: this.x, y: this.y, z: this.z },

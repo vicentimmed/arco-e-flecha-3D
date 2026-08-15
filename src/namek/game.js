@@ -99,12 +99,15 @@ export class NamekGame {
 
     /* --------------------------------------------------------- o mundo --- */
     this.field = new NamekField();
-    this.world = new NamekWorld(this.scene, this.field);
+    /* Os EFEITOS nascem antes do mundo, e a ordem passou a importar: a lava
+       ferve com brasa e fumaça (`NamekLava.borbulhar`), e para isso ela precisa
+       do pool de partículas já montado quando `world.build` a construir. */
+    this.fx = new NamekFx(this.scene, this.field);
+    this.world = new NamekWorld(this.scene, this.field, this.fx);
     /* NÃO HÁ MAIS APOSENTADORIA de cratera, e por isso não há mais gancho de
        aposentadoria aqui. A cratera é assada num mapa de deslocamento
        (`NamekField.bakeCrater`) e passa a ser parte do relevo: ela não sai
        nunca, e `heightAt` custa o mesmo com dez ou dez mil buracos abertos. */
-    this.fx = new NamekFx(this.scene, this.field);
     this.powers = new PowerSystem(this.scene, this.field);
 
     /* -------------------------------------------------------- o jogador --- */
@@ -1477,7 +1480,14 @@ export class NamekGame {
       this.lock.update(dt, {
         origem: this._origemDaTrava(),
         buscar: (id) => this.remotes.get(id),
+        /* A lista de candidatos: a mira assistida varre todo mundo por quadro
+           (ver `LockOn._sobAMira`), e é dessa varredura que saem tanto o alvo
+           dos projéteis quanto os círculos que o HUD desenha. */
+        candidatos: this.remotes.byId.values(),
         camera: this.camera3,
+        /* A proporção da tela, para a zona da mira ser um CÍRCULO em pixels e
+           não uma elipse. Ver o comentário em `_sobAMira`. */
+        aspecto: this.camera3.aspect,
         manobra: acoes.strafe !== 0 || acoes.up !== 0,
       });
     }
@@ -1601,6 +1611,11 @@ export class NamekGame {
        Depois da câmera, como a bússola e pelo mesmo motivo: ele projeta pela
        lente deste quadro. */
     this.hud.setLockRing(this.anelDaTrava());
+    /* Os círculos de todo mundo, e o aceso é para onde o tiro vai. A lista é a
+       MESMA projeção que escolheu o alvo da assistência — ver
+       `LockOn.naTelaTodos`, que existe justamente para o anel aceso e o alvo do
+       tiro nunca discordarem. */
+    this.hud.setAneis(this.lock.naTelaTodos, this.lockId);
 
     this.hud.setVitals(this.health, NAMEK.fighter.maxHealth, this.ki.valor, this.ki.max);
     this.hud.setSpecials(this.specialIndex, this.ki.podeEspecial());
@@ -1671,7 +1686,7 @@ export class NamekGame {
        por `ev.chao`; sem esta fila, uma Genki Dama detonando a duzentos metros
        de altura era a maior coisa que o modo desenha acontecendo em silêncio. */
     for (const a of ev.noAr) {
-      this.audio.detonouNoAr(a.p, a.power);
+      this.audio.detonouNoAr(a.p, a.power, a.kind);
     }
 
     /* O TREMOR do quadro, se houve. É do MEU golpe (o sistema só o relata para
@@ -1696,7 +1711,7 @@ export class NamekGame {
        * imediatos, e é sob eles que o buraco aparece. São dois ou três quadros
        * de rede embaixo de uma nuvem que dura um segundo. */
       this.fx.groundImpact(g.p.x, g.p.y, g.p.z, g.power);
-      this.audio.estouroNoChao(g.p, g.power);
+      this.audio.estouroNoChao(g.p, g.power, g.kind);
       this.derrubarPorPerto(g.p, g.power, g.fundo);
       /* Só o que é forte o bastante pede BURACO; o resto marca e some. Ver
          `craterMinPower` — sem o corte, a rajada consumia a fila inteira de 96

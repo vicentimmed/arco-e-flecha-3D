@@ -700,6 +700,51 @@ const CSS = `
   50% { opacity: 0.35; }
 }
 
+/* ====================================================== os círculos de todos
+ *
+ * Um por lutador em cena, ancorado no corpo dele. O APAGADO diz onde as pessoas
+ * estão; o ACESO diz para onde o tiro vai — é a mira assistida pelo cursor (ver
+ * 'NAMEK.lock.mira'), e o pedido é literal sobre ela não ser a trava: *"sem
+ * travar a câmera, sem a parte vermelha nem nada… talvez é mudar aquele círculo
+ * de cor quando o mouse estiver perto dele."*
+ *
+ * Por isso a distância entre os dois estados é de COR e de PESO, e não de forma:
+ * forma nova (cantoneiras, tracejado) é o vocabulário da trava, e usá-la aqui
+ * faria as duas coisas se confundirem justamente quando as duas estão na tela.
+ *
+ * O apagado é deliberadamente discreto. Com quinze em campo, quinze círculos
+ * fortes seriam a briga escondida atrás da interface.
+ */
+
+.nk-aneis { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+
+.nk-lutador-anel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 1.5px solid rgba(226, 240, 255, 0.34);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  /* Só a COR transiciona. A posição, não: o anel persegue um corpo a 64 m/s, e
+     uma transição por cima disso o deixa atrasado em relação ao adversário de um
+     jeito que o olho lê como travamento. */
+  transition: border-color 0.1s linear, box-shadow 0.1s linear;
+  will-change: transform, width, height;
+}
+.nk-lutador-anel[hidden] { display: none !important; }
+
+/* SOB A MIRA: âmbar, grosso e aceso. Âmbar e não vermelho de propósito — o
+   vermelho é da TRAVA, e as duas coisas aparecem na mesma tela. */
+.nk-lutador-anel.nk-sob {
+  border-width: 2.5px;
+  border-color: var(--nk-ouro);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.75),
+    0 0 14px rgba(255, 211, 77, 0.6),
+    inset 0 0 10px rgba(255, 211, 77, 0.28);
+}
+
 /* ============================================================= dano recebido */
 
 /* O clarão. Vinheta e não lavagem de tela: o vermelho entra pelas bordas e

@@ -295,7 +295,111 @@ function explosao(ctx, tamanho = 1) {
 }
 
 /**
- * A GENKI DAMA SENDO JUNTADA. 3,8 s, para cobrir o windup de 3,6 s.
+ * O ESTALO DA RAJADA NO CHÃO — a bola de ki arrebentando na terra.
+ *
+ * É o som que faltava, e a queixa foi literal: *"quando o poder cair no chão e
+ * explodir deve fazer barulho de explosão, inclusive aqueles poderes rápidos."*
+ * A rajada TINHA som de impacto — o `explosao(0,55)` genérico —, e o problema
+ * era ele ser a mesma coisa que tudo o mais, um degrau mais baixo. Numa troca de
+ * tiros a 6/s, doze estouros iguais por segundo viram um ronco só, e o ouvido
+ * para de contar.
+ *
+ * O que separa este som dos outros é o TEMPO, não o volume: 0,3 s contra os 1,4
+ * do Galick Gun. Um estalo curto e brilhante lê como "bateu ali" e some para dar
+ * lugar ao próximo; uma explosão com cauda lê como "aconteceu alguma coisa
+ * grande" e, repetida seis vezes por segundo, entope a mistura inteira.
+ *
+ * O corte que ABRE (400 → 2 600 Hz nos primeiros 8 ms) é o que dá o "tec" do
+ * torrão de terra voando; depois ele fecha depressa e sobra só o grave curto do
+ * chão cedendo.
+ */
+function estaloDeTerra(ctx) {
+  const b = buffer(ctx, 0.3, (t) => {
+    const ataque = Math.min(1, t / 0.0015);
+    const cauda = Math.exp(-t * 16);
+    /* O grave é uma senoide que DESCE — 190 para ~60 Hz em três centésimos.
+       Frequência fixa daria nota, e terra cedendo não tem nota. */
+    const grave = Math.sin(2 * Math.PI * (190 * Math.exp(-t * 26) + 58) * t) * 0.55;
+    return (ruido() * 0.85 + grave) * ataque * cauda;
+  });
+  return normalizar(
+    passaBaixa(b, (t) => (t < 0.008 ? 400 + 275000 * t : 2600 * Math.exp(-t * 22) + 130)),
+    1,
+  );
+}
+
+/**
+ * O TALHO DO KIENZAN NO CHÃO — o disco cravando na terra.
+ *
+ * O golpe é uma LÂMINA, e nenhum dos estouros do banco soa como lâmina: eles são
+ * todos ruído filtrado com cauda, que é a assinatura de uma coisa que EXPLODE.
+ * O Kienzan não explode — ele corta, e o corte tem duas partes que este som
+ * separa de propósito:
+ *
+ * • o ZUMBIDO, um par de senoides desafinadas entre si (1 040 e 1 390 Hz)
+ *   morrendo em um décimo de segundo. Elas batem uma contra a outra e produzem
+ *   o "ring" metálico que o ouvido lê como gume;
+ * • a MORDIDA, o ruído grave de terra sendo aberta logo atrás.
+ *
+ * A desafinação é o ponto inteiro: duas senoides na MESMA frequência somam e
+ * viram uma nota limpa de instrumento. É a diferença entre um sino e uma lâmina.
+ */
+function talhoDeDisco(ctx) {
+  const b = buffer(ctx, 0.75, (t) => {
+    const ataque = Math.min(1, t / 0.001);
+    const zumbido =
+      (Math.sin(2 * Math.PI * 1040 * t) + Math.sin(2 * Math.PI * 1390 * t) * 0.8) *
+      0.5 *
+      Math.exp(-t * 24);
+    const mordida = ruido() * 0.9 * Math.exp(-t * 7);
+    const grave = Math.sin(2 * Math.PI * (120 * Math.exp(-t * 12) + 44) * t) * 0.5 * Math.exp(-t * 5);
+    return (zumbido + mordida + grave) * ataque;
+  });
+  /* O corte NÃO desce até o fim: 900 Hz de piso deixam o zumbido passar pela
+     cauda inteira. Fechando como uma explosão comum, a lâmina desapareceria e
+     sobraria o baque — que é o som de qualquer outro golpe. */
+  return normalizar(passaBaixa(b, (t) => 5200 * Math.exp(-t * 9) + 900), 1);
+}
+
+/**
+ * O RUGIDO DO KAMEHAMEHA NO CHÃO — e ele é o único impacto SUSTENTADO do modo.
+ *
+ * Os outros golpes batem e acabam. O feixe fica APOIADO no terreno por até 2,4 s,
+ * cavando: a cabeça dele encosta, abre a cratera de entrada e continua ali,
+ * perfurando. Um estouro de meio segundo debaixo de um feixe que dura cinco
+ * vezes isso é a leitura errada — soa como se o golpe tivesse terminado enquanto
+ * ele ainda está queimando o chão na frente do jogador.
+ *
+ * Por isso 2,2 s, e por isso o envelope é um PLATÔ e não uma cauda: sobe em
+ * 40 ms, segura, e só solta no último terço. É o som de uma coisa que está
+ * acontecendo, e não de uma que aconteceu.
+ *
+ * O tremor de 19 Hz por cima é o que impede o platô de virar um chiado de
+ * estática: energia sustentada não é lisa, ela pulsa.
+ */
+function rugidoDeFeixe(ctx) {
+  const dur = 2.2;
+  const b = buffer(ctx, dur, (t) => {
+    const k = t / dur;
+    const env = Math.min(1, t / 0.04) * (k < 0.62 ? 1 : Math.pow(1 - (k - 0.62) / 0.38, 1.6));
+    /* Duas frequências de tremor que não fecham entre si, como no tremor da
+       câmera e pelo mesmo motivo: uma só é um batimento regular, e batimento
+       regular lê como defeito de áudio. */
+    const pulso = 0.72 + 0.28 * Math.sin(2 * Math.PI * 19 * t) * Math.sin(2 * Math.PI * 7.3 * t);
+    const sub = Math.sin(2 * Math.PI * 52 * t) * 0.5 + Math.sin(2 * Math.PI * 78 * t) * 0.25;
+    return (ruido() * 0.8 * pulso + sub) * env;
+  });
+  return normalizar(passaBaixa(b, (t) => 1900 * Math.exp(-t * 0.9) + 220), 1);
+}
+
+/**
+ * A GENKI DAMA SENDO JUNTADA. 5,4 s, para cobrir o windup de 5,2 s.
+ *
+ * A duração ACOMPANHA `NAMEK.specials.genki.windup`, e tem de acompanhar: um
+ * buffer mais curto que a pose deixa o fim dela em silêncio, e o fim da pose é
+ * justamente o instante em que o jogador está mais exposto — parado no ar, sem
+ * defesa, com a esfera no tamanho máximo. Silêncio ali leria como "o golpe
+ * falhou". Quem mexer no windup mexe aqui junto.
  *
  * Todos os outros especiais saem com um "fiu" descendente (`disparoEspecial`),
  * e descer é o que faz o ouvido ler "saiu de mim e foi embora". A Genki Dama é o
@@ -318,7 +422,7 @@ function explosao(ctx, tamanho = 1) {
  * um som longo demais para terminar num clique.
  */
 function genkiCarga(ctx) {
-  const dur = 3.8;
+  const dur = 5.4;
   const b = buffer(ctx, dur, (t) => {
     const k = t / dur;
     /* Ao quadrado, não linear: a energia "chegando" tem de acelerar. Linear soa
@@ -651,6 +755,10 @@ export class NamekAudio {
       estouroM: explosao(c, 1.2),
       estouroG: explosao(c, 2.4),
       estouroColossal: detonacaoColossal(c),
+      /* Os três impactos com IDENTIDADE — ver `IMPACTO`, logo abaixo do banco. */
+      estaloTerra: estaloDeTerra(c),
+      talhoDisco: talhoDeDisco(c),
+      rugidoFeixe: rugidoDeFeixe(c),
       genkiCarga: genkiCarga(c),
       baque: baque(c),
       onda: ondaDeKi(c),
@@ -906,32 +1014,79 @@ export class NamekAudio {
   }
 
   /**
-   * Impacto no chão. A potência escolhe QUAL estouro, não só o volume.
+   * Impacto no chão. **Quem escolhe o som é o GOLPE, não a potência.**
    *
-   * As potências reais do modo são 0,12 (bola), 1,4 (disco), 4,2 (Kamehameha),
-   * 6,4 (Galick Gun) e **26** (Genki Dama). O escalonamento antigo tinha três
-   * faixas e um volume `0,55 + p·0,05` que SATURAVA em 1,0 já na potência 9 —
-   * então o golpe de 96 de dano e 30 m de cratera soava 15% mais alto que o
-   * Galick Gun e usava o mesmo buffer de qualquer coisa acima de 8. O ouvido não
-   * tinha como saber que a maior coisa do jogo tinha acabado de acontecer.
+   * ------------------------------------------------------------------ o defeito
    *
-   * Agora são quatro faixas com volumes ESPAÇADOS de propósito. Como toda
-   * receita sai normalizada no mesmo pico, "maior" não pode vir de tocar mais
-   * alto que o máximo — tem de vir de tocar os pequenos mais BAIXO, deixando
-   * espaço de cabeça para o colossal. Os três primeiros perderam volume; só a
-   * Genki Dama toca em 1,0, e só ela usa `detonacaoColossal`.
+   * A escolha era por `power`, em faixas — e `power` não é "o tamanho do golpe",
+   * é *"quanto de cratera ele abre"*. As duas coisas andaram juntas por um tempo
+   * e deixaram de andar no dia em que o Kamehameha passou a cavar um buraco
+   * ESTREITO e fundo: a potência dele caiu de 4,2 para 0,58 (ver `craterDeep`),
+   * e com ela o golpe que enche a tela passou a soar exatamente como uma bolinha
+   * de ki — mesma faixa, mesmo buffer, mesmo volume.
+   *
+   * O pedido fecha a questão: *"cada poder deve ter o som adequado a ele"*. A
+   * régua certa é a IDENTIDADE, e ela vem no evento (`kind`).
+   *
+   * -------------------------------------------------------------- as identidades
+   *
+   * Três dos cinco ganharam receita própria, e cada uma existe porque o golpe
+   * faz uma coisa que ruído-com-cauda não descreve:
+   *
+   * • a RAJADA estala (0,3 s). Curto porque ela sai seis vezes por segundo, e
+   *   seis explosões com cauda por segundo viram um ronco só;
+   * • o KIENZAN talha — tem gume, e gume é um zumbido metálico, não um estouro;
+   * • o KAMEHAMEHA ruge, e é o único impacto SUSTENTADO do jogo: ele fica
+   *   apoiado no chão por até 2,4 s, cavando.
+   *
+   * O Galick Gun e a Genki Dama continuam com os estouros do banco, e é o certo:
+   * os dois são esferas que detonam, que é exatamente o que aquelas receitas
+   * descrevem. O que muda para eles é só o volume ESPAÇADO — como toda receita
+   * sai normalizada no mesmo pico, "maior" não vem de tocar acima do máximo, vem
+   * de tocar os menores mais baixo.
+   *
+   * `power` continua entrando, e continua sendo útil: ele é o caminho de trás
+   * para quem chega sem `kind` (a cratera que volta pela rede, o baque de queda).
+   *
+   * @param {string} [kind] o id do golpe em `NAMEK.specials`, ou `"blast"`
    */
-  estouroNoChao(p, power) {
+  estouroNoChao(p, power, kind) {
     if (!this.buf) return;
-    /* Acima de 16 só existe a Genki Dama (26), e o degrau até o vizinho mais
-       próximo (6,4) é enorme de propósito: esta faixa é dela e de mais nada. */
-    if (power >= 16) {
-      this.tocarSolene(this.buf.estouroColossal, p, 1, 0.97 + Math.random() * 0.06);
-      return;
+    const r = this._receitaDeImpacto(power, kind);
+    if (r.solene) this.tocarSolene(this.buf[r.buf], p, r.vol, r.taxa());
+    else this.tocar(this.buf[r.buf], p, r.vol, r.taxa());
+  }
+
+  /**
+   * A tabela de impacto: golpe → receita, com o caminho de trás por potência.
+   *
+   * Separada de `estouroNoChao` porque a detonação NO AR usa a mesma escolha com
+   * outro tempero (ver `detonouNoAr`), e duas tabelas seriam duas listas de cinco
+   * golpes envelhecendo em metades.
+   */
+  _receitaDeImpacto(power, kind) {
+    switch (kind) {
+      case "blast":
+        return { buf: "estaloTerra", vol: 0.62, taxa: () => 0.92 + Math.random() * 0.22 };
+      case "disk":
+        return { buf: "talhoDisco", vol: 0.75, taxa: () => 0.94 + Math.random() * 0.14 };
+      case "kamehameha":
+        return { buf: "rugidoFeixe", vol: 0.88, taxa: () => 0.97 + Math.random() * 0.08 };
+      case "galick":
+        return { buf: "estouroG", vol: 0.85, taxa: () => 0.88 + Math.random() * 0.14 };
+      case "genki":
+        return { buf: "estouroColossal", vol: 1, solene: true, taxa: () => 0.97 + Math.random() * 0.06 };
+      default:
+        break;
     }
-    const b = power >= 5 ? this.buf.estouroG : power >= 2 ? this.buf.estouroM : this.buf.estouroP;
-    const vol = power >= 5 ? 0.8 : power >= 2 ? 0.68 : 0.5;
-    this.tocar(b, p, vol, 0.9 + Math.random() * 0.2);
+    /* SEM `kind`: a escala de potência de sempre. É o caminho de quem chega pela
+       rede sem a identidade do golpe — a cratera dos outros e o baque de queda. */
+    if (power >= 16) {
+      return { buf: "estouroColossal", vol: 1, solene: true, taxa: () => 0.97 + Math.random() * 0.06 };
+    }
+    if (power >= 5) return { buf: "estouroG", vol: 0.8, taxa: () => 0.9 + Math.random() * 0.2 };
+    if (power >= 2) return { buf: "estouroM", vol: 0.68, taxa: () => 0.9 + Math.random() * 0.2 };
+    return { buf: "estouroP", vol: 0.5, taxa: () => 0.9 + Math.random() * 0.2 };
   }
 
   /**
@@ -947,19 +1102,19 @@ export class NamekAudio {
    * @param {{x,y,z}} p onde ela abriu
    * @param {number} power a potência do golpe (`NAMEK.specials[kind].power`)
    */
-  detonouNoAr(p, power) {
+  detonouNoAr(p, power, kind) {
     if (!this.buf) return;
-    if (power >= 16) {
-      this.tocarSolene(this.buf.estouroColossal, p, 1, 0.97 + Math.random() * 0.06);
+    const r = this._receitaDeImpacto(power, kind);
+    if (r.solene) {
+      this.tocarSolene(this.buf[r.buf], p, r.vol, r.taxa());
       return;
     }
-    /* No ar não há terreno para devolver o grave, então o estouro é um degrau
-       mais leve e um tico mais agudo que o mesmo golpe no chão. É uma diferença
-       pequena e ela faz o ouvido saber, sem olhar, se o golpe pegou o chão ou
-       pegou gente. */
-    const b = power >= 5 ? this.buf.estouroG : power >= 2 ? this.buf.estouroM : this.buf.estouroP;
-    const vol = power >= 5 ? 0.72 : power >= 2 ? 0.6 : 0.45;
-    this.tocar(b, p, vol, 1.05 + Math.random() * 0.15);
+    /* No ar não há terreno para devolver o grave, então o mesmo golpe sai um
+       degrau mais leve e um tico mais agudo que no chão. É uma diferença pequena
+       e ela faz o ouvido saber, sem olhar, se o golpe pegou o chão ou pegou
+       gente — e ela é aplicada POR CIMA da receita do golpe, para o Kienzan
+       continuar soando como Kienzan nos dois casos. */
+    this.tocar(this.buf[r.buf], p, r.vol * 0.88, r.taxa() * 1.08);
   }
 
   quedaNoChao(p, speed) {

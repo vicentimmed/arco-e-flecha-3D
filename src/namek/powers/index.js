@@ -248,6 +248,12 @@ export class PowerSystem {
          `craterFor`, que é quem o interpreta, e `NC2S.GROUND_HIT.df`, que é como
          ele chega à sala. */
       fundo: 1,
+      /* QUEM bateu — `"blast"` ou o id do especial. É o que dá a cada golpe o
+         som de impacto DELE (ver `NamekAudio.estouroNoChao`): a escolha era por
+         potência, e potência deixou de descrever o tamanho do golpe no dia em
+         que o Kamehameha passou a cavar estreito e fundo. Não viaja na rede — é
+         informação local, para o ouvido de quem atirou. */
+      kind: null,
     }));
     /* Os estouros NO AR — os que não abrem cratera e por isso não têm nenhum
        outro canal por onde avisar que aconteceram. Uma Genki Dama que detona a

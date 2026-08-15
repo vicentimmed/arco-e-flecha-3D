@@ -627,11 +627,19 @@ export const NAMEK = {
         cone: 35,
         /** m — alcance da escolha de alvo. Só vale se `soTrava` cair. */
         acquire: 320,
-        /* SÓ COM A TRAVA. "Para fazer curva, ele só faz curva quando o player
-           está travado o foco no inimigo" — e é uma regra boa por si só: a
-           trava passa a ser o PREÇO da curvatura. Sem ela o Kamehameha é o
-           feixe reto de sempre, e quem quiser o gancho tem de se comprometer
-           com um alvo antes de gastar a barra. Ver `soltarEspecial`. */
+        /* SÓ COM ALVO DESIGNADO — e o que conta como "designado" mudou.
+         *
+         * A regra nasceu como *"ele só faz curva quando o player está travado o
+         * foco no inimigo"*, e ela continua valendo no que importa: o Kamehameha
+         * não sai caçando sozinho. O que mudou foi existir uma SEGUNDA forma de
+         * designar alguém — a mira assistida pelo cursor (`NAMEK.lock.mira`) —,
+         * e o pedido é explícito de que ela vale para tudo: *"todos os poderes
+         * seguem o player, não só o tiro rápido."*
+         *
+         * `soTrava` passou a significar "não adquire alvo sozinho", que é o que
+         * ele sempre quis dizer: sem trava E sem ninguém sob o cursor, o feixe é
+         * a reta que sempre foi. Quem resolve isso é `soltarEspecial`, através
+         * de `LockOn.alvoDeAtaque`. */
         soTrava: true,
       },
     },
@@ -763,7 +771,25 @@ export const NAMEK = {
     },
     genki: {
       nome: "Genki Dama",
-      windup: 3.6,
+      /* 5,2 s de pose, e não 3,6 — *"ela também deve precisar de mais tempo
+       * para atirar, mais tempo criando."*
+       *
+       * O número tem uma trava dos dois lados e ela vale escrever, porque quem
+       * mexer nele de novo precisa saber onde bate a cabeça:
+       *
+       * • PARA BAIXO, o windup é o aviso. Ele é o que dá a quem está do outro
+       *   lado da arena tempo de ver a esfera crescendo, decidir e chegar — sem
+       *   ele o golpe que apaga alguém seria um botão.
+       * • PARA CIMA, ele é o preço. 5,2 s parado no ar, sem defesa, à vista de
+       *   todo mundo, é mais que a barra inteira de carga (5,3 s) e mais que o
+       *   dobro do atordoamento (2,4 s). Ou seja: **a janela em que alguém foi
+       *   derrubado não cabe mais este golpe**, e isso é de propósito — a Genki
+       *   Dama não é o remate de um combo, ela é a aposta.
+       *
+       * O som da carga acompanha (`genkiCarga`, 5,4 s): um windup mais longo que
+       * o buffer deixaria o último segundo e meio em silêncio, que é justamente
+       * o segundo e meio em que o jogador está mais exposto. */
+      windup: 5.2,
       sustain: 7,
       /* ALCANCE HONESTO. Estava 700, e a vida do projétil é
          `min(sustain, range / speed)`: com a sustentação de então (4,5 s) a
@@ -773,7 +799,22 @@ export const NAMEK = {
          207. Agora são 7 s a 46 m/s = 322 m, e o número aqui é esse. */
       range: 322,
       speed: 46,
-      hitRadius: 11,
+      /* 16 m de raio — trinta e dois de diâmetro, dezoito vezes a altura de um
+       * lutador. *"Aumente mais o tamanho da Genki Dama."*
+       *
+       * Era 11, e 11 já era o maior raio de morte do jogo. O que 16 muda não é
+       * a conta de quem morre (ela já matava todo mundo que encostava): é a
+       * ESCALA na tela. A referência mostra uma lua — uma coisa maior que o
+       * cenário à volta —, e a 200 m de distância uma esfera de 22 m de diâmetro
+       * lê como uma bola grande, não como um astro. Com 32 m ela cobre um quinto
+       * da tela àquela distância, e não há mais como confundi-la com o Galick
+       * Gun, que é o outro golpe esférico do repertório (13 m de diâmetro).
+       *
+       * O raio de morte cresceu junto porque no `powers/orb.js` ele É o desenho:
+       * a esfera é escalada por `hitRadius`, e o comentário do Kamehameha vale
+       * aqui igual — tudo o que parece sólido tem de matar, e morrer do lado de
+       * fora do que se vê é a reclamação que nenhum ajuste de número conserta. */
+      hitRadius: 16,
       /* A VIDA INTEIRA. "A Genki Dama deve tirar a vida inteira do player que
        * mirou, inclusive de outros players que estiverem na explosão dela."
        *
@@ -790,13 +831,13 @@ export const NAMEK = {
        * uma vez (`exposicao`, em `registrarQueimadura`). Onze metros de raio
        * pegam um grupo inteiro, e agora cada um deles morre. */
       damage: 100,
-      /* 34 e não 26: ela continua sendo a maior cratera do jogo por larga
-         margem, e com a escala nova (`craterBase` 3,2 + 7,6·√p) isso são 47,5 m
-         — batendo no teto de `craterMax` (44 m). Bater no teto aqui é o certo: o
-         golpe mais caro do modo deve ser o que abre o maior buraco que o jogo
-         aceita, e o teto existe contra potência absurda vinda da rede, não
-         contra este golpe. */
-      power: 34,
+      /* 44, e com o teto de `craterMax` subindo junto para 52 m: a esfera dobrou
+         de volume, e um buraco do mesmo tamanho de antes leria como se ela
+         tivesse encolhido no impacto. `craterBase` 3,2 + 7,6·√44 = 53,6 m, então
+         ela bate no teto — e bater no teto aqui é o certo: o golpe mais caro do
+         modo deve abrir o maior buraco que o jogo aceita, e o teto existe contra
+         potência absurda vinda da rede, não contra este golpe. */
+      power: 44,
       cor: 0x9ff0ff,
 
       /* ELA PASSOU A PERSEGUIR — e este bloco desmente, de propósito, um "nunca
@@ -863,6 +904,56 @@ export const NAMEK = {
      Quem implementa é `src/namek/lockon.js` (o alvo), `src/namek/camera.js`
      (o enquadramento) e `src/namek/game.js` (a costura). */
   lock: {
+    /* ============================================== a MIRA ASSISTIDA (soft)
+     *
+     * **Um alvo sem trava**, escolhido a cada quadro por quem está mais perto do
+     * CURSOR na tela. É o pedido, e ele descreve exatamente o problema que a
+     * trava não resolve:
+     *
+     *   *"os poderes sempre devem ir no player cujo cursor está mais próximo. Se
+     *   o cursor estiver muito longe, aí os poderes saem retos… dessa forma o
+     *   player consegue atirar em vários players movendo o mouse rapidamente,
+     *   sem ter que ficar preso a algum player."*
+     *
+     * A diferença para a trava (`R`) é o COMPROMISSO. A trava é uma decisão que
+     * dura: ela muda a câmera, sobrevive ao alvo sair da tela, e é o preço da
+     * curvatura do Kamehameha. A mira assistida não decide nada — ela é uma
+     * leitura do quadro atual, morre no quadro seguinte, e a única coisa que ela
+     * faz é dizer aos projéteis para onde ir.
+     *
+     * Por isso ela **não mexe na câmera e não tem anel vermelho**: o pedido é
+     * literal sobre isso ("sem travar a câmera, sem a parte vermelha nem nada").
+     * O aviso é o círculo que cada lutador já tem mudando de cor — ver
+     * `NamekHud.setAneis`.
+     *
+     * A trava GANHA quando existe: ela é a intenção declarada do jogador, e uma
+     * mira automática que a contradissesse seria o software desfazendo uma
+     * decisão explícita. Ver `LockOn.alvoDeAtaque`.
+     */
+    mira: {
+      /* Raio da zona, em frações da MEIA-ALTURA da tela.
+       *
+       * Em frações e não em pixels porque a tela do jogador não é a nossa; e da
+       * meia-altura (com o `x` corrigido pela proporção) porque a zona tem de ser
+       * um CÍRCULO na tela — medida em NDC cru ela seria uma elipse achatada, e
+       * um alvo à direita entraria na assistência antes de um alvo acima, à
+       * mesma distância aparente.
+       *
+       * 0,26 são 13 % da altura da tela. É generoso o bastante para o gesto que
+       * o pedido descreve (varrer o mouse por três adversários e atirar em cada
+       * um) e apertado o bastante para nunca haver dúvida sobre em quem o tiro
+       * vai — a esta distância só cabe um corpo. */
+      raioTela: 0.26,
+      /** m — além disto o cursor em cima de alguém não vale assistência. Menor
+       *  que o alcance da trava (420 m) de propósito: a trava é para perseguir
+       *  quem fugiu, a assistência é para a briga. */
+      alcance: 260,
+      /** graus — meio-ângulo de segurança. A zona de tela já exclui quem está
+       *  atrás, MENOS no caso degenerado de um alvo quase no plano da lente, em
+       *  que a projeção explode. Este cone é a guarda contra esse caso. */
+      cone: 70,
+    },
+
     /* ----------------------------------------------------- seleção de alvo */
     /** m — alcance máximo. Além disto a trava fica INSTÁVEL (ver `perda`) e
      *  eventualmente cai. É bem maior que a distância de briga (55 m) porque
@@ -955,10 +1046,29 @@ export const NAMEK = {
        *  acompanhar um giro brusco do alvo: ela fica para trás, de propósito, e
        *  alcança depois. Sem teto, um adversário passando rente varre a tela. */
       giroMax: 2.2,
-      /** m a mais de braço por metro de separação. */
-      ganho: 0.14,
-      /** m — braço máximo. */
-      distMax: 26,
+      /* m a mais de braço por metro de separação.
+       *
+       * 0,045 e não 0,14, e o teto caiu de 26 m para 11 m. O relato foi direto:
+       * *"com o lock-in a câmera está ficando muito afastada; a câmera deve
+       * ficar bem mais perto do player."*
+       *
+       * O que estava errado era a régua. Com 0,14, brigar a 60 m de distância —
+       * que é a distância NORMAL deste modo — punha a lente a 15 m do peito,
+       * mais que o dobro dos 6,6 m do voo livre; a 140 m ela batia no teto de
+       * 26 m e o lutador virava um boneco de brinquedo no meio da tela. O braço
+       * estava tentando fazer sozinho o trabalho de manter os dois no quadro, e
+       * esse trabalho hoje é de outra peça: o campo de visão abre (`fovExtra`) e
+       * o ponto de interesse desliza para o meio (`vies`) conforme a separação
+       * cresce. Somando os três, a câmera recuava três vezes pelo mesmo motivo.
+       *
+       * Com 0,045 a 60 m dão 9,3 m e o teto de 11 m só é atingido a partir de
+       * ~100 m. O enquadramento fica perto do voo livre — que é o pedido — e o
+       * adversário continua cabendo, porque quem o mantém no quadro é a lente
+       * abrindo, não a câmera fugindo. */
+      ganho: 0.045,
+      /** m — braço máximo. Pouco acima do braço de voo livre em arrancada
+       *  (6,6 + 5,2 = 11,8): a trava não pode afastar mais que um mergulho. */
+      distMax: 11,
       /** Onde a lente olha, entre o peito do lutador (0) e o alvo (1). Puxado
        *  para o lutador — ele é quem o jogador controla, e o alvo só precisa
        *  CABER no quadro, não ocupar o centro. */
@@ -1017,8 +1127,11 @@ export const NAMEK = {
     craterGain: 7.6,
     /** fração do raio que vira profundidade. */
     craterDepth: 0.62,
-    /** m — maior cratera aceita. Trava contra potência absurda vinda da rede. */
-    craterMax: 44,
+    /** m — maior cratera aceita. Trava contra potência absurda vinda da rede.
+     *  52 acompanha a Genki Dama, que dobrou de tamanho (ver `genki.hitRadius`):
+     *  um buraco de 44 m debaixo de uma esfera de 32 m de diâmetro leria como se
+     *  ela tivesse encolhido ao encostar no chão. */
+    craterMax: 52,
     /**
      * Potência mínima para o buraco ser PERSISTENTE.
      *
@@ -1077,10 +1190,25 @@ export const NAMEK = {
        atravessar a terra toda, e só a insistência (ou uma Genki Dama num ponto
        já cavado) chega lá. */
     lava: {
-      /** m — a cota em que a lava assenta. Abaixo do mar (−8). */
-      nivel: -14,
+      /* m — a cota em que a lava assenta. **Bem abaixo do mar (−8).**
+       *
+       * Era −14, e o pedido foi *"a lava deve ficar mais funda"*. O número não é
+       * de gosto: ele decide quanto de PAREDE existe entre a boca do buraco e a
+       * poça, e é essa parede que faz o poço ler como poço.
+       *
+       * Com −14 e um relevo de clareira a +1,2, sobravam quinze metros — o
+       * bastante para o buraco ser uma bacia com fundo laranja, e não o bastante
+       * para ele ser um poço. Com −28 são quase trinta metros de rocha em volta,
+       * e as camadas de cor que o terreno pinta por profundidade (terra, marrom
+       * escuro, rocha cinza, brasa) ganham espaço para acontecer todas antes de
+       * a lava aparecer — hoje elas ficavam espremidas.
+       *
+       * O custo é quanto se cava para chegar lá, e ele foi medido: um Kamehameha
+       * abre 19,5 m de fundo e não chega; dois chegam. A rajada precisa de ~8
+       * tiros no mesmo ponto. Isso é uma conquista, que é o que ela deve ser. */
+      nivel: -28,
       /** m — o fundo tem de passar disto para a poça acender. */
-      gatilho: -18,
+      gatilho: -32,
       /** dano por segundo em quem encosta. Alto: é para doer, não para coçar. */
       dano: 34,
       /** m — quanto acima da superfície da lava o toque ainda conta. */

@@ -1098,6 +1098,7 @@ class Feixe {
         e.p.z = this.bocaZ || this.hz;
         e.power = this.info.power;
         e.fundo = this.info.craterDeep ?? 1;
+        e.kind = this.kind;
       }
     }
 
@@ -1115,6 +1116,7 @@ class Feixe {
         e.p.z = this.hz;
         e.power = this.info.power * this.atravessa.potencia;
         e.fundo = this.info.craterDeep ?? 1;
+        e.kind = this.kind;
       }
     }
 

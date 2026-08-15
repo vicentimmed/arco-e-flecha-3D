@@ -450,6 +450,11 @@ export class BlastPool {
                REAPROVEITADO, e um `fundo` deixado pelo Kamehameha do quadro
                anterior viraria um poco aqui. */
             e.fundo = 1;
+            /* A rajada tem som PRÓPRIO no impacto — o estalo curto de
+               `estaloDeTerra`. Ver `NamekAudio.estouroNoChao`: sem a
+               identidade, ela caía na faixa de potência e soava igual a
+               qualquer outra coisa pequena. */
+            e.kind = "blast";
           }
           morreu = true;
           break;
@@ -491,6 +496,11 @@ export class BlastPool {
                    REAPROVEITADO, e um `fundo` deixado pelo Kamehameha do quadro
                    anterior viraria um poco aqui. */
                 e.fundo = 1;
+            /* A rajada tem som PRÓPRIO no impacto — o estalo curto de
+               `estaloDeTerra`. Ver `NamekAudio.estouroNoChao`: sem a
+               identidade, ela caía na faixa de potência e soava igual a
+               qualquer outra coisa pequena. */
+            e.kind = "blast";
               }
               morreu = true;
               break;

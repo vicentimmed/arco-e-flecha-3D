@@ -84,16 +84,57 @@ const TOLERANCIA = NAMEK.net.hitTolerance;
 const RESPAWN_MINIMO = 1.6;
 
 /**
- * Teto de crateras pequenas por jogador, por segundo.
+ * Teto de crateras PEQUENAS por jogador, por segundo.
  *
  * A rajada sai a 6/s por pessoa. Com quinze em campo mirando o chão seriam 90
- * crateras por segundo, retransmitidas para quinze telas — e o teto de 96 do
- * `NamekField` inteiro gasto e regastado a cada segundo, com o terreno piscando
- * para todo mundo. Golpe GRANDE (potência ≥ 1, que é a faixa dos especiais)
- * passa sempre: ele acontece uma vez por barra cheia e a cratera dele é o
- * assunto do golpe.
+ * crateras por segundo, retransmitidas para quinze telas, e a malha do terreno
+ * de todo mundo re-esculpida noventa vezes por segundo.
  */
 const CRATERAS_POR_SEGUNDO = 5;
+
+/**
+ * A mesma cota, para os golpes GRANDES — e ela é um balde SEPARADO.
+ *
+ * ------------------------------------------------------------------ o defeito
+ *
+ * Havia um balde só, e o comentário dele prometia uma coisa que o código não
+ * fazia: *"golpe GRANDE (potência ≥ 1, que é a faixa dos especiais) passa
+ * sempre"*. Passava, na versão em que a exceção existia; ela foi tirada para
+ * conter um abuso, e a promessa ficou no comentário.
+ *
+ * Enquanto a rajada tinha potência 0,12 isso não custou nada — ela ficava
+ * abaixo do corte de `craterMinPower` e nem chegava a pedir cratera. Quando a
+ * potência dela subiu para 0,45 (para a ilha poder ser destruída de verdade),
+ * ela passou a pedir uma cratera a cada tiro, **seis por segundo contra um
+ * balde de cinco**, e o balde virou o que ele nunca quis ser: uma fila em que a
+ * rajada entra sempre na frente.
+ *
+ * Medido: quatro segundos de rajada contínua deixam o balde estourado, e a
+ * Genki Dama disparada em seguida é **descartada em silêncio** — sem erro, sem
+ * aviso, sem cratera. É o relato *"a Genki Dama não abriu cratera"*, e ele não
+ * dependia de mira nem de distância: dependia de o jogador ter atirado antes,
+ * que é o que todo mundo faz.
+ *
+ * ------------------------------------------------------------------ a defesa
+ *
+ * Dois baldes, um por faixa. O da rajada continua contendo o spray; o dos
+ * especiais é lento (dois por segundo) e a rajada não encosta nele — ela não
+ * pode, porque nem sequer é medida ali. Um especial custa a barra CHEIA, então
+ * dois por segundo é várias vezes mais do que qualquer jogador honesto consegue
+ * produzir, e continua sendo um teto contra um cliente que minta a potência.
+ *
+ * O corte entre as faixas é 2: a rajada tem 0,45, o Kamehameha 0,58, e o menor
+ * especial que abre buraco de verdade (o Kienzan) tem 3,6. O Kamehameha fica do
+ * lado da rajada de propósito — a potência dele é baixa porque a cratera dele é
+ * ESTREITA (ele cava fundo, ver `craterDeep`), e ele ainda enfileira uma
+ * cratera a cada sete metros de rocha ao atravessar uma montanha. Essa fila é
+ * exatamente o que o balde pequeno existe para conter, e ela já tem a folga
+ * dela em `podeCravar`.
+ */
+const CRATERAS_GRANDES_POR_SEGUNDO = 2;
+
+/** Potência a partir da qual a cratera é cobrada no balde dos GRANDES. */
+const POTENCIA_GRANDE = 2;
 
 /**
  * m — o maior alcance que qualquer golpe deste jogo tem.
@@ -992,7 +1033,7 @@ export class NamekRoom {
      * os clientes re-esculpida 54 vezes seguidas. A rajada legítima continua
      * passando inteira pela folga de meio segundo do balde, e um especial de
      * verdade sai muitas vezes abaixo do limite. */
-    if (dono && !this.podeCravar(dono)) return null;
+    if (dono && !this.podeCravar(dono, p)) return null;
 
     /* A cota é medida ANTES de o buraco existir. Depois de `addCrater` o
        `heightAt` deste ponto já é o fundo da cratera, e mandar isso faria a
@@ -1050,8 +1091,25 @@ export class NamekRoom {
   }
 
   /** O balde de crateras pequenas de um lutador. Ver `CRATERAS_POR_SEGUNDO`. */
-  podeCravar(f) {
+  /**
+   * @param {number} power a potência da cratera — é ela que escolhe o BALDE.
+   *   Ver `CRATERAS_GRANDES_POR_SEGUNDO`: a rajada e o especial disputavam a
+   *   mesma fila, e como a rajada sai a 6/s contra um teto de 5/s ela vencia
+   *   sempre. A Genki Dama de quem tinha acabado de atirar era descartada em
+   *   silêncio.
+   */
+  podeCravar(f, power = 0) {
     const agora = this.now();
+
+    /* O BALDE DOS GRANDES. Separado, lento, e a rajada não o toca. */
+    if (power >= POTENCIA_GRANDE) {
+      const passoG = 1000 / CRATERAS_GRANDES_POR_SEGUNDO;
+      const baseG = Math.max(f.crateraGrandeAte ?? 0, agora - passoG);
+      if (baseG > agora) return false;
+      f.crateraGrandeAte = baseG + passoG;
+      return true;
+    }
+
     const passo = 1000 / CRATERAS_POR_SEGUNDO;
     /* Balde com folga: rajadas curtas passam inteiras, spray contínuo é aparado.
      *
@@ -1874,15 +1932,16 @@ export class NamekRoom {
 
        O teto é a potência do golpe mais forte do jogo com uma folga para a
        queda. Ele ERA 16, dimensionado quando a Genki Dama tinha potência 12 — e
-       ela subiu para 34 junto com a escala das crateras (ver `craterBase`). Um
-       teto abaixo da potência de um golpe legítimo não protege nada: ele só apara
-       em silêncio o maior buraco do jogo, e o sintoma seria a Genki Dama abrindo
-       a mesma cratera do Galick Gun. 44 é a Genki Dama com um terço de folga.
+       ela subiu junto com a escala das crateras (ver `craterBase`) e de novo
+       quando a esfera dobrou de tamanho, chegando a 44. Um teto abaixo da
+       potência de um golpe legítimo não protege nada: ele só apara em silêncio o
+       maior buraco do jogo, e o sintoma seria a Genki Dama abrindo a mesma
+       cratera do Galick Gun. 56 é a Genki Dama com folga.
 
-       `craterFor` já apara em 64 e `craterMax` apara o raio em 44 m; isto apara
+       `craterFor` já apara em 64 e `craterMax` apara o raio em 52 m; isto apara
        mais cedo, porque uma potência absurda vinda da rede também vira uma
        cratera absurda no índice espacial. */
-    this.cratera(msg.p[0], msg.p[2], Math.min(power, 44), player, msg.df);
+    this.cratera(msg.p[0], msg.p[2], Math.min(power, 56), player, msg.df);
   }
 
   registrarProp(player, msg) {

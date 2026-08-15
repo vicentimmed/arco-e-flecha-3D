@@ -821,6 +821,7 @@ class Esfera {
            mesmo valendo 1: o registro da fila é REAPROVEITADO, e um `fundo` de
            3,5 deixado por um Kamehameha do quadro anterior viraria um poço aqui. */
         e.fundo = 1;
+        e.kind = this.kind;
       }
     }
 

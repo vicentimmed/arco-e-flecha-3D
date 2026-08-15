@@ -98,6 +98,34 @@ export class LockOn {
     this._ponto = { x: 0, y: 0, z: 0 };
     /** Rascunho da projeção. */
     this._ndc = { x: 0, y: 0, atras: false };
+
+    /* ============================================== a MIRA ASSISTIDA (soft)
+     *
+     * Ver `NAMEK.lock.mira`: um alvo SEM trava, escolhido a cada quadro por quem
+     * está mais perto do cursor. Ele mora nesta classe e não numa sua porque as
+     * duas coisas compartilham tudo — a projeção, a varredura de candidatos, a
+     * regra de quem é atingível — e porque uma governa a outra: a trava ganha
+     * quando existe (`alvoDeAtaque`). Duas classes seriam duas varreduras por
+     * quadro e um lugar a mais para elas discordarem sobre quem é o alvo. */
+
+    /** Id de quem está sob o cursor, ou null. Morre e renasce a cada quadro. */
+    this.sob = null;
+
+    /**
+     * ONDE CADA LUTADOR CAI NA TELA, resolvido uma vez por quadro.
+     *
+     * A varredura da mira assistida já projeta todo mundo; o HUD precisa das
+     * mesmas posições para desenhar o círculo em volta de cada um. Publicar o
+     * resultado aqui é o que evita a segunda passada — e, mais importante, o que
+     * garante que o anel que o jogador vê aceso é O MESMO que os projéteis vão
+     * perseguir. Duas projeções independentes se separariam por um quadro, e um
+     * quadro de discordância aqui é o tiro saindo para quem não estava marcado.
+     *
+     * Reaproveitado entre quadros, como tudo neste arquivo.
+     * @type {Array<{id:number, x:number, y:number, dist:number, visivel:boolean, sob:boolean, cor:*}>}
+     */
+    this.naTelaTodos = [];
+    this._bancoTela = [];
   }
 
   /* ====================================================== seleção de alvo == */
@@ -236,8 +264,15 @@ export class LockOn {
    *   `manobra`  true quando o jogador está com entrada lateral/vertical
    * @returns {boolean} a trava continua de pé
    */
-  update(dt, { origem, buscar, camera, manobra = false }) {
+  update(dt, { origem, buscar, candidatos, camera, aspecto = 1, manobra = false }) {
     if (this._ataque > 0) this._ataque = Math.max(0, this._ataque - dt);
+
+    /* A MIRA ASSISTIDA roda SEMPRE, com trava ou sem — ela é a leitura do quadro
+       atual, e é dela que sai tanto o alvo dos projéteis quanto o anel aceso no
+       HUD. Rodá-la só quando não há trava faria os círculos dos outros
+       lutadores congelarem no instante em que alguém travasse. */
+    this._sobAMira(candidatos, origem, camera, aspecto);
+
     if (this.id === null) {
       this.assistencia = 0;
       return false;
@@ -321,6 +356,127 @@ export class LockOn {
   }
 
   /**
+   * QUEM ESTÁ SOB O CURSOR — a mira assistida, resolvida por quadro.
+   *
+   * Ver `NAMEK.lock.mira` para o pedido e para cada número. O que este método
+   * faz, em uma frase: projeta todo mundo, mede a distância de cada um ao CENTRO
+   * DA TELA em unidades de meia-altura, e elege o mais perto que esteja dentro
+   * da zona.
+   *
+   * Três coisas que parecem detalhe e não são:
+   *
+   * • **A distância é medida na TELA, não no mundo.** É o pedido inteiro: o
+   *   jogador aponta com o mouse, e quem ele está apontando é quem está debaixo
+   *   do cursor — não quem está mais perto dele no espaço. Um adversário colado
+   *   nas costas não recebe tiro nenhum, e é assim que tem de ser.
+   * • **O `x` é corrigido pela proporção da tela.** NDC é normalizado por eixo,
+   *   então um círculo em NDC é uma elipse em pixels: numa tela 16:9, sem a
+   *   correção, um alvo à direita entraria na assistência a quase o dobro da
+   *   distância aparente de um alvo acima. A zona tem de ser redonda porque o
+   *   gesto do jogador é redondo.
+   * • **Quem está ATRÁS da lente é descartado, não espelhado.** A projeção
+   *   divide por `-z`: atrás dela o sinal vira e o alvo aparece do lado oposto,
+   *   perto do centro. Sem o descarte, um adversário nas costas seria eleito
+   *   como se estivesse na mira.
+   *
+   * A lista `naTelaTodos` sai preenchida para o HUD. Ela é reaproveitada entre
+   * quadros — os registros são um pool, e só `length` muda.
+   */
+  _sobAMira(candidatos, origem, camera, aspecto) {
+    const lista = this.naTelaTodos;
+    lista.length = 0;
+    this.sob = null;
+    if (!candidatos || !camera) return;
+
+    const M = NAMEK.lock.mira;
+    const cosCone = Math.cos(M.cone * GRAU);
+    const zona2 = M.raioTela * M.raioTela;
+    /* A meia-altura da tela em unidades de mundo por metro de distância. Sai do
+       campo de visão VIVO da câmera — que abre com a arrancada e com a trava —,
+       então o anel acompanha o zoom sozinho. Resolvido uma vez para o laço. */
+    const tanFov = Math.tan((camera.fov * GRAU) / 2) || 1;
+    let melhor = null;
+    let melhorD2 = zona2;
+
+    for (const r of candidatos) {
+      if (!r || r.down) continue;
+      const p = r.pose;
+      const alvoY = p.y + NAMEK.fighter.chest;
+      const dx = p.x - origem.x;
+      const dy = alvoY - origem.y;
+      const dz = p.z - origem.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d < 0.001) continue;
+
+      this._projetar(p.x, alvoY, p.z, camera);
+      const n = lista.length;
+      let m = this._bancoTela[n];
+      if (!m) {
+        m = this._bancoTela[n] = {
+          id: 0, x: 0, y: 0, dist: 0, raio: 0, visivel: false, sob: false, cor: null,
+        };
+      }
+      m.id = r.id;
+      m.x = this._ndc.x;
+      m.y = this._ndc.y;
+      m.dist = d;
+      m.cor = r.color;
+      m.sob = false;
+      /* O RAIO APARENTE, em frações da meia-altura da tela — e ele sai da ÓTICA,
+       * não de uma constante ajustada a olho.
+       *
+       * Um corpo de altura `H` a `d` metros ocupa, na tela, a fração
+       * `H / (2·d·tan(fov/2))` da altura toda; em unidades de MEIA-altura (que é
+       * o que o NDC usa, e o que o HUD vai multiplicar) isso é `H / (d·tanFov)`.
+       * Metade disso é o raio.
+       *
+       * A altura usada é 1,9 vez a do lutador, como no anel da trava e pelo
+       * mesmo motivo: um círculo colado no corpo desaparece atrás do próprio
+       * adversário quando ele está de frente. O que se quer é um círculo EM
+       * VOLTA dele. */
+      m.raio = (NAMEK.fighter.height * 1.9 * 0.5) / (d * tanFov);
+      /* VISÍVEL é o que o HUD usa para decidir se desenha o círculo. Um pouco
+         além da borda (1,05) de propósito: um anel cortado pela metade na beira
+         da tela é informação, e some-lo ali faria o marcador piscar toda vez que
+         o adversário raspasse o canto. */
+      m.visivel =
+        !this._ndc.atras && Math.abs(this._ndc.x) <= 1.05 && Math.abs(this._ndc.y) <= 1.05;
+      lista.push(m);
+
+      if (this._ndc.atras || d > M.alcance) continue;
+      /* O cone é a guarda contra o caso degenerado (alvo quase no plano da
+         lente, em que a projeção explode). A zona de tela faz o resto. */
+      if ((dx * this._eixoDaLente(camera, 0) +
+           dy * this._eixoDaLente(camera, 1) +
+           dz * this._eixoDaLente(camera, 2)) / d < cosCone) continue;
+
+      const ex = this._ndc.x * aspecto;
+      const d2 = ex * ex + this._ndc.y * this._ndc.y;
+      if (d2 < melhorD2) {
+        melhorD2 = d2;
+        melhor = m;
+      }
+    }
+
+    if (melhor) {
+      melhor.sob = true;
+      this.sob = melhor.id;
+    }
+  }
+
+  /**
+   * Uma componente do eixo óptico da câmera, tirada da matriz dela.
+   *
+   * A terceira coluna de `matrixWorld` é o eixo `+z` LOCAL da lente, e uma
+   * câmera olha para o `−z` dela — daí o sinal. Ler da matriz em vez de receber
+   * a direção é o que mantém este arquivo sem depender de quem calculou a mira:
+   * a câmera já se posicionou neste quadro, e a matriz dela é a verdade.
+   */
+  _eixoDaLente(camera, i) {
+    return -camera.matrixWorld.elements[8 + i];
+  }
+
+  /**
    * "Acabei de atacar" — arma a janela de assistência forte.
    *
    * Chamado por quem atira (rajada, especial, onda). Não é o mesmo que "estou
@@ -355,8 +511,16 @@ export class LockOn {
    * alvo de mira antes de deixar de ser alvo de trava.
    */
   alvoDeAtaque() {
-    if (this.id === null) return null;
-    return this.foraDoQuadro ? null : this.id;
+    /* A TRAVA GANHA quando existe e está à vista: ela é a intenção declarada do
+       jogador, e uma mira automática que a contradissesse seria o software
+       desfazendo uma decisão explícita. */
+    if (this.id !== null && !this.foraDoQuadro) return this.id;
+    /* Sem trava (ou com o alvo travado fora de vista), vale quem está sob o
+       CURSOR. É o pedido: *"os poderes sempre devem ir no player cujo cursor
+       está mais próximo; se o cursor estiver muito longe, aí os poderes saem
+       retos"* — e "saem retos" é exatamente o `null` que sobra aqui quando
+       ninguém está na zona. */
+    return this.sob;
   }
 
   /** Onde o alvo cai na tela, em NDC, e se ele está atrás da lente. */

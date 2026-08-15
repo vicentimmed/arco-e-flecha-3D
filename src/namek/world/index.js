@@ -42,9 +42,16 @@ export class NamekWorld {
    * @param {THREE.Scene} scene
    * @param {import("../../shared/namek/field.js").NamekField} field
    */
-  constructor(scene, field) {
+  /**
+   * @param {import("../fx/index.js").NamekFx} [fx] o pool de partículas. Só a
+   *   LAVA o usa, e por isso ele é opcional: ela ferve com brasa e fumaça (ver
+   *   `NamekLava.borbulhar`), e sem o pool ela continua correta — só não ferve.
+   *   A bancada de cenário em `dev/` monta o mundo sem o jogo em volta.
+   */
+  constructor(scene, field, fx = null) {
     this.scene = scene;
     this.field = field;
+    this.fx = fx;
 
     /** 0 = dia, 1 = tempestade. O valor CAMINHADO. */
     this.storm = 0;
@@ -92,7 +99,7 @@ export class NamekWorld {
     /* A lava DEPOIS do terreno, porque ela lê `field.lavaPools` — que quem
        entra no meio da partida já recebeu preenchida, via a lista de crateras
        do `welcome`. E o gancho, para as poças que abrirem daqui em diante. */
-    this.lava = new NamekLava(this.field).build(this.root);
+    this.lava = new NamekLava(this.field, this.fx).build(this.root);
     this.field.onLava = (poca) => this.lava?.acender(poca);
 
     progresso(0.9, "semeando o campo…");
@@ -153,7 +160,11 @@ export class NamekWorld {
     this.sky?.update(dt, cameraPos, tempoSala);
     this.water?.update(dt, cameraPos, tempoSala);
     this.scenery?.update(dt, cameraPos, tempoSala);
-    this.lava?.update(dt);
+    /* A câmera vai junto: a lava só ferve PERTO de quem está olhando, e sem a
+       posição ela borbulharia em todas as poças do mapa — inclusive nas que
+       estão a quatrocentos metros, com as partículas em sub-pixel. Ver
+       `NamekLava.borbulhar`. */
+    this.lava?.update(dt, cameraPos);
     this.grass?.update(dt, tempoSala);
   }
 

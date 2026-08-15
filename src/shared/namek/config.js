@@ -290,6 +290,26 @@ export const NAMEK = {
     levelId: "namek",
     /** O único modo desta sala. */
     modeId: "deathmatch",
+
+    /* Os números do TRANSPORTE. Repetidos aqui em vez de lidos de
+       `CONFIG.net`, e isso é o §0 do plano em ação: um `import` do config do
+       arqueiro faria o modo herdar `maxPlayers: 12` — e o requisito é 15 — e
+       amarraria a nossa sala a um arquivo que ninguém vai lembrar que ela lê ao
+       balancear o vale. Os valores coincidem hoje porque a rede é a mesma; eles
+       são livres para divergir amanhã, que é justamente o ponto. */
+    url: "", // vazio = mesma origem, em /ws
+    nameMaxLength: 16,
+    /** s entre pings. Também impede o proxy de matar conexão ociosa. */
+    heartbeat: 15,
+    /** s — backoff de reconexão; depois repete o último. */
+    reconnectDelays: [0.4, 0.8, 1.6, 3, 5],
+    /** m — folga entre o acerto declarado e onde a vítima estava de fato.
+     *  Generosa de propósito: quem atira vê o alvo `interpDelay` no passado, e
+     *  a 96 m/s de boost isso são quase dez metros. Serve para a sala não se
+     *  contradizer, não para impedir trapaça. */
+    hitTolerance: 12,
+    /** s antes de destruir a sala vazia. */
+    emptyRoomGrace: 30,
   },
 
   /* -------------------------------------------------------------------- bots */

@@ -4071,6 +4071,33 @@ async function main() {
 
   const lobby = new Lobby(document.getElementById("lobby"));
 
+  /* NAMEKUSEI é outro jogo, e o desvio acontece AQUI — antes de existir física,
+     vale ou renderer. Não é economia: é que o jogo do arqueiro prende um
+     contexto WebGL ao canvas no construtor, e um segundo contexto sobre o mesmo
+     elemento não nasce. Ver `src/namek/boot.js`, que explica o caminho inteiro.
+
+     `import()` dinâmico, e não estático, para que o Vite parta o pacote: quem
+     vem jogar arco e flecha não baixa uma linha de Namekusei. */
+  if (new URLSearchParams(location.search).get("jogo") === "namek") {
+    const { bootNamek } = await import("./namek/boot.js");
+    let namek;
+    try {
+      namek = await bootNamek((passo) => lobby.setStep(passo));
+    } catch (err) {
+      console.error(err);
+      lobby.setError(`falhou: ${err.message}`);
+      return;
+    }
+    window.game = namek;
+    lobby.setReady();
+    lobby.onEnter = async (nome) => {
+      await namek.connect(nome);
+      lobby.hide();
+      namek.start();
+    };
+    return;
+  }
+
   let game;
   try {
     lobby.setStep("carregando física (WASM)…");

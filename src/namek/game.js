@@ -1,0 +1,773 @@
+/* ---------------------------------------------------------------------------
+   Namekusei — o laço principal.
+
+   Este é o arquivo que junta as peças, e ele é o ÚNICO lugar do modo que
+   conhece todas elas. Cada subsistema (mundo, personagem, poderes, efeitos,
+   controle, câmera, HUD, rede) sabe fazer a própria coisa e não sabe da
+   existência dos outros; quem os apresenta é aqui.
+
+   É a mesma forma do `Game` do arqueiro em `src/main.js` — e é um arquivo
+   SEPARADO pelo motivo do §0 do plano: o jogo de arco e flecha não pode mudar
+   de comportamento por causa deste modo. Um `if (namek)` dentro daquele laço de
+   4 100 linhas seria a primeira das mil linhas que acabam mexendo no vale.
+
+   ---------------------------------------------------------------- o quadro
+
+   Passo VARIÁVEL, e essa é uma diferença deliberada em relação ao arqueiro.
+
+   Lá o passo é fixo em 1/120 s num acumulador, porque a flecha é um corpo
+   rígido integrado por um solver e o resultado precisa ser idêntico em 60, 120
+   ou 144 Hz. Aqui não há solver: o movimento é cinemático e todo amortecimento
+   usa `damp()` (que é estável em passo variável, ver `utils/math.js`). Pagar um
+   acumulador de passo fixo daria o mesmo resultado por mais trabalho — e o
+   passo variável entrega a resposta mais imediata, que é o pedido explícito
+   ("a jogabilidade deve ser rápida, não deve ser um jogo travado e lento").
+
+   O `dt` é limitado a 50 ms. Uma aba que volta do segundo plano entrega um
+   quadro de vários segundos, e integrar isso de uma vez teleportaria todo mundo
+   para fora da arena.
+   --------------------------------------------------------------------------- */
+
+import * as THREE from "three";
+
+import { NAMEK, specialInfo } from "../shared/namek/config.js";
+import { NamekField } from "../shared/namek/field.js";
+import { NC2S, NS2C, packFighter, vecFrom } from "../shared/namek/protocol.js";
+
+import { NamekWorld } from "./world/index.js";
+import { NamekFx } from "./fx/index.js";
+import { PowerSystem } from "./powers/index.js";
+import { Fighter } from "./character/index.js";
+import { FighterController } from "./movement.js";
+import { NamekCamera } from "./camera.js";
+import { NamekInput } from "./input.js";
+import { NamekHud } from "./ui/index.js";
+import { KiMeter } from "./ki.js";
+import { NamekClient } from "./net/client.js";
+import { RemoteFighters } from "./net/remote.js";
+
+/** s — teto do passo. Ver o cabeçalho. */
+const DT_MAX = 0.05;
+
+export class NamekGame {
+  constructor(canvas, uiRoot) {
+    /* --------------------------------------------------------- desenho --- */
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: "high-performance",
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    /* Contagem manual, como o renderer do arqueiro faz e pelo mesmo motivo: ela
+       é o guarda-corpo do orçamento do §3, e o `autoReset` a zeraria a cada
+       `render()` deixando só o último passe para ler. */
+    this.renderer.info.autoReset = false;
+
+    this.scene = new THREE.Scene();
+    this.camera3 = new THREE.PerspectiveCamera(
+      68,
+      window.innerWidth / window.innerHeight,
+      0.15,
+      // A arena tem 1800 m de lado e o teto está a 520 m: quem voa alto vê a
+      // borda oposta a ~2 km. Cortar antes disso mostraria o mundo terminando.
+      4200,
+    );
+
+    /* --------------------------------------------------------- o mundo --- */
+    this.field = new NamekField();
+    this.world = new NamekWorld(this.scene, this.field);
+    this.fx = new NamekFx(this.scene, this.field);
+    this.powers = new PowerSystem(this.scene, this.field);
+
+    /* -------------------------------------------------------- o jogador --- */
+    this.controller = new FighterController(this.field);
+    this.ki = new KiMeter();
+    this.me = new Fighter(this.scene, 0xff7a1a, true);
+    this.cam = new NamekCamera(this.camera3, this.field);
+    this.input = new NamekInput(canvas);
+    this.hud = new NamekHud(uiRoot);
+
+    /* ----------------------------------------------------------- rede --- */
+    this.net = new NamekClient();
+    this.remotes = new RemoteFighters(this.scene, () => this.net.serverTime);
+
+    /** Meu id na sala. Vem no `welcome`. */
+    this.myId = null;
+    this.myName = "";
+    /** Vida — a SALA é a autoridade; isto é a cópia local para o HUD. */
+    this.health = NAMEK.fighter.maxHealth;
+    this.down = false;
+    this.deadUntil = 0;
+    this.invulnUntil = 0;
+
+    /** Alvo travado (Tab). null = sem trava. */
+    this.lockId = null;
+    /** Especial armado (índice em `NAMEK.specialOrder`). */
+    this.specialIndex = 0;
+    /** O especial em execução: `{ kind, t, dur, dir }` ou null. */
+    this.casting = null;
+
+    /** Id local de cada bola, para casar o acerto com o disparo. */
+    this.blastSeq = 1;
+    /** s — relógio da cadência da rajada. */
+    this.blastCooldown = 0;
+    /** Qual mão atira a próxima. Alterna — é o pedido explícito. */
+    this.nextHand = 0;
+
+    /** ms — quando a próxima pose sai. */
+    this.nextStateAt = 0;
+
+    this.running = false;
+    this.lastTime = 0;
+
+    this._onResize = () => this.resize();
+    window.addEventListener("resize", this._onResize);
+
+    this.bindNetwork();
+  }
+
+  build(progresso = () => {}) {
+    this.world.build(progresso);
+    return this;
+  }
+
+  resize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    this.renderer.setSize(w, h);
+    this.camera3.aspect = w / h;
+    this.camera3.updateProjectionMatrix();
+  }
+
+  /* ------------------------------------------------------------- rede ----- */
+
+  bindNetwork() {
+    const net = this.net;
+
+    net.on("welcome", (msg) => {
+      this.myId = msg.you.id;
+      this.myName = msg.you.name;
+      this.me.setColor(msg.you.color ?? 0xff7a1a);
+      this.health = msg.you.health ?? NAMEK.fighter.maxHealth;
+
+      /* O CHÃO JÁ DEFORMADO. Quem entra no meio de uma partida precisa do mesmo
+         relevo que os outros têm — é o critério 6 do §12 do plano. A lista vem
+         com raio e fundura prontos de propósito (ver `NamekField.loadCraters`). */
+      this.field.loadCraters(msg.craters);
+      for (const c of this.field.craters) this.world.applyCrater(c);
+
+      this.world.setWeather(msg.weather ?? NAMEK.weather.padrao, true);
+      this.remotes.reconcile((msg.fighters ?? []).filter((f) => f.id !== this.myId));
+      this.hud.setScores(this.placar(msg.scores));
+      this.nascer(msg.you.spawn);
+    });
+
+    net.on(NS2C.JOIN, (msg) => {
+      if (msg.fighter.id === this.myId) return;
+      this.remotes.add(msg.fighter);
+      this.hud.toast(`${msg.fighter.name} entrou`);
+    });
+
+    net.on(NS2C.LEAVE, (msg) => {
+      this.remotes.remove(msg.id);
+      if (this.lockId === msg.id) this.lockId = null;
+    });
+
+    net.on(NS2C.STATES, (msg) => this.remotes.applyStates(msg));
+
+    net.on(NS2C.VITALS, (msg) => {
+      this.remotes.applyVitals(msg);
+      /* A minha barra também vem aqui: a sala é a autoridade sobre o ki (ela
+         cobra os disparos) e sobre a vida. O `sincronizar` PERSEGUE em vez de
+         escrever — ver o comentário lá, é o que impede a barra de engasgar a
+         cada amostra. */
+      for (const [id, health, ki] of msg.h ?? []) {
+        if (id !== this.myId) continue;
+        this.health = health;
+        this.ki.sincronizar(ki);
+      }
+    });
+
+    /* Projéteis dos OUTROS: eu desenho, eu não julgo. Quem atira é a autoridade
+       sobre o próprio acerto (§8 do plano) — o `local: false` é o que diz ao
+       sistema de poderes para não reportar acerto nenhum destes. */
+    net.on(NS2C.BLAST, (msg) => {
+      if (msg.owner === this.myId) return; // o meu eu já desenhei no disparo
+      this.powers.spawnBlast({
+        id: `${msg.owner}:${msg.id}`,
+        owner: msg.owner,
+        origem: vecFrom(msg.o),
+        dir: vecFrom(msg.d),
+        hand: msg.hand,
+        target: msg.target ?? null,
+        local: false,
+      });
+    });
+
+    net.on(NS2C.SPECIAL, (msg) => {
+      if (msg.owner === this.myId) return;
+      this.powers.spawnSpecial({
+        owner: msg.owner,
+        kind: msg.kind,
+        origem: vecFrom(msg.o),
+        dir: vecFrom(msg.d),
+        local: false,
+      });
+    });
+
+    net.on(NS2C.BURST, (msg) => {
+      if (msg.owner === this.myId) return;
+      this.powers.spawnBurst({ owner: msg.owner, origem: vecFrom(msg.o), local: false });
+    });
+
+    net.on(NS2C.HURT, (msg) => {
+      if (msg.id === this.myId) {
+        const antes = this.health;
+        this.health = msg.health;
+        const fracao = Math.min(1, (antes - msg.health) / 34);
+        this.hud.hurtFlash(fracao);
+        this.cam.shake(0.3 + fracao * 0.7, 0.25);
+        const de = this.remotes.get(msg.by);
+        if (de) this.hud.damageFrom(this.anguloNaTela(de.pose));
+        return;
+      }
+      const r = this.remotes.get(msg.id);
+      if (r) {
+        r.health = msg.health;
+        r.fighter.hit(msg.d ? vecFrom(msg.d) : null, msg.amount > 20);
+      }
+    });
+
+    net.on(NS2C.DEATH, (msg) => {
+      const dir = msg.d ? vecFrom(msg.d) : null;
+      if (msg.victim === this.myId) {
+        this.morrer(dir);
+      } else {
+        this.remotes.get(msg.victim)?.fighter.die(dir);
+        if (this.lockId === msg.victim) this.lockId = null;
+      }
+      this.hud.killFeed(this.nomeDe(msg.killer), this.nomeDe(msg.victim), msg.kind);
+    });
+
+    net.on(NS2C.SPAWN, (msg) => {
+      if (msg.id === this.myId) this.nascer(msg);
+      else this.remotes.get(msg.id)?.fighter.revive();
+    });
+
+    /* CRATERA. Vem de todo mundo, inclusive de volta de mim — e a volta não é
+       desperdício: é ela que carimba o id da sala no buraco que eu já abri
+       localmente. `addCrater` é idempotente por id justamente para isso, e
+       devolver null é o sinal de que não há nada novo a esculpir. */
+    net.on(NS2C.CRATER, (msg) => {
+      const c = this.field.addCrater(msg.i, msg.p[0], msg.p[2], msg.power);
+      if (c) this.world.applyCrater(c);
+    });
+
+    net.on(NS2C.PROP_DOWN, (msg) => {
+      this.world.breakProp(msg.kind, msg.i);
+    });
+
+    net.on(NS2C.WEATHER, (msg) => {
+      this.world.setWeather(msg.id);
+      this.hud.banner(
+        msg.id === "tempestade" ? "O PLANETA ESTÁ EXPLODINDO" : "O CÉU ABRIU",
+        3,
+      );
+    });
+
+    net.on(NS2C.BOLT, (msg) => {
+      this.world.strikeBolt(msg.p[0], msg.p[1]);
+      /* O tremor só se sente PERTO. Um raio a 800 m sacudindo a câmera diria
+         que ele caiu ao lado, e a tempestade inteira viraria um tremor
+         constante sem informação nenhuma. */
+      const d = Math.hypot(msg.p[0] - this.controller.position.x, msg.p[1] - this.controller.position.z);
+      if (d < 260) this.cam.shake(NAMEK.weather.tempestade.tremor * (1 - d / 260), 0.4);
+    });
+
+    net.on(NS2C.SCORES, (msg) => this.hud.setScores(this.placar(msg.s)));
+
+    net.on("disconnected", () => this.hud.toast("conexão caiu — reconectando…"));
+    net.on("reconnecting", () => this.hud.toast("reconectando…"));
+  }
+
+  async connect(nome) {
+    await this.net.connect(nome, "kakarot");
+  }
+
+  /* -------------------------------------------------------- nascer/morrer -- */
+
+  nascer(spawn) {
+    if (!spawn) return;
+    const p = spawn.p ? vecFrom(spawn.p) : { x: 0, y: NAMEK.respawn.dropHeight, z: 0 };
+    this.controller.teleport(p.x, p.y, p.z, spawn.yaw ?? 0);
+    this.me.revive();
+    this.down = false;
+    this.deadUntil = 0;
+    this.health = NAMEK.fighter.maxHealth;
+    this.invulnUntil = spawn.invulnUntil ?? this.net.serverTime + NAMEK.respawn.invuln * 1000;
+    this.hud.setDead(null);
+    /* Nasce VOANDO. Cair de 120 m no chão é o que a queda de nascimento do vale
+       faz — e lá ela dura 1,4 s e termina numa nuvem de poeira. Aqui o lutador
+       voa: pousá-lo à força seria tirar dele, no instante da volta, a única
+       coisa que ele estava querendo fazer. */
+    this.controller.flying = true;
+  }
+
+  morrer(direcao) {
+    if (this.down) return;
+    this.down = true;
+    this.deadUntil = this.net.serverTime + NAMEK.respawn.delay * 1000;
+    this.me.die(direcao);
+    this.lockId = null;
+    this.casting = null;
+    this.cam.shake(1, 0.6);
+  }
+
+  /* --------------------------------------------------------------- ajuda -- */
+
+  nomeDe(id) {
+    if (id === this.myId) return this.myName;
+    return this.remotes.get(id)?.name ?? "alguém";
+  }
+
+  placar(lista) {
+    return (lista ?? []).map((s) => ({ ...s, nome: s.name, eu: s.id === this.myId }));
+  }
+
+  /** Ângulo na tela de onde veio uma pancada — alimenta a marca de dano. */
+  anguloNaTela(p) {
+    const dx = p.x - this.controller.position.x;
+    const dz = p.z - this.controller.position.z;
+    return Math.atan2(dx, dz) - this.controller.yaw;
+  }
+
+  /* -------------------------------------------------------------- mira ---- */
+
+  /**
+   * Escolhe o alvo travado, ou o solta.
+   *
+   * Trava no que está mais perto do CENTRO DA TELA, não no mais próximo no
+   * espaço: o jogador aponta para quem ele quer brigar, e o mais próximo é
+   * frequentemente alguém às costas dele.
+   */
+  alternarTrava() {
+    if (this.lockId !== null) {
+      this.lockId = null;
+      this.hud.setCrosshair("livre");
+      return;
+    }
+    const dir = this.cam.aimDirection();
+    let melhor = null;
+    let melhorCos = 0.72; // ~44° de meio-ângulo: generoso, mas não "atrás de mim"
+    for (const r of this.remotes.byId.values()) {
+      if (r.down) continue;
+      const dx = r.pose.x - this.controller.position.x;
+      const dy = r.pose.y + NAMEK.fighter.chest - (this.controller.position.y + NAMEK.fighter.chest);
+      const dz = r.pose.z - this.controller.position.z;
+      const d = Math.hypot(dx, dy, dz) || 1;
+      const cos = (dx * dir.x + dy * dir.y + dz * dir.z) / d;
+      if (cos > melhorCos) {
+        melhorCos = cos;
+        melhor = r;
+      }
+    }
+    this.lockId = melhor?.id ?? null;
+    this.hud.setCrosshair(this.lockId !== null ? "travado" : "livre");
+  }
+
+  /** O ponto do alvo travado, ou null. */
+  pontoDaTrava() {
+    const r = this.lockId !== null ? this.remotes.get(this.lockId) : null;
+    if (!r || r.down) return null;
+    return { x: r.pose.x, y: r.pose.y + NAMEK.fighter.chest, z: r.pose.z };
+  }
+
+  /* ------------------------------------------------------------ disparos -- */
+
+  /**
+   * A rajada básica: uma bola por mão, ALTERNANDO, enquanto o botão está
+   * apertado. É o pedido literal do usuário, e a alternância é o que dá o ritmo
+   * de duas mãos do anime em vez de uma metralhadora de um cano só.
+   */
+  atirar(dt) {
+    this.blastCooldown -= dt;
+    if (this.blastCooldown > 0) return;
+    if (!this.ki.gastar(NAMEK.ki.blastCost)) return;
+
+    this.blastCooldown = 1 / NAMEK.blast.rate;
+    const mao = this.nextHand;
+    this.nextHand = mao === 0 ? 1 : 0;
+
+    const origem = this.me.handPoint(mao);
+    const dir = this.direcaoDeTiro(origem);
+    const alvo = this.escolherAlvoDaBola(origem, dir);
+
+    const id = this.blastSeq++;
+    this.powers.spawnBlast({
+      id: `${this.myId}:${id}`,
+      owner: this.myId,
+      origem,
+      dir,
+      hand: mao,
+      target: alvo,
+      local: true,
+    });
+    this.me.lastHand = mao;
+    this.me.handPose = 1;
+
+    this.net.send(NC2S.BLAST, {
+      id,
+      o: [origem.x, origem.y, origem.z],
+      d: [dir.x, dir.y, dir.z],
+      hand: mao,
+      target: alvo,
+      w: this.net.serverTime,
+    });
+  }
+
+  /**
+   * Para onde a bola sai.
+   *
+   * Com alvo travado ela sai na direção DELE, não do retículo — é o que o BT3
+   * faz, e é o que torna o combate aéreo jogável: mirar à mão em alguém que se
+   * move a 96 m/s enquanto você também se move não é habilidade, é sorte.
+   *
+   * Sem trava, sai pela mira. E em nenhum dos dois casos a bola procura sozinha
+   * — a perseguição dela é fraca e limitada, ver o §6.1 do plano.
+   */
+  direcaoDeTiro(origem) {
+    const trava = this.pontoDaTrava();
+    if (trava) {
+      const dx = trava.x - origem.x;
+      const dy = trava.y - origem.y;
+      const dz = trava.z - origem.z;
+      const d = Math.hypot(dx, dy, dz) || 1;
+      return { x: dx / d, y: dy / d, z: dz / d };
+    }
+    return this.cam.aimDirection();
+  }
+
+  /**
+   * Quem a bola vai perseguir — decidido AQUI, no disparo, e nunca revisto.
+   *
+   * O alvo travado tem prioridade. Sem trava, o mais alinhado com o tiro dentro
+   * de `acquire` metros. Uma bola que troca de alvo no meio do voo lê como bug,
+   * e é por isso que este valor viaja na mensagem em vez de cada cliente
+   * recalculá-lo (ver o comentário de `NC2S.BLAST`).
+   */
+  escolherAlvoDaBola(origem, dir) {
+    if (this.lockId !== null) return this.lockId;
+    const H = NAMEK.blast.homing;
+    const cosCone = Math.cos((H.cone * Math.PI) / 180);
+    let melhor = null;
+    let melhorCos = cosCone;
+    for (const r of this.remotes.byId.values()) {
+      if (r.down) continue;
+      const dx = r.pose.x - origem.x;
+      const dy = r.pose.y + NAMEK.fighter.chest - origem.y;
+      const dz = r.pose.z - origem.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > H.acquire || d < 0.001) continue;
+      const cos = (dx * dir.x + dy * dir.y + dz * dir.z) / d;
+      if (cos > melhorCos) {
+        melhorCos = cos;
+        melhor = r.id;
+      }
+    }
+    return melhor;
+  }
+
+  /**
+   * O especial. **Só sai com a barra CHEIA** — é a regra do §5 do plano e o
+   * pedido explícito do usuário.
+   */
+  soltarEspecial(indice) {
+    if (this.casting || this.down) return;
+    const kind = NAMEK.specialOrder[indice];
+    const info = specialInfo(kind);
+    if (!info) return;
+    if (!this.ki.podeEspecial()) {
+      this.hud.toast("ki insuficiente — segure C para carregar");
+      return;
+    }
+    this.ki.gastarTudo();
+
+    const origem = this.me.chestPoint();
+    const dir = this.direcaoDeTiro(origem);
+    this.casting = { kind, indice, t: 0, dur: info.windup + info.sustain, dir };
+    this.specialIndex = indice;
+
+    /* A DIREÇÃO É TRAVADA AGORA, no início da pose, e não quando o feixe sai.
+       O windup do Kamehameha dura um segundo inteiro; deixar a direção viva até
+       o fim dele permitiria carregar olhando para o chão e disparar tendo girado
+       para o céu, o que apaga o custo de se comprometer — que é a única coisa
+       que o windup existe para cobrar. */
+    this.powers.spawnSpecial({ owner: this.myId, kind, origem, dir, local: true });
+    this.net.send(NC2S.SPECIAL, {
+      kind,
+      o: [origem.x, origem.y, origem.z],
+      d: [dir.x, dir.y, dir.z],
+      w: this.net.serverTime,
+    });
+  }
+
+  onda() {
+    if (this.down) return;
+    if (!this.ki.gastar(NAMEK.ki.burstCost)) return;
+    const origem = this.me.chestPoint();
+    this.powers.spawnBurst({ owner: this.myId, origem, local: true });
+    this.net.send(NC2S.BURST, { p: [origem.x, origem.y, origem.z] });
+  }
+
+  /* -------------------------------------------------------------- quadro -- */
+
+  start() {
+    this.running = true;
+    this.lastTime = performance.now();
+    requestAnimationFrame(this.frame.bind(this));
+  }
+
+  frame(now) {
+    if (!this.running) return;
+    const dt = Math.min(DT_MAX, (now - this.lastTime) / 1000);
+    this.lastTime = now;
+    try {
+      this.step(dt);
+    } catch (err) {
+      /* Um erro aqui mataria o `requestAnimationFrame` e a tela congelaria sem
+         nada no console além do primeiro estouro. Registrar e seguir é o que
+         mantém o jogo de pé o suficiente para a pessoa entender o que houve —
+         e para o erro aparecer UMA vez, não sessenta por segundo. */
+      if (!this._erroReportado) {
+        console.error("Namekusei — erro no quadro:", err);
+        this._erroReportado = true;
+      }
+    }
+    requestAnimationFrame(this.frame.bind(this));
+  }
+
+  step(dt) {
+    const acoes = this.input.actions();
+    const agora = this.net.serverTime;
+
+    /* ---------------------------------------------------------- morto --- */
+    if (this.down) {
+      const falta = Math.max(0, this.deadUntil - agora);
+      this.hud.setDead(falta / 1000);
+      if (falta <= 0 && acoes.respawn) this.net.send(NC2S.RESPAWN, {});
+    }
+
+    /* ------------------------------------------------------------ ki --- */
+    this.ki.carregando = acoes.charge && !this.down && !this.casting;
+    this.ki.update(dt);
+    if (this.ki.encheuAgora) this.hud.toast("ki cheio — especial pronto");
+
+    /* -------------------------------------------------------- controle --- */
+    /* Carregar ki PRENDE no lugar, e é a troca central do modo: poder em troca
+       de estar parado à vista de todo mundo. Zerar as ações de movimento é como
+       isso é imposto, e fazê-lo aqui — e não dentro do controlador — é o que
+       mantém o controlador ignorante do ki. */
+    if (this.ki.carregando) {
+      acoes.forward = 0;
+      acoes.strafe = 0;
+      acoes.up = 0;
+      acoes.boost = false;
+      acoes.run = false;
+    }
+    const pouso = this.down ? null : this.controller.update(dt, acoes, this.ki);
+
+    /* O POUSO FORTE. Cratera, poeira e dano — é o pedido literal: "se o player
+       cair do alto e cair no chão deve deformar e fazer nuvem de poeira". Quem
+       decide o dano é a sala; o buraco e a poeira são locais e imediatos, para
+       o baque não chegar meio segundo depois do impacto. */
+    if (pouso && pouso.speed >= NAMEK.destruction.slamSpeed) {
+      const power = (pouso.speed - NAMEK.destruction.slamSpeed) * NAMEK.destruction.slamPower;
+      this.fx.slam(pouso.p.x, pouso.p.y, pouso.p.z, pouso.speed);
+      this.cam.shake(Math.min(1, power * 0.6), 0.3);
+      this.net.send(NC2S.SLAM, {
+        p: [pouso.p.x, pouso.p.y, pouso.p.z],
+        speed: pouso.speed,
+      });
+    }
+
+    /* ---------------------------------------------------------- ações --- */
+    if (!this.down) {
+      if (acoes.lockPressed) this.alternarTrava();
+      if (acoes.burstPressed) this.onda();
+      for (let i = 0; i < NAMEK.specialOrder.length; i++) {
+        if (acoes.special[i]) this.soltarEspecial(i);
+      }
+      if (acoes.fire && !this.casting && !this.ki.carregando) this.atirar(dt);
+    }
+
+    /* O especial em curso: a fração alimenta a pose (e viaja na rede como um
+       número só — o mesmo truque do `q` do Kamehameha do arqueiro). */
+    if (this.casting) {
+      this.casting.t += dt;
+      if (this.casting.t >= this.casting.dur) this.casting = null;
+    }
+
+    /* -------------------------------------------------------- a minha pose */
+    const c = this.controller;
+    this.me.position.x = c.position.x;
+    this.me.position.y = c.position.y;
+    this.me.position.z = c.position.z;
+    this.me.velocity.x = c.velocity.x;
+    this.me.velocity.y = c.velocity.y;
+    this.me.velocity.z = c.velocity.z;
+    this.me.yaw = c.yaw;
+    this.me.pitch = c.pitch;
+    this.me.roll = c.roll;
+    this.me.gaitPhase = c.gaitPhase;
+    this.me.runBlend = c.runBlend;
+    this.me.flyBlend = c.flyBlend;
+    this.me.boostBlend = c.boostBlend;
+    this.me.chargeBlend = this.ki.blend;
+    this.me.specialFraction = this.casting ? this.casting.t / this.casting.dur : 0;
+    this.me.specialIndex = this.casting ? this.casting.indice : -1;
+    this.me.down = this.down;
+    this.me.invuln = agora < this.invulnUntil;
+    // O braço estendido do tiro volta sozinho — se não voltasse, o lutador
+    // ficaria apontando para sempre depois da última bola.
+    this.me.handPose = Math.max(0, this.me.handPose - dt * 4);
+    this.me.update(dt, this.camera3.position);
+
+    /* --------------------------------------------------------- os outros -- */
+    this.remotes.update(dt, this.camera3.position);
+
+    /* --------------------------------------------------------- poderes ---- */
+    const alvos = this.remotes.alvos();
+    /* Eu também sou alvo — dos projéteis dos outros —, mas o sistema só reporta
+       acerto de quem é dono do tiro, e o dono de um tiro alheio não sou eu. A
+       minha cápsula entra na lista para o feixe ser BLOQUEADO por mim e para o
+       empurrão da onda me alcançar; quem me machuca é sempre a sala. */
+    alvos.push({
+      id: this.myId,
+      x: c.position.x,
+      y: c.position.y,
+      z: c.position.z,
+      raio: NAMEK.fighter.radius,
+      altura: NAMEK.fighter.height,
+      vivo: !this.down,
+      invuln: this.me.invuln,
+    });
+    const eventos = this.powers.update(dt, alvos, this.myId);
+    this.reportar(eventos);
+
+    /* ------------------------------------------------------------ cena ---- */
+    this.fx.update(dt, this.camera3.position);
+    this.world.update(dt, this.camera3.position, agora);
+
+    this.cam.update(dt, {
+      position: c.position,
+      yaw: c.yaw,
+      pitch: c.pitch,
+      velocity: c.velocity,
+      flying: c.flying,
+      boosting: c.boostBlend > 0.3,
+    }, this.pontoDaTrava());
+
+    /* ------------------------------------------------------------- HUD ---- */
+    this.hud.setVitals(this.health, NAMEK.fighter.maxHealth, this.ki.valor, this.ki.max);
+    this.hud.setSpecials(this.specialIndex, this.ki.podeEspecial());
+    const trava = this.lockId !== null ? this.remotes.get(this.lockId) : null;
+    this.hud.setTarget(
+      trava
+        ? {
+            id: trava.id,
+            nome: trava.name,
+            cor: trava.color,
+            vida: trava.health,
+            vidaMax: NAMEK.fighter.maxHealth,
+          }
+        : null,
+    );
+    this.hud.update(dt);
+
+    /* ------------------------------------------------------------ rede ---- */
+    this.pushState(agora);
+
+    this.renderer.info.reset();
+    this.renderer.render(this.scene, this.camera3);
+  }
+
+  /**
+   * Reporta à sala o que os MEUS projéteis fizeram.
+   *
+   * Quem atira é a autoridade sobre o próprio acerto; a sala é a autoridade
+   * sobre a vida (§8 do plano). É o mesmo contrato do `C2S.IMPACT` da flecha, e
+   * seguir o modelo que o jogo já usa vale mais do que qualquer melhoria
+   * isolada aqui: dois modelos de confiança no mesmo servidor seriam a
+   * inconsistência que ninguém lembra de manter.
+   */
+  reportar(ev) {
+    if (!ev) return;
+
+    for (const a of ev.acertos) {
+      this.net.send(NC2S.BLAST_HIT, {
+        id: a.blastId,
+        victim: a.victim,
+        p: [a.p.x, a.p.y, a.p.z],
+      });
+      this.fx.bodyHit(a.p.x, a.p.y, a.p.z, 0xbfe8ff);
+    }
+
+    for (const q of ev.queimando) {
+      this.net.send(NC2S.SPECIAL_HIT, { victim: q.victim, kind: q.kind, dt: q.dt });
+    }
+
+    for (const g of ev.chao) {
+      /* A cratera aparece AGORA na minha tela e a sala confirma depois. Esperar
+         a volta da rede poria meio segundo entre o feixe encostar no chão e o
+         chão reagir — e é exatamente nesse meio segundo que o jogador está
+         olhando para o ponto de impacto. O `addCrater` é idempotente por id, e
+         o id local é negativo para nunca colidir com o carimbo da sala. */
+      this.fx.groundImpact(g.p.x, g.p.y, g.p.z, g.power);
+      const c = this.field.addCrater(this._craterLocal--, g.p.x, g.p.z, g.power);
+      if (c) this.world.applyCrater(c);
+      this.net.send(NC2S.GROUND_HIT, { p: [g.p.x, g.p.y, g.p.z], power: g.power });
+    }
+
+    for (const e of ev.empurroes) {
+      if (e.victim !== this.myId) continue;
+      this.controller.push(e.push.x, e.push.y, e.push.z, 0.2);
+    }
+  }
+
+  /** Contador das crateras que ainda não têm carimbo da sala. Ver `reportar`. */
+  _craterLocal = -1;
+
+  /**
+   * A pose sai a 20 Hz, não por quadro.
+   *
+   * Sessenta poses por segundo por jogador com quinze em campo seriam 900
+   * mensagens/s subindo por cliente para uma informação que a interpolação do
+   * outro lado já suaviza a 20. É a mesma taxa do arqueiro, e pelo mesmo motivo.
+   */
+  pushState(agora) {
+    if (agora < this.nextStateAt) return;
+    this.nextStateAt = agora + 1000 / NAMEK.net.stateRate;
+    if (!this.net.connected) return;
+    this.net.send(NC2S.STATE, { s: packFighter(this.me), w: agora });
+  }
+
+  dispose() {
+    this.running = false;
+    window.removeEventListener("resize", this._onResize);
+    this.net.disconnect();
+    this.input.dispose();
+    this.hud.dispose();
+    this.remotes.dispose();
+    this.powers.dispose();
+    this.fx.dispose();
+    this.world.dispose();
+    this.me.dispose();
+    this.renderer.dispose();
+  }
+}

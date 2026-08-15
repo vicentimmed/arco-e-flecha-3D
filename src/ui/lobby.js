@@ -83,6 +83,23 @@ const PORTAS = [
     detalhe: "dez minutos de muralha — só se perde se o portão cair",
     classe: "porta-cerco",
   },
+  /* NAMEKUSEI é a única porta que não leva a uma fase deste jogo: leva a OUTRO
+     jogo, que divide com este o servidor, a tela de entrada e mais nada. Daí o
+     `jogo` no lugar de `level`/`mode` — ver `submit`, e `src/namek/boot.js`
+     para a razão de a entrada ser por recarga. */
+  {
+    id: "namek",
+    jogo: "namek",
+    /* `level` e `mode` aqui NÃO escolhem sala (quem faz isso é o `hello` do
+       cliente de lá): eles existem só para o contador de "quem está jogando"
+       achar a sala de Namekusei em `/salas`, como acha as outras. Sem eles a
+       porta ficaria muda enquanto houvesse gente lutando do outro lado. */
+    level: "namek",
+    mode: "deathmatch",
+    rotulo: "Batalha em Namekusei",
+    detalhe: "voo livre, ki e Kamehameha — até 15 lutadores",
+    classe: "porta-namek",
+  },
 ];
 
 export class Lobby {
@@ -294,6 +311,29 @@ export class Lobby {
     this.status.textContent = "entrando…";
     storeName(nome);
 
+    /* TROCA DE JOGO: recarrega em vez de conectar.
+     *
+     * A comparação é nos DOIS sentidos de propósito. O caminho de ida (clicar
+     * em Namekusei estando no arqueiro) é o óbvio; o de volta é o que quebrava
+     * sem isto — recarregada a página em `?jogo=namek`, TODAS as portas
+     * continuam na tela, e clicar no Vale chamava o `onEnter` que aquela página
+     * instalou, que é o de Namekusei. O resultado era entrar em Namekusei tendo
+     * clicado no Vale, sem nenhum erro em lugar nenhum.
+     *
+     * O nome acabou de ser guardado, então ele reaparece preenchido do outro
+     * lado e a recarga passa despercebida — é o mesmo caminho que a troca de
+     * qualidade gráfica já usa logo acima. `src/namek/boot.js` explica por que
+     * a entrada tem de ser assim e não uma troca de cena. */
+    const q = new URLSearchParams(location.search);
+    const jogoAtual = q.get("jogo");
+    const jogoAlvo = porta.jogo ?? null;
+    if (jogoAlvo !== jogoAtual) {
+      if (jogoAlvo) q.set("jogo", jogoAlvo);
+      else q.delete("jogo");
+      location.search = q.toString();
+      return;
+    }
+
     try {
       await this.onEnter(nome, { level: porta.level, mode: porta.mode });
     } catch (err) {
@@ -336,6 +376,7 @@ const NOMES_DE_MODO = {
   zombieBoss: "chefão",
   meteorRain: "chuva de meteoros",
   siege: "cerco",
+  deathmatch: "Namekusei",
 };
 
 function nomeDoModo(mode) {

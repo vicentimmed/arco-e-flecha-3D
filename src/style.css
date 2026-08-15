@@ -2166,6 +2166,17 @@ body {
   border-left-color: #b8863c;
 }
 
+/* Namekusei: o verde do planeta na borda, e o laranja do ki no rótulo. É a
+   única porta que leva a outro jogo, e o contraste dos dois avisa isso sem
+   precisar de uma etiqueta escrita. */
+.lobby-porta.porta-namek {
+  border-left-color: #45d97a;
+}
+
+.lobby-porta.porta-namek .lobby-porta-rotulo {
+  color: #ffb257;
+}
+
 .lobby-porta:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.09);
   filter: brightness(1.08);

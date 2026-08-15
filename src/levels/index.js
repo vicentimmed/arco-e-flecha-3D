@@ -159,10 +159,12 @@ export class LevelManager {
     this.current = null;
 
     progresso(0.2, "trocando o mundo…");
-    await respirar();
+    // SEM await aqui: fecha a janela em que um pacote de rede (a rede não
+    // para durante a troca) criaria corpos que o recreate() logo orfanaria.
     const Fase = levelClass(id);
     ctx.physics.recreate(levelPhysics(Fase.id).gravity);
     ctx.sync.clear();
+    await respirar();
 
     progresso(0.3, "construindo a fase…");
     await respirar();

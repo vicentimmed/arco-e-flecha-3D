@@ -509,9 +509,16 @@ export class NamekRoom {
     this.broadcastScores();
   }
 
-  /** Uma cor livre da paleta. Nunca falha: com a paleta vazia, sorteia. */
+  /**
+   * Uma cor livre da paleta. Nunca falha: com a paleta vazia, sorteia.
+   *
+   * `shift` e não `pop`: a `PALETA` está escrita na ordem em que as cores devem
+   * ser entregues (o laranja do personagem primeiro — ver o comentário lá), e
+   * tirar do fim entregava a lista ao contrário. O sintoma era o primeiro
+   * lutador da sala nascendo verde-limão em vez de com o gi do personagem.
+   */
   tomarCor() {
-    return this.cores.pop() ?? PALETA[(Math.random() * PALETA.length) | 0];
+    return this.cores.shift() ?? PALETA[(Math.random() * PALETA.length) | 0];
   }
 
   /** Devolve a cor de quem saiu, para quem chegar depois. */

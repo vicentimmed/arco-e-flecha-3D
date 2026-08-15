@@ -128,10 +128,26 @@ function bloqueadoPeloRelevo(field, ax, ay, az, bx, by, bz) {
    Mesmo critério de `server/colors.js`: nada de rosa nem magenta, que aqui
    seriam a única cor que não combina com nenhuma aura de ki. Quem reveste é a
    sala (`NamekRoom.tomarCor`), não este arquivo. */
+/* A ORDEM É A ORDEM DE ENTREGA, e o primeiro é laranja de propósito.
+ *
+ * A cor do jogador reveste o GI (ver `character/rig.js`), então ela não é um
+ * detalhe de identificação: é a roupa inteira do lutador. O personagem deste
+ * modo é feito à imagem do Goku, e o laranja é a assinatura dele — quem entra
+ * sozinho numa sala vazia precisa ver o personagem CERTO, não a última cor de
+ * uma lista. Antes daqui a entrega saía do fim da lista e o primeiro lutador
+ * nascia verde-limão.
+ *
+ * Do segundo em diante são as cores de quem mais aparece ao lado dele no
+ * material de origem — o azul e o roxo dos saiyajins, o verde namekuseijin, o
+ * vermelho, o turquesa —, e só depois os tons de desempate. Quinze para as
+ * quinze vagas de `NAMEK.net.maxPlayers`: uma sala cheia nunca tem duas iguais.
+ *
+ * Mesmo critério de `server/colors.js`: nada de rosa nem magenta, que aqui
+ * seriam a única cor que não combina com nenhuma aura de ki. */
 export const PALETA = [
-  "#e0554a", "#4a9ee0", "#8ee04a", "#e0c24a", "#4ad97a",
-  "#4ae0c2", "#e08a4a", "#7a8ce0", "#c8e04a", "#4ac2e0",
-  "#e0664a", "#5ad04a", "#d0a04a", "#4ab4d0", "#a0e04a",
+  "#e8822c", "#4a9ee0", "#7a8ce0", "#5ad04a", "#e0554a",
+  "#4ae0c2", "#e0c24a", "#8ee04a", "#4ac2e0", "#d0a04a",
+  "#4ad97a", "#e0664a", "#c8e04a", "#4ab4d0", "#a0e04a",
 ];
 
 /** Contador de bolas. Ver o comentário de `id` em `atirar`. */

@@ -91,12 +91,38 @@ export const NAMEK_SOL_DIR = SOIS[0].dir.clone().normalize();
    conferir de relance que a névoa combina com o horizonte nos DOIS climas — a
    discrepância entre eles é exatamente o que produz uma linha visível na junção
    entre o mar e o céu. */
+/* A PALETA É ESCRITA MAIS SATURADA DO QUE SE QUER VER, e isso não é engano.
+ *
+ * O renderer usa `ACESFilmicToneMapping` com exposição 1,05, e o ACES desatura
+ * de propósito tudo o que é claro — é o que ele faz de melhor em cena
+ * fotográfica e é o que aqui comia o planeta. Medido na tela com a paleta
+ * anterior: zênite `#a0d4a9` (S 38 %), horizonte `#d1ddce` (S 18 %, L 84 %) — um
+ * menta pastel quase branco, exatamente o "céu que some" que o comentário do
+ * degradê logo abaixo promete evitar. O céu do Namek na referência é lima
+ * saturado, reconhecível num quadro só.
+ *
+ * Os valores abaixo saem escuros e saturados no papel para chegarem à tela na
+ * faixa certa. Qualquer ajuste aqui precisa ser conferido NA IMAGEM, com o
+ * pixel medido, e nunca no código-fonte. */
 const DIA = {
-  zenith: new THREE.Color("#6fd08a"),
-  horizonte: new THREE.Color("#d8f5c9"),
-  chao: new THREE.Color("#a9d9b6"),
-  nevoa: new THREE.Color("#d3f0c6"),
-  nevoaDens: 0.00042,
+  zenith: new THREE.Color("#1f9e46"),
+  horizonte: new THREE.Color("#9fd862"),
+  chao: new THREE.Color("#79b98d"),
+  /* A NÉVOA NÃO É A COR DO HORIZONTE, e essa linha era o motivo de o planeta
+   * não ter horizonte nenhum.
+   *
+   * Ela foi escolhida igual à do domo para não haver emenda visível — e
+   * conseguiu: o mar, que é a única coisa enevoada ali, dissolvia na cor do céu
+   * e a linha do mundo simplesmente não existia em nenhum quadro aéreo. Só que
+   * a emenda que se temia não é entre névoa e céu: é entre MAR e céu, e ela é
+   * justamente o que se quer ver. Uma névoa mais fria e mais funda que o
+   * horizonte devolve a faixa turquesa contra o lima — o contraste que dá
+   * sensação de planeta na referência. */
+  nevoa: new THREE.Color("#6fae9a"),
+  /* E menos densa: a 3 000 m a anterior comia 80 % do mar, então o horizonte
+     estaria apagado mesmo com a cor certa. A 0,00030 sobram 55 %, que ainda é
+     perspectiva aérea de sobra e deixa a faixa aparecer. */
+  nevoaDens: 0.0003,
   solLuz: new THREE.Color("#fff0cc"),
   solInt: 3.0,
   ceuLuz: new THREE.Color("#a8f0b6"),

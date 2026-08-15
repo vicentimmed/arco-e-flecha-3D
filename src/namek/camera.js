@@ -68,11 +68,41 @@ const ANTECIPACAO = 0.8;
 const CONVERGENCIA = 60;
 
 /* ------------------------------------------------------------ o terreno ---- */
-/** m — folga mínima entre a lente e o chão. */
-const FOLGA_CHAO = 1.4;
+/**
+ * m — folga mínima entre a lente e o chão.
+ *
+ * **PRECISA SER MENOR QUE `NAMEK.fighter.chest` (1,15 m).** Não é margem de
+ * segurança: é uma condição de coerência, e violá-la quebrava a câmera inteira
+ * no chão.
+ *
+ * O pivô do braço é o PEITO, a 1,15 m dos pés. Com a folga em 1,4 m, o próprio
+ * pivô estava "dentro do chão" pelo critério do teste — e como o braço sobe só
+ * `ALTURA` ao longo de todo o percurso, a PRIMEIRA amostra (a 1/6 do caminho,
+ * a 1,375 m) já nascia reprovada em chão perfeitamente plano. `_encurtarBraco`
+ * então recuava para a amostra anterior, que é o índice zero: **a lente colapsava
+ * para dentro da cabeça do personagem, sempre, em 100 % do chão plano.** Medido:
+ * 6,6 m viravam 1,40 m, e o quadro mostrava o interior do crânio.
+ *
+ * 0,75 m deixa a lente rente sem encostar, e mantém a primeira amostra folgada.
+ */
+const FOLGA_CHAO = 0.75;
 /** Amostras ao longo do braço no teste contra o relevo. Seis bastam para um
  *  braço de doze metros: a feição mais estreita do relevo tem dezenas de metros. */
 const AMOSTRAS = 6;
+/**
+ * Fração do braço abaixo da qual encurtar deixa de resolver nada.
+ *
+ * A segunda metade do mesmo defeito: mesmo com a folga corrigida, uma ladeira
+ * subindo ATRÁS do lutador ainda reprova as primeiras amostras, e recuar até o
+ * índice zero põe a lente no peito dele de novo — só que agora numa encosta, que
+ * é onde o jogador menos pode se dar ao luxo de não se ver.
+ *
+ * Com piso, o braço para de encurtar em 40 % e quem resolve o resto é o
+ * `_pisoDoTerreno`: a lente SOBE por cima do morro e olha o lutador de cima.
+ * Enquadramento pior que o normal, e é para ser — mas com o personagem no quadro,
+ * que é a única coisa inegociável.
+ */
+const BRACO_MINIMO = 0.4;
 
 /* -------------------------------------------------------------- caráter ---- */
 /** graus de campo de visão a mais na arrancada. */
@@ -398,7 +428,10 @@ export class NamekCamera {
          última que estava livre. Passo grosso de propósito — meio metro de
          precisão aqui custaria dezenas de consultas de altura por quadro e
          ninguém percebe a diferença numa câmera amortecida. */
-      const k = (i - 1) / AMOSTRAS;
+      /* Nunca abaixo do piso: encurtar até zero devolve a lente para dentro do
+         corpo, que é o problema que o encurtamento existe para evitar. Ver
+         `BRACO_MINIMO` — daqui para baixo quem resolve é o `_pisoDoTerreno`. */
+      const k = Math.max(BRACO_MINIMO, (i - 1) / AMOSTRAS);
       this._desejada.set(ax + dx * k, ay + dy * k, az + dz * k);
       return;
     }

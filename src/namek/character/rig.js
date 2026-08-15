@@ -415,29 +415,41 @@ function montarRosto(mat, head, perto) {
   const R = OSSO.headR;
 
   // Esclera e íris: um par de malhas, não quatro. Ver `fundir`.
+  /* O ACHATAMENTO VAI NA GEOMETRIA, NÃO NA MALHA — e essa distinção é a
+   * diferença entre ter rosto e não ter.
+   *
+   * `fundir` assa o deslocamento de cada peça DENTRO da geometria (é o que a
+   * fusão faz: uma malha só, com as posições já no lugar). Um `.scale` na malha
+   * depois disso multiplica tudo o que está lá dentro — inclusive o
+   * deslocamento. Os olhos nasciam a −0,86·R da frente do rosto e o `scale.z`
+   * de 0,55 os empurrava para −0,47·R, quando a superfície do crânio naquela
+   * altura está em −0,98·R: **3,7 cm DENTRO da cabeça, invisíveis em 100 % dos
+   * ângulos.** O mesmo valia para a íris (4,1 cm dentro) e para as orelhas
+   * (também 100 % enterradas). O que sobrava do rosto era um narizinho.
+   *
+   * Escalando a esfera ANTES, o achatamento é dela e o deslocamento continua
+   * inteiro. */
   const olhos = new THREE.Mesh(
     fundir(
       [-1, 1].map((lado) => ({
-        geo: new THREE.SphereGeometry(R * 0.17, 10, 8),
+        geo: new THREE.SphereGeometry(R * 0.17, 10, 8).scale(1, 1.2, 0.55),
         matriz: em(lado * R * 0.38, R * 0.12, -R * 0.86),
       })),
     ),
     mat.olho,
   );
-  olhos.scale.set(1, 1.2, 0.55);
   head.add(olhos);
   perto.push(olhos);
 
   const iris = new THREE.Mesh(
     fundir(
       [-1, 1].map((lado) => ({
-        geo: new THREE.SphereGeometry(R * 0.095, 8, 6),
+        geo: new THREE.SphereGeometry(R * 0.095, 8, 6).scale(1, 1.15, 0.5),
         matriz: em(lado * R * 0.38, R * 0.1, -R * 0.96),
       })),
     ),
     mat.olhoEscuro,
   );
-  iris.scale.set(1, 1.15, 0.5);
   head.add(iris);
   perto.push(iris);
 
@@ -470,13 +482,13 @@ function montarRosto(mat, head, perto) {
   const orelhas = new THREE.Mesh(
     fundir(
       [-1, 1].map((lado) => ({
-        geo: new THREE.SphereGeometry(R * 0.21, 8, 6),
+        // Achatada na geometria, deslocada depois. Ver o comentário dos olhos.
+        geo: new THREE.SphereGeometry(R * 0.21, 8, 6).scale(0.4, 1, 0.7),
         matriz: em(lado * R * 0.93, -R * 0.04, 0),
       })),
     ),
     mat.pele,
   );
-  orelhas.scale.set(0.4, 1, 0.7);
   head.add(orelhas);
   perto.push(orelhas);
 }

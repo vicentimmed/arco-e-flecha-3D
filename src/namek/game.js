@@ -135,7 +135,7 @@ export class NamekGame {
     this.deadUntil = 0;
     this.invulnUntil = 0;
 
-    /** Alvo travado (Tab). null = sem trava. */
+    /** Alvo travado (E). null = sem trava. */
     this.lockId = null;
     /** Especial armado (índice em `NAMEK.specialOrder`). */
     this.specialIndex = 0;
@@ -862,6 +862,7 @@ export class NamekGame {
        um quadro de comandos passando por baixo da tela aberta. */
     if (acoes.menuPressed) {
       this.input.setMenuOpen(this.menu.toggle());
+      this.hud.showHelp(this.menu.aberto);
       if (this.menu.aberto) {
         this.menu.setRoster(this.remotes.byId.size + 1, this.botCount());
         this.menu.setWeather(this.weather);

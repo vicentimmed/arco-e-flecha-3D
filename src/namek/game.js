@@ -267,6 +267,15 @@ export class NamekGame {
       this.field.loadCraters(msg.craters);
       for (const c of this.field.craters) this.world.applyCrater(c);
 
+      /* E O QUE JÁ FOI DERRUBADO. A chave é `"tipo:índice"`, como a sala a
+         monta em `registrarProp` — o mesmo par que o `NS2C.PROP_DOWN` manda
+         durante a partida, só que em lote e de uma vez. */
+      for (const chave of msg.props ?? []) {
+        const sep = String(chave).indexOf(":");
+        if (sep < 0) continue;
+        this.world.breakProp(chave.slice(0, sep), Number(chave.slice(sep + 1)));
+      }
+
       /* `.id` — o `welcome` traz o clima como `{ id, w }`, não como a string
          que o `NS2C.WEATHER` de cada troca manda. Passar o objeto inteiro não
          estourava: `setWeather` valida contra `NAMEK.weather.ids`, não achava o
@@ -981,7 +990,9 @@ export class NamekGame {
     eu.vivo = !this.down;
     eu.invuln = this.me.invuln;
     alvos.push(eu);
-    const eventos = this.powers.update(dt, alvos, this.myId);
+    /* O MUNDO vai junto: é dele que sai `propsNear`, e é isso que faz a bola
+       de ki parar na pedra em vez de atravessá-la. */
+    const eventos = this.powers.update(dt, alvos, this.myId, this.world);
     this.reportar(eventos);
 
     /* ------------------------------------------------------------ cena ---- */

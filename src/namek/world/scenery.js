@@ -101,6 +101,13 @@ const PALETA = {
   porta: new THREE.Color("#26403f"),
 };
 
+/* m — célula do índice espacial das peças (`indexarProps`). 32 m é maior que a
+   maior peça (a casa tem 3,6 m de raio) e pequeno o bastante para a lista de
+   uma célula ser curta. */
+const PROP_CELL = 32;
+/** Empacota a célula num inteiro, como o índice de crateras do campo faz. */
+const chaveProp = (ix, iz) => ((ix + 2048) << 16) | (iz + 2048);
+
 const _obj = new THREE.Object3D();
 const _cor = new THREE.Color();
 
@@ -453,6 +460,8 @@ export class NamekScenery {
 
     /** @type {Array<object>} a lista que outros sistemas leem. Ver `props`. */
     this._props = [];
+    /** @type {Map<number, object[]>|null} grade espacial. Ver `indexarProps`. */
+    this._propGrid = null;
     /** Por tipo, para `breakProp(kind, i)` achar em O(1). */
     this._porTipo = { rocha: [], arvore: [], casa: [] };
     this.malhas = [];
@@ -474,8 +483,45 @@ export class NamekScenery {
     this.montarArvores(vilas);
     this.montarRochas(vilas);
     this.montarDetritos();
+    this.indexarProps();
 
     return this;
+  }
+
+  /* ------------------------------------------------- índice das peças ----- */
+
+  /**
+   * Grade espacial das peças, para o projétil achar o que tem à frente sem
+   * varrer as ~300 do cenário.
+   *
+   * Construída no fim do `build`, quando `_props` já está completa, e nunca
+   * mais tocada: peça derrubada CONTINUA no índice, com `vida` zero, porque
+   * tirá-la custaria uma remoção de lista a cada queda e quem consulta já
+   * precisa testar `vida` de qualquer jeito.
+   */
+  indexarProps() {
+    this._propGrid = new Map();
+    for (const p of this._props) {
+      const r = p.raio;
+      const ix0 = Math.floor((p.x - r) / PROP_CELL);
+      const ix1 = Math.floor((p.x + r) / PROP_CELL);
+      const iz0 = Math.floor((p.z - r) / PROP_CELL);
+      const iz1 = Math.floor((p.z + r) / PROP_CELL);
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iz = iz0; iz <= iz1; iz++) {
+          const k = chaveProp(ix, iz);
+          let lista = this._propGrid.get(k);
+          if (!lista) this._propGrid.set(k, (lista = []));
+          lista.push(p);
+        }
+      }
+    }
+  }
+
+  /** As peças que podem alcançar (x, z), ou null. Lista curta, para varrer. */
+  propsNear(x, z) {
+    if (!this._propGrid) return null;
+    return this._propGrid.get(chaveProp(Math.floor(x / PROP_CELL), Math.floor(z / PROP_CELL))) ?? null;
   }
 
   /**
@@ -1036,6 +1082,7 @@ export class NamekScenery {
     this._porTipo = { rocha: [], arvore: [], casa: [] };
     this.pedacos = null;
     this.detritos = null;
+    this._propGrid = null;
     this.malhas = [];
     this.root = null;
   }

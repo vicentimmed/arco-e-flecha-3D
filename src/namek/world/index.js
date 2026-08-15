@@ -181,6 +181,14 @@ export class NamekWorld {
   }
 
   /**
+   * As peças que podem alcançar (x, z). É o que permite a um projétil parar
+   * numa pedra em vez de atravessá-la — ver `NamekScenery.indexarProps`.
+   */
+  propsNear(x, z) {
+    return this.scenery?.propsNear(x, z) ?? null;
+  }
+
+  /**
    * Derruba uma peça do cenário.
    * @param {"rocha"|"arvore"|"casa"} kind
    * @param {number} index índice em `props` dentro daquele tipo

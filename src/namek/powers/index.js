@@ -365,7 +365,7 @@ export class PowerSystem {
    * @returns {{acertos:Array, queimando:Array, chao:Array, empurroes:Array}}
    *          — REUSADO a cada quadro. Ver o §3 do cabeçalho.
    */
-  update(dt, alvos, localId) {
+  update(dt, alvos, localId, cenario = null) {
     const passo = dt > PASSO_MAX ? PASSO_MAX : dt;
     const lista = alvos ?? SEM_ALVOS;
 
@@ -375,7 +375,7 @@ export class PowerSystem {
     this.filaEmpurroes.limpar();
     this._luzPedido.forca = 0;
 
-    this.blasts.update(passo, lista, localId, this.relato);
+    this.blasts.update(passo, lista, localId, this.relato, cenario);
     this.beams.update(passo, lista, localId, this.relato);
     this.disks.update(passo, lista, localId, this.relato);
     this.genkis.update(passo, lista, localId, this.relato);

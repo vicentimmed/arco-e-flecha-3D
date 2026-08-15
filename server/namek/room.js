@@ -956,6 +956,12 @@ export class NamekRoom {
          §12: quem entra no meio vê o chão já deformado, e não um planeta liso
          que ninguém mais está vendo. */
       craters: this.field.craterList(),
+      /* AS PEÇAS JÁ DERRUBADAS. Mesmo motivo da lista de crateras logo acima, e
+         a ausência disto era um furo real: quem entrava no meio via de pé as
+         rochas, ajisas e casas que todo mundo já tinha destruído, e continuava
+         batendo nelas com o projétil enquanto os outros atiravam através do
+         lugar vazio. `propsCaidos` já guarda tudo, só não viajava. */
+      props: [...this.propsCaidos],
       scores: this.scores(),
     });
 

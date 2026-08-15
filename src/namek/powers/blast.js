@@ -332,7 +332,7 @@ export class BlastPool {
    * @param {number|string} localId quem é o dono desta tela
    * @param {object} relato o cartório de acontecimentos
    */
-  update(dt, alvos, localId, relato) {
+  update(dt, alvos, localId, relato, cenario) {
     const B = NAMEK.blast;
     const H = NAMEK.blast.homing;
     const duracaoHoming = H.duration;
@@ -398,8 +398,7 @@ export class BlastPool {
           break;
         }
 
-        /* O CHÃO. Só ele para a bola — o resto do cenário é assunto do
-           `PROP_HIT`, que não passa por aqui. */
+        /* O CHÃO. */
         if (y < TETO_DO_RELEVO && y <= this.field.heightAt(x, z)) {
           this.estourar(x, y, z, true);
           if (this.dono[i] === localId) {
@@ -412,6 +411,46 @@ export class BlastPool {
           }
           morreu = true;
           break;
+        }
+
+        /* AS PEÇAS DO CENÁRIO — rocha, ajisa, casa.
+         *
+         * Antes só o chão parava a bola, e a consequência era que um tiro
+         * mirado numa pedra a ATRAVESSAVA e ia estourar no chão atrás dela. A
+         * peça até caía, mas por tabela: o `derrubarPorPerto` do estouro lá
+         * atrás a alcançava se estivesse dentro do raio.
+         *
+         * Parando aqui, o estouro acontece NA peça — e como quem trata o
+         * evento de chão é o mesmo `derrubarPorPerto` de sempre, ela cai e a
+         * cratera abre no ponto certo, sem nenhuma mensagem nova de rede.
+         *
+         * O teste é contra a lista curta da célula (`propsNear`), não contra
+         * as ~300 peças do cenário. */
+        if (cenario && y < TETO_DO_RELEVO) {
+          const perto = cenario.propsNear(x, z);
+          if (perto) {
+            for (let k = 0; k < perto.length; k++) {
+              const p = perto[k];
+              if (p.vida <= 0) continue;
+              const dx = p.x - x;
+              const dy = p.y - y;
+              const dz = p.z - z;
+              const alcance = p.raio + B.radius;
+              if (dx * dx + dy * dy + dz * dz > alcance * alcance) continue;
+              this.estourar(x, y, z, true);
+              if (this.dono[i] === localId) {
+                const e = relato.chao();
+                e.owner = this.dono[i];
+                e.p.x = x;
+                e.p.y = y;
+                e.p.z = z;
+                e.power = B.power;
+              }
+              morreu = true;
+              break;
+            }
+            if (morreu) break;
+          }
         }
       }
 

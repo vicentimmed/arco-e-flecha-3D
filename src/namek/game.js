@@ -118,6 +118,18 @@ export class NamekGame {
         this.net.disconnect();
         location.reload();
       },
+      /* O ÚNICO lugar que reage a "o menu abriu ou fechou" — não importa se
+         foi o Esc, o clique no fundo, ou outro botão que venha a existir. O
+         menu chama isto de DENTRO do próprio `toggle`, então nenhum caminho
+         de fechar escapa da sincronização (ver o comentário em `ui/menu.js`). */
+      aoAlternar: (aberto) => {
+        this.input.setMenuOpen(aberto);
+        this.hud.showHelp(aberto);
+        if (aberto) {
+          this.menu.setRoster(this.remotes.byId.size + 1, this.botCount());
+          this.menu.setWeather(this.weather);
+        }
+      },
     });
     /** Clima em cena, só para o menu acender o botão certo. */
     this.weather = NAMEK.weather.padrao;
@@ -845,14 +857,7 @@ export class NamekGame {
     /* O MENU, antes de tudo. Ele solta o ponteiro e cala o teclado do jogo (é o
        que `setMenuOpen` faz lá dentro), então tratá-lo depois das ações deixaria
        um quadro de comandos passando por baixo da tela aberta. */
-    if (acoes.menuPressed) {
-      this.input.setMenuOpen(this.menu.toggle());
-      this.hud.showHelp(this.menu.aberto);
-      if (this.menu.aberto) {
-        this.menu.setRoster(this.remotes.byId.size + 1, this.botCount());
-        this.menu.setWeather(this.weather);
-      }
-    }
+    if (acoes.menuPressed) this.menu.toggle();
 
     /* ---------------------------------------------------------- morto --- */
     if (this.down) {

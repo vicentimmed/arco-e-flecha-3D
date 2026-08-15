@@ -178,12 +178,24 @@ export class NamekMenu {
     this.el.addEventListener("click", this._fundo);
   }
 
-  /** @param {boolean} [forcar] omitido alterna */
+  /**
+   * @param {boolean} [forcar] omitido alterna
+   *
+   * TODO SEGUINTE PASSA POR AQUI, e é por isso que `acoes.aoAlternar` é
+   * chamado aqui dentro e não em quem chama `toggle`. Havia um bug em que o
+   * Esc (via `NamekGame.step`) destravava o teclado e fechava a ficha de
+   * controles, mas o clique no FUNDO (`_fundo`, abaixo) chamava `toggle`
+   * direto — fechava só o cartão do menu, e a ficha de controles e o teclado
+   * travado ficavam presos porque ninguém mais avisava `hud.showHelp` e
+   * `input.setMenuOpen`. Com o aviso aqui dentro, todo jeito de abrir ou
+   * fechar o menu — Esc, fundo, ou o que vier depois — passa pelo mesmo cano.
+   */
   toggle(forcar) {
     const novo = forcar === undefined ? !this.aberto : forcar;
     if (novo === this.aberto) return this.aberto;
     this.aberto = novo;
     this.el.hidden = !novo;
+    this.acoes.aoAlternar?.(novo);
     return this.aberto;
   }
 

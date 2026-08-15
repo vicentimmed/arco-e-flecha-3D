@@ -570,6 +570,60 @@ documento é o seguinte:
   simulado passa a poder gastar um especial a cada N acertos, e a saída
   compara as duas partidas.
 
+### 4.9 Fácil, normal e difícil
+
+Tudo acima descreve o **normal**, e ele não mudou uma vírgula: os três níveis
+são multiplicadores sobre as tabelas do §4.3, e o normal tem todos em 1,00.
+
+```
+rochas  = ceil( base × escalaDeJogadores × mix )
+gap     = base × gap  ÷ escalaDeJogadores
+tanque  = round( base × tank × (1 + 1,00 × (N − 1)) )
+```
+
+| nível | `mix` | `gap` | `tank` | vitórias (1 jogador, 200 partidas) |
+|---|---|---|---|---|
+| fácil | 0,60 | 1,25 | 0,75 | 97,5 % |
+| normal | 1,00 | 1,00 | 1,00 | 87,5 % |
+| difícil | 1,45 | 0,80 | 1,00 | 53,0 % |
+
+**`gap` anda junto com `mix`, e é o que impede o difícil de ser só mais longo.**
+A dificuldade deste modo é concorrência (§4.2) — `prazo de queda ÷ intervalo` —,
+e esse número não sabe quantas rochas a horda tem. Mexer só na contagem
+produziria uma horda maior com exatamente a mesma pressão.
+
+**`fallSpeeds` não entra em nenhum nível.** O prazo de queda de cada rocha é o
+mesmo nos três, então a antecipação do §3.3 é aprendida uma vez e vale em todos.
+Muda o volume e o ritmo da chuva; não muda a conta que o jogador faz.
+
+**O `tank` é torto de propósito, e as duas pontas foram medidas.**
+
+O colosso é a única parte do modo que `mix` e `gap` não alcançam: uma rocha só,
+com janela de queda fixa. Cada ponta precisou ser verificada por si.
+
+* **Para cima não há espaço.** O abate já consome de 75 % a 83 % da janela no
+  normal (§4.3). A 1,20 passa de 99 %, a 1,30 chega a 109 % — um colosso que um
+  arqueiro sozinho não mata nem acertando tudo. Medido: **0 % de vitórias**, com
+  188 das 200 derrotas paradas na horda 3. O difícil ficou em 1,00 e toda a
+  dificuldade dele vem da chuva, que era o pedido.
+* **Para baixo ele é obrigatório.** Com o colosso intocado, o fácil mede **84,5 %**
+  contra os 87,5 % do normal — o fácil sairia mais difícil que o normal. O
+  motivo está à vista na distribuição das derrotas: quem perde neste modo perde
+  no colosso e na horda 10, e aliviar a chuva não toca em nenhum dos dois.
+
+Com 4 e com 6 jogadores os três níveis vencem 100 % das partidas, e o que separa
+os níveis passa a ser a **margem mínima** — 8,6 s no fácil, 3,3 s no normal e
+2,1 s no difícil. É a mesma métrica que calibrou o `playerScale` do §4.4, e pelo
+mesmo motivo: em grupo a taxa de vitória satura e deixa de informar. O teto do
+§4.5 não morde em nenhum nível (pico de 8 rochas no ar com 6 arqueiros no
+difícil).
+
+**Onde a escolha vive.** É da SALA, como o modo e a fase — as rochas caem na base
+de todo mundo. Trocar de nível recomeça a chuva da horda 1, sempre: meia horda
+dimensionada para um nível e meia para outro não é nenhum dos dois. As três
+portas são botões sem tecla no menu de comandos, e o nível aparece na faixa do
+modo ao entrar e no chip pelo resto da partida.
+
 ---
 
 ## 5. O retorno na tela — o bloco que decide se o modo é justo
@@ -660,6 +714,7 @@ partida acabou. Melhor recusar e pedir recarga.
 | | conteúdo | nota |
 |---|---|---|
 | `C2S.METEOR_HIT` | `{ id, d }` | "acertei esta rocha". `d` só alimenta o texto de distância. Quem atirou é a autoridade sobre o próprio acerto — o contrato do jogo —, mas quem decide se a rocha estourou é a sala. |
+| `C2S.METEOR_DIFFICULTY` | `{ level }` | fácil, normal ou difícil (§4.9). **Entra no modo e recomeça a chuva**, sempre — não é um ajuste aplicado à partida em curso, e por isso não existe uma segunda mensagem de "entrar" a combinar com esta. O `level` é peneirado no servidor: o que não estiver na tabela vira o padrão. |
 
 **Servidor → cliente**
 
@@ -669,7 +724,7 @@ partida acabou. Melhor recusar e pedir recarga.
 | `S2C.METEOR_HIT` | `{ id, by, left, p }` | evento |
 | `S2C.METEOR_BURST` | `{ id, p, seed, r }` | evento |
 | `S2C.METEOR_IMPACT` | `{ p }` | evento |
-| `S2C.METEOR_STATUS` | `{ horde, hordes, rocks, next, tank, startsAt }` | ao mudar |
+| `S2C.METEOR_STATUS` | `{ horde, hordes, rocks, next, tank, startsAt, difficulty }` | ao mudar |
 | `S2C.METEOR_OVER` | `{ reason: "win"\|"impact", horde, ranking? }` | evento |
 
 `S2C.HORDE` é **reaproveitada** para a faixa, com um campo `kind: "meteor"` — é a

@@ -110,8 +110,15 @@
  * nenhum: muralha, portão rachando sozinho e a partida terminando sem que nada
  * tenha aparecido na tela. É o pior tipo de incompatibilidade — a que não
  * levanta erro — e é exatamente o que a versão existe para evitar.
+ *
+ * 21 — a CHUVA DE METEOROS ganhou fácil, normal e difícil, e com eles o
+ * `C2S.METEOR_DIFFICULTY`. Pelo mesmo motivo do item 17: nada quebra alto. Uma
+ * aba antiga não tem os botões, mas continua jogando — e é aí que está o
+ * problema, porque a dificuldade é da SALA. Ela jogaria o difícil de todo mundo
+ * chamando aquilo de chuva normal, sem nada na tela dizendo o contrário, e o
+ * relato que chegaria seria "o modo ficou impossível do nada".
  */
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -177,6 +184,18 @@ export const C2S = {
   /** "Acertei esta rocha": `{ id, d, kame? }`. Quem atira é a autoridade sobre
    *  o próprio acerto; quem decide se ela estourou é a sala. */
   METEOR_HIT: "meteorHit",
+  /** Chuva de meteoros em fácil, normal ou difícil: `{ level }`.
+   *
+   *  ENTRA NO MODO e recomeça a chuva, sempre — não é um ajuste que se aplica à
+   *  partida em curso. Meia horda dimensionada para um nível e meia para outro
+   *  não é nenhum dos dois, e o único desfecho honesto de trocar de nível é
+   *  começar de novo. É por isso que a mensagem é uma só, e não um "ajuste" a
+   *  ser combinado com um `C2S.MODE` que o cliente teria de lembrar de mandar.
+   *
+   *  Vale para a SALA inteira, como o modo e a fase: as rochas caem na base de
+   *  todo mundo. Não confundir com o `BOT_DIFFICULTY`, que é a pontaria dos
+   *  bots — aqui é o tamanho e o ritmo da chuva. */
+  METEOR_DIFFICULTY: "meteorDifficulty",
   /** "Disparei o especial": `{ o:[x,y,z], d:[x,y,z], w }`.
    *  A direção é TRAVADA aqui — girar depois não entorta o feixe. */
   KAME: "kame",

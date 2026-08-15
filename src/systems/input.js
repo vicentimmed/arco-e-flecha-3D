@@ -102,6 +102,12 @@ export class Input {
       askRespawn: false, // K — renascer noutro lugar
       askResetScores: false, // Y — zerar o placar de todos
       setMode: null, // "free" | "duel" | "boarHunt"
+      /* A chuva de meteoros COM NÍVEL: "easy" | "normal" | "hard".
+         Separada do `setMode` porque carrega um segundo dado, e porque entrar
+         nela por aqui é sempre um recomeço no nível pedido — enquanto o
+         `setMode: "meteorRain"` do Shift+9 entra no nível que a sala já tem.
+         Só o menu escreve neste campo: não há tecla, e é o pedido. */
+      setMeteorRain: null,
       setLevel: null, // "valley" | "moon" — a FASE, não o modo
       toggleBot: null, // "add" | "remove" — adversário de CPU
       cycleBotDifficulty: 0, // N: +1 avança, Shift+N volta, 0 = nada
@@ -616,6 +622,7 @@ export class Input {
     a.doMenu = false;
     a.jumpReleased = false;
     a.setMode = null;
+    a.setMeteorRain = null;
     return snapshot;
   }
 }

@@ -12,6 +12,15 @@
 
 import { radToDeg } from "../utils/math.js";
 
+/**
+ * Os níveis da chuva de meteoros, por extenso. Ver `difficulties` no config.
+ *
+ * A tabela é do HUD e não do config porque o config guarda NÚMEROS — quanto
+ * cada nível multiplica —, e o que se escreve na tela é outra coisa: uma
+ * palavra em português, que muda com o idioma e não com o balanceamento.
+ */
+const NIVEIS_DA_CHUVA = { easy: "FÁCIL", normal: "NORMAL", hard: "DIFÍCIL" };
+
 /** Um trecho de texto puro. Nunca `innerHTML`: nomes vêm da rede. */
 function texto(conteudo, classe = "") {
   const span = document.createElement("span");
@@ -97,6 +106,21 @@ const ATALHOS = [
          voltar sem recarregar a página. O menu resolve isso sem gastar tecla:
          `kbd: false` desenha a linha só com o botão. */
       [[], "cerco ao castelo", ["setMode", "siege"]],
+      /* A CHUVA APARECE COMO TRÊS LINHAS, e não como uma linha mais um ajuste
+         em outro canto.
+       *
+       * Escolher o nível é a MESMA decisão que entrar no modo — ninguém quer
+       * "a chuva" e descobre a dificuldade depois —, e duas decisões que se
+       * tomam juntas devem caber num gesto. Cada botão entra e recomeça no
+       * nível pedido; ver `C2S.METEOR_DIFFICULTY`.
+       *
+       * NENHUMA DAS TRÊS MOSTRA TECLA, e o Shift+9 que existe não vai em
+       * nenhuma delas de propósito: ele entra na chuva no nível que a SALA já
+       * tem, que não é o que qualquer uma destas linhas promete. Uma dica de
+       * tecla ao lado de "fácil" ensinaria um atalho que faz outra coisa. */
+      [[], "chuva de meteoros: fácil", ["setMeteorRain", "easy"]],
+      [[], "chuva de meteoros: normal", ["setMeteorRain", "normal"]],
+      [[], "chuva de meteoros: difícil", ["setMeteorRain", "hard"]],
     ],
   },
   {
@@ -626,7 +650,7 @@ export class HUD {
      * arena nova — e deixar o menu por cima disso o obrigaria a fechá-lo às
      * cegas. Todo o resto (bot, porco, música, traçado) é justamente o que se
      * quer encadear sem fechar nada. */
-    this.comandosQueFecham = new Set(["setMode", "setLevel"]);
+    this.comandosQueFecham = new Set(["setMode", "setLevel", "setMeteorRain"]);
     /** Chamado ao abrir e ao fechar, para o input soltar/retomar o ponteiro. */
     this.onCommandMenuToggle = null;
     this.el.cmdCorpo.appendChild(
@@ -806,8 +830,14 @@ export class HUD {
    * O convite precisa ser visível e dizer o que fazer: uma tecla que só
    * funciona quando outra pessoa também aperta é invisível sem isto, e ninguém
    * descobriria o duelo sozinho.
+   *
+   * @param {string|null} [difficulty] o nível da chuva, quando o modo é ela.
+   *   Aparece na faixa porque a faixa é o que se lê ao ENTRAR, que é o instante
+   *   em que a pergunta "em qual nível?" tem resposta útil — depois de a
+   *   primeira rocha cair já é tarde para descobrir. O chip carrega o mesmo
+   *   dado pelo resto da partida.
    */
-  setMode(mode, invites = [], needed = 2, selfId = null, level = "valley") {
+  setMode(mode, invites = [], needed = 2, selfId = null, level = "valley", difficulty = null) {
     const banner = this.el.modeBanner;
     banner.replaceChildren();
 
@@ -875,6 +905,15 @@ export class HUD {
         }[mode] ?? mode.toUpperCase(),
         "forte",
       ),
+    );
+    /* O NÍVEL COMO TERCEIRO PEDAÇO DA FAIXA, com o mesmo peso do lugar e do
+       modo: "LUA · CHUVA DE METEOROS · DIFÍCIL". Não é adorno — numa sala, quem
+       não clicou no botão precisa saber em que nível o outro acabou de pôr
+       todo mundo, e a faixa é a única coisa que ele lê ao entrar. */
+    if (mode === "meteorRain" && NIVEIS_DA_CHUVA[difficulty]) {
+      banner.append(texto("   ·   "), texto(NIVEIS_DA_CHUVA[difficulty], "forte"));
+    }
+    banner.append(
       texto(
         mode === "lastStand"
           ? "   uma vida só · quem sobrar ganha · 1 para sair"
@@ -1209,7 +1248,13 @@ export class HUD {
       return;
     }
     chip.hidden = false;
-    this.el.zombieHordeLabel.textContent = "Chuva";
+    /* O NÍVEL VIVE NO RÓTULO do chip, e não num chip novo. A faixa que o
+       anuncia ao entrar some em segundos; o que sobra pelo resto da partida é
+       isto, e "Chuva" sozinho não responde a pergunta que aparece na horda 7
+       quando o céu está pesado — se aquilo é o difícil ou se a pessoa está
+       jogando mal o normal. Minúscula porque é rótulo, e rótulo não grita. */
+    const nivel = NIVEIS_DA_CHUVA[estado.difficulty]?.toLowerCase() ?? null;
+    this.el.zombieHordeLabel.textContent = nivel ? `Chuva · ${nivel}` : "Chuva";
     this.el.zombieLeftLabel.textContent = estado.tank ? "Alvo" : "Rochas";
     this.el.zombieHorde.textContent = `${estado.horde} / ${estado.hordes}`;
     this.el.zombieLeft.textContent = estado.tank ? "COLOSSO" : String(estado.rocks ?? 0);

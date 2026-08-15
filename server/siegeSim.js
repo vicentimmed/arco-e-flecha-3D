@@ -328,7 +328,7 @@ export class Siege {
     this.gateAlive = true;
     this.t = 0;
     this.espera = S.startDelay;
-    this.players = Math.max(1, nPlayers);
+    this.setPlayers(nPlayers);
     this.tiersOut = new Set();
     this.criticalTime = 0;
     this.pendentes = [];
@@ -437,7 +437,54 @@ export class Siege {
     const i = Math.floor(m);
     const f = m - i;
     const base = tab[i] + (tab[Math.min(i + 1, tab.length - 1)] - tab[i]) * f;
-    return base * this.tide(fase) * Math.pow(S.playerGapScale, this.players - 1);
+    return base * this.tide(fase) * this.escalaDeDefensores();
+  }
+
+  /**
+   * O QUANTO A GUARNIÇÃO APERTA A CURVA — e é isto que faz o modo caber tanto
+   * num defensor sozinho quanto num adarve cheio.
+   *
+   * `gapBase` descreve o cerco de UM defensor. Cada defensor a mais é um arco a
+   * mais na muralha, e sem apertar nada o segundo jogador dobraria a capacidade
+   * de abate sem dobrar coisa alguma do outro lado: era isso que fazia a
+   * diferença entre "impossível" e "trivial" caber em um único participante de
+   * distância, medida no banco de provas.
+   *
+   * A lei é uma POTÊNCIA de N, e não o `s^(N−1)` geométrico que estava aqui. A
+   * razão é que a capacidade cresce LINEARMENTE — cada arqueiro é um arco —, e
+   * só uma potência acompanha isso: o fator geométrico de 0,85 dava ×1,38 de
+   * pressão para ×3 de poder de fogo, ou seja, cada reforço deixava o cerco
+   * mais fácil em vez de apenas maior.
+   *
+   * O expoente fica em torno de 1, e o ajuste fino dele mora em `CONFIG` (ver
+   * `playerGapExp`, que carrega as medições). O que esta função garante é o
+   * sinal da conta, que é o que estava errado: mais gente no adarve é mais
+   * cerco, nunca menos.
+   *
+   * @param {number} [n] quantos defensores, se não os desta partida
+   */
+  escalaDeDefensores(n = this.players) {
+    const S = CONFIG.modes.siege;
+    return Math.pow(Math.max(1, n), -S.playerGapExp);
+  }
+
+  /**
+   * A guarnição mudou de tamanho no meio do cerco.
+   *
+   * Chega tanto de gente entrando na sala quanto da tecla `B` — e as duas coisas
+   * têm de valer o mesmo, porque o portão não sabe distinguir um arco de CPU de
+   * um arco humano.
+   *
+   * O QUE JÁ ESTÁ MARCADO NÃO MUDA, e é de propósito. A fila de chegadas corre
+   * uma travessia (~84 s) à frente do relógio: quem já saiu da linha de árvores
+   * está na rampa, à vista, e reescrever a hora dele seria mover gente que o
+   * jogador está olhando. O reforço aperta a curva DO HORIZONTE EM DIANTE, que
+   * é o mesmo critério da chuva de meteoros — lá uma horda em curso também
+   * nunca é remexida. Na prática: quem chama dois bots vê a rampa engrossar no
+   * minuto seguinte, não no segundo seguinte.
+   */
+  setPlayers(n) {
+    this.players = Math.max(1, n | 0);
   }
 
   /**
@@ -693,14 +740,21 @@ export class Siege {
     const A = CONFIG.modes.siege.opening;
     if (!A?.count) return;
     const viagem = this.viagem(A.kind);
+    /* A COLUNA TAMBÉM É DA GUARNIÇÃO, pela mesma conta de `gapAtual`: ela é o
+       primeiro minuto e meio de pressão, e um primeiro minuto e meio calibrado
+       para três arqueiros é uma sentença para um. O que NÃO muda é a contagem —
+       dezoito continuam saindo do bosque, e é a contagem que faz a coluna ser
+       uma coluna. O que muda é o passo dela, exatamente como no resto da curva:
+       sozinho, a mesma coluna leva o dobro do tempo para desfilar. */
+    const passo = A.gap * this.escalaDeDefensores();
     for (let i = 0; i < A.count; i++) {
-      const chegada = this.abertura + i * A.gap;
+      const chegada = this.abertura + i * passo;
       this.pendentes.push({ kind: A.kind, chegada, nascimento: chegada - viagem });
     }
     /* O acumulador salta para o fim da coluna. Sem isto o fluxo normal começaria
        a marcar chegadas POR CIMA das dela, e o portão receberia as duas coisas
        somadas — que é o dobro da pressão que a curva descreve. */
-    this.ultimaChegada = this.abertura + (A.count - 1) * A.gap;
+    this.ultimaChegada = this.abertura + (A.count - 1) * passo;
   }
 
   /* ------------------------------------------------------------ nascimento -- */

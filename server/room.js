@@ -71,7 +71,7 @@ import { ElkHunt } from "./elkSim.js";
 import { ElkWolfPack } from "./elkWolves.js";
 import { BirdFlock } from "./birdSim.js";
 import { ZombieNight } from "./zombieSim.js";
-import { MeteorRain } from "./meteorSim.js";
+import { MeteorRain, meteorDifficultyOf } from "./meteorSim.js";
 import { Siege } from "./siegeSim.js";
 import { BatSwarm } from "./batSim.js";
 import { TargetSeries } from "./targetSeries.js";
@@ -1706,20 +1706,21 @@ export class Room {
       if (horda) this.broadcastAll({ t: S2C.HORDE, ...horda });
       this.broadcastZombieStatus();
     } else if (isSiegeMode(modo)) {
-      /* SOZINHO O CERCO NÃO FECHA — e isso é medido, não achado.
+      /* O CERCO ENTRA VAZIO — a guarnição é convite, não requisito.
        *
-       * `scripts/bench-cerco.js` dá 0 % de vitórias com um defensor e 80 % com
-       * três. Não é curva mal ajustada: um arco mata um soldado a cada 5,1 s, e
-       * a curva termina pedindo um abate por segundo. A diferença tem de vir de
-       * mais gente na muralha, e é isso que os arqueiros de CPU são aqui — não
-       * adversários, como no duelo, mas a guarnição.
+       * Ele nascia forçando dois bots, e a justificativa era medida: o banco de
+       * provas dava 0 % de vitórias com um defensor e 80 % com três. O que
+       * aquela medição descrevia, porém, não era o modo — era a CURVA, que
+       * havia sido calibrada contra a sala de três que esta linha criava. Com
+       * `gapBase` reancorada no defensor sozinho e a pressão passando a escalar
+       * com quem está no muro (ver `playerGapExp`), o solitário mede 75 % e os
+       * bots deixam de ser a calibragem para voltar a ser o que a tecla B é em
+       * todo outro modo: uma escolha de quem joga.
        *
-       * Dois é o mínimo que põe a partida na faixa jogável; quem quiser mais
-       * aperta B, como em qualquer outro modo. */
+       * Quem quiser a guarnição de antes aperta B duas vezes — e recebe
+       * praticamente a partida de antes, porque é em N = 3 que a curva nova e a
+       * velha se encontram (97 % contra os 100 % de então). */
       for (const p of this.players.values()) p.zDownUntil = 0;
-      while (this.players.size + this.bots.count < 3) {
-        if (!this.addBot()) break;
-      }
       this.repairing.clear();
       for (const t of this.trebuchets) {
         t.pronto = 0;
@@ -3005,6 +3006,17 @@ export class Room {
       horde: this.meteors.horde,
       hordes: M.hordes,
       rocks: this.meteors.vivos + this.meteors.pending.length,
+      /* O NÍVEL VIAJA COM O ESTADO, e não numa mensagem própria.
+       *
+       * Ele muda uma vez por partida, junto com o começo da chuva — que é
+       * exatamente quando este pacote já sai. Uma mensagem separada seria um
+       * segundo caminho para a mesma notícia, com a chance de os dois chegarem
+       * fora de ordem e a tela anunciar "difícil" sobre uma chuva fácil.
+       *
+       * E, de graça, resolve quem chega no meio: o `snapshot` já carrega este
+       * bloco inteiro, então um retardatário lê o nível da sala sem uma linha
+       * escrita para o caso dele. */
+      difficulty: this.meteors.dificuldade,
       tank: this.meteors.tankAtivo,
       /* A VIDA DO COLOSSO, para a barra do HUD.
        *
@@ -3100,6 +3112,22 @@ export class Room {
     if (this.siege.over) return;
     const S = CONFIG.modes.siege;
     const dt = this.boarStep;
+
+    /* A GUARNIÇÃO É CONTADA A CADA PASSO, e não congelada no `start`.
+     *
+     * É o que faz "chamar dois bots" e "chegar mais um jogador" serem a mesma
+     * coisa para o portão — que é a verdade: o sitiante não sabe distinguir um
+     * arco de CPU de um arco humano, e o que ele sente é quantas flechas descem
+     * do adarve. Sem isto, entrar sozinho e apertar B três vezes daria quatro
+     * arqueiros defendendo o cerco de um, que é a partida vazia; e alguém saindo
+     * no meio deixaria o cerco de quatro nas mãos de quem sobrou.
+     *
+     * Mesma escolha da chuva de meteoros (ver `tickMeteors`), e pela mesma razão
+     * de lá: a partida dura dez minutos e entrar no meio é o normal. O efeito
+     * não é instantâneo, e isso também é de propósito — a fila de chegadas corre
+     * uma travessia à frente, então o reforço aperta a rampa do horizonte em
+     * diante, não em cima de quem já está subindo. Ver `Siege.setPlayers`. */
+    this.siege.setPlayers(this.players.size + this.bots.count);
 
     /* Trabucos: içam sozinhos, ou mais rápido com alguém na manivela. Quem
        está na manivela não está atirando — é a troca central do modo.
@@ -4695,6 +4723,21 @@ export class Room {
           ? this.bots.setDifficulty(msg.level)
           : this.bots.cycleDifficulty(msg.step === -1 ? -1 : 1);
         this.broadcastAll({ t: S2C.BOT_DIFFICULTY, level: nivel });
+        break;
+      }
+
+      case C2S.METEOR_DIFFICULTY: {
+        /* Grava PRIMEIRO, entra depois: `requestMode` termina em `setMode`, que
+           chama `meteors.start()` — e o `start` lê a dificuldade de dentro do
+           próprio simulador. Invertida, a ordem faria a primeira chuva sair no
+           nível anterior e só a segunda obedecer ao botão. */
+        this.meteors.dificuldade = meteorDifficultyOf(msg.level);
+        this.log(`chuva de meteoros: ${this.meteors.dificuldade}`);
+        /* Sempre pelo caminho normal de entrada no modo, mesmo já estando nele:
+           é ele que faz o preparo coordenado, põe todo mundo na linha e começa
+           a chuva da horda 1. Trocar de nível no meio de uma horda dimensionada
+           pelo nível anterior não daria nenhum dos dois modos. */
+        this.requestMode(player, "meteorRain");
         break;
       }
 

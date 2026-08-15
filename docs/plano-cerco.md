@@ -420,9 +420,24 @@ dois nascimentos (§4.2).
   interpolação numa tabela de 21 pontos, um por minuto. Tabela, e não fórmula,
   pela razão de sempre neste projeto: é a tabela que o banco de provas consegue
   corrigir num ponto só sem reescrever a curva inteira.
-* **`escalaJogadores`** = `0,85^(N−1)`, o mesmo `playerGapScale` do modo zumbi, e
-  sublinear pela mesma razão: quatro arqueiros somam poder de fogo, mas dividem
-  34 m de muro e disputam a mesma linha de tiro.
+* **`escalaJogadores`** = `N^−1,05` (`playerGapExp`), e `gapBase` é a curva de
+  **um** defensor.
+
+  Era `0,85^(N−1)`, emprestado do modo zumbi, e o empréstimo estava errado por
+  uma razão que só apareceu quando o banco de provas mediu as duas pontas: a
+  capacidade de abate cresce **linearmente** com N — cada defensor é um arco —,
+  e um fator geométrico de 0,85 devolvia ×1,38 de pressão para ×3 de poder de
+  fogo. O resultado é que cada reforço deixava o cerco mais fácil: 0 % de
+  vitórias sozinho, 100 % com três, sem degrau no meio. Era por isso que a sala
+  precisava forçar dois bots na entrada do modo — eles não eram ajuda, eram a
+  calibragem.
+
+  Com a potência, a pressão por defensor é constante e o número de arcos na
+  muralha deixa de mudar a dificuldade do modo, que é o que ele sempre quis
+  dizer. Medido: 75 % sozinho, 74 % em dupla, 97 % com três. O que os defensores
+  dividem (34 m de muro, a mesma linha de tiro) continua sendo cobrado, mas do
+  outro lado da conta — quem larga a muralha para içar o trabuco ou remendar o
+  portão não está atirando, e é isso que faz o quarto valer menos que o primeiro.
 
 ### 4.2 Agendado pela CHEGADA — de novo
 
@@ -854,9 +869,18 @@ muralha** sem código de comportamento novo — só um alvo diferente e a posiç
 travada.
 
 Isso importa mais aqui do que nos outros modos: o cerco com um jogador só é uma
-pessoa cobrindo 34 m de muro, e a curva de pressão do §4.1 escala por `N`. Com
-dois bots, o solo joga a mesma partida que o quarteto — e o quarteto continua
-sendo melhor, porque bot não vai à manivela nem repara portão.
+pessoa cobrindo 34 m de muro, e a curva de pressão do §4.1 escala por `N`.
+
+**Eles são convite, não requisito.** O modo entrava criando dois bots à força, e
+a razão era a curva mal escalada que o §4.1 descreve — sem eles, o solitário
+perdia 40 de 40 partidas. Corrigida a escala, o cerco entra vazio e os bots
+voltam a ser o que a tecla `B` é em todo outro modo: uma escolha de quem joga. O
+sitiante não distingue um arco de CPU de um arco humano, então chamar um bot e
+receber um jogador valem a mesma coisa para o portão — e as duas coisas são
+contadas a cada passo (`Room.tickSiege`), não congeladas no começo da partida.
+
+O quarteto continua sendo melhor que o solo, porque bot não vai à manivela nem
+repara portão.
 
 ---
 

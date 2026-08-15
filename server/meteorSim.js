@@ -32,6 +32,22 @@ const faixa = (min, max) => min + Math.random() * (max - min);
 const r = (v) => Math.round(v * 100) / 100;
 
 /**
+ * O nome de um nível de dificuldade, peneirado.
+ *
+ * Todo caminho que chega aqui vem da REDE (`C2S.METEOR_DIFFICULTY`), e uma
+ * chuva dimensionada por um campo que o cliente escolheu seria uma sala inteira
+ * refém de quem digitou qualquer coisa no console. O que não estiver na tabela
+ * vira o padrão, calado — não há nada de útil a dizer a quem mandou lixo.
+ *
+ * @param {unknown} nivel
+ * @returns {"easy"|"normal"|"hard"}
+ */
+export function meteorDifficultyOf(nivel) {
+  const M = CONFIG.modes.meteorRain;
+  return typeof nivel === "string" && M.difficulties[nivel] ? nivel : M.defaultDifficulty;
+}
+
+/**
  * Uma rocha caindo.
  *
  * A velocidade é CONSTANTE, e não queda livre. Com g = 1,62 os primeiros dez
@@ -222,6 +238,11 @@ export class TankMeteor extends FallingMeteor {
 
 export class MeteorRain {
   constructor(terrain) {
+    /* FORA do `setTerrain`, e é de propósito: a dificuldade é uma escolha da
+       SALA, e trocar de fase (ou voltar do vale para a Lua) não desfaz uma
+       escolha que alguém fez no menu. Tudo o mais aqui é estado de partida e
+       morre com o terreno; isto não é estado de partida. */
+    this.dificuldade = CONFIG.modes.meteorRain.defaultDifficulty;
     this.setTerrain(terrain);
   }
 
@@ -288,6 +309,18 @@ export class MeteorRain {
     return this._hordePlayers ?? this.playerCount;
   }
 
+  /**
+   * Os multiplicadores do nível em curso. Ver `difficulties` no config.
+   *
+   * O `fallSpeed` NÃO consulta isto, e é o que mantém os três níveis sendo o
+   * mesmo jogo: o prazo de queda de cada rocha é igual em todos, então mirar se
+   * aprende uma vez só. O que muda é quantas rochas e de quanto em quanto tempo.
+   */
+  get perfil() {
+    const M = CONFIG.modes.meteorRain;
+    return M.difficulties[this.dificuldade] ?? M.difficulties[M.defaultDifficulty];
+  }
+
   fallSpeed(n) {
     const lista = CONFIG.modes.meteorRain.fallSpeeds;
     return lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? lista[lista.length - 1];
@@ -296,14 +329,19 @@ export class MeteorRain {
   gap(n) {
     const lista = CONFIG.modes.meteorRain.hordeGaps;
     const base = lista[Math.max(0, Math.min(lista.length, n) - 1)] ?? lista[lista.length - 1];
-    return base / this.escala();
+    return (base * this.perfil.gap) / this.escala();
   }
 
-  /** A composição da horda, já multiplicada pelos jogadores. */
+  /** A composição da horda, já multiplicada pelos jogadores e pelo nível. */
   mixDe(n) {
     const M = CONFIG.modes.meteorRain;
     const base = M.hordeMix[Math.max(0, Math.min(M.hordeMix.length, n) - 1)] ?? { p: 0, m: 0, g: 0 };
-    const k = this.escala();
+    /* O nível entra junto com os jogadores no MESMO arredondamento, e não num
+       segundo `ceil` por cima do primeiro. Arredondar duas vezes só sabe subir:
+       seis rochas com dois arqueiros no fácil dão ceil(6 × 1,88 × 0,6) = 7 de
+       uma vez, e ceil(ceil(6 × 1,88) × 0,6) = 8 em duas — o fácil recebendo uma
+       rocha que o cálculo não pediu, e sempre para o mesmo lado. */
+    const k = this.escala() * this.perfil.mix;
     return {
       p: Math.ceil(base.p * k),
       m: Math.ceil(base.m * k),
@@ -326,8 +364,19 @@ export class MeteorRain {
   tankHits(n) {
     const M = CONFIG.modes.meteorRain;
     const base = M.tankHits[n] ?? 10;
-    return Math.round(
-      base * (1 + M.tankPlayerScale * Math.max(0, this.hordePlayerCount - 1)),
+    /* A VELOCIDADE DELE NÃO MUDA COM O NÍVEL, só a vida. É o que faz a mudança
+       ser legível: a janela de tiro é a mesma nos três, e o que se sente é o
+       colosso morrendo mais cedo ou mais tarde DENTRO dela. Mexer na velocidade
+       mexeria no prazo, e o prazo é justamente o que os três níveis dividem.
+       Piso de 1: um multiplicador não pode produzir um colosso que já nasce
+       morto. */
+    return Math.max(
+      1,
+      Math.round(
+        base *
+          this.perfil.tank *
+          (1 + M.tankPlayerScale * Math.max(0, this.hordePlayerCount - 1)),
+      ),
     );
   }
 
@@ -340,8 +389,14 @@ export class MeteorRain {
    * Sem isso a horda 1 pega o jogador de costas — e "de costas" neste modo é a
    * coisa que o alerta da tela inteiro existe para evitar.
    */
-  start(nPlayers = 1) {
+  /**
+   * @param {number} [nPlayers]
+   * @param {string} [dificuldade] o nível pedido. Omitido, o que já valia
+   *   continua valendo — recomeçar a chuva não é trocar de nível.
+   */
+  start(nPlayers = 1, dificuldade = undefined) {
     const M = CONFIG.modes.meteorRain;
+    if (dificuldade !== undefined) this.dificuldade = meteorDifficultyOf(dificuldade);
     this.playerCount = Math.max(1, nPlayers | 0);
     this._hordePlayers = null;
     this.active = true;

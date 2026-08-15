@@ -18,11 +18,12 @@
    Uso:
      node scripts/bench-meteoros.js [jogadores] [taxaDeTiro] [acerto] [rodadas]
      node scripts/bench-meteoros.js 1 0.50 0.78 200
+     node scripts/bench-meteoros.js 1 0.50 0.78 200 0.95 easy
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
 import { MoonField } from "../src/shared/moonField.js";
-import { MeteorRain } from "../server/meteorSim.js";
+import { MeteorRain, meteorDifficultyOf } from "../server/meteorSim.js";
 
 const PASSO = 1 / 10; // o mesmo relógio de 10 Hz da sala
 
@@ -47,12 +48,22 @@ const rodadas = Number(process.argv[5] ?? 200);
  */
 const pTanque = Number(process.argv[6] ?? 0.95);
 
+/**
+ * O NÍVEL a provar: `easy`, `normal` ou `hard`.
+ *
+ * É o argumento que existe para os outros três níveis não serem palpite. Os
+ * multiplicadores de `difficulties` foram escolhidos aqui, rodando as mesmas
+ * 200 partidas em cada um e olhando a taxa de vitória e a margem mínima — que
+ * são os dois números que dizem se um nível é fácil ou só é curto.
+ */
+const dificuldade = meteorDifficultyOf(process.argv[7] ?? "normal");
+
 const terreno = new MoonField();
 
 /** Uma partida inteira. @returns {{venceu, horda, margem, pico, hordas}} */
 function partida() {
   const chuva = new MeteorRain(terreno);
-  chuva.start(jogadores);
+  chuva.start(jogadores, dificuldade);
 
   const intervalo = 1 / (taxaTiro * jogadores);
   let proximoTiro = intervalo;
@@ -119,8 +130,12 @@ for (let i = 0; i < rodadas; i++) {
 }
 
 const C = taxaTiro * pAcerto;
+const D = CONFIG.modes.meteorRain.difficulties[dificuldade];
 console.log(`\n  CHUVA DE METEOROS — banco de provas`);
 console.log(`  ${rodadas} partidas · ${jogadores} jogador(es)`);
+console.log(
+  `  nível: ${dificuldade} · rochas ×${D.mix} · intervalo ×${D.gap} · colosso ×${D.tank}`,
+);
 console.log(`  arqueiro: ${taxaTiro} tiros/s × ${(pAcerto * 100).toFixed(0)}% = C ${C.toFixed(2)} acertos/s\n`);
 console.log(`  vitórias ............ ${((vitorias / rodadas) * 100).toFixed(1)}%`);
 console.log(`  margem mínima ....... ${margemMin === Infinity ? "—" : margemMin.toFixed(1)} s`);

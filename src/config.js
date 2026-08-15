@@ -1216,6 +1216,62 @@ export const CONFIG = {
          horda, que decide se ela é jogável. */
       hordeGaps: [7.5, 6.8, 6.4, 6.0, 5.7, 5.5, 5.4, 5.3, 5.2, 5.1],
 
+      /* ------------------------------------------------------ dificuldade --
+         Fácil, normal e difícil — e `normal` É A CHUVA DE SEMPRE, com todos os
+         multiplicadores em 1,00. Isso não é enfeite de simetria: é o que
+         garante que ligar este bloco não muda uma vírgula do modo que já foi
+         medido no banco de provas.
+
+         São MULTIPLICADORES sobre as três tabelas acima, e não três cópias
+         delas. Cópias envelhecem em separado — mexer na horda 7 do normal e
+         esquecer as outras duas é o tipo de erro que só aparece jogando —, e
+         além disso as cópias esconderiam a única coisa que o leitor precisa
+         saber aqui: quanto cada nível se afasta do centro.
+
+         `mix` é O PEDIDO — menos rochas no fácil, mais no difícil. `gap` vem
+         junto porque sem ele o difícil seria só MAIS LONGO: o que aperta neste
+         modo é quantas rochas estão no ar ao mesmo tempo, que é `prazo de
+         queda ÷ intervalo`, e esse número não sabe quantas rochas a horda tem.
+
+         `fallSpeeds` NÃO ENTRA, e é a decisão que dá coerência ao conjunto: o
+         prazo de queda de cada rocha é o mesmo nos três níveis, então a leitura
+         e a antecipação que se aprende no fácil valem inteiras no difícil. Muda
+         o volume e o ritmo da chuva; não muda a física de mirar nela.
+
+         MEDIDO (`scripts/bench-meteoros.js`, 200 partidas por nível, arqueiro
+         de 0,5 tiro/s e 78 % de acerto). Um jogador: 97,5 % de vitórias no
+         fácil, 87,5 % no normal, 53 % no difícil — e no difícil a derrota sobe
+         com as hordas (7, 8 e 10 são os picos) em vez de se empilhar num ponto
+         só, que é o que separa uma rampa de uma parede.
+
+         ------------------------------------------- por que o `tank` é torto
+
+         O colosso não sobe no difícil e desce no fácil, e não é descuido: ele é
+         a única parte do modo que `mix` e `gap` NÃO ALCANÇAM — uma rocha só,
+         com uma janela de queda fixa —, então cada ponta precisou ser medida
+         por si.
+
+         Para CIMA não há espaço. O abate já consome de 75 % a 83 % da janela no
+         normal; a 1,20 passa de 99 % e a 1,30 chega a 109 %, ou seja, um
+         colosso que um arqueiro sozinho não consegue matar nem acertando tudo.
+         Medido: 0 % de vitórias, com 188 das 200 derrotas paradas na horda 3. O
+         difícil ficou em 1,00 e a dificuldade dele veio toda da chuva, que é
+         justamente o que foi pedido.
+
+         Para BAIXO ele é obrigatório. Com o colosso intocado, o fácil mede
+         84,5 % de vitórias contra os 87,5 % do normal — o fácil sairia mais
+         DIFÍCIL que o normal, e pelo motivo que a medição deixa à vista: quem
+         perde neste modo perde no colosso e na horda 10, e aliviar a chuva não
+         toca em nenhum dos dois. A 0,75 o abate cai para 57 %–64 % da janela e
+         o nível volta a fazer o que promete. */
+      difficulties: {
+        easy: { mix: 0.6, gap: 1.25, tank: 0.75 },
+        normal: { mix: 1.0, gap: 1.0, tank: 1.0 },
+        hard: { mix: 1.45, gap: 0.8, tank: 1.0 },
+      },
+      /** O nível de sala nova, e o que a porta do lobby entrega. */
+      defaultDifficulty: "normal",
+
       /* ----------------------------------------------------------- tanque --
          Hordas 3, 6, 9 e 10, em SEGUNDO ATO: o céu esvazia e ele desce
          sozinho. Dois prazos simultâneos, um deles pedindo doze acertos, é a
@@ -1551,13 +1607,66 @@ export const CONFIG = {
          acusa "curva errada" com razão. 2,9 dá volume de verdade à abertura
          (era 4,3 antes deste lote) e ainda deixa a margem que a rampa precisa
          para o jogador aprender a leitura dela. */
+      /* REANCORADA NO DEFENSOR SOZINHO — ×2,15 em bloco, forma intacta.
+       *
+       * A tabela sempre descreveu, no papel, o cerco de UM defensor. Na prática
+       * descrevia o de três: a sala forçava dois bots na entrada do modo, e a
+       * curva foi calibrada contra essa sala. Media-se, portanto, `gapBase`
+       * vezes `0,85² = 0,72`, e o número escrito aqui nunca era jogado por
+       * ninguém. O preço disso estava medido no banco de provas e era o pior
+       * possível: um defensor sozinho perdia 40 de 40 partidas, sempre por volta
+       * do minuto 4,6 — ou seja, a curva "de um jogador" era uma sentença de
+       * morte para um jogador.
+       *
+       * Com os bots deixando de ser obrigatórios (ver `Room.setMode`), a tabela
+       * passa a ser lida como sempre esteve escrita, e por isso teve de virar de
+       * verdade a curva de um. O fator saiu do banco: 2,15 põe o defensor
+       * solitário na faixa de 75 a 80 % de vitórias (alvo: 75 %; corridas de
+       * 100 e de 120 partidas), com 0 % das derrotas antes do minuto 6 e a
+       * mediana delas no 9,7 — a partida inteira acontece, e o que decide é o
+       * clímax.
+       *
+       * A FORMA NÃO MUDOU, e isso importa mais que o fator: é a forma que os
+       * lotes anteriores mediram, e multiplicar em bloco preserva todas aquelas
+       * medições. Também é de propósito que o fator tenha sido escolhido para o
+       * encontro com a calibragem antiga cair em N = 3, que era a única sala que
+       * existia: `2,15 / 3^1,05 = 0,68` contra os `0,85² = 0,72` de antes — 6 %
+       * mais apertado, dentro do ruído do banco (a mesma configuração medida
+       * duas vezes varia mais que isso). Um humano com dois bots continua
+       * jogando a partida que foi jogada e aprovada; o que mudou é que agora ela
+       * é uma escolha, e não o piso. */
       gapBase: [
-        2.9, 2.8, 2.7, 2.5, 2.3, 2.15, 2.0, 1.85, 1.7, 1.55, 1.4,
+        6.25, 6.0, 5.8, 5.4, 4.95, 4.6, 4.3, 4.0, 3.65, 3.35, 3.0,
       ],
-      /* Mais gente = mais poder de fogo, mas os arqueiros dividem 34 m de muro
-         e disputam a mesma linha de tiro. Sublinear pelo mesmo motivo (e com o
-         mesmo número) que `playerGapScale` do modo zumbi. */
-      playerGapScale: 0.85,
+      /* UM ARCO A MAIS É UMA COTA A MAIS DE CERCO: `gap = base / N^exp`.
+       *
+       * Era um fator geométrico (`0,85^(N−1)`), e o defeito dele era de ORDEM
+       * DE GRANDEZA, não de ajuste: três defensores triplicam a capacidade de
+       * abate e recebiam ×1,38 de pressão. O resultado, medido, é que cada
+       * reforço deixava o cerco MAIS FÁCIL — do 0 % do solitário para 100 % com
+       * três, sem nenhum degrau no meio. Não havia curva capaz de servir às duas
+       * pontas ao mesmo tempo, e é por isso que o modo precisava dos bots
+       * obrigatórios para ser jogável: eles não eram ajuda, eram a calibragem.
+       *
+       * A ÂNCORA É 1, e ela vem da conta, não do banco: a capacidade de abate é
+       * LINEAR no número de defensores — cada um é um arco, e matar não se
+       * divide. O que eles dividem (34 m de muro, a mesma linha de tiro, a
+       * manivela do trabuco) já é cobrado do outro lado: o banco desconta o
+       * arqueiro que larga a muralha para içar ou para remendar o portão, e é
+       * esse desconto que faz o quarto defensor render menos que o primeiro sem
+       * precisar de expoente para dizê-lo.
+       *
+       * 1,05 é o ajuste fino em cima da âncora, e ele é medido. Em 1 exato a
+       * dupla saía em 93 % — acima do teto de 90 % que o banco chama de curva
+       * errada —, porque o segundo arco chega antes de o segundo turno de
+       * manivela cobrar por ele. Os 5 % a mais põem a dupla em 75 %, que é o
+       * alvo, sem tocar no solitário (1^x = 1 para qualquer x).
+       *
+       * O TETO ESTÁ EM 1,15, e foi medido também: ali a dupla despenca para
+       * 42 % contra os 75 % do solitário, ou seja, abre-se um buraco no lugar
+       * exato em que a segunda pessoa entra na sala. Entre 1 e 1,15 a série
+       * sobe limpa; passando de 1,15 ela deixa de subir. */
+      playerGapExp: 1.05,
 
       /* -------------------------------------------------------- a abertura --
          A COLUNA DO PRIMEIRO MINUTO. Ver `Siege.enfileirarAbertura`.
@@ -1581,9 +1690,22 @@ export const CONFIG = {
          olhando a paisagem recebe os dezoito no portão de uma vez, que é
          exatamente a lição que a fase quer ensinar no primeiro minuto em vez de
          no oitavo. */
+      /* O PASSO É POR DEFENSOR, como o resto da curva (ver `playerGapExp` e
+         `Siege.enfileirarAbertura`): 3,2 s é a coluna de um, e a sala de três a
+         recebe a 1,07 s. Sem isto a abertura era a única parte do cerco que
+         ignorava quem estava no muro — dezoito chegadas a 1,5 s, calibradas
+         para três arqueiros, desabando sobre um. Era o pior lugar possível para
+         essa conta estar errada: são os primeiros noventa segundos, e um
+         defensor sozinho matava seis dos dezoito antes do portão. Os outros
+         doze já chegavam encostados na madeira, e a partida estava decidida
+         antes de o primeiro escalão sair.
+
+         A CONTAGEM não escala junto, e é de propósito: dezoito é o que faz a
+         coluna ser uma coluna, e ela é a primeira coisa que o jogador vê. O que
+         muda é o passo — sozinho, o mesmo desfile leva o dobro do tempo. */
       opening: {
         count: 18,
-        gap: 1.5, // s entre duas chegadas da coluna
+        gap: 3.2, // s entre duas chegadas da coluna, POR DEFENSOR
         kind: "soldier",
       },
 

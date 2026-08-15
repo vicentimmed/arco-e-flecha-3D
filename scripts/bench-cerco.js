@@ -128,14 +128,25 @@ function partida() {
      A primeira versão dedicava um defensor inteiro ao içamento assim que
      houvesse dois, e isso produzia um resultado impossível: a dupla saía PIOR
      que o solitário (0 % contra 0 %, mas perdendo mais cedo), porque o segundo
-     jogador apertava a curva por `playerGapScale` sem acrescentar uma flecha.
+     jogador apertava a curva por `playerGapExp` sem acrescentar uma flecha.
      Ninguém joga assim. Dois defensores revezam: um vai à manivela entre dois
      tiros, e o custo real é meio arco, não um. */
   const naManivela = semTrabuco ? 0 : Math.min(1, (defensores - 1) * 0.5);
-  const arqueiros = Math.max(1, defensores - naManivela);
 
-  const intervalo = 1 / (taxaTiro * arqueiros);
-  let proximoTiro = intervalo;
+  /* O reparador também para de atirar — e isto é uma correção, não um refinamento.
+   *
+   * O comentário do reparo (mais abaixo) sempre prometeu que "ele não entra na
+   * conta do arco enquanto repara", e a conta nunca cobrou nada: `arqueiros`
+   * era calculado uma vez, fora do laço, e o remendo saía de graça. O efeito
+   * aparecia exatamente onde este banco é usado para calibrar a escala por
+   * defensor — de três em diante o portão ganhava 12 de vida por segundo sem
+   * perder um arco, e QUALQUER curva media 100 % de vitórias. Ou seja, a
+   * pergunta "quanto a guarnição deve apertar a curva?" não tinha resposta
+   * mensurável: o banco respondia "não importa".
+   *
+   * Agora o número de arcos é lido a cada passo, e quem está no portão não está
+   * na muralha. */
+  let proximoTiro = 0;
   let t = 0;
   let agora = 0;
   let filaPico = 0;
@@ -170,8 +181,20 @@ function partida() {
     }
     if (cerco.espera > 0) continue;
 
+    /* ---------------------------------------------------------- reparo --
+       Só quando o portão passa do ponto e só se sobrar gente. Um defensor no
+       portão é um defensor fora da muralha, e o modelo cobra isso: ele não
+       entra na conta do arco enquanto repara.
+
+       A DECISÃO vem antes do tiro (o desconto tem de valer neste passo); a
+       aplicação, logo abaixo. */
+    const emReparo =
+      !semReparo && defensores > 2 && cerco.gateHp < cerco.gateMax * 0.5;
+
     /* ------------------------------------------------------------ arco -- */
-    while (t >= proximoTiro) {
+    const arqueiros = Math.max(0, defensores - naManivela - (emReparo ? 1 : 0));
+    const intervalo = arqueiros > 0 ? 1 / (taxaTiro * arqueiros) : Infinity;
+    while (t >= proximoTiro + intervalo) {
       proximoTiro += intervalo;
       const alvo = maisPertoDoPortao(cerco);
       if (!alvo) continue;
@@ -200,13 +223,7 @@ function partida() {
       }
     }
 
-    /* ---------------------------------------------------------- reparo --
-       Só quando o portão passa do ponto e só se sobrar gente. Um defensor no
-       portão é um defensor fora da muralha, e o modelo cobra isso: ele não
-       entra na conta do arco enquanto repara. */
-    if (!semReparo && defensores > 2 && cerco.gateHp < cerco.gateMax * 0.5) {
-      cerco.repair(PASSO, 1);
-    }
+    if (emReparo) cerco.repair(PASSO, 1);
 
     const fila = cerco.fila;
     filaSoma += fila;

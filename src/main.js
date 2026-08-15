@@ -2039,6 +2039,7 @@ class Game {
        ver `Hud.onCommand`. É só isso que decide se há pergunta de confirmação. */
     if (a.setMode) this.askModeChange(a.setMode, a.doMenu === true);
     if (a.setLevel) this.askLevelChange(a.setLevel, a.doMenu === true);
+    if (a.setMeteorRain) this.askMeteorRain(a.setMeteorRain);
     /* Pôr e tirar bot é PEDIDO À SALA. O aviso na tela não sai daqui: ele vem
        do `S2C.JOIN`/`S2C.LEAVE` que o servidor manda para todo mundo, porque um
        adversário novo em campo é notícia para a sala inteira, não só para quem
@@ -2320,6 +2321,11 @@ class Game {
       msg.needed ?? 2,
       this.net.me?.id,
       msg.level ?? this.levels.id,
+      /* O nível da chuva vem do ESTADO, não desta mensagem, e chega a tempo:
+         a sala manda o `METEOR_STATUS` antes do `MODE` (ver `Room.setMode`, em
+         que o `broadcastMode` é a última linha) e o WebSocket entrega em ordem.
+         Quem entra na sala já vem com ele no `snapshot`. */
+      this.meteorState?.difficulty ?? null,
     );
 
     if (msg.mode === "series") {
@@ -3107,6 +3113,28 @@ class Game {
     }
     const nome = MODE_LABELS[mode] ?? mode;
     this.ask(`Entrar no ${nome}?`, () => this.net.send(C2S.MODE, { mode }));
+  }
+
+  /**
+   * A chuva de meteoros num nível: fácil, normal ou difícil.
+   *
+   * SEM PERGUNTA e SEM O GUARDA DE FASE, e as duas coisas pelo mesmo motivo: só
+   * o menu escreve nesta ação, e um clique num botão que diz "chuva de
+   * meteoros: difícil" já é a intenção inteira, sem ambiguidade nenhuma.
+   *
+   * O guarda de `askModeChange` recusaria isto no vale — a chuva só existe na
+   * Lua —, e recusar seria uma resposta pior do que a verdadeira: a sala sabe
+   * levar a fase junto (`levelForMode` e `prepareMode`, no servidor), então
+   * clicar daqui viaja para a Lua e começa a chuva, que é exatamente o que o
+   * botão promete. O aviso "não existe aqui" só faz sentido para uma TECLA
+   * apertada por engano.
+   *
+   * Trocar de nível recomeça a chuva da horda 1, sempre — ver
+   * `C2S.METEOR_DIFFICULTY`.
+   */
+  askMeteorRain(level) {
+    if (!this.net.connected) return;
+    this.net.send(C2S.METEOR_DIFFICULTY, { level });
   }
 
   /** Começa a estocada, preservando o ponto atual da recarga. */

@@ -55,6 +55,7 @@ import * as THREE from "three";
 import { ValueNoise } from "../../utils/noise.js";
 import { clamp, smoothstep } from "../../utils/math.js";
 import { NAMEK } from "../../shared/namek/config.js";
+import { NAMEK_SOL_DIR, NAMEK_BRUMA_SOL, NAMEK_BRUMA_BRASA } from "./sky.js";
 import { DETALHE_GLSL, texturaDeDetalhe, descartarDetalhe } from "./detail.js";
 
 const TAU = Math.PI * 2;
@@ -68,21 +69,36 @@ const TAU = Math.PI * 2;
  * Os valores não são arbitrários — cada um responde a uma coisa que existe no
  * campo de altura:
  *
- *   2,6 m até 175 m  a clareira. É a única banda dimensionada por CRATERA e não
+ *   2,8 m até 170 m  a clareira. É a única banda dimensionada por CRATERA e não
  *                    por relevo: o relevo ali é liso (o `field` achata contra a
  *                    cota 4), mas o que se cava nele não é. Nesta célula, a
- *                    rajada básica abre um buraco de três células, o Kamehameha
- *                    de dez e a Genki Dama de dezesseis — abaixo de umas três, a
- *                    cratera deixa de ser uma bacia e vira um amassado
- *                    triangular. Cada 0,2 m a menos aqui custa ~13 k triângulos,
- *                    e foi assim que este número foi escolhido: medindo.
- *   9 m até 420 m    as colinas. A oitava mais fina do FBM daqui tem ~34 m de
- *                    comprimento de onda; 9 m já a amostra quatro vezes.
- *   14 m até 790 m   as montanhas. Segura a resolução onde vive a crista
- *                    `ridged2` (~18 m na terceira oitava) — é ela que dá a
- *                    rocha lascada da silhueta.
- *   26 m até 1.040 m a praia e o fundo raso. Depois de 880 m o campo já é uma
- *                    chapa a −22 m debaixo d'água; detalhe ali é invisível. */
+ *                    menor cratera PERSISTENTE (potência 0,5, o corte de
+ *                    `craterMinPower`) tem dois pontos de raio, o Kamehameha
+ *                    cinco e a Genki Dama onze — abaixo de umas três, a cratera
+ *                    deixa de ser uma bacia e vira um amassado triangular. Cada
+ *                    0,2 m a menos aqui custa ~13 k triângulos, e foi assim que
+ *                    este número foi escolhido: medindo.
+ *   8 m até 420 m    as colinas. A oitava mais fina do FBM daqui tem ~34 m de
+ *                    comprimento de onda; 8 m já a amostra quatro vezes.
+ *   8 m até 790 m    AS MONTANHAS, e este é o número que mudou.
+ *
+ *                    Eram 14 m, dimensionados só pela crista `ridged2` (~18 m na
+ *                    terceira oitava) — a régua certa enquanto a montanha era
+ *                    silhueta e nada mais. Ela deixou de ser: o pedido é que um
+ *                    Kamehameha arranque um pedaço dela, e `NamekField` agora
+ *                    entrega esse pedaço (ver `esculpirNaco`). Um naco de 21 m de
+ *                    raio numa malha de 14 m tem UM vértice e meio dentro dele —
+ *                    a física perderia a montanha e a tela não mostraria nada.
+ *                    Com 8 m são 2,7 pontos de raio para o Kamehameha e 5,9 para
+ *                    a Genki Dama, que é o mínimo para o buraco ter forma.
+ *
+ *                    O preço, medido: +17,4 k triângulos. Pagos com os 0,2 m que
+ *                    a clareira devolveu e com a praia, abaixo.
+ *   36 m até 1.040 m a praia e o fundo raso. Eram 26 m, e os 10 m a mais valem
+ *                    2,2 k triângulos que a montanha precisava mais do que este
+ *                    anel: depois de 880 m o campo já é uma chapa a −22 m
+ *                    debaixo d'água, e detalhe numa chapa submersa é detalhe
+ *                    gasto duas vezes — a água o esconde e a distância também. */
 const LOD = [
   [0, 2.6],
   [180, 2.6],
@@ -121,17 +137,32 @@ const VIES_SETOR = 0.25;
    "um campo qualquer". */
 const PALETA = {
   /* O desvio para o CIANO é o que separa "outro planeta" de "um campo".
-     Os três tons ficam entre 160° e 168° de matiz — verde puro (120°) daria
+     Os tons de campo ficam entre 158° e 168° de matiz — verde puro (120°) daria
      grama terrestre, e foi exatamente esse o erro da primeira paleta: com a
      hemisférica esverdeada por cima, o chão saía com cara de vale alpino. */
   campo: new THREE.Color("#35997c"),
   campoClaro: new THREE.Color("#4fb897"),
   campoFundo: new THREE.Color("#1c6a5b"),
+  /* A MANCHA DE SOL. Mais clara e mais amarela que `campoClaro`, e ela não é um
+     quarto degradê: ela entra por LIMIAR, em ilhas de borda rasgada. A referência
+     tem grama clara EM MANCHAS, e mancha é uma coisa que começa e acaba — um
+     degradê contínuo entre dois verdes, por mais bem feito que seja, lê como
+     iluminação irregular, nunca como vegetação diferente. */
+  campoSol: new THREE.Color("#7fd39f"),
+  /** O oposto: a moita rasteira encharcada das depressões. */
+  musgo: new THREE.Color("#13564b"),
   rocha: new THREE.Color("#7c8477"),
   rochaEscura: new THREE.Color("#4a5350"),
+  /** Rocha de topo, batida de sol e de vento. Ver `corDeSuperficie`. */
+  rochaClara: new THREE.Color("#9aa08d"),
+  /* A TERRA que aparece entre a grama e a rocha. É a faixa que faltava: sem
+     ela, campo e rocha se encontravam num `lerp` direto e a encosta ficava com
+     um contorno de duas cores, que é a cara de mapa de altura pintado. */
+  terra: new THREE.Color("#8a7a5c"),
   /* Areia clara. Puxou para o branco (era #d9dfba, um bege esverdeado que
-     sumia contra o campo turquesa): a faixa de praia só lê como praia se
-     contrastar com a terra atrás dela. */
+     sumia contra o campo turquesa): agora que existe uma FAIXA de praia de
+     verdade no relevo (ver `NamekField.baseHeight`), ela precisa contrastar
+     com a terra atrás dela. */
   praia: new THREE.Color("#ece7d3"),
   raso: new THREE.Color("#2c6f6c"),
   /** Cor das fissuras de magma na tempestade. Ver `aMagma`. */
@@ -264,6 +295,10 @@ export class NamekTerrain {
   alturaDeVertice(v) {
     const x = this.positions[v * 3];
     const z = this.positions[v * 3 + 2];
+    /* `displacementAt` e não uma soma escrita aqui: é a MESMA leitura que o
+       `heightAt` da física faz. Ter a conta nos dois lugares é ter dois chões
+       — o desenhado e o pisado —, e a diferença apareceria como um lutador
+       afundado no barro. */
     return this.base[v] + this.field.displacementAt(x, z);
   }
 
@@ -339,7 +374,7 @@ export class NamekTerrain {
    * pela sombra própria, e repintar o anel a cada explosão custaria um
    * terceiro buffer subindo para a placa por golpe.
    */
-  corDeSuperficie(x, z, h, ny, out) {
+  corDeSuperficie(x, z, h, ny, out, celula = 2.8) {
     const n = this.noise;
     const inclinacao = 1 - ny; // 0 = plano, 1 = parede
     const mancha = n.fbm2(x * 0.0042, z * 0.0042, 2);
@@ -351,26 +386,96 @@ export class NamekTerrain {
        degradê liso. Mesmo remédio que o vale usa (`grain` + `patch`). */
     const veio = n.fbm2(x * 0.018 - 61.3, z * 0.018 + 27.9, 2);
 
-    /* O campo. Três variações de escala diferente: a mancha larga (~240 m) dá
-       as regiões, o veio (~55 m) quebra o degradê a média distância, e o grão
-       (~16 m) impede que tudo isso vire papel de parede à distância de voo. */
+    /* O MIÚDO, e ele é a resposta direta a "parece que não tem tanta textura".
+     *
+     * As duas escalas que existiam — 240 m e 16 m — dão as regiões e as
+     * variações, e nenhuma delas é visível a dez metros de distância. O que
+     * faltava era a escala do PASSO: manchas de sete metros, do tamanho de um
+     * lutador em pé, que é a única faixa em que o olho ainda distingue detalhe
+     * de cor no chão enquanto voa baixo.
+     *
+     * Ela é apagada onde a malha não a sustenta, e isso não é economia: 7 m de
+     * comprimento de onda numa célula de 8 m é ruído abaixo de Nyquist, e o
+     * resultado não é "menos detalhe", é CINTILAÇÃO — cada quadro em que a
+     * câmera anda, o vértice pega outra fase e o chão da montanha ferve. O
+     * `smoothstep` no lugar de um corte seco é pelo mesmo motivo do resto do
+     * LOD: um anel onde a textura acaba lê como defeito de terreno. */
+    const fino = 1 - smoothstep(3.0, 5.5, celula);
+    const miudo = fino > 0.001 ? n.fbm2(x * 0.145, z * 0.145, 2) * fino : 0;
+
+    /* O campo, em QUATRO escalas, e a mancha larga continua mandando.
+     *
+     * As quatro chegaram por dois caminhos e ficaram todas: a mancha de 240 m e
+     * o grão de 16 m são de sempre, o VEIO de 55 m veio do ramo do grão de
+     * superfície (ele tapa a faixa de média distância, em que as outras duas
+     * deixavam um degradê liso), e o MIÚDO de 7 m veio do retoque de cenário
+     * (é a escala do passo, a única que se enxerga voando baixo). Elas cobrem
+     * faixas diferentes e nenhuma substitui a outra — por isso a soma, e não a
+     * escolha entre elas. */
     out
       .copy(PALETA.campo)
-      .lerp(PALETA.campoClaro, clamp(0.42 + 0.58 * mancha + 0.3 * veio + 0.18 * grao, 0, 1))
-      .lerp(PALETA.campoFundo, clamp(0.28 - 0.62 * mancha - 0.24 * veio, 0, 1) * 0.8);
+      .lerp(
+        PALETA.campoClaro,
+        clamp(0.4 + 0.58 * mancha + 0.26 * veio + 0.2 * grao + 0.16 * miudo, 0, 1),
+      )
+      .lerp(
+        PALETA.campoFundo,
+        clamp(0.28 - 0.62 * mancha - 0.2 * veio + 0.16 * grao, 0, 1) * 0.8,
+      );
 
+    /* AS MANCHAS CLARAS, por LIMIAR e não por mistura.
+     *
+     * A soma das três escalas passa por um `smoothstep` estreito: onde ela
+     * ultrapassa o limiar, a grama é outra. É a diferença entre uma pradaria
+     * pintada com aerógrafo e uma com CLAREIRAS de vegetação diferente, e o
+     * que rasga a borda dessas ilhas são justamente as escalas curtas dentro
+     * do limiar — sem o grão e o miúdo somados aqui, o contorno seria uma
+     * curva de nível suave e a mancha viraria uma poça. */
+    const ilha = smoothstep(0.16, 0.46, mancha * 0.9 + veio * 0.4 + grao * 0.5 + miudo * 0.45);
+    if (ilha > 0.001) out.lerp(PALETA.campoSol, ilha * 0.62);
+
+    /* O MUSGO das depressões. O oposto da ilha, e vem no mesmo pacote: um campo
+       que só tem manchas claras parece descolorido em faixas. */
+    const baixio = smoothstep(-0.18, -0.5, mancha + grao * 0.35) * smoothstep(0.72, 0.95, ny);
+    if (baixio > 0.001) out.lerp(PALETA.musgo, baixio * 0.55);
     /* A ROCHA aflora pela inclinação E pela altitude. Só pela inclinação, um
        cume achatado de 120 m continuaria coberto de campo verde-azulado, o que
-       lê como um morro de grama e apaga a leitura de montanha. */
+       lê como um morro de grama e apaga a leitura de montanha.
+       A `crista` é o que faz a linha entre grama e pedra ser RASGADA: `ridged2`
+       tem cristas finas e ramificadas, então ela empurra a rocha para baixo em
+       línguas e a deixa recuar em bolsões. Com o `smoothstep` sozinho, a
+       fronteira era uma curva de nível limpa — a assinatura de um chão pintado
+       por fórmula.
+       Ela se chamava `veio` e foi renomeada no merge: o ramo do grão de
+       superfície declarou um `veio` lá em cima, de outra escala e outro ruído
+       (`fbm2`, 55 m, para a cor do campo). Dois `const veio` na mesma função é
+       erro de sintaxe, e dois nomes iguais para coisas diferentes seria pior
+       que o erro. */
+    const crista = n.ridged2(x * 0.021, z * 0.021, 2);
     const rochoso = clamp(
-      Math.max(smoothstep(0.3, 0.6, inclinacao), smoothstep(52, 96, h)) + 0.12 * grao,
+      Math.max(smoothstep(0.3, 0.6, inclinacao), smoothstep(52, 96, h)) +
+        0.12 * grao +
+        0.22 * crista +
+        0.1 * miudo,
       0,
       1,
     );
+
+    /* A TERRA vem ANTES da rocha e só na transição: é o pé da pedra, onde a
+       grama já não pega e o mineral ainda não aflorou. Um pico de meia altura
+       na mesma máscara — cheia embaixo, zerada em cima —, e é ela que dá os três
+       degraus (grama · terra · rocha) que uma encosta de verdade tem. */
+    const transicao = rochoso * (1 - rochoso) * 4;
+    if (transicao > 0.001) out.lerp(PALETA.terra, transicao * 0.4);
+
     if (rochoso > 0.001) {
       _mistura
         .copy(PALETA.rocha)
-        .lerp(PALETA.rochaEscura, smoothstep(0.42, 0.92, inclinacao) * 0.85);
+        .lerp(PALETA.rochaEscura, smoothstep(0.42, 0.92, inclinacao) * 0.85)
+        /* O topo bate sol e vento: a rocha alta esbranquiça. Sem isto, uma
+           montanha de 140 m fica com a mesma pedra da saia de 50 m e a silhueta
+           perde a leitura de altura. */
+        .lerp(PALETA.rochaClara, smoothstep(78, 135, h) * 0.7);
       out.lerp(_mistura, rochoso);
     }
 
@@ -389,6 +494,26 @@ export class NamekTerrain {
     // mas é o que impede uma encosta voltada para o lado oposto ao sol de ficar
     // com o mesmo brilho da que o encara.
     out.multiplyScalar(0.82 + 0.18 * clamp(ny, 0, 1));
+
+    /* O GRANULADO POR VÉRTICE — a última escala, e a mais barata das cinco.
+     *
+     * Nenhum ruído contínuo cobre esta faixa: ela é a variação de UM vértice
+     * para o vizinho, comprimento de onda de uma célula, e um `fbm2` na
+     * frequência dela devolveria exatamente o que Nyquist promete devolver, que
+     * é lixo. O que funciona é aceitar que aqui não há forma, só quebra:
+     * um hash das coordenadas inteiras, ±3 % de brilho, sem correlação com nada.
+     *
+     * Três por cento parece pouco escrito e é o teto do que se pode gastar: é o
+     * suficiente para o `dithering` do material não ter mais superfície chapada
+     * para produzir faixas, e pouco o bastante para o chão não virar chuvisco
+     * quando a câmera se afasta e os vértices caem sub-pixel. Some junto com o
+     * miúdo, pelo mesmo motivo dele. */
+    if (fino > 0.001) {
+      let s = (Math.round(x * 4) * 374761393 + Math.round(z * 4) * 668265263) | 0;
+      s = Math.imul(s ^ (s >>> 13), 1274126177);
+      s = (s ^ (s >>> 16)) >>> 0;
+      out.multiplyScalar(1 + (s / 0xffffffff - 0.5) * 0.06 * fino);
+    }
     return out;
   }
 
@@ -464,12 +589,17 @@ export class NamekTerrain {
 
     // ---- normais e cores (a cor depende da normal, então vêm depois).
     this.escreverNormal(-1, 0);
-    this.corDeVertice(0);
+    this.corDeVertice(0, LOD[0][1]);
     for (let k = 0; k < this.ringR.length; k++) {
       const S = this.ringS[k];
+      /* A célula do anel, resolvida UMA vez para os até 512 vértices dele. Ela
+         é o que diz a `corDeSuperficie` quais escalas de cor a malha aqui
+         consegue sustentar — ver o `fino` de lá. Chamar `celulaEm` por vértice
+         seria varrer a tabela de LOD 41 mil vezes para obter 165 respostas. */
+      const cel = this.celulaEm(this.ringR[k]);
       for (let s = 0; s < S; s++) {
         this.escreverNormal(k, s);
-        this.corDeVertice(this.ringOff[k] + s);
+        this.corDeVertice(this.ringOff[k] + s, cel);
       }
     }
 
@@ -497,11 +627,11 @@ export class NamekTerrain {
     return this;
   }
 
-  corDeVertice(v) {
+  corDeVertice(v, celula) {
     const x = this.positions[v * 3];
     const h = this.positions[v * 3 + 1];
     const z = this.positions[v * 3 + 2];
-    this.corDeSuperficie(x, z, h, this.normals[v * 3 + 1], _cor);
+    this.corDeSuperficie(x, z, h, this.normals[v * 3 + 1], _cor, celula);
     this.colors[v * 3] = _cor.r;
     this.colors[v * 3 + 1] = _cor.g;
     this.colors[v * 3 + 2] = _cor.b;
@@ -550,7 +680,7 @@ export class NamekTerrain {
    * 1, 2 ou ½. Quando ela é 2, cada célula do anel grosso vira TRÊS triângulos
    * em vez de dois — é o leque que fecha o T-junction. Sem ele, o vértice extra
    * do anel fino fica sobre a aresta do grosso e abre uma fresta de um pixel
-   * por onde se vê o céu; numa malha de 168 anéis isso é uma coroa de frestas
+   * por onde se vê o céu; numa malha de 176 anéis isso é uma coroa de frestas
    * concêntricas, e é o tipo de defeito que só aparece em movimento.
    */
   costurar(idx, ka, kb) {
@@ -623,7 +753,17 @@ export class NamekTerrain {
   criarMaterial() {
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.96,
+      /* 0,9 e não 0,96, e a diferença inteira é o sol baixo.
+       *
+       * Com a direcional a 55° de altura, um brilho especular no chão caía onde
+       * ninguém olha (embaixo do observador) e a rugosidade quase máxima era
+       * grátis. Com ela a 32°, a encosta voltada para o sol reflete de raspão, e
+       * uma faixa de brilho largo correndo pelo alto das colinas é metade do que
+       * faz uma paisagem de fim de tarde parecer fim de tarde.
+       * Não desce mais que isso: a partir de ~0,8 o `MeshStandardMaterial` já
+       * concentra o lóbulo o bastante para aparecer uma mancha viajando com a
+       * câmera, e mancha viajante em terreno lê como defeito, não como luz. */
+      roughness: 0.9,
       metalness: 0,
       dithering: true, // o gradiente do campo é largo; sem isto ele fica em faixas
     });
@@ -634,6 +774,12 @@ export class NamekTerrain {
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.storm = uStorm;
       shader.uniforms.magmaCor = { value: PALETA.magma.clone() };
+      /* A direção do sol e as duas brumas vêm de `sky.js`, que é quem os possui
+         — ver `NAMEK_SOL_DIR`. Repeti-los aqui daria um terreno que doura na
+         direção de um sol que já se mudou. */
+      shader.uniforms.solDirMundo = { value: NAMEK_SOL_DIR.clone() };
+      shader.uniforms.brumaDia = { value: NAMEK_BRUMA_SOL.clone() };
+      shader.uniforms.brumaBrasa = { value: NAMEK_BRUMA_BRASA.clone() };
       Object.assign(shader.uniforms, uDetalhe);
 
       shader.vertexShader = shader.vertexShader
@@ -642,12 +788,18 @@ export class NamekTerrain {
           `#include <common>
            attribute float aMagma;
            varying float vMagma;
+           varying vec3 vMundoChao;
            ${DETALHE_GLSL.vertexCommon}`,
         )
         .replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
            vMagma = aMagma;
+           /* A posição de MUNDO, para a bruma saber para onde a linha de visada
+              aponta. modelMatrix e não um atalho assumindo identidade: a malha
+              hoje está na origem, mas quem a reposicionar um dia não vai
+              procurar o defeito num degradê de horizonte. */
+           vMundoChao = (modelMatrix * vec4(transformed, 1.0)).xyz;
            ${DETALHE_GLSL.vertexBody}`,
         );
 
@@ -657,7 +809,11 @@ export class NamekTerrain {
           `#include <common>
            uniform float storm;
            uniform vec3 magmaCor;
+           uniform vec3 solDirMundo;
+           uniform vec3 brumaDia;
+           uniform vec3 brumaBrasa;
            varying float vMagma;
+           varying vec3 vMundoChao;
            ${DETALHE_GLSL.fragmentCommon}`,
         )
         .replace(
@@ -677,13 +833,59 @@ export class NamekTerrain {
               Linear, o chão começava a brilhar no primeiro segundo da transição
               e a leitura era "alguém ligou uma luz", não "o planeta rachou". */
            totalEmissiveRadiance += magmaCor * (vMagma * storm * storm * 1.6);`,
+        )
+        .replace(
+          "#include <fog_fragment>",
+          `#include <fog_fragment>
+           #ifdef USE_FOG
+           {
+             /* A BRUMA ACESA — a perspectiva aérea vista CONTRA o sol.
+              *
+              * A FogExp2 da cena tem uma cor só, igual em todas as direções, e
+              * é ela que apagava o anel de montanhas: a 700 m de distância a
+              * névoa já come metade da cor, e o que sobrava era o mesmo
+              * verde-acinzentado do lado do sol e do lado oposto. Um relevo sem
+              * lado iluminado é um relevo sem profundidade, por mais LOD que se
+              * pague nele.
+              *
+              * O conserto é aditivo e reaproveita o fogFactor que a inclusão
+              * acima acabou de calcular (ele fica em escopo — é declarado dentro
+              * do mesmo bloco #ifdef): quanto mais longe a montanha e mais a
+              * linha de visada aponta para o sol, mais luz espalhada volta.
+              * pow(_, 3.0) mantém isso um FEIXE em vez de um verniz dourado na
+              * tela inteira, e a mesma constante está em water.js — a
+              * montanha e o mar se encontram numa linha, e dois expoentes
+              * diferentes apareceriam exatamente ali.
+              *
+              * Aditivo também é o que garante que isto nunca escureça nada: no
+              * pior caso ele não faz nada, e no pior caso do pior caso (bruma
+              * forte demais) o defeito é visível na hora, não é uma montanha
+              * preta que ninguém liga a este trecho. */
+             float aoSol = max(dot(normalize(vMundoChao - cameraPosition), normalize(solDirMundo)), 0.0);
+             vec3 bruma = mix(brumaDia, brumaBrasa, storm);
+             gl_FragColor.rgb += bruma * (pow(aoSol, 3.0) * fogFactor * mix(0.62, 0.20, storm));
+           }
+           #endif`,
         );
     };
 
-    /* Sem isto o Three reaproveita o programa já compilado de qualquer outro
-       `MeshStandardMaterial` com as mesmas flags, e o enxerto acima é ignorado
-       em silêncio — o chão volta a ser chapado sem nenhum erro no console. */
-    mat.customProgramCacheKey = () => "namek-terreno-detalhe-at";
+    /* SEM ISTO O CENÁRIO INTEIRO PODE QUEBRAR, e de um jeito que não parece ter
+       nada a ver com aqui.
+       O Three monta a chave do cache de programas com os parâmetros do material
+       (tipo, defines, mapas) e **não** com o texto que o `onBeforeCompile`
+       produziu — só com o que `customProgramCacheKey` devolve. Dois
+       `MeshStandardMaterial` com os mesmos parâmetros e enxertos DIFERENTES
+       ganham o mesmo programa, e o segundo passa a rodar o shader do primeiro:
+       aqui isso seria o terreno desenhado sem `aMagma` (ou uma vegetação
+       desenhada com ele, procurando um atributo que a malha dela não tem), ou o
+       chão voltando a ser chapado sem nenhum erro no console.
+       É a convenção do repositório inteiro — ver `entities/environment.js` e
+       `namek/character/rig.js`, que já pagam esta linha.
+       A chave NOMEIA OS TRÊS enxertos que este material carrega, e isso é o que
+       a mantém honesta: magma, bruma e detalhe chegaram por caminhos diferentes
+       e convivem no mesmo shader — uma chave que citasse só um deles voltaria a
+       ser a mentira que ela existe para impedir. */
+    mat.customProgramCacheKey = () => "namek-terreno-magma-bruma-detalhe";
 
     this.material = mat;
     return mat;

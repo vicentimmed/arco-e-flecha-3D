@@ -20,8 +20,14 @@
  * Sobe quando o formato quebra. A sala recusa quem não bate.
  *
  * 1 — o modo nasceu.
+ * 2 — o atordoamento: `NS2C.STAGGER` e o bit 4 da pose. Um cliente da versão 1
+ *     ignoraria a mensagem em silêncio e desenharia de pé quem está caído — que
+ *     é justamente o tipo de divergência que esta versão existe para recusar.
+ * 3 — a guarda (bit 8) e a DIFICULDADE dos bots (`NC2S`/`NS2C.DIFFICULTY`, mais
+ *     o campo no `welcome`). Um cliente antigo não teria o botão e ficaria
+ *     mostrando um nível que não é o da sala.
  */
-export const NAMEK_PROTOCOL_VERSION = 1;
+export const NAMEK_PROTOCOL_VERSION = 3;
 
 /** O que o `hello` precisa carregar para cair NESTA sala e não na do arqueiro. */
 export const NAMEK_LEVEL = "namek";
@@ -50,8 +56,18 @@ export const NC2S = {
    *  sobre o próprio acerto; a sala é a autoridade sobre a vida. */
   BLAST_HIT: "blastHit",
 
-  /** Especial disparado: `{ kind, o:[x,y,z], d:[x,y,z], w }`.
-   *  A direção é TRAVADA aqui: girar depois não entorta o feixe. */
+  /** Especial disparado: `{ kind, o:[x,y,z], d:[x,y,z], target, w }`.
+   *
+   *  A direção é TRAVADA aqui: girar depois não entorta o feixe.
+   *
+   *  `target` existe pela mesma razão que o do `NC2S.BLAST`, e agora vale para
+   *  mais que uma bolinha: o Kienzan e o Galick Gun PERSEGUEM (ver `homing` em
+   *  `NAMEK.specials`), e quem escolhe a vítima é quem atirou, no instante do
+   *  disparo. Sem este campo, cada cliente escolheria o alvo mais alinhado com o
+   *  SEU ponto de vista e o mesmo disco faria curvas diferentes em cada tela —
+   *  que é a única classe de divergência que este modo não tolera, porque ela
+   *  decide quem morre. É `null` para o Kamehameha e para a Genki Dama, que não
+   *  perseguem. */
   SPECIAL: "special",
 
   /** "O meu especial está queimando fulano": `{ victim, kind, dt }`.
@@ -81,6 +97,14 @@ export const NC2S = {
 
   /** Muda o clima da sala: `{ id: "dia"|"tempestade" }`. Vale para todos. */
   WEATHER: "weather",
+
+  /** Muda a dificuldade dos bots: `{ id }`, um de `NAMEK.bot.dificuldadeOrdem`.
+   *
+   *  É da SALA, como o clima, e pelo mesmo motivo: os bots são de todos. Quem
+   *  pede é qualquer um pelo menu, e o efeito é imediato para quem já está em
+   *  campo — ver `NamekBotSquad.setDificuldade`, que é onde "dinamicamente"
+   *  vira código. */
+  DIFFICULTY: "difficulty",
 
   /** Sincronismo de relógio: `{ c: clientClock }`. */
   PING: "ping",
@@ -131,13 +155,30 @@ export const NS2C = {
   /** Retransmissão da onda, com `owner`. */
   BURST: "burst",
 
-  /** Alguém levou dano: `{ id, health, by, amount, kind }`.
-   *  Vira o clarão vermelho, o número subindo e a pose de dor. */
+  /** Alguém levou dano: `{ id, health, by, amount, kind, g }`.
+   *  Vira o clarão vermelho, o número subindo e a pose de dor.
+   *  `g` é 1 quando o golpe foi APARADO por uma guarda — é o que separa, no
+   *  ouvido e na tela, defender de apanhar. Ver `NAMEK.guard`. */
   HURT: "hurt",
 
   /** Morte confirmada: `{ victim, killer, kind, p:[x,y,z], d:[x,y,z] }`.
    *  `d` é a direção do golpe — é ela que joga o corpo para o lado certo. */
   DEATH: "death",
+
+  /**
+   * Derrubado por golpes seguidos: `{ id, by, s, w }`.
+   *
+   * `s` são os SEGUNDOS em que a vítima fica caída — vem na mensagem em vez de
+   * ser lido de `NAMEK.fighter.stagger.time` pelos dois lados porque quem conta
+   * os golpes é a sala, e é ela que decide se aquela queda vale o tempo cheio.
+   * Ler a constante daqui funcionaria hoje e passaria a mentir no dia em que a
+   * sala quisesse encurtar a queda de quem já está com pouca vida.
+   *
+   * A mensagem NÃO move ninguém: quem derruba o corpo é o cliente da vítima
+   * (§8 — a posição de um humano é dele). Para os outros, a queda chega pela
+   * pose, no bit 4 de `packFighter`. Esta mensagem é o gatilho, não o estado.
+   */
+  STAGGER: "stagger",
 
   /** Onde renascer: `{ id, p:[x,y,z], yaw, invulnUntil }`. */
   SPAWN: "spawn",
@@ -154,6 +195,11 @@ export const NS2C = {
 
   /** Clima: `{ id, w }`. `w` é o instante em que a transição começou. */
   WEATHER: "weather",
+
+  /** Dificuldade dos bots: `{ id }`. Retransmitida a todos para o menu de cada
+   *  um mostrar o nível que de fato está valendo — e não o que aquela pessoa
+   *  pediu por último. */
+  DIFFICULTY: "difficulty",
 
   /** Raio da tempestade: `{ p:[x,z], w }`. A sala decide para todos verem o
    *  mesmo relâmpago no mesmo lugar — meio do céu piscando em horas diferentes
@@ -213,8 +259,22 @@ export function packFighter(f) {
     /** mão que atirou por último e há quanto tempo: alimenta o braço estendido */
     ha: f.lastHand ?? 0,
     hp: r3(f.handPose ?? 0),
-    /** bits: 1 = caído, 2 = invulnerável (piscando) */
-    b: (f.down ? 1 : 0) | (f.invuln ? 2 : 0),
+    /* bits: 1 = morto, 2 = invulnerável (piscando), 4 = ATORDOADO, 8 = DEFENDENDO.
+     *
+     * O 4 é um bit e não um canal contínuo porque estar caído é um estado, não
+     * uma grandeza — e porque ele já viaja de graça no byte que os outros dois
+     * ocupavam. `tonto` é lido como VERDADEIRO/FALSO: o cliente guarda um
+     * booleano, o bot do servidor guarda os segundos que faltam, e os dois
+     * escrevem o mesmo bit sem tradutor no meio.
+     *
+     * O 8 é a GUARDA, e ela é um caso especial que vale explicar: a defesa é um
+     * estado CONTÍNUO que custa ki e reduz dano, e mandá-la aqui — em vez de num
+     * par de mensagens "comecei/parei" — é a mesma decisão que a sala já toma
+     * para o arranque e para a pose de carga. O motivo está escrito em
+     * `NamekRoom.economiaDeKi`: a pose é reenviada 20 vezes por segundo, então
+     * um pacote perdido se conserta sozinho no seguinte, enquanto um "parei"
+     * perdido deixaria alguém defendendo (e drenando) para sempre. */
+    b: (f.down ? 1 : 0) | (f.invuln ? 2 : 0) | (f.tonto ? 4 : 0) | (f.defendendo ? 8 : 0),
   };
 }
 
@@ -254,6 +314,8 @@ export function unpackFighter(s, out) {
   const b = s.b ?? 0;
   out.down = (b & 1) === 1;
   out.invuln = (b & 2) === 2;
+  out.tonto = (b & 4) === 4;
+  out.defendendo = (b & 8) === 8;
   return out;
 }
 

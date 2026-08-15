@@ -61,6 +61,7 @@ import {
   poseEspecial,
   poseDano,
   poseArremessado,
+  poseDefesa,
   poseQueda,
   poseMorte,
   aplicarRajada,
@@ -165,6 +166,14 @@ export class Fighter {
     this.handPose = 0;
     this.down = false;
     this.invuln = false;
+    /** Derrubado por golpes seguidos (bit 4 da rede). Vivo, mas no chão. */
+    this.tonto = false;
+    /** Guarda de pé (bit 8 da rede): os dois braços cruzados à frente. */
+    this.defendendo = false;
+    /** A barra está CHEIA? Acende a aura de prontidão — ver `atualizarAura`.
+     *  Quem escreve é o dono: o laço principal para o lutador local, o
+     *  `VITALS` para os remotos. */
+    this.kiFull = false;
 
     /* --------------------------------------------- espelhos amortecidos ---- */
     this._run = 0;
@@ -174,6 +183,9 @@ export class Fighter {
     this._esp = 0;
     this._hurt = 0;
     this._hand = 0;
+    this._guarda = 0;
+    /** Espelho amortecido de `kiFull`. Sobe suave e cai quase seco — ver `atualizarAura`. */
+    this._cheio = 0;
     this._andar = 0;
     this._queda = 0;
     this._pitch = 0;
@@ -183,6 +195,8 @@ export class Fighter {
     /* ------------------------------------------------ tombo, morte, dor ---- */
     this._morrendo = false;
     this._morteT = 0;
+    /** s desde que o corpo foi derrubado. Gêmeo de `_morteT` — ver `derrubar`. */
+    this._tontoT = 0;
     this._tombo = 0;
     this._morte = 0;
     /** Assentar no chão é mais lento que tombar — ver `poseMorte`. */
@@ -258,6 +272,32 @@ export class Fighter {
   }
 
   /**
+   * Foi DERRUBADO — cinco golpes seguidos, e o corpo vai ao chão.
+   *
+   * É a morte sem a morte: o mesmo tombo girando seguido do mesmo assentar, com
+   * os mesmos dois canais (`_tombo` e `_morte`), porque a leitura pedida é
+   * exatamente a mesma — um corpo que perde o controle no ar e encontra o chão.
+   * A única diferença é que esta é REVERSÍVEL: quando `tonto` apaga, os alvos
+   * dos canais voltam a zero e o mesmo amortecimento que deitou o corpo o
+   * levanta, sem uma linha de animação a mais.
+   *
+   * Reaproveitar `poseMorte` para alguém que está vivo é deliberado e é o
+   * contrário de preguiça: um segundo conjunto de poses "caído mas vivo" seria
+   * uma cópia que envelheceria em metades, e a diferença entre as duas coisas na
+   * tela não é a pose — é que uma delas se levanta.
+   *
+   * @param {{x,y,z}|null} direcao de onde veio a pancada que derrubou
+   */
+  derrubar(direcao) {
+    if (this._morrendo) return;
+    this.hit(direcao, true);
+    this.tonto = true;
+    this._tontoT = 0;
+    this._velGiro = 5 + Math.random() * 3;
+    this._eixoTombo.set(1, this._hitX * 0.6, this._hitZ * 0.35).normalize();
+  }
+
+  /**
    * Morreu. O corpo é ARREMESSADO nesta direção e só depois assenta.
    *
    * Duas coisas em sequência, e é a sequência que vende o golpe: primeiro o
@@ -278,6 +318,10 @@ export class Fighter {
   revive() {
     this._morrendo = false;
     this.down = false;
+    this.tonto = false;
+    this.defendendo = false;
+    this._guarda = 0;
+    this._tontoT = 0;
     this._morteT = 0;
     this._tombo = 0;
     this._morte = 0;
@@ -345,8 +389,20 @@ export class Fighter {
     this._boost = damp(this._boost, clamp(this.boostBlend, 0, 1), 5.5, dt);
     this._charge = damp(this._charge, clamp(this.chargeBlend, 0, 1), 7, dt);
     this._hurt = damp(this._hurt, clamp(this.hurtBlend, 0, 1), 16, dt);
+    /* A GUARDA SOBE DEPRESSA E DESCE DEVAGAR, e a assimetria é a regra do golpe:
+       ela precisa estar de pé no quadro em que o botão desceu (defender tarde é
+       não ter defendido), e o corpo demora a se abrir de novo depois — abrir a
+       guarda num estalo lê como o boneco tendo sido desligado. */
+    this._guarda = damp(this._guarda, this.defendendo ? 1 : 0, this.defendendo ? 15 : 7, dt);
     this._hand = damp(this._hand, clamp(this.handPose, 0, 1), 18, dt);
     this._pitch = damp(this._pitch, this.pitch, 20, dt);
+    /* A prontidão ACENDE depressa e APAGA na hora (3,5 contra 18): encher a
+       barra é um acontecimento e tem de ser visto no quadro em que acontece;
+       gastar uma lasca dela é perder o estado, e a aura tem de ir junto. Ela
+       apagava devagar antes, e o resultado é que o lutador andava aceso quase
+       o tempo todo — a aura deixava de dizer "cheio" e virava enfeite. */
+    const cheio = this.kiFull ? 1 : 0;
+    this._cheio = damp(this._cheio, cheio, cheio ? 3.5 : 18, dt);
 
     /* Marcha: quanto se anda sai da VELOCIDADE, não de um canal.
      *
@@ -396,11 +452,29 @@ export class Fighter {
     if (morrendo && !this._morrendo) this.die(null);
     if (morrendo) this._morteT += dt;
 
+    /* O CAÍDO usa os mesmos dois canais do morto — ver `derrubar`. Ele perde
+       para a morte quando os dois acontecem (morrer no meio de um atordoamento
+       é comum, porque quem está no chão é justamente quem está apanhando), e o
+       relógio dele zera quando o corpo se levanta, para uma segunda queda
+       recomeçar do começo em vez de continuar de onde parou. */
+    const caido = !morrendo && this.tonto === true;
+    if (caido) this._tontoT += dt;
+    else this._tontoT = 0;
+
     this._arremesso = damp(this._arremesso, 0, 2.6, dt);
-    const alvoTombo = morrendo
-      ? 1 - smoothstep(0.3, 0.95, this._morteT)
-      : this._arremesso;
-    const alvoMorte = morrendo ? smoothstep(0.35, 1.1, this._morteT) : 0;
+    let alvoTombo = this._arremesso;
+    let alvoMorte = 0;
+    if (morrendo) {
+      alvoTombo = 1 - smoothstep(0.3, 0.95, this._morteT);
+      alvoMorte = smoothstep(0.35, 1.1, this._morteT);
+    } else if (caido) {
+      /* Mais rápido que a morte: 0,25 s de tombo e o corpo já está assentando.
+         A queda dura 2,4 s no total (`stagger.time`), e gastar um terço dela
+         girando no ar deixaria pouco tempo de "caído" para o golpe do outro
+         lado caber. Morrer pode ser demorado; apanhar tem de ser seco. */
+      alvoTombo = Math.max(this._arremesso, 1 - smoothstep(0.2, 0.75, this._tontoT));
+      alvoMorte = smoothstep(0.25, 0.8, this._tontoT);
+    }
     this._tombo = damp(this._tombo, clamp(alvoTombo, 0, 1), 10, dt);
     this._morte = damp(this._morte, alvoMorte, 6, dt);
     this._assento = damp(this._assento, alvoMorte, 3.2, dt);
@@ -446,6 +520,14 @@ export class Fighter {
       poseCarga(_tmpPose, ctx);
       misturarPose(_pose, _tmpPose, this._charge);
     }
+    /* A GUARDA entra depois da carga e antes do especial, e as duas vizinhanças
+       têm razão de ser: ela nunca coexiste com a carga (o laço principal e o bot
+       garantem isso nos dois lados), e o especial ganha dela porque quem começou
+       um Kamehameha não está mais se protegendo — está comprometido. */
+    if (this._guarda > 0.002) {
+      poseDefesa(_tmpPose, ctx);
+      misturarPose(_pose, _tmpPose, this._guarda);
+    }
     if (this._esp > 0.002) {
       poseEspecial(_tmpPose, ctx);
       misturarPose(_pose, _tmpPose, this._esp);
@@ -458,11 +540,42 @@ export class Fighter {
     /* A rajada é CAMADA e entra depois de tudo o que é postura: atirar não muda
        o que o corpo está fazendo, muda só o braço que atira. Ela é abafada pelo
        especial e pela carga porque nesses dois as mãos já estão ocupadas. */
-    aplicarRajada(_pose, ctx, this._hand * (1 - this._esp) * (1 - this._charge));
+    /* O braço da rajada é abafado também pela GUARDA, pelo mesmo motivo das
+       outras duas: com os antebraços cruzados na frente do rosto, a mão não está
+       livre para atirar — e quem está defendendo não atira mesmo (o laço
+       principal cala o botão, e a sala recusa o disparo). */
+    aplicarRajada(
+      _pose,
+      ctx,
+      this._hand * (1 - this._esp) * (1 - this._charge) * (1 - this._guarda),
+    );
 
+    /* A DOR NÃO CANCELA O COMPROMISSO — ela só o incomoda.
+     *
+     * O pedido do usuário é preciso: "quando o player está carregando o poder ou
+     * atirando o poder, se ele for acertado por outros poderes, ele não perde a
+     * animação, porém o life dele é tirado. A menos que seja acertado por um
+     * Kamehameha ou um grande poder."
+     *
+     * As duas metades moram em lugares diferentes, e é assim que tem de ser:
+     *
+     * • a metade "não perde a animação" é ESTA linha. Durante um especial ou
+     *   uma carga, a camada de dor entra com um quinto do peso — some o
+     *   estremecimento, fica a postura. Antes ela entrava inteira, e uma rajada
+     *   de seis pontos dobrava o tronco de quem estava no meio de um Kamehameha
+     *   de 3,5 s: a pose mais cara do jogo desmanchada por um arranhão.
+     * • a metade "a menos que seja um poder grande" NÃO é uma pose: é a queda.
+     *   Trinta de dano na janela (`NAMEK.fighter.stagger`) derrubam o corpo, e
+     *   aí quem cancela o golpe é a sala, que apaga o especial em curso e manda
+     *   o `STAGGER`. Um Kienzan, um Galick Gun, uma Genki Dama ou meio segundo
+     *   de Kamehameha passam desse limiar sozinhos; cinco bolinhas também.
+     *
+     * Ou seja: o corpo aguenta o que é pequeno e vai ao chão com o que é grande,
+     * e nenhuma das duas coisas precisou de um estado novo para existir. */
     if (this._hurt > 0.002) {
+      const compromisso = Math.max(this._esp, this._charge);
       poseDano(_tmpPose, ctx);
-      misturarPose(_pose, _tmpPose, this._hurt * 0.85 * (1 - this._morte));
+      misturarPose(_pose, _tmpPose, this._hurt * 0.85 * (1 - this._morte) * (1 - compromisso * 0.8));
     }
     if (this._tombo > 0.002) {
       poseArremessado(_tmpPose, ctx);
@@ -619,16 +732,38 @@ export class Fighter {
     const vz = this.velocity.z;
     const rapidez = Math.sqrt(vx * vx + vy * vy + vz * vz);
 
-    /* QUATRO fontes acendem a mesma aura, e a maior manda. Somá-las estouraria
+    /* CINCO fontes acendem a mesma aura, e a maior manda. Somá-las estouraria
        a tela quando alguém carrega ki no meio de um arranque, que é uma coisa
        que acontece o tempo todo.
 
-       VOAR É UMA DELAS, e antes não era: a aura só existia na carga e no
-       arranque, então o lutador cruzava o céu em voo de cruzeiro sem ki nenhum
-       em volta. Na referência ninguém voa apagado — quem está no ar está com o
-       ki aceso, mais forte quanto mais rápido vai. */
-    const voando = this._fly * (0.4 + 0.34 * clamp(rapidez / NAMEK.fighter.flySpeed, 0, 1));
-    let i = Math.max(this._charge, this._boost * 0.9, voando);
+       O VOO DE CRUZEIRO NÃO É UMA DELAS. Ele já foi, e o preço era o lutador
+       aceso o tempo todo: qualquer voo, em qualquer velocidade, ligava a aura.
+       Quem acende no ar é a ARRANCADA (`_boost`) — o voo rápido, o da cauda —,
+       e por isso o `voando` some daqui. Parou de arrancar, a aura apaga com o
+       rastro; a não ser que a barra esteja cheia, e aí quem a segura é a
+       prontidão, que é o único estado que tem direito a ficar aceso parado. */
+
+    /* A PRONTIDÃO é a mais fraca das quatro, e tem de ser.
+     *
+     * Ela fica acesa por minutos — é o estado de quem está com a barra cheia —,
+     * enquanto as outras são gestos de segundos. No talo ela apagaria a
+     * diferença entre "estou pronto" e "estou carregando", que é a leitura de
+     * jogo mais importante que a aura carrega: 0,38 é um contorno que se vê a
+     * cem metros e ainda deixa a carga (1,0) ser três vezes mais forte que ele.
+     *
+     * E ela é o mesmo sinal do voo de graça (`freeFlightAt`), então o brilho em
+     * volta de um adversário quer dizer as duas coisas ao mesmo tempo: ele pode
+     * soltar o golpe grande, e ele pode te perseguir sem pagar nada por isso. */
+    /* A GUARDA é a quinta, e entra mais fraca que a carga de propósito: ela
+       custa ki (é o que a torna uma escolha) e a aura é a única coisa que diz
+       isso de longe. Forte demais, ela viraria a leitura de "carregando" — que
+       é o oposto exato do que está acontecendo. */
+    let i = Math.max(
+      this._charge,
+      this._boost * 0.9,
+      this._cheio * 0.38,
+      this._guarda * 0.42,
+    );
     if (this._esp > 0.01) {
       // No especial a aura sobe com a carga e recua quando o golpe já saiu: a
       // energia foi embora com o feixe.

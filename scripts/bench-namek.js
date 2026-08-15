@@ -95,6 +95,13 @@ if (espectador) {
 }
 if (tempestade) sala.pedirClima("tempestade", sala.now());
 
+/* A DIFICULDADE, por argumento: `dificil`, `medio`, `facil` ou `parado`.
+   Ela muda tudo o que este banco mede — velocidade, esquiva, cadência e
+   especial —, então medir sem poder escolhê-la seria medir um nível só e
+   chamar o resultado de "os bots". */
+const nivel = process.argv.find((a) => NAMEK.bot.dificuldades[a]);
+if (nivel) sala.bots.setDificuldade(nivel);
+
 const bots = sala.bots.list;
 const N = bots.length;
 
@@ -136,7 +143,13 @@ for (let q = 0; q < quadros; q++) {
     const b = bots[i];
     ki += b.ki;
     if (b.estado === "carregar") carga++;
-    trilha[i].push({ x: b.position.x, y: b.position.y, z: b.position.z, viva: b.alive, estado: b.estado });
+    trilha[i].push({
+      x: b.position.x, y: b.position.y, z: b.position.z,
+      viva: b.alive, estado: b.estado,
+      /* Caído por golpes seguidos também é "parado por decisão do jogo" — a de
+         quem o derrubou. Ver a exceção da pose de carga logo abaixo. */
+      tonto: b.tonto > 0,
+    });
     if (!b.alive) continue;
     let melhor = Infinity;
     for (const o of bots) {
@@ -157,10 +170,16 @@ function marcar(bot, motivo) {
 /* ------------------------------------------------------------------- presos */
 
 /* PRESO = cinco segundos vivo sem sair de um raio de 4 m.
-   A pose de CARGA está fora da conta de propósito: carregar ki TRAVA o
-   personagem no lugar (§5 do plano), então um bot enchendo a barra é um bot
-   parado por decisão, não por defeito. Sem esta exceção o banco acusaria como
-   bug o comportamento mais importante da lista do §9. */
+   Duas poses estão fora da conta de propósito, e as duas pelo mesmo motivo —
+   elas são o jogo funcionando, não o bot travando:
+
+   • a pose de CARGA: carregar ki TRAVA o personagem no lugar (§5 do plano),
+     então um bot enchendo a barra é um bot parado por decisão. Sem esta
+     exceção o banco acusaria como bug o comportamento mais importante do §9;
+   • o ATORDOAMENTO: quem levou cinco golpes seguidos cai no chão e fica lá
+     (`NAMEK.fighter.stagger`). Derrubado a duzentos metros, ele passa quatro
+     segundos caindo e mais dois e meio caído — mais que a janela de cinco
+     segundos deste teste, e por construção sem andar um metro. */
 const JANELA = Math.round(5 / AMOSTRA);
 const presos = [];
 for (let i = 0; i < N; i++) {
@@ -169,7 +188,12 @@ for (let i = 0; i < N; i++) {
     let ok = true;
     let andou = 0;
     for (let b = a; b <= a + JANELA; b++) {
-      if (!t[b].viva || t[b].estado === "carregar") { ok = false; break; }
+      /* "treino" é o alvo de pancada do nível `parado`: ficar parado É o
+         comportamento dele (ver `NAMEK.bot.dificuldades`), então acusá-lo de
+         preso seria o banco reprovando a funcionalidade que ele deveria
+         confirmar. */
+      const e = t[b].estado;
+      if (!t[b].viva || e === "carregar" || e === "treino" || t[b].tonto) { ok = false; break; }
       andou = Math.max(andou, Math.hypot(t[b].x - t[a].x, t[b].y - t[a].y, t[b].z - t[a].z));
     }
     if (ok && andou < 4) {
@@ -206,7 +230,8 @@ for (const b of bots) {
 const min = duracao / 60;
 
 console.log(
-  `namekusei — ${N} bots, ${duracao} s de partida, passo de ${(PASSO * 1000).toFixed(0)} ms` +
+  `namekusei — ${N} bots (${sala.bots.dificuldadeId}), ${duracao} s de partida, ` +
+    `passo de ${(PASSO * 1000).toFixed(0)} ms` +
     `${espectador ? ", COM espectador" : ""}${tempestade ? ", TEMPESTADE" : ""}`,
 );
 
@@ -254,7 +279,7 @@ if (espectador) {
 console.log("\n── contenção (§4) ────────────────────────────────────");
 if (!fugas.length) console.log("arena             nenhum bot saiu do mundo, furou o teto ou entrou no relevo");
 else for (const f of fugas) console.log(`  ⚠ ${f.nome} — ${f.motivo}`);
-if (!presos.length) console.log(`presos            nenhum (janela de 5 s, raio de 4 m, fora a pose de carga)`);
+if (!presos.length) console.log(`presos            nenhum (janela de 5 s, raio de 4 m, fora carga e queda)`);
 else for (const p of presos) console.log(`  ⚠ ${p.nome} preso em ${p.em} s — andou ${p.andou} m em 5 s`);
 
 sala.destroy();

@@ -235,6 +235,7 @@ export class NamekRoom {
     if (!this.players.size && !this.bots.count) return;
 
     const t = this.now();
+    this.relogioDaQueda(t);
     this.economiaDeKi(dt, t);
     this.queimarNaLava(dt, t);
     this.montarCorpos(t);
@@ -356,13 +357,28 @@ export class NamekRoom {
       const bo = f.isBot ? f.boostBlend : (f.state?.bo ?? 0);
       const ch = f.isBot ? f.chargeBlend : (f.state?.ch ?? 0);
 
-      if (bo > 0.05) {
+      /* BARRA CHEIA VOA DE GRAÇA — o mesmo limiar que o cliente lê em
+         `KiMeter.voaDeGraca`, e ter os dois lados no mesmo `freeFlightAt` é o
+         que impede a barra do HUD de descer enquanto a barra que vale fica
+         parada. Vale para o bot pelo mesmo caminho: ele não paga arranque com o
+         especial no topo, que é justamente quando ele está caçando alguém. */
+      const deGraca = f.ki >= K.max * K.freeFlightAt - 1e-6;
+      if (bo > 0.05 && !deGraca) {
         const custo = K.boostDrain * bo * dt;
         if (custo > 0) {
           f.ki = Math.max(0, f.ki - custo);
           f.ultimoGasto = agora;
         }
       }
+      /* A GUARDA DRENA, e drena antes de qualquer ganho. É o que dá preço ao
+         botão de defesa: quem fica atrás dos braços vê a barra descer, e uma
+         barra vazia é uma guarda que não apara mais nada (ver `defendendo`).
+         Vem da pose pelo mesmo motivo que o arranque vem — ver o cabeçalho. */
+      if (this.defendendo(f)) {
+        f.ki = Math.max(0, f.ki - NAMEK.guard.drain * dt);
+        f.ultimoGasto = agora;
+      }
+
       if (ch > 0.05) {
         f.ki = Math.min(K.max, f.ki + K.chargeRate * ch * dt);
       } else if (agora - f.ultimoGasto > K.idleDelay * 1000) {
@@ -496,6 +512,16 @@ export class NamekRoom {
     if (agora < vitima.invulnUntil) return 0;
     if (!(dano > 0)) return 0;
 
+    /* A GUARDA APARA AQUI, no funil, e não em cada fonte de dano.
+     *
+     * Rajada, feixe, disco, esfera, onda e queda passam todos por este método —
+     * é o que o cabeçalho promete —, e é por isso que a defesa precisa de uma
+     * linha só para valer contra tudo. Aparar dentro de cada golpe seria seis
+     * implementações da mesma regra, e a sétima (a que alguém acrescentar
+     * amanhã) nasceria sem defesa nenhuma e ninguém notaria. */
+    const aparado = this.defendendo(vitima);
+    if (aparado) dano *= NAMEK.guard.damage;
+
     vitima.health -= dano;
     if (vitima.isBot) vitima.machucar();
 
@@ -511,6 +537,12 @@ export class NamekRoom {
        — acumula e acende a 6 Hz. Sem essa distinção, três segundos de
        Kamehameha em dois alvos são 120 mensagens que dizem a mesma coisa. */
     if (continuo) {
+      /* O FEIXE TAMBÉM DERRUBA, e ele conta a cada quadro — não a cada `HURT`.
+         O `HURT` sai a 6 Hz por economia de rede (é o clarão vermelho, não o
+         estado); a contagem é sobre o DANO, e o dano do feixe acontece vinte
+         vezes por segundo. Contar no ritmo da mensagem faria um Kamehameha
+         derrubar três vezes mais devagar do que ele machuca. */
+      if (!aparado) this.contarGolpe(vitima, por, agora, dano);
       vitima.dorAcum += dano;
       vitima.dorPor = por?.id ?? null;
       vitima.dorKind = kind;
@@ -523,6 +555,7 @@ export class NamekRoom {
         by: vitima.dorPor,
         amount: Math.round(vitima.dorAcum),
         kind: vitima.dorKind,
+        g: aparado ? 1 : 0,
       });
       vitima.dorAcum = 0;
       return dano;
@@ -535,8 +568,179 @@ export class NamekRoom {
       by: por?.id ?? null,
       amount: Math.round(dano),
       kind,
+      /* APARADO. Um bit, e ele existe porque a guarda precisa ser AUDÍVEL: sem
+         ele, aparar um Kienzan e levá-lo na cara soam igual, e o jogador não
+         tem como aprender que o botão fez alguma coisa. A vida já diz (o dano
+         caiu para 22 %), mas ninguém lê número no meio de uma briga. */
+      g: aparado ? 1 : 0,
     });
+    /* A CONTAGEM SÓ VÊ GOLPE DISCRETO, e o `continuo` acima já saiu com o
+       `return` dele. É a distinção certa: o feixe cobra vinte vezes por segundo
+       e derrubaria alguém em um quarto de segundo de exposição, o que faria do
+       atordoamento um efeito colateral do Kamehameha em vez da janela que
+       existe para o Kamehameha poder sair. Rajada, disco, esfera e onda contam;
+       feixe, não. */
+    if (!aparado) this.contarGolpe(vitima, por, agora, dano);
     return dano;
+  }
+
+  /**
+   * Está com a guarda de pé?
+   *
+   * Lida da POSE (bit 8 de `packFighter`) para o humano e do campo direto para o
+   * bot — a mesma divisão que `economiaDeKi` já faz com o arranque e a carga, e
+   * pela mesma razão: a pose chega 20 vezes por segundo e se conserta sozinha.
+   *
+   * **E ela exige ki.** Sem essa segunda metade, um cliente que mentisse o bit
+   * defenderia de graça e para sempre: com ela, a mentira é autolimitada, porque
+   * quem defende paga `guard.drain` por segundo em `economiaDeKi` e a barra
+   * chega a zero em menos de cinco segundos. É o mesmo modelo de confiança do
+   * resto do modo — o cliente declara, a sala cobra.
+   */
+  defendendo(f) {
+    if (!f?.alive || f.ki <= 0) return false;
+    if (this.atordoado(f)) return false; // caído não tem guarda
+    if (f.isBot) return f.defendendo === true;
+    return (((f.state?.b ?? 0) & 8) === 8);
+  }
+
+  /**
+   * Mais castigo na conta — e a queda, quando ela fecha.
+   *
+   * **A conta é de DANO, medida em rajadas.** Uma bola de ki (6 de dano) vale
+   * exatamente um golpe, e é daí que sai o "cinco poderes seguidos" do pedido;
+   * um Kienzan (48), um Galick Gun (62) ou uma Genki Dama (96) valem mais de
+   * cinco sozinhos e derrubam no impacto; e um feixe, que cobra por quadro, vai
+   * somando até fechar os trinta.
+   *
+   * Foi assim, e não com um contador de acertos, porque a regra que o usuário
+   * descreveu tem DUAS metades que precisam ser a mesma linha de código:
+   * "cinco poderes pequenos seguidos derrubam" e "um poder grande derruba de
+   * uma vez". Com um contador de eventos, a Genki Dama valeria 1 de 5 e uma
+   * bolinha valeria o mesmo — e o golpe mais caro do jogo não interromperia
+   * nada. Contando dano, as duas metades caem sozinhas da mesma conta.
+   *
+   * A janela DESLIZA: cada acerto empurra o prazo para `window` segundos à
+   * frente, e um intervalo maior que isso zera a conta. É o que separa "estou
+   * sendo metralhado" de cinco tiros espalhados por uma partida inteira, que é
+   * a única leitura que faz do golpe uma coisa merecida.
+   *
+   * Ver `NAMEK.fighter.stagger` para a razão de cada número, e o §6 do plano
+   * para por que o modo precisava disto: a 64 m/s ninguém acerta um especial em
+   * quem tem o controle do próprio corpo.
+   *
+   * @param {number} dano o dano JÁ aparado pela guarda, se houve guarda
+   */
+  contarGolpe(vitima, por, agora, dano) {
+    const S = NAMEK.fighter.stagger;
+    if (!vitima.alive) return;
+    if (!(dano > 0)) return;
+    /* Já está caído, ou acabou de levantar: a contagem nem começa. Sem esta
+       linha, os golpes que chovem EM CIMA de quem está no chão — e eles chovem,
+       porque é para isso que a janela existe — reiniciariam o relógio a cada
+       cinco, e o corpo nunca mais se levantaria. */
+    if (agora < vitima.tontoLivreEm) return;
+
+    if (agora > vitima.golpeAte) vitima.golpes = 0;
+    /* Em RAJADAS: o dano dividido pelo dano de uma bola de ki. É o que faz a
+       mesma linha atender "cinco pequenos" e "um grande" — ver o cabeçalho. */
+    vitima.golpes += dano / NAMEK.blast.damage;
+    vitima.golpeAte = agora + S.window * 1000;
+    if (vitima.golpes < S.hits) return;
+
+    this.derrubar(vitima, por, agora);
+  }
+
+  /** Põe alguém no chão por `stagger.time` segundos. O caminho único. */
+  derrubar(vitima, por, agora) {
+    const S = NAMEK.fighter.stagger;
+    vitima.golpes = 0;
+    vitima.golpeAte = 0;
+    /* O MÍNIMO garantido pela sala. O fim de verdade quem diz é o corpo, pelo
+       bit 4 da pose — a queda de trezentos metros dura mais que isto. Ver
+       `atordoado` e `relogioDaQueda`. */
+    vitima.tontoAte = agora + S.time * 1000;
+    vitima.tontoLivreEm = vitima.tontoAte + S.immune * 1000;
+    /* O ESPECIAL EM CURSO MORRE JUNTO. Ele é o registro que autoriza o
+       `SPECIAL_HIT` a cobrar dano (ver `registrarEspecial`): mantê-lo vivo
+       deixaria um feixe continuar queimando gente a partir de um corpo caído no
+       chão — o golpe cobrando por um lutador que já não existe. */
+    vitima.especial = null;
+    if (vitima.isBot) vitima.derrubar(S.time);
+
+    /* DERRUBAR ENCHE A BARRA DE QUEM DERRUBOU. É o pedido literal — "o ki dele
+     * é completamente restaurado para que ele possa em sequência soltar um
+     * poder maior enquanto o player está atordoado" — e é a peça que fecha o
+     * ciclo do modo.
+     *
+     * Sem ela, a janela existia e era inútil na prática: derrubar alguém custa
+     * cinco bolas de ki (10 da barra) ou um especial (a barra inteira), e o
+     * especial que a janela foi criada para permitir exige a barra CHEIA. Ou
+     * seja, quem acabava de derrubar alguém era exatamente quem NÃO tinha com o
+     * que aproveitar — e encher a barra leva 5,3 s, mais que o dobro dos 2,4 s
+     * em que a vítima fica no chão. A recompensa chegava sempre tarde demais.
+     *
+     * É uma recompensa grande, e ela se paga sozinha: derrubar exige 30 de dano
+     * dentro de uma janela de 2,6 s, com a vítima sem guarda, e não pode ser
+     * repetido na mesma pessoa por 6 s (`stagger.immune`). Quem consegue isso
+     * ganhou o direito ao golpe grande. E o `ultimoGasto` é zerado junto, senão
+     * a regeneração passiva ficaria bloqueada pelo próprio presente.
+     *
+     * Só para quem NÃO é a vítima, obviamente: uma queda por dano de queda ou
+     * por onda própria não premia ninguém. */
+    if (por && por !== vitima && por.alive) {
+      por.ki = NAMEK.ki.max;
+      por.ultimoGasto = -Infinity;
+    }
+
+    this.broadcastAll({
+      t: NS2C.STAGGER,
+      id: vitima.id,
+      by: por && por !== vitima ? por.id : null,
+      s: S.time,
+      w: agora,
+    });
+  }
+
+  /**
+   * Está caído AGORA? Quem está, não atira, não solta especial e não cava.
+   *
+   * **A queda tem duração VARIÁVEL, e por isso são duas fontes.** Quem é
+   * derrubado a trezentos metros passa cinco segundos despencando antes de os
+   * 2,4 s no chão começarem a contar (ver `FighterController.derrubar`, que
+   * explica por que o relógio só anda com os pés no chão). A sala não tem como
+   * saber de antemão quanto tempo a queda leva — ela nem sabe a que altura o
+   * lutador estava quando o quinto golpe chegou.
+   *
+   * Então: `tontoAte` é o MÍNIMO garantido pela sala, e o bit 4 da pose é o
+   * lutador dizendo "ainda estou no chão". A união dos dois é a resposta. Um
+   * cliente que mentisse o bit só conseguiria voltar a atirar no mínimo — nunca
+   * antes dele —, que é o mesmo teto de sempre: o cliente pode se prejudicar,
+   * não se privilegiar.
+   */
+  atordoado(f, agora = this.now()) {
+    if (agora < (f.tontoAte ?? 0)) return true;
+    if (f.isBot) return f.tonto > 0;
+    return (((f.state?.b ?? 0) & 4) === 4);
+  }
+
+  /**
+   * O relógio da CARÊNCIA, que só pode começar quando o corpo se levanta.
+   *
+   * `stagger.immune` é a trava que impede dois atiradores de manter um terceiro
+   * no chão para sempre, e ela conta a partir do momento em que ele LEVANTA —
+   * não do instante em que a sala imaginou que ele levantaria. Como a queda tem
+   * duração variável, a única forma de acertar isso é observar a borda: enquanto
+   * `atordoado` for verdade, a carência é empurrada para a frente.
+   *
+   * Uma passada por quadro sobre quinze lutadores, sem alocar nada.
+   */
+  relogioDaQueda(agora) {
+    for (const f of this.todos()) {
+      if (!f.alive) continue;
+      if (!this.atordoado(f, agora)) continue;
+      f.tontoLivreEm = agora + NAMEK.fighter.stagger.immune * 1000;
+    }
   }
 
   /** A morte: placar, aviso e o relógio do renascimento. */
@@ -546,6 +750,14 @@ export class NamekRoom {
     vitima.score.deaths++;
     vitima.respawnAt = agora + NAMEK.respawn.delay * 1000;
     vitima.dorAcum = 0;
+    /* Morrer apaga o atordoamento inteiro, inclusive a carência: o corpo que
+       renasce é um corpo novo, e ele nasce piscando (`respawn.invuln`), que já é
+       a proteção daquele instante. Guardar a carência através da morte daria a
+       quem acabou de morrer seis segundos de imunidade a queda de graça. */
+    vitima.golpes = 0;
+    vitima.golpeAte = 0;
+    vitima.tontoAte = 0;
+    vitima.tontoLivreEm = 0;
     if (vitima.isBot) vitima.cair();
     const corpo = this.corpoPorId.get(vitima.id);
     /* O corpo do QUADRO EM CURSO morre junto. Sem isto, uma segunda bola que
@@ -556,6 +768,26 @@ export class NamekRoom {
     if (por && por !== vitima) {
       por.score.kills++;
       if (por.isBot) por.tDecisao = 0; // procura o próximo na hora
+
+      /* DERRUBOU, ENCHEU. **No instante do tombo, e por inteiro.**
+       *
+       * É o pedido literal ("assim que ele começar a cair a barra já deve
+       * encher instantaneamente"), e ele fecha o laço que o modo não tinha:
+       * abate → barra cheia → aura acesa → voo de graça → chegar no próximo. Sem
+       * ele, quem acabou de ganhar uma briga era exatamente quem tinha menos ki
+       * na arena, e o prêmio por vencer era ter de parar para carregar à vista
+       * de todo mundo.
+       *
+       * Aqui, e não num tratador de mensagem, porque `matar` é o caminho ÚNICO
+       * de toda morte — rajada, feixe, disco, onda. Era isso o "às vezes não
+       * acontece": qualquer regra escrita só no caminho da rajada deixaria de
+       * fora metade das mortes do jogo.
+       *
+       * `ultimoGasto` volta para trás junto: sem isso a regeneração passiva
+       * ficaria `idleDelay` segundos travada por um gasto que o prêmio já pagou.
+       */
+      por.ki = NAMEK.ki.max;
+      por.ultimoGasto = -Infinity;
     }
 
     const ponto = p ?? this.pontoDe(vitima);
@@ -643,6 +875,10 @@ export class NamekRoom {
     f.ultimoGasto = -Infinity;
     f.dorAcum = 0;
     f.especial = null;
+    f.golpes = 0;
+    f.golpeAte = 0;
+    f.tontoAte = 0;
+    f.tontoLivreEm = 0;
     if (f.isBot) f.renascer(p.x, p.y, p.z, invulnUntil);
 
     /* Encara o meio da arena. Mesma razão do bot: nascer de costas para a
@@ -718,6 +954,28 @@ export class NamekRoom {
     return c;
   }
 
+  /**
+   * A dificuldade dos bots, pedida por alguém no menu.
+   *
+   * Da SALA, como o clima, e retransmitida a todos: os bots são de todos, e um
+   * menu mostrando o nível que aquela pessoa pediu por último em vez do que
+   * está valendo seria a pior forma de mentir — a que o jogador só descobre
+   * apanhando.
+   *
+   * Sem carência de tempo, ao contrário do clima. Lá ela existe porque a
+   * transição de céu dura oito segundos e um pedido novo no meio dela não
+   * descreve nada que dê para ver; aqui a troca é instantânea por construção
+   * (são multiplicadores lidos no quadro em que são usados), então segurar o
+   * botão só produziria a mesma sala, escrita de novo. O que protege contra o
+   * clique repetido é `setDificuldade` devolver false quando o nível já é o
+   * corrente — e aí não há retransmissão nenhuma.
+   */
+  pedirDificuldade(id) {
+    if (!this.bots.setDificuldade(id)) return;
+    this.broadcastAll({ t: NS2C.DIFFICULTY, id: this.bots.dificuldadeId });
+    this.log(`namek — bots: ${this.bots.dificuldadeId}`);
+  }
+
   /** O balde de crateras pequenas de um lutador. Ver `CRATERAS_POR_SEGUNDO`. */
   podeCravar(f) {
     const agora = this.now();
@@ -766,6 +1024,12 @@ export class NamekRoom {
           kind: ev.kind,
           o: vec(ev.o),
           d: vec(ev.d),
+          /* O ALVO, que faltava — e a falta era visível: sem este campo o
+             cliente recebia `target: undefined`, e o especial de todo bot voava
+             RETO na tela enquanto o mesmo golpe de um humano contornava. Um
+             Kienzan de bot e um Kienzan de gente eram dois golpes diferentes.
+             `alvoId` é a trava do bot; é o que a tecla R é para o humano. */
+          target: ev.alvo ?? null,
           w: agora,
         });
         break;
@@ -829,7 +1093,8 @@ export class NamekRoom {
       const f = 1 - d / K.burstRadius;
       const inv = d > 1e-3 ? 1 / d : 0;
       if (c.ref.isBot) {
-        const v = K.burstPush * f;
+        // Quem está de guarda também é MENOS empurrado — ver `NAMEK.guard.push`.
+        const v = K.burstPush * f * (this.defendendo(c.ref) ? NAMEK.guard.push : 1);
         c.ref.velocity.x += dx * inv * v;
         c.ref.velocity.y += dy * inv * v + v * 0.35;
         c.ref.velocity.z += dz * inv * v;
@@ -970,6 +1235,14 @@ export class NamekRoom {
       dorPor: null,
       dorKind: "blast",
       crateraAte: 0,
+      /* O atordoamento. `golpes` é a contagem corrente e `golpeAte` é o fim da
+         janela deslizante; `tontoAte` é o instante em que ele se levanta e
+         `tontoLivreEm` o instante a partir do qual pode ser derrubado de novo.
+         Ver `contarGolpe` e `NAMEK.fighter.stagger`. */
+      golpes: 0,
+      golpeAte: 0,
+      tontoAte: 0,
+      tontoLivreEm: 0,
       /** Ki gasto na vida toda. Ver `gastar`. */
       gastoKi: 0,
 
@@ -985,6 +1258,11 @@ export class NamekRoom {
       time: agora,
       max: NAMEK.net.maxPlayers,
       weather: { id: this.weather, w: this.weatherAt },
+      /* Quem entra no meio precisa do nível que está VALENDO, não do padrão —
+         senão o menu dele mostraria "Médio" numa sala em que os bots estão em
+         "Parado", e a primeira coisa que ele faria seria trocar para um nível
+         que já era o dele. */
+      difficulty: this.bots.dificuldadeId,
       fighters: this.roster(player),
       /* A LISTA INTEIRA DE CRATERAS. É esta linha que cumpre o critério 6 do
          §12: quem entra no meio vê o chão já deformado, e não um planeta liso
@@ -1039,6 +1317,10 @@ export class NamekRoom {
       this.field = new NamekField();
       this.weather = NAMEK.weather.padrao;
       this.weatherAt = 0;
+      /* A dificuldade volta ao padrão junto com o resto. Ela é uma escolha da
+         PARTIDA, não da instalação: quem chega numa sala vazia não deveria
+         herdar o "Parado" que alguém deixou ligado para treinar ontem. */
+      this.bots.setDificuldade(NAMEK.bot.dificuldadePadrao);
       this.corpos.length = 0;
       this.corpoPorId.clear();
       this.propsCaidos.clear();
@@ -1122,6 +1404,10 @@ export class NamekRoom {
         this.pedirClima(msg.id, this.now());
         break;
 
+      case NC2S.DIFFICULTY:
+        this.pedirDificuldade(msg.id);
+        break;
+
       default:
         break;
     }
@@ -1179,6 +1465,16 @@ export class NamekRoom {
    */
   registrarRajada(player, msg) {
     if (!player.alive) return;
+    /* CAÍDO NÃO ATIRA — e a trava mora aqui, na sala, e não só no cliente.
+     *
+     * O cliente já cala o botão de tiro enquanto o corpo está no chão (ver
+     * `NamekGame.step`), mas essa é a metade cortês da regra: a metade que
+     * importa é esta, porque a janela de atordoamento só vale alguma coisa se
+     * ela for real para todo mundo. Sem esta linha, bastaria um cliente que
+     * ignora o próprio estado para continuar metralhando deitado — e o golpe
+     * inteiro deixaria de existir. Vale para o especial, para a onda e para a
+     * cratera pelo mesmo motivo. */
+    if (this.atordoado(player)) return;
     if (!vetorOk(msg.o) || !vetorOk(msg.d)) return;
     if (!this.gastar(player, NAMEK.ki.blastCost)) return;
 
@@ -1251,6 +1547,7 @@ export class NamekRoom {
    */
   registrarEspecial(player, msg) {
     if (!player.alive) return;
+    if (this.atordoado(player)) return; // ver `registrarRajada`
     const info = specialInfo(msg.kind);
     if (!info) return;
     if (!vetorOk(msg.o) || !vetorOk(msg.d)) return;
@@ -1285,9 +1582,23 @@ export class NamekRoom {
       kind: msg.kind,
       o: vec(msg.o),
       d: vec(msg.d),
+      /* O alvo do golpe que persegue, repassado INTACTO e saneado como número —
+         o mesmo cuidado que `registrarRajada` toma com o `target` dela, e pelo
+         mesmo motivo: um campo vindo da rede que é retransmitido para catorze
+         conexões é um amplificador se não for aparado. */
+      target: Number.isFinite(msg.target) ? msg.target : null,
       w: clampTempo(msg.w, agora),
     });
-    this.bots.avisarEspecial({ owner: player.id, kind: msg.kind, o: msg.o, d: msg.d });
+    /* O ALVO vai junto: o fantasma que os bots consultam para desviar tem de
+       CURVAR como o golpe de verdade curva. Sem ele, o bot se afastava do eixo
+       do disparo e o Kamehameha ia atrás dele — a esquiva o entregava. */
+    this.bots.avisarEspecial({
+      owner: player.id,
+      kind: msg.kind,
+      o: msg.o,
+      d: msg.d,
+      target: msg.target,
+    });
   }
 
   /**
@@ -1337,6 +1648,47 @@ export class NamekRoom {
     const vy = p.y - e.o[1];
     const vz = p.z - e.o[2];
 
+    /* GOLPE QUE PERSEGUE NÃO TEM EIXO, e a conferência tem de mudar com ele.
+     *
+     * O teste da distância à reta que sai da boca do golpe é exato para quem
+     * viaja em linha reta — e desde que "todos os poderes devem perseguir o
+     * player", ninguém viaja. Um Kienzan que faz 165° de correção acerta alguém
+     * a noventa graus do rumo original, e o teste do eixo recusaria justamente o
+     * acerto legítimo: o golpe não machucaria ninguém que ele perseguiu.
+     *
+     * São dois casos, e a diferença entre eles é o teto de correção total:
+     *
+     * • QUEM TEM `arcMax` (o Kamehameha e a Genki Dama) ganha um CONE. O teto
+     *   dá um limite geométrico de graça: a posição do golpe é a integral de
+     *   versores que nunca se afastam mais de `arcMax` da direção do disparo, e
+     *   a média de vetores dentro de um cone fica dentro do mesmo cone. Ou seja,
+     *   o golpe inteiro cabe num cone de meia-abertura `arcMax` em torno de `d`,
+     *   e a margem lateral aceita a `t` metros é `t · tan(arcMax)` — um cone que
+     *   é frouxo longe, sim, mas oito vezes e meia mais apertado que a esfera em
+     *   ângulo sólido, e o mais apertado que se pode afirmar com honestidade.
+     *
+     * • QUEM NÃO TEM (o Kienzan, o Galick Gun) fica com a ESFERA: a vítima tem
+     *   de estar dentro do alcance, medido da origem. Para eles não existe cone
+     *   honesto — 165° de correção é mais que um hemisfério.
+     *
+     * A troca da esfera vale a pena registrar: um cliente mentiroso poderia
+     * escolher a vítima dentro dela em vez de a que ele de fato acertou. O que
+     * segura o abuso é o resto do cerco, que continua inteiro: o golpe tem de
+     * existir e estar dentro da janela de tempo dele (`e.ate`), custou a barra
+     * CHEIA, e cada vítima só pode ser cobrada UMA vez (`exposicao`). O teto do
+     * estrago de uma mentira é, portanto, um acerto por golpe — que é o mesmo
+     * teto de um acerto honesto.
+     *
+     * E é por isso que o Kamehameha PRECISA do cone e não podia herdar a esfera:
+     * ele cobra por SEGUNDO, então "uma vez por vítima" vale 2,4 s de dps em vez
+     * de um corte, e a esfera de 620 m em torno de quem atirou é grande demais
+     * para uma cobrança dessa. */
+    const arcMax = e.info.homing?.arcMax;
+    if (e.info.homing && arcMax === undefined) {
+      const d = Math.hypot(vx, vy, vz);
+      if (d > e.info.range + TOLERANCIA) return;
+    } else {
+
     const dn = Math.hypot(e.d[0], e.d[1], e.d[2]);
     /* Direção degenerada não pode virar divisão por zero. `vetorOk` garante que
        os três números são finitos, não que eles formam um versor: um cliente
@@ -1350,9 +1702,13 @@ export class NamekRoom {
     const t = vx * dx + vy * dy + vz * dz;
     if (t < 0 || t > e.info.range + TOLERANCIA) return;
 
-    const raio = (e.info.hitRadius ?? 4) + TOLERANCIA;
+    /* A abertura do cone. Zero para quem não persegue — e aí isto é, linha por
+       linha, o teste de eixo que sempre esteve aqui. */
+    const abre = arcMax === undefined ? 0 : t * Math.tan((arcMax * Math.PI) / 180);
+    const raio = (e.info.hitRadius ?? 4) + abre + TOLERANCIA;
     const fora = Math.hypot(vx - dx * t, vy - dy * t, vz - dz * t);
     if (fora > raio) return;
+    }
 
     /* Feixe cobra por SEGUNDO (`dps`); disco e Genki Dama cortam DE UMA VEZ
        (`damage`). São dois golpes de natureza diferente e a mesma mensagem
@@ -1385,6 +1741,7 @@ export class NamekRoom {
 
   registrarOnda(player, msg) {
     if (!player.alive) return;
+    if (this.atordoado(player)) return; // ver `registrarRajada`
     if (!vetorOk(msg.p)) return;
     /* A onda sai de QUEM a soltou, então o ponto declarado tem de ser o corpo
        dele. Oito metros de folga cobrem o atraso da pose; o que a checagem

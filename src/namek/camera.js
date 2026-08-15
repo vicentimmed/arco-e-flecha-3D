@@ -13,7 +13,7 @@
    O que é diferente do arqueiro, e é o modo inteiro:
 
    • **Ela ABRE na arrancada.** Recua cinco metros e alarga o campo de visão em
-     treze graus. Não é enfeite: 96 m/s com o mesmo enquadramento de 34 m/s lê
+     treze graus. Não é enfeite: 64 m/s com o mesmo enquadramento de 26 m/s lê
      como o mundo passando rápido, não como VOCÊ indo rápido. A sensação de
      velocidade num jogo 3D é quase toda periferia e distância focal.
    • **Ela INCLINA na curva.** Um giro rápido roda a câmera um pouco no eixo da
@@ -54,7 +54,7 @@ const FECHO_SOLO = 0.22;
 
 /* --------------------------------------------------------- amortecimento --- */
 /** 1/s — a lente perseguindo a pose desejada. Nem rígida (o corpo treme junto)
- *  nem lenta (a 96 m/s a câmera ficaria para trás e o lutador sairia do quadro). */
+ *  nem lenta (a 64 m/s a câmera ficaria para trás e o lutador sairia do quadro). */
 const SUAV_POSICAO = 9;
 /** 1/s — o ponto para onde ela olha. Quase instantâneo de propósito: é ele que
  *  define a MIRA, e mira com atraso é mira errada. O pouco que sobra existe só
@@ -244,7 +244,7 @@ export class NamekCamera {
     /* ANTECIPAÇÃO — e sem ela o enquadramento inteiro é uma mentira.
      *
      * Uma lente amortecida que persegue um alvo em movimento fica atrasada em
-     * `v / k` metros PARA SEMPRE: não é transitório, é o regime. A 96 m/s com
+     * `v / k` metros PARA SEMPRE: não é transitório, é o regime. A 64 m/s com
      * k = 9 isso são 10,7 m — medido — e o braço de 11,8 m que os números
      * acima descrevem virava 22 m na tela, com o lutador reduzido a um terço
      * do tamanho durante a arrancada inteira. As constantes deixavam de mandar

@@ -64,7 +64,7 @@
      • **pitch positivo olha para CIMA.**
    --------------------------------------------------------------------------- */
 
-import { NAMEK, specialInfo } from "../../src/shared/namek/config.js";
+import { NAMEK, specialInfo, duracaoDaPose, dificuldadeBot } from "../../src/shared/namek/config.js";
 
 const TAU = Math.PI * 2;
 const RAD = Math.PI / 180;
@@ -198,6 +198,11 @@ export class NamekBot {
     this.handPose = 0;
     this.down = false;
     this.invuln = false;
+    /** s que faltam de queda por golpes seguidos. `packFighter` lê a
+     *  VERACIDADE deste campo no bit 4 — ver `NAMEK.fighter.stagger`. */
+    this.tonto = 0;
+    /** Guarda de pé? Bit 8 da pose. Quem decide é `talvezDefender`. */
+    this.defendendo = false;
 
     /* ------------------------------------------------------ estado de sala -- */
     this.health = NAMEK.fighter.maxHealth;
@@ -246,6 +251,13 @@ export class NamekBot {
     /** s — quanto falta da esquiva em curso. */
     this.esquiva = 0;
     this.esquivaDir = { x: 0, y: 0, z: 0 };
+    /** s — quanto falta da guarda em curso. Ver `talvezDefender`. */
+    this.defesa = 0;
+    /** s — carência depois de DECIDIR não desviar. Ver `decidir`. */
+    this.recusaEm = 0;
+    /** s — carência até o próximo especial. É a dificuldade em segundos; ver
+     *  `talvezEspecial`. */
+    this.especialEm = 0;
     /** Para onde ele vaga quando não há ninguém. */
     this.destino = null;
     /** s — carência da onda de empurrão. */
@@ -264,6 +276,7 @@ export class NamekBot {
   renascer(x, y, z, invulnUntil = 0) {
     this.alive = true;
     this.down = false;
+    this.tonto = 0;
     this.health = NAMEK.fighter.maxHealth;
     this.ki = NAMEK.ki.max;
     this.position.x = x;
@@ -280,6 +293,8 @@ export class NamekBot {
     this.boostBlend = 0;
     this.hurtBlend = 0;
     this.esquiva = 0;
+    this.defesa = 0;
+    this.defendendo = false;
     this.estado = "procurar";
     this.destino = null;
     /* Encara o meio da arena ao cair: nascer de costas para a briga é nascer
@@ -290,6 +305,7 @@ export class NamekBot {
   cair() {
     this.alive = false;
     this.down = true;
+    this.tonto = 0;
     this.health = 0;
     this.especial = null;
     this.specialIndex = -1;
@@ -299,11 +315,47 @@ export class NamekBot {
     this.carregando = false;
     this.boost = false;
     this.esquiva = 0;
+    this.defesa = 0;
+    this.defendendo = false;
   }
 
   /** A pose de dor, que o cliente lê em `hu`. Decai sozinha. */
   machucar() {
     this.hurtBlend = 1;
+  }
+
+  /**
+   * Cinco golpes seguidos: ele PERDE O AR e cai.
+   *
+   * Quem conta os golpes é a sala (`NamekRoom.contarGolpe`) — aqui só se paga a
+   * conta, e ela é a mesma que um humano paga na tela dele: o corpo é jogado
+   * para baixo, o especial em curso morre no meio, e por `segundos` ele não
+   * decide mais nada. O `estado` volta a `procurar` porque quem levanta do chão
+   * não continua a manobra que estava fazendo antes de cair.
+   *
+   * O bot NÃO é solto no ar em queda livre por 2,4 s: `passoDoBot` o traz para
+   * baixo com a mesma velocidade de corpo mole que a morte usa. Integrar
+   * gravidade aqui daria trezentos metros de queda e o pouso do atordoamento
+   * viraria uma cratera do outro lado da montanha.
+   */
+  derrubar(segundos) {
+    if (!this.alive) return;
+    this.tonto = Math.max(this.tonto, segundos);
+    this._quedaAr = QUEDA_MAX;
+    this.especial = null;
+    this.specialIndex = -1;
+    this.specialFraction = 0;
+    this.carregando = false;
+    this.boost = false;
+    this.esquiva = 0;
+    /* Caído não tem guarda — os braços não estão mais entre ele e o mundo. A
+       sala pensa o mesmo (ver `NamekRoom.defendendo`), e as duas linhas
+       existem porque as duas pontas decidem sozinhas. */
+    this.defesa = 0;
+    this.defendendo = false;
+    this.estado = "procurar";
+    this.tDecisao = 0;
+    this.velocity.y = Math.min(this.velocity.y, -NAMEK.fighter.stagger.drop);
   }
 }
 
@@ -321,6 +373,48 @@ export class NamekBotSquad {
     this.bolas = [];
     /** Os feixes sustentados em curso: `{ dono, kind, o, d, t, info }`. */
     this.feixes = [];
+
+    /* A DIFICULDADE É DA ESQUADRA, e não de cada bot. É o que faz o pedido
+       ("tudo é alterado para todos dinamicamente, independente se já tiver
+       adicionado o bot ou não") sair de graça: os multiplicadores são lidos
+       AQUI, no quadro em que são usados, então trocar de nível muda o
+       comportamento de quem já está em campo no passo seguinte — sem renascer
+       ninguém, sem varrer lista, sem perder o alvo que cada um estava
+       perseguindo. Ver `NAMEK.bot.dificuldades`. */
+    this.dificuldadeId = NAMEK.bot.dificuldadePadrao;
+    this.dif = dificuldadeBot(this.dificuldadeId);
+  }
+
+  /**
+   * Troca o nível de todos os bots, agora.
+   *
+   * @param {string} id um de `NAMEK.bot.dificuldadeOrdem`
+   * @returns {boolean} false quando o id não existe ou já era o corrente
+   */
+  setDificuldade(id) {
+    if (typeof id !== "string") return false;
+    if (!NAMEK.bot.dificuldades[id]) return false;
+    if (id === this.dificuldadeId) return false;
+    this.dificuldadeId = id;
+    this.dif = dificuldadeBot(id);
+    /* O que estava em curso é CANCELADO. Um especial armado no nível difícil
+       terminando de sair depois de a sala pedir "parado" é o contrário do que
+       "dinamicamente" quer dizer — e o alvo de treino não pode revidar nem uma
+       vez. O resto do estado (alvo, órbita, ki) fica: trocar de nível não é
+       recomeçar a partida. */
+    for (const bot of this.list) {
+      bot.especial = null;
+      bot.specialIndex = -1;
+      bot.specialFraction = 0;
+      bot.carregando = false;
+      bot.boost = false;
+      bot.esquiva = 0;
+      bot.defesa = 0;
+      bot.defendendo = false;
+      bot.especialEm = 0;
+      bot.tDecisao = 0;
+    }
+    return true;
   }
 
   get count() {
@@ -400,7 +494,11 @@ export class NamekBotSquad {
       dano: 0,
       poder: 0,
       fantasma: true,
-      persegue: true,
+      /* O BLOCO DE PERSEGUIÇÃO DO PRÓPRIO GOLPE, e não um "sim/não" — ver
+         `passoDasBolas`, que antes aplicava os números da rajada a tudo o que
+         voava. Aqui é uma rajada de verdade, então é o da rajada mesmo. */
+      homing: NAMEK.blast.homing,
+      arco: 0,
     });
   }
 
@@ -412,22 +510,112 @@ export class NamekBotSquad {
    * do eixo. Um bot que atravessa um Kamehameha porque não o enxerga é o
    * defeito mais visível que este modo poderia ter.
    */
-  avisarEspecial({ owner, kind, o, d }) {
+  avisarEspecial({ owner, kind, o, d, target }) {
     const info = specialInfo(kind);
     if (!info || !Array.isArray(o) || !Array.isArray(d)) return;
     const n = normalizar(d[0], d[1], d[2]);
     if (!n) return;
-    this.feixes.push({
-      dono: owner,
+    /* O FANTASMA PERSEGUE IGUAL. Sem o alvo, o medo do bot era sempre a reta do
+       disparo — ele se afastava do eixo e o golpe ia atrás dele, o que é pior do
+       que não desviar: a esquiva o entregava. `target` é o mesmo id que viajou
+       no `NC2S.SPECIAL` e que o cliente usa para desenhar a curva. */
+    const alvo = Number.isFinite(target) ? target : null;
+
+    /* NEM TODO ESPECIAL É UM FEIXE, e o medo tem de ter a forma certa.
+     *
+     * A divisão é a mesma que o resto do modo usa: quem tem `dps` é um SEGMENTO
+     * que fica aceso (Kamehameha), quem tem `damage` é um corpo que VOA (o
+     * Kienzan, a Genki Dama e, desde que deixou de ser um segundo Kamehameha, o
+     * Galick Gun). Empurrar um golpe que voa para a lista de feixes o desenharia
+     * na cabeça do bot como uma parede de meio quilômetro acesa na direção do
+     * tiro — ele desviaria de uma coisa que não existe e ficaria parado na frente
+     * da que existe. E `passoDosFeixes` cobra `info.dps * dt`: sem `dps`, a conta
+     * é `undefined * dt`, ou seja, NaN de dano em cima de quem estivesse por
+     * perto se o feixe não fosse fantasma. */
+    if (info.dps === undefined) {
+      this.bolas.push({
+        id: proximaBola++,
+        dono: owner,
+        x: o[0], y: o[1], z: o[2],
+        dx: n.x, dy: n.y, dz: n.z,
+        alvo,
+        t: 0,
+        /* A ESPERA é o `windup` do golpe: o humano ainda está na pose, e a bola
+           só nasce quando ele a solta. Sem ela, o fantasma sairia no instante do
+           anúncio e chegaria ao alvo um segundo inteiro antes do golpe de
+           verdade — o bot desviaria cedo, voltaria para o lugar, e tomaria na
+           cara a Genki Dama que ele "já tinha desviado". */
+        espera: info.windup,
+        vida: Math.min(info.sustain, info.range / info.speed),
+        velocidade: info.speed,
+        raio: info.hitRadius,
+        dano: 0,
+        poder: 0,
+        fantasma: true,
+        homing: info.homing ?? null,
+        arco: 0,
+      });
+      return;
+    }
+
+    this.feixes.push(
+      this.novoFeixe({
+        dono: owner,
+        kind,
+        info,
+        o,
+        dir: n,
+        alvo,
+        espera: info.windup,
+        dur: info.windup + info.sustain,
+        fantasma: true,
+        // Fantasma não abre buraco: quem atirou é que reporta a cratera dele.
+        crateraFeita: true,
+      }),
+    );
+  }
+
+  /**
+   * Um feixe na lista, com o caminho já semeado.
+   *
+   * A fábrica existe porque os feixes nascem em dois lugares — o do bot, em
+   * `passoDoEspecial`, e o fantasma de um humano, em `avisarEspecial` — e
+   * porque o que eles guardam deixou de ser "uma origem e uma direção" quando o
+   * Kamehameha passou a fazer curva. Duplicar treze campos em dois lugares é
+   * duplicar o dia em que um deles ganha o décimo quarto.
+   */
+  novoFeixe({ dono, kind, info, o, dir, alvo, espera, dur, fantasma, crateraFeita }) {
+    return {
+      dono,
       kind,
       info,
       ox: o[0], oy: o[1], oz: o[2],
-      dx: n.x, dy: n.y, dz: n.z,
+      /* A direção do DISPARO, que é a que viajou na rede e contra a qual a sala
+         confere o acerto declarado por humanos. A que a curva move é `dx/dy/dz`
+         do móvel abaixo — ver `passoDosFeixes`. */
+      d0x: dir.x, d0y: dir.y, d0z: dir.z,
+      /* A CABEÇA: onde ela está, para onde aponta, e quanto arco de correção já
+         gastou. Os três nomes (`dx`, `dy`, `dz`, `arco`) são os que
+         `perseguirPonto` espera. */
+      hx: o[0], hy: o[1], hz: o[2],
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      arco: 0,
+      alvo,
+      /* O CAMINHO, em coordenadas soltas: o nó da origem e o nó VIVO, que é
+         reescrito a cada passo. Mesmo desenho do cliente (`gravar`, em
+         `powers/beam.js`), e pelo mesmo motivo: um feixe que curva não pode ser
+         testado como um segmento, ou o dano cobra pela reta que ele não seguiu. */
+      pts: [o[0], o[1], o[2], o[0], o[1], o[2]],
+      arcoNo: 0,
+      frente: 0,
+      alcance: info.range,
       t: 0,
-      dur: info.windup + info.sustain,
-      fantasma: true,
-      crateraFeita: true,
-    });
+      /** s — quanto o feixe ainda não saiu da mão. Ver `passoDosFeixes`. */
+      espera: espera ?? 0,
+      dur,
+      fantasma,
+      crateraFeita,
+    };
   }
 
   /* -------------------------------------------------------------- o passo -- */
@@ -445,7 +633,7 @@ export class NamekBotSquad {
     for (const bot of this.list) this.passoDoBot(bot, dt, ctx);
     /* Os bots já andaram; as bolas têm de encontrá-los ONDE ELES ESTÃO.
        Sem esta linha o projétil testaria contra a posição do começo do quadro,
-       e a 96 m/s isso são quase cinco metros de defasagem — o bastante para uma
+       e a 64 m/s isso são mais de três metros de defasagem — o bastante para uma
        bola atravessar alguém sem tocar e para outra acertar um lugar vazio. */
     for (const c of ctx.corpos) {
       if (!c.isBot) continue;
@@ -481,10 +669,63 @@ export class NamekBotSquad {
 
     bot.invuln = ctx.agora < bot.invulnUntil;
     bot.hurtBlend = Math.max(0, bot.hurtBlend - dt * 2.2);
+
+    /* ATORDOADO: vivo, no chão, e sem decisão nenhuma.
+     *
+     * É o mesmo corpo mole da morte — velocidade amortecida para uma descida de
+     * 18 m/s e nada mais —, com uma diferença que importa: ele continua VIVO na
+     * lista de corpos, então ainda pode ser acertado, ainda é alvo válido para
+     * quem estiver mirando, e ainda conta como gente na sala. É exatamente o que
+     * a janela existe para produzir: alguém parado e alcançável pelo tempo de um
+     * especial ser carregado. Ver `NamekBot.derrubar`. */
+    if (bot.tonto > 0) {
+      /* O RELÓGIO SÓ ANDA NO CHÃO — a mesma regra do lutador humano (ver
+         `FighterController.derrubar`), e ela vale aqui pelo mesmo motivo: um bot
+         derrubado a duzentos metros que recuperasse o controle no meio da queda
+         voltaria a voar sem nunca ter encostado, e o golpe não teria
+         acontecido. `_quedaAr` é o teto de segurança para o caso de o chão não
+         chegar (derrubado sobre o oceano da borda). */
+      const chao = ctx.field.heightAt(bot.position.x, bot.position.z);
+      const noChao = bot.position.y <= chao + FOLGA_DURA + 0.4;
+      if (noChao) bot.tonto -= dt;
+      else {
+        bot._quedaAr = (bot._quedaAr ?? QUEDA_MAX) - dt;
+        if (bot._quedaAr <= 0) bot.tonto = 0;
+      }
+      bot.velocity.x = damp(bot.velocity.x, 0, 3, dt);
+      bot.velocity.y = damp(bot.velocity.y, -18, 2, dt);
+      bot.velocity.z = damp(bot.velocity.z, 0, 3, dt);
+      bot.flyBlend = damp(bot.flyBlend, 0, 4, dt);
+      bot.boostBlend = damp(bot.boostBlend, 0, 6, dt);
+      bot.chargeBlend = damp(bot.chargeBlend, 0, 6, dt);
+      this.integrar(bot, dt, ctx.field);
+      if (bot.tonto <= 0) {
+        bot.tonto = 0;
+        bot._quedaAr = QUEDA_MAX;
+        /* Levanta VOANDO. Um lutador que se põe de pé na grama e sobe a pé
+           passa os dois segundos seguintes sendo um alvo parado — ou seja, a
+           punição duraria o dobro do que está escrito em `stagger.time`. */
+        bot.flyBlend = 1;
+        bot.velocity.y = Math.max(bot.velocity.y, 6);
+      }
+      return;
+    }
+
     bot.handPose = Math.max(0, bot.handPose - dt * 4);
     bot.recarga -= dt;
     bot.ondaEm -= dt;
     bot.esquiva -= dt;
+    bot.recusaEm -= dt;
+    bot.especialEm -= dt;
+    bot.defesa -= dt;
+    /* A GUARDA VALE ATÉ O RELÓGIO ZERAR, e cai sozinha com a barra vazia — a
+       sala cobra `guard.drain` por segundo enquanto este bit estiver aceso (ver
+       `NamekRoom.economiaDeKi`), então um bot que defendesse sem olhar a barra
+       ficaria sem ki para escapar logo depois, que é o pior negócio possível. */
+    /* E nunca junto da carga: são as duas mãos ocupadas de jeitos opostos, e a
+       sala somaria o ganho da carga ao dreno da guarda no mesmo quadro — uma
+       barra que sobe enquanto o corpo se protege é o contrário da troca. */
+    bot.defendendo = bot.defesa > 0 && !bot.carregando && bot.ki > NAMEK.ki.burstCost;
     bot.trocaLado -= dt;
     if (bot.trocaLado <= 0) {
       /* Trocar de lado no meio da órbita é o que impede o bot de virar um
@@ -533,15 +774,67 @@ export class NamekBotSquad {
    * deve ser, num modo em que a briga é o assunto.
    */
   decidir(bot, ctx) {
+    /* 0 — O ALVO DE TREINO não decide nada. Sem alvo, sem esquiva, sem carga,
+       sem tiro: `desejo` vai lê-lo em `treino` e só corrigir a altura. Ver
+       `NAMEK.bot.dificuldades.parado`, que explica o ciclo inteiro (subir,
+       apanhar, cair, subir). */
+    if (this.dif.mover === 0) {
+      bot.alvoId = null;
+      bot.estado = "treino";
+      return;
+    }
+
     const alvo = this.escolherAlvo(bot, ctx);
     bot.alvoId = alvo?.id ?? null;
 
     /* 1 — TEM COISA VINDO. */
     const ameaca = this.ameacaPara(bot, ctx);
-    if (ameaca) {
+    /* A CHANCE DE DESVIAR é a dificuldade em pessoa — é o "mais fácil de ser
+     * acertado" do pedido. E ela precisa de uma CARÊNCIA para significar o que
+     * diz.
+     *
+     * `decidir` roda a cada `reaction` segundos (0,22 no padrão), e uma bola
+     * leva perto de meio segundo entre entrar no alcance de aviso e chegar: sem
+     * carência, o bot sortearia duas ou três vezes contra a MESMA bola, e 25 %
+     * por sorteio viram 58 % de chance real. O nível fácil deixaria de existir
+     * por aritmética. Recusado o desvio, ele fica 0,6 s sem repensar — o tempo
+     * de a bola que ele decidiu ignorar chegar ou passar. */
+    if (ameaca && bot.recusaEm <= 0 && Math.random() >= this.dif.esquiva) {
+      bot.recusaEm = 0.6;
+    } else if (ameaca && bot.recusaEm <= 0) {
       if (bot.esquiva <= 0) bot.esquivas++;
       bot.esquivaDir = ameaca;
       bot.esquiva = 0.55;
+      /* E ELE TAMBÉM LEVANTA A GUARDA — desviar e se proteger não são
+       * alternativas, são a mesma reação.
+       *
+       * O bot esquiva sempre; a guarda é a segunda camada, e ela existe por uma
+       * razão de jogo e não de sobrevivência: sem isto, a defesa seria um botão
+       * que só o jogador humano tem, e o modo ensinaria a mecânica a ninguém.
+       * Vendo um adversário cruzar os braços e aguentar a rajada, o jogador
+       * aprende que aquilo é possível — que é como todo jogo ensina o que ele
+       * não escreve na tela.
+       *
+       * `pericia` decide QUEM se protege: um lutador ruim (0,34) quase nunca
+       * fecha a guarda a tempo, um bom (0,99) fecha quase sempre. E ninguém
+       * defende com a barra baixa: ki é fuga, e gastar o resto dele aparando
+       * significa não ter como sair depois. */
+      /* MAS SÓ CONTRA O QUE VALE A PENA. Medido no banco de provas: com o bot
+       * aparando toda bolinha, a sala inteira parou de morrer — 15 lutadores,
+       * 60 s, **zero abates**, contra os dois por minuto de sempre. Não é um
+       * detalhe de ajuste: um adversário que reduz 78 % do dano recebido a cada
+       * ameaça é, na prática, um adversário imortal, e o modo deixa de ter
+       * desfecho.
+       *
+       * A regra que sobrou é a que um jogador bom usa: **de bolinha se desvia,
+       * de golpe grande se aguenta** — e também se aguenta quando a vida está
+       * no fim, porque aí não há mais o que trocar. As duas condições são
+       * raras, que é exatamente o que faz a guarda LER como uma decisão quando
+       * ela aparece. */
+      const vale = this.grande || bot.health < NAMEK.fighter.maxHealth * 0.4;
+      if (vale && bot.defesa <= 0 && bot.ki > NAMEK.ki.max * 0.45 && Math.random() < bot.pericia * 0.85) {
+        bot.defesa = 0.45 + Math.random() * 0.4;
+      }
     }
     if (bot.esquiva > 0) {
       bot.estado = "esquivar";
@@ -588,6 +881,24 @@ export class NamekBotSquad {
    * espaço, então segura; mais longe que isso, a barra volta a ser munição.
    */
   guardandoBarra(bot, d) {
+    /* GUARDAR A BARRA É PERÍCIA, e por isso ela é a primeira coisa que o nível
+     * manso perde.
+     *
+     * Isto saiu de uma medida que teimava em dar o contrário do esperado: com a
+     * carência de especial já no lugar, o nível FÁCIL soltava 45 especiais por
+     * partida contra 17 do DIFÍCIL. A causa não estava no especial — estava no
+     * ki. O bot difícil desvia muito, e desviar custa arranque; ele passa a
+     * partida com a barra pela metade e só chega ao especial quando de fato
+     * merece. O fácil quase não desvia, então não gasta nada, e a barra dele
+     * vivia cheia: a carência virou o único limite, e ele soltava no relógio.
+     *
+     * Corrigir com um número maior de carência seria tratar o sintoma. O certo
+     * é o próprio comportamento: **quem joga mal não economiza recurso.** Abaixo
+     * de metade da escala de especial, o bot gasta a barra em rajada como
+     * qualquer um gastaria, e o especial passa a ser o que sobra — que é
+     * exatamente o "não solta tantos poderes" do pedido, e de brinde é uma
+     * leitura muito mais honesta de um adversário fraco. */
+    if (this.dif.especial < 0.5) return false;
     return bot.ki >= NAMEK.ki.max * 0.985 && d < 160;
   }
 
@@ -634,6 +945,9 @@ export class NamekBotSquad {
    * "de lado" também) tira o bot do cone, e a bola segue reta para o vazio.
    */
   ameacaPara(bot, ctx) {
+    /* Zerada a cada consulta: ela descreve a ameaça que ESTA chamada achou, e
+       um resto da anterior faria o bot se defender de um perigo que já passou. */
+    this.grande = false;
     const bx = bot.position.x;
     const by = bot.position.y + NAMEK.fighter.chest;
     const bz = bot.position.z;
@@ -660,21 +974,36 @@ export class NamekBotSquad {
       const cy = ry + vy * t;
       const cz = rz + vz * t;
       if (Math.hypot(cx, cy, cz) > 7) continue;
+      /* A AMEAÇA É GRANDE? O raio do projétil responde sozinho: uma bola de ki
+         tem 1,5 m de raio de acerto, e todo especial que voa tem no mínimo 3,4.
+         É o que decide se vale a pena levantar a guarda (ver `decidir`) — de
+         bolinha se desvia, de Genki Dama se aguenta. */
+      this.grande = b.raio > NAMEK.blast.hitRadius * 1.5;
       return direcaoDeEsquiva(b.dx, b.dy, b.dz, rx, ry, rz);
     }
 
     /* O FEIXE. Não se desvia de um Kamehameha no último instante: ele já está
-       aceso e o que importa é a distância ao EIXO, não o tempo de chegada. */
+       aceso e o que importa é a distância ao CORPO dele, não o tempo de chegada.
+       São duas perguntas, e as duas mudaram junto com a curva: "estou dentro do
+       que ele já percorreu?" e "estou na frente de onde ele está indo?". A
+       segunda usa a CABEÇA e a direção viva — projetá-la da boca do golpe, como
+       se fazia, desenhava a reta que o feixe justamente deixou de seguir. */
     for (const f of this.feixes) {
       if (f.dono === bot.id) continue;
-      const alcance = f.info.range;
-      const d = distSeg(
-        bx, by, bz,
-        f.ox, f.oy, f.oz,
-        f.ox + f.dx * alcance, f.oy + f.dy * alcance, f.oz + f.dz * alcance,
-      );
-      if (d > f.info.hitRadius + 16) continue;
-      return direcaoDeEsquiva(f.dx, f.dy, f.dz, bx - f.ox, by - f.oy, bz - f.oz);
+      const perto = f.info.hitRadius + 16;
+      let d = this.distanciaAoFeixe(f, bx, by, bz, perto);
+      const resta = f.alcance - f.frente;
+      if (d > perto && resta > 0) {
+        d = distSeg(
+          bx, by, bz,
+          f.hx, f.hy, f.hz,
+          f.hx + f.dx * resta, f.hy + f.dy * resta, f.hz + f.dz * resta,
+        );
+      }
+      if (d > perto) continue;
+      // Feixe é sempre grande: são 62 de dano por segundo.
+      this.grande = true;
+      return direcaoDeEsquiva(f.dx, f.dy, f.dz, bx - f.hx, by - f.hy, bz - f.hz);
     }
 
     return null;
@@ -691,7 +1020,7 @@ export class NamekBotSquad {
     switch (bot.estado) {
       case "esquivar": {
         /* Esquiva com ARRANQUE. Sair de lado a 34 m/s não sai do cone de uma
-           bola que vem a 78 m/s corrigindo 95°/s; a 96 m/s, sai. O ki que isso
+           bola que vem a 78 m/s corrigindo; a 64 m/s do arranque, sai. O ki que isso
            custa é o preço de continuar vivo, e é uma troca que o jogador
            também faz. */
         const forte = bot.ki > NAMEK.ki.burstCost;
@@ -765,6 +1094,23 @@ export class NamekBotSquad {
         /* Colado demais: sai de perto com arranque. `tooClose` existe para o
            bot não virar aquele adversário que gruda no rosto e não deixa mirar. */
         if (d < NAMEK.bot.tooClose) bot.boost = bot.ki > NAMEK.ki.max * 0.5;
+        break;
+      }
+
+      case "treino": {
+        /* O ALVO DE TREINO. Uma linha de comportamento: **só a altura.**
+         *
+         * Nada lateral — nem órbita, nem separação útil, nem fuga da borda —,
+         * então ele fica onde está e sobe até `alturaTreino` acima do relevo.
+         * Quando um golpe o empurra ou o derruba ele cai, porque a física é a
+         * de todo mundo; quando volta ao controle, sobe de novo. Esse vaivém É
+         * o boneco de pancada que o pedido descreve, e ele não custou uma linha
+         * de máquina de estados: custou não pedir mais nada.
+         *
+         * O ganho de 0,8 é o que separa "sobe" de "salta": ele volta em alguns
+         * segundos, devagar, que é o tempo de quem está treinando recarregar. */
+        const cota = ctx.field.heightAt(bot.position.x, bot.position.z) + NAMEK.bot.alturaTreino;
+        dv.y = clamp((cota - bot.position.y) * 0.8, -NAMEK.fighter.climbSpeed, NAMEK.fighter.climbSpeed);
         break;
       }
 
@@ -861,6 +1207,30 @@ export class NamekBotSquad {
     const piso = this.pisoSeguro(bot, ctx.field);
     if (p.y < piso) {
       dv.y = Math.max(dv.y, (piso - p.y) * 2.4);
+    }
+
+    /* O "VOA MAIS DEVAGAR" do pedido, e ele mora aqui — no ALVO de velocidade,
+       não na aceleração. Cortar a aceleração daria um bot que demora a chegar à
+       mesma velocidade de sempre, o que lê como lentidão de rede; cortando o
+       alvo, ele se move devagar e continua respondendo na hora. É a mesma
+       distinção que a guarda do jogador faz, e pelo mesmo motivo.
+       A cota vertical do alvo de treino é a única que NÃO escala: `mover` vale
+       zero nele, e zerar a subida o deixaria caído no chão para sempre. */
+    const mult = this.dif.mover;
+    if (bot.estado === "treino") {
+      /* O ALVO DE TREINO não anda de lado — nem pela repulsão dos vizinhos, nem
+         pela antevisão de relevo, nem pela borda. Zerar aqui, DEPOIS de todas
+         elas, é o que garante o "não fica se mexendo muito" contra qualquer
+         termo que alguém venha a somar amanhã. A vertical fica: é ela que o faz
+         subir de volta depois de apanhar. */
+      dv.x = 0;
+      dv.z = 0;
+      bot.boost = false;
+    } else if (mult !== 1) {
+      dv.x *= mult;
+      dv.y *= mult;
+      dv.z *= mult;
+      if (mult < 0.6) bot.boost = false;
     }
 
     const accel = bot.boost ? NAMEK.fighter.boostAccel : NAMEK.fighter.airAccel;
@@ -995,6 +1365,8 @@ export class NamekBotSquad {
   /* ------------------------------------------------------------- a rajada -- */
 
   talvezAtirar(bot, alvo, ctx) {
+    /* `rajada` zerada = alvo de treino: ele não revida, nunca. */
+    if (this.dif.rajada <= 0) return;
     if (bot.recarga > 0 || bot.carregando) return;
     if (!alvo.alive || alvo.invuln) return;
 
@@ -1026,7 +1398,10 @@ export class NamekBotSquad {
 
     if (!ctx.gastar(bot, NAMEK.ki.blastCost)) return;
 
-    bot.recarga = 1 / NAMEK.blast.rate;
+    /* A CADÊNCIA escalada pela dificuldade — é o "não solta tantos poderes" na
+       parte mais visível dele. No fácil ele atira a 40 %, ou seja, uma bola a
+       cada 0,4 s em vez de a cada 0,17: dá para ver cada uma sair e desviar. */
+    bot.recarga = 1 / (NAMEK.blast.rate * this.dif.rajada);
     bot.lastHand = bot.lastHand === 0 ? 1 : 0;
     bot.handPose = 1;
     bot.tiros++;
@@ -1053,7 +1428,9 @@ export class NamekBotSquad {
     const oz = bot.position.z - Math.sin(bot.yaw) * NAMEK.blast.handOffset * (bot.lastHand ? 1 : -1);
 
     let dir = versor(ax - ox, ay - oy, az - oz);
-    dir = desviar(dir, bot.erroMira * RAD);
+    /* O ERRO DE MIRA multiplicado pela dificuldade — o "ele também erra mais
+       poderes" do pedido. No fácil são 3,4 vezes o erro natural dele. */
+    dir = desviar(dir, bot.erroMira * this.dif.erro * RAD);
 
     const bola = {
       id: proximaBola++,
@@ -1068,7 +1445,8 @@ export class NamekBotSquad {
       dano: NAMEK.blast.damage,
       poder: NAMEK.blast.power,
       fantasma: false,
-      persegue: true,
+      homing: NAMEK.blast.homing,
+      arco: 0,
     };
     this.bolas.push(bola);
 
@@ -1094,9 +1472,43 @@ export class NamekBotSquad {
    * para esculpir uma montanha.
    */
   talvezEspecial(bot, alvo, d, ctx) {
+    if (this.dif.especial <= 0) return false; // alvo de treino não revida
     if (bot.especial) return false;
     if (bot.ki < NAMEK.ki.max * NAMEK.ki.specialThreshold) return false;
-    if (d > 90 || d < 12) return false;
+    /* A JANELA DE DISTÂNCIA também aperta com o nível, e ela é o que finalmente
+     * fez a conta bater.
+     *
+     * Medido: mesmo com carência e sem guardar a barra, o nível fácil ainda
+     * soltava o DOBRO de especiais do difícil. O motivo é que ele MORRE muito
+     * mais (não desvia), e quem renasce volta com a barra cheia — cada morte
+     * era um especial de graça, e no fácil as mortes são o que mais acontece.
+     *
+     * Apertar a janela resolve pelo comportamento, e não por mais um relógio:
+     * um lutador fraco só tenta o golpe grande quando o adversário está bem na
+     * frente dele. No fácil a janela fecha em 53 m — abaixo dos 55 m em que ele
+     * orbita —, então ele só arrisca quando a briga fecha de verdade. */
+    const janela = 90 * (0.5 + 0.5 * this.dif.especial);
+    if (d > janela || d < 12) return false;
+    /* A CARÊNCIA ENTRE ESPECIAIS, pela dificuldade — e ela é um RELÓGIO, não um
+     * sorteio. A primeira versão sorteava `Math.random() < dif.especial` aqui, e
+     * o banco de provas mostrou o resultado exatamente ao contrário do
+     * pretendido: **77 especiais no nível fácil contra 11 no difícil.**
+     *
+     * O motivo é uma armadilha que vale escrever, porque ela aparece toda vez
+     * que se põe uma probabilidade num caminho quente. `talvezAtirar` é chamada
+     * a cada quadro em que o bot está atacando; quando ele está com a barra
+     * cheia, `guardandoBarra` o impede de gastar em rajada, então `recarga`
+     * nunca é armada e ele cai aqui VINTE VEZES POR SEGUNDO. Uma chance de 18 %
+     * por tentativa, vinte vezes por segundo, é praticamente certeza em um
+     * quarto de segundo — ou seja, quanto MENOR a probabilidade, mais parecido
+     * com "sempre" ficava o resultado, porque o que mudava não era a frequência,
+     * era só quantas vezes ele reperguntava.
+     *
+     * Um relógio não tem esse problema: no difícil ele é zero (nenhum limite
+     * além do ki), no médio são ~3 s de espera entre um especial e o próximo, e
+     * no fácil são ~23 s. É o "não solta tantos poderes" do pedido, medido em
+     * segundos, que é a unidade em que o jogador sente. */
+    if (bot.especialEm > 0) return false;
 
     const ox = bot.position.x;
     const oy = bot.position.y + NAMEK.fighter.chest;
@@ -1127,7 +1539,7 @@ export class NamekBotSquad {
       alvo.y + NAMEK.fighter.chest + alvo.vy * voo - oy,
       alvo.z + alvo.vz * voo - oz,
     );
-    dir = desviar(dir, bot.erroMira * 0.4 * RAD);
+    dir = desviar(dir, bot.erroMira * 0.4 * this.dif.erro * RAD);
 
     if (!ctx.gastar(bot, NAMEK.ki.max)) return false;
 
@@ -1136,13 +1548,22 @@ export class NamekBotSquad {
       info,
       dir,
       o: { x: ox, y: oy, z: oz },
+      /* Quem o golpe vai perseguir, travado AGORA. O bot não reavalia: um golpe
+         que troca de alvo no meio do voo lê como bug, aqui como em toda parte. */
+      alvo: alvo.id,
       t: 0,
-      dur: info.windup + info.sustain,
+      /* NÃO é `windup + sustain`: ver `duracaoDaPose`. O disco e a esfera saem
+         da mão e voam sozinhos — prender o lutador pela vida do projétil o
+         deixava seis segundos parado no ar sem decidir nada. */
+      dur: duracaoDaPose(info),
       saiu: false,
     };
     bot.specialIndex = Math.max(0, NAMEK.specialOrder.indexOf(kind));
     bot.specialFraction = 0;
     bot.especiais++;
+    /* O relógio do PRÓXIMO. `1/especial - 1` é zero no difícil e cresce sem
+       tabela extra: 0,6 dá 0,67 × BASE, e 0,18 dá 4,6 × BASE. */
+    bot.especialEm = ESPECIAL_BASE * (1 / this.dif.especial - 1);
 
     ctx.emitir({
       tipo: "especial",
@@ -1150,6 +1571,13 @@ export class NamekBotSquad {
       kind,
       o: [ox, oy, oz],
       d: [dir.x, dir.y, dir.z],
+      /* QUEM ELE PERSEGUE. O bot não tem a tecla R, mas tem `alvoId` — a pessoa
+         que ele decidiu atacar —, e ela é a trava dele. Sem este campo o
+         especial do bot chegava ao cliente sem alvo e voava reto na tela
+         enquanto o dele, no servidor, também voava reto: as duas metades
+         concordavam em estar erradas, e o golpe de um bot não era o mesmo golpe
+         que o de um humano. Ver o `case "especial"` da sala. */
+      alvo: alvo.id,
     });
     return true;
   }
@@ -1178,17 +1606,19 @@ export class NamekBotSquad {
     if (!e.saiu && e.t >= e.info.windup) {
       e.saiu = true;
       if (e.info.dps !== undefined) {
-        this.feixes.push({
-          dono: bot.id,
-          kind: e.kind,
-          info: e.info,
-          ox: e.o.x, oy: e.o.y, oz: e.o.z,
-          dx: e.dir.x, dy: e.dir.y, dz: e.dir.z,
-          t: 0,
-          dur: e.info.sustain,
-          fantasma: false,
-          crateraFeita: false,
-        });
+        this.feixes.push(
+          this.novoFeixe({
+            dono: bot.id,
+            kind: e.kind,
+            info: e.info,
+            o: [e.o.x, e.o.y, e.o.z],
+            dir: e.dir,
+            alvo: e.alvo,
+            dur: e.info.sustain,
+            fantasma: false,
+            crateraFeita: false,
+          }),
+        );
       } else {
         /* Disco e Genki Dama não sustentam: eles VOAM. Entram na mesma lista
            das bolas de ki, com raio, dano e potência próprios — um integrador
@@ -1198,7 +1628,10 @@ export class NamekBotSquad {
           dono: bot.id,
           x: e.o.x, y: e.o.y, z: e.o.z,
           dx: e.dir.x, dy: e.dir.y, dz: e.dir.z,
-          alvo: null,
+          /* O ALVO, que faltava — com `null` aqui e `persegue: false` logo
+             abaixo, o Kienzan de um bot era o único do jogo que não perseguia
+             ninguém. Ele mira em quem o bot decidiu atacar, que é a trava dele. */
+          alvo: e.alvo,
           t: 0,
           vida: e.info.sustain,
           velocidade: e.info.speed,
@@ -1206,7 +1639,8 @@ export class NamekBotSquad {
           dano: e.info.damage ?? 40,
           poder: e.info.power,
           fantasma: false,
-          persegue: false,
+          homing: e.info.homing ?? null,
+          arco: 0,
         });
       }
     }
@@ -1231,6 +1665,7 @@ export class NamekBotSquad {
    * estava sendo encurralado volta a ter a distância em que sabe brigar.
    */
   talvezOnda(bot, ctx) {
+    if (this.dif.rajada <= 0) return; // alvo de treino não revida
     if (bot.ondaEm > 0 || !bot.alive || bot.carregando) return;
     if (bot.ki < NAMEK.ki.burstCost + 18) return;
 
@@ -1254,48 +1689,51 @@ export class NamekBotSquad {
   /* ------------------------------------------------------------- as bolas -- */
 
   /**
-   * Um passo de todas as bolas em voo.
+   * Um passo de tudo o que voa: bolas de ki, Kienzans, Galick Guns e Genki
+   * Damas.
    *
-   * A perseguição fraca é a do §6.1, letra por letra: gira no máximo
-   * `turnRate` graus por segundo, por no máximo `duration` segundos, e SÓ
-   * enquanto o alvo estiver dentro do cone. O alvo foi escolhido no disparo e
-   * nunca é reavaliado — bola que troca de alvo no meio do voo lê como bug.
+   * A perseguição é a do §6.1, letra por letra: gira no máximo `turnRate` graus
+   * por segundo, por no máximo `duration` segundos, e SÓ enquanto o alvo
+   * estiver dentro do cone. O alvo foi escolhido no disparo e nunca é
+   * reavaliado — bola que troca de alvo no meio do voo lê como bug.
+   *
+   * CADA PROJÉTIL COM O `homing` DO PRÓPRIO GOLPE, e isto era um defeito com
+   * duas metades. A primeira: os números da RAJADA (26°/s, 0,75 s, cone de 22°)
+   * eram aplicados a tudo o que estivesse nesta lista, inclusive a um Kienzan,
+   * que persegue a 70°/s por 4,5 s num cone de 75°. A segunda, que anulava a
+   * primeira: as bolas de especial nasciam com `persegue: false`, então nada
+   * disso chegava a acontecer — o disco de um bot voava RETO no servidor
+   * enquanto o mesmo disco contornava na tela de quem o via.
    */
   passoDasBolas(dt, ctx) {
-    const H = NAMEK.blast.homing;
-    const cosCone = Math.cos(H.cone * RAD);
-    const giroMax = H.turnRate * RAD * dt;
     const vivas = [];
 
     for (const b of this.bolas) {
+      /* Ainda na mão de quem vai atirar. Só o fantasma de um especial alheio usa
+         isto — ver `avisarEspecial` —, e é por isso que ele fica na lista sem
+         andar: a ameaça precisa existir para o bot antes de existir no espaço. */
+      if (b.espera > 0) {
+        b.espera -= dt;
+        vivas.push(b);
+        continue;
+      }
       b.t += dt;
       if (b.t > b.vida) continue;
 
-      if (b.persegue && b.t < H.duration && b.alvo !== null) {
+      if (b.homing && b.alvo !== null && b.t < b.homing.duration) {
         const alvo = acharCorpo(ctx.corpos, b.alvo);
         if (alvo && alvo.alive) {
-          const ax = alvo.x - b.x;
-          const ay = alvo.y + NAMEK.fighter.chest - b.y;
-          const az = alvo.z - b.z;
-          const d = Math.hypot(ax, ay, az);
-          if (d > 1e-3) {
-            const ux = ax / d;
-            const uy = ay / d;
-            const uz = az / d;
-            const cos = ux * b.dx + uy * b.dy + uz * b.dz;
-            if (cos > cosCone) {
-              /* Gira o VERSOR em direção ao alvo, com teto no ângulo do passo.
-                 Interpolar e renormalizar dá exatamente isto para ângulos
-                 pequenos, e um passo de 50 ms nunca produz um ângulo grande. */
-              const ang = Math.min(Math.acos(clamp(cos, -1, 1)), giroMax);
-              const g = versor(ux - b.dx * cos, uy - b.dy * cos, uz - b.dz * cos);
-              const c = Math.cos(ang);
-              const s = Math.sin(ang);
-              b.dx = b.dx * c + g.x * s;
-              b.dy = b.dy * c + g.y * s;
-              b.dz = b.dz * c + g.z * s;
-            }
-          }
+          perseguirPonto(
+            b,
+            b.homing,
+            alvo.x,
+            alvo.y + NAMEK.fighter.chest,
+            alvo.z,
+            b.x,
+            b.y,
+            b.z,
+            dt,
+          );
         }
       }
 
@@ -1375,10 +1813,17 @@ export class NamekBotSquad {
   /**
    * Um passo dos feixes sustentados.
    *
-   * O feixe não é um projétil: ele é um SEGMENTO que existe por
-   * `info.sustain` segundos e cobra por tempo de exposição. A frente avança a
-   * `info.speed` até o alcance ou até o relevo — quem está atrás do ponto de
-   * impacto ainda não está sendo queimado, e essa diferença é visível a olho.
+   * O feixe não é um projétil: ele é um CAMINHO que existe por `info.sustain`
+   * segundos e cobra por tempo de exposição. A cabeça avança a `info.speed` até
+   * o alcance ou até o relevo — quem está atrás do ponto de impacto ainda não
+   * está sendo queimado, e essa diferença é visível a olho.
+   *
+   * ERA UM SEGMENTO, e virou um caminho quando o Kamehameha passou a fazer
+   * curva. Não era uma escolha: o cliente desenha o feixe pela trajetória
+   * (`powers/beam.js`) e, se o dano continuasse sendo cobrado pela reta do
+   * disparo, um feixe de bot queimaria quem ele visivelmente contornou e
+   * pouparia quem ele visivelmente atravessou. As duas contas têm de ser a
+   * mesma conta.
    */
   passoDosFeixes(dt, ctx) {
     const vivos = [];
@@ -1386,28 +1831,38 @@ export class NamekBotSquad {
       f.t += dt;
       if (f.t > f.dur) continue;
 
-      const frente = Math.min(f.info.range, f.info.speed * f.t);
-      const fim = this.pontaDoFeixe(f, frente, ctx.field);
+      /* A ESPERA é o `windup`, e vale para o feixe FANTASMA: o humano ainda está
+         na pose e o feixe dele ainda não saiu. É a mesma peça que o fantasma da
+         bola tem, e faltava aqui — sem ela a cabeça deste feixe já estava a
+         trezentos metros quando o de verdade ainda não tinha nascido, e o prazo
+         de perseguição dele acabava antes de o golgo real começar a curvar. */
+      const tv = f.t - f.espera;
+      if (tv <= 0) {
+        vivos.push(f);
+        continue;
+      }
+
+      const chao = this.avancarFeixe(f, tv, dt, ctx);
 
       if (!f.fantasma) {
-        if (!f.crateraFeita && fim.chao) {
+        if (!f.crateraFeita && chao) {
           f.crateraFeita = true;
-          ctx.emitir({ tipo: "chao", dono: f.dono, p: [fim.x, fim.y, fim.z], poder: f.info.power });
+          ctx.emitir({ tipo: "chao", dono: f.dono, p: [f.hx, f.hy, f.hz], poder: f.info.power });
         }
+        const alcance = f.info.hitRadius + NAMEK.fighter.radius;
         for (const c of ctx.corpos) {
           if (c.id === f.dono || !c.alive || c.invuln) continue;
-          const d = distSeg(
-            c.x, c.y + NAMEK.fighter.chest, c.z,
-            f.ox, f.oy, f.oz,
-            fim.x, fim.y, fim.z,
-          );
-          if (d > f.info.hitRadius + NAMEK.fighter.radius) continue;
+          if (this.distanciaAoFeixe(f, c.x, c.y + NAMEK.fighter.chest, c.z, alcance) > alcance) {
+            continue;
+          }
           ctx.emitir({
             tipo: "acerto",
             dono: f.dono,
             vitima: c.id,
             dano: f.info.dps * dt,
             p: [c.x, c.y + NAMEK.fighter.chest, c.z],
+            /* A direção do EMPURRÃO é a da cabeça, não a do disparo: quem toma
+               um feixe que contornou é jogado para onde ele estava indo. */
             d: [f.dx, f.dy, f.dz],
             kind: f.kind,
           });
@@ -1418,26 +1873,125 @@ export class NamekBotSquad {
     this.feixes = vivos;
   }
 
-  /** Onde o feixe termina: no alcance atual, ou no relevo, o que vier antes. */
-  pontaDoFeixe(f, frente, field) {
-    const N = 14;
-    for (let i = 1; i <= N; i++) {
-      const t = (frente * i) / N;
-      const x = f.ox + f.dx * t;
-      const y = f.oy + f.dy * t;
-      const z = f.oz + f.dz * t;
-      if (field.heightAt(x, z) >= y) return { x, y, z, chao: true };
+  /**
+   * A cabeça do feixe gira, anda e grava por onde passou.
+   *
+   * Gêmea de `avancar` + `gravar` do cliente, e as duas precisam concordar. A
+   * amostragem do relevo é mais grossa aqui de propósito: o passo da sala é bem
+   * maior que o quadro de um cliente, e refinar o ponto de impacto em meio metro
+   * serve para não enterrar a bola de fogo no morro — coisa que este lado não
+   * desenha.
+   *
+   * @returns {boolean} true no passo em que ela encostou no chão
+   */
+  avancarFeixe(f, tv, dt, ctx) {
+    if (f.frente >= f.alcance) return false;
+
+    const H = f.info.homing;
+    if (H && f.alvo !== null && tv < H.duration) {
+      const alvo = acharCorpo(ctx.corpos, f.alvo);
+      if (!alvo || !alvo.alive) {
+        f.alvo = null;
+      } else {
+        const tx = alvo.x;
+        const ty = alvo.y + NAMEK.fighter.chest;
+        const tz = alvo.z;
+        /* PASSOU: o alvo ficou para trás do plano da cabeça, e a perseguição
+           acabou para sempre. É a mesma trava definitiva do cliente — ver
+           `perseguir`, em `powers/beam.js`, que tem o porquê. */
+        if ((tx - f.hx) * f.dx + (ty - f.hy) * f.dy + (tz - f.hz) * f.dz <= 0) {
+          f.alvo = null;
+        } else {
+          perseguirPonto(f, H, tx, ty, tz, f.hx, f.hy, f.hz, dt);
+        }
+      }
     }
-    return {
-      x: f.ox + f.dx * frente,
-      y: f.oy + f.dy * frente,
-      z: f.oz + f.dz * frente,
-      chao: false,
-    };
+
+    const passo = Math.min(f.info.speed * dt, f.alcance - f.frente);
+    if (passo <= 0) return false;
+
+    /* Marcha em fatias de 4 m atrás do relevo. A 340 m/s um passo de 50 ms são
+       17 m, e uma crista estreita cabe inteira dentro dele. */
+    let bateu = false;
+    let andou = passo;
+    for (let s = 4; s <= passo; s += 4) {
+      const x = f.hx + f.dx * s;
+      const y = f.hy + f.dy * s;
+      const z = f.hz + f.dz * s;
+      if (y <= ctx.field.heightAt(x, z)) {
+        andou = s;
+        bateu = true;
+        break;
+      }
+    }
+    if (!bateu) {
+      const x = f.hx + f.dx * passo;
+      const y = f.hy + f.dy * passo;
+      const z = f.hz + f.dz * passo;
+      if (y <= ctx.field.heightAt(x, z)) bateu = true;
+    }
+
+    f.hx += f.dx * andou;
+    f.hy += f.dy * andou;
+    f.hz += f.dz * andou;
+    f.frente += andou;
+    if (bateu) f.alcance = f.frente;
+
+    // O nó VIVO é o último e é reescrito todo passo; de 14 em 14 m ele é
+    // promovido a nó fixo e um novo nasce por cima dele. Ver `gravar`, no
+    // cliente, que tem o desenho inteiro.
+    const n = f.pts.length;
+    f.pts[n - 3] = f.hx;
+    f.pts[n - 2] = f.hy;
+    f.pts[n - 1] = f.hz;
+    if (f.frente - f.arcoNo >= 14) {
+      f.arcoNo = f.frente;
+      f.pts.push(f.hx, f.hy, f.hz);
+    }
+    return bateu;
+  }
+
+  /**
+   * Distância de um ponto ao caminho já percorrido pelo feixe.
+   *
+   * Sem corte de cauda: o feixe do bot não dissipa por trás no servidor — ele
+   * simplesmente deixa de existir quando `dur` acaba —, e cobrar por um trecho
+   * que o cliente já apagou vale no máximo os 0,55 · sustain do fim do golpe,
+   * contra quem já estava dentro dele. A folga é a favor de quem apanha em
+   * menos de um segundo de exposição, e não vale um segundo acumulador.
+   */
+  distanciaAoFeixe(f, x, y, z, corte) {
+    let melhor = Infinity;
+    for (let i = 0; i + 5 < f.pts.length; i += 3) {
+      const d = distSeg(
+        x, y, z,
+        f.pts[i], f.pts[i + 1], f.pts[i + 2],
+        f.pts[i + 3], f.pts[i + 4], f.pts[i + 5],
+      );
+      if (d < melhor) {
+        melhor = d;
+        if (melhor <= corte) return melhor;
+      }
+    }
+    return melhor;
   }
 }
 
 /* ---------------------------------------------------------------- auxiliares */
+
+/* s — a carência-base entre dois especiais do mesmo bot, antes de a dificuldade
+   multiplicá-la. Ver `talvezEspecial`: no difícil ela vale zero (o único limite
+   é o ki), e é `1/especial - 1` que a estica nos níveis mansos. Cinco segundos
+   é a ordem de grandeza do tempo que a barra leva para encher — ou seja, no
+   médio a espera fica logo acima do ritmo natural do golpe, e no fácil bem
+   além dele. */
+const ESPECIAL_BASE = 5;
+
+/* s — teto de tempo caindo depois de ser derrubado no ar. O mesmo número e o
+   mesmo motivo do `QUEDA_MAX` de `src/namek/movement.js`: a queda do teto de
+   voo cabe nele, e ele existe para que "sem controle" nunca vire "sem controle
+   para sempre" — derrubado sobre o oceano, o chão não chega nunca. */
+const QUEDA_MAX = 9;
 
 /** m — folga de cruzeiro sobre o relevo. É onde o bot QUER voar. */
 const FOLGA_VOO = 9;
@@ -1463,6 +2017,63 @@ function dist2D(a, b) {
 function acharCorpo(corpos, id) {
   for (let i = 0; i < corpos.length; i++) if (corpos[i].id === id) return corpos[i];
   return null;
+}
+
+/**
+ * Gira uma direção EM DIREÇÃO a um ponto, com as travas do `homing` do golpe.
+ * O motor da perseguição do lado do servidor.
+ *
+ * É a gêmea de `perseguirPonto` + `passoDeGiro` (em `src/namek/powers/blast.js`),
+ * e ela é uma CÓPIA, não um `import`, por um motivo chato e real: aquele arquivo
+ * importa `three`, e a sala não tem — nem quer — o motor gráfico carregado. As
+ * duas precisam concordar no resultado, então a fórmula está escrita aqui do
+ * mesmo jeito: rotação no PLANO dos dois vetores, usando a componente do alvo
+ * ortogonal à direção como segundo eixo. O comentário longo, com a sutileza
+ * inteira, está do lado do cliente.
+ *
+ * As quatro travas são as do §6.1 do plano: teto de giro por segundo
+ * (`turnRate`), teto da correção TOTAL (`arcMax`, opcional), prazo (`duration`,
+ * conferido por quem chama) e um CONE fora do qual não há correção nenhuma.
+ *
+ * @param {{dx,dy,dz,arco}} m o móvel — a direção é mutada no lugar e `arco`
+ *   acumula os radianos já gastos do teto total
+ * @param {object} H o bloco `homing` do golpe
+ * @returns {number} radianos girados neste passo
+ */
+function perseguirPonto(m, H, tx, ty, tz, ox, oy, oz, dt) {
+  let maxRad = H.turnRate * RAD * dt;
+  if (H.arcMax !== undefined) {
+    const sobra = H.arcMax * RAD - m.arco;
+    if (sobra <= 0) return 0;
+    if (maxRad > sobra) maxRad = sobra;
+  }
+
+  let ax = tx - ox;
+  let ay = ty - oy;
+  let az = tz - oz;
+  const dist = Math.hypot(ax, ay, az);
+  if (dist < 1e-3) return 0;
+  ax /= dist;
+  ay /= dist;
+  az /= dist;
+
+  const cos = m.dx * ax + m.dy * ay + m.dz * az;
+  if (cos < Math.cos(H.cone * RAD)) return 0; // fora do cone: reta, e ponto
+  if (cos > 0.999999) return 0; // já apontando
+
+  const passo = Math.min(Math.acos(clamp(cos, -1, 1)), maxRad);
+  const g = versor(ax - m.dx * cos, ay - m.dy * cos, az - m.dz * cos);
+  const c = Math.cos(passo);
+  const s = Math.sin(passo);
+  const nx = m.dx * c + g.x * s;
+  const ny = m.dy * c + g.y * s;
+  const nz = m.dz * c + g.z * s;
+  const inv = 1 / (Math.hypot(nx, ny, nz) || 1);
+  m.dx = nx * inv;
+  m.dy = ny * inv;
+  m.dz = nz * inv;
+  m.arco += passo;
+  return passo;
 }
 
 function fora(x, y, z) {

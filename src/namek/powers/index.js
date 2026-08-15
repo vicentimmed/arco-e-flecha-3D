@@ -29,13 +29,22 @@
    2. OS QUATRO CANAIS DE SAÍDA
    ============================================================================
 
-   `update` devolve quatro listas, e o mapeamento delas para o protocolo é
-   direto — o que também explica por que são quatro e não seis:
+   `update` devolve quatro listas e dois canais locais, e o mapeamento delas
+   para o protocolo é direto — o que também explica por que são estes e não
+   outros:
 
        acertos    → NC2S.BLAST_HIT     { id, victim, p }
        queimando  → NC2S.SPECIAL_HIT   { victim, kind, dt }
        chao       → NC2S.GROUND_HIT    { p, power }
        empurroes  → efeito local (a onda empurra quem está na própria tela)
+       noAr       → efeito local (o estouro que NÃO tocou o chão, e por isso
+                    não tem cratera para anunciá-lo — ver `filaNoAr`)
+       abalo      → efeito local (o tremor da lente; não é lista, é o mais
+                    forte do quadro, pela mesma razão da luz)
+
+   Os dois últimos não sobem para a sala e nunca subiriam: eles descrevem o que
+   a MINHA tela faz com um acontecimento que ela já conhece. Mandá-los seria
+   pedir ao servidor que retransmitisse um som e um tranco de câmera.
 
    **`queimando` é o canal de TODO especial que cobra vida**, e não só do feixe.
    O feixe cobra por segundo (`dps` em `NAMEK.specials`) e manda o `dt` de
@@ -82,18 +91,24 @@
        bolas de ki      3    (três InstancedMesh, de 1 a 256 bolas)
        feixes           24   (6 no pool × 4 malhas)
        discos           12   (6 × 2)
-       Genki Damas      6    (3 × 2)
+       esferas          15   (5 × 3 — o Galick Gun tem núcleo, coroa e fita; a
+                              Genki Dama usa 2, e a fita dela fica invisível)
        ondas            8    (8 × 1)
        ------------------------------
-       total            53
+       total            62
 
-   Esse 53 é o pior caso ARITMÉTICO, não o realista: ele exige seis feixes, seis
-   discos, três Genki Damas e oito ondas vivos no mesmo quadro, o que pede vinte
-   e três especiais simultâneos numa sala de quinze pessoas em que a barra leva
-   2,6 s para encher. Um tiroteio quente de verdade fica em ~11: as três camadas
-   das bolas, um feixe e uma onda. E o que está fora do pool está `visible =
-   false`, que o renderer descarta antes de montar a lista de desenho — pool
-   ocioso não custa chamada nenhuma.
+   Esse 62 é o pior caso ARITMÉTICO, não o realista: ele exige seis feixes, seis
+   discos, cinco esferas e oito ondas vivos no mesmo quadro, o que pede vinte e
+   cinco especiais simultâneos numa sala de quinze pessoas em que a barra leva
+   5,3 s para encher. Um tiroteio quente de verdade fica em ~12: as três camadas
+   das bolas, um feixe, uma esfera e uma onda. E o que está fora do pool está
+   `visible = false`, que o renderer descarta antes de montar a lista de desenho
+   — pool ocioso não custa chamada nenhuma.
+
+   (O total subiu de 53 quando o Galick Gun deixou de ser um feixe e virou uma
+   esfera. Na prática a conta MELHOROU: o pool de feixes passou a atender um
+   golpe só, e as quatro malhas de um feixe custam o dobro das duas de uma
+   esfera.)
 
    ============================================================================
    5. AS PARTÍCULAS
@@ -121,7 +136,7 @@ import {
 } from "./blast.js";
 import { BeamPool } from "./beam.js";
 import { DiskPool } from "./disk.js";
-import { GenkiPool } from "./genki.js";
+import { OrbPool } from "./orb.js";
 import { BurstPool } from "./burst.js";
 
 /* --------------------------------------------------------------------- luz */
@@ -197,7 +212,7 @@ export class PowerSystem {
     this.blasts = new BlastPool(scene, field);
     this.beams = new BeamPool(scene, field);
     this.disks = new DiskPool(scene, field);
-    this.genkis = new GenkiPool(scene, field);
+    this.orbes = new OrbPool(scene, field);
     this.bursts = new BurstPool(scene, field);
 
     /* As capacidades saem do pior caso de cada canal, não de um número redondo:
@@ -223,6 +238,18 @@ export class PowerSystem {
       p: { x: 0, y: 0, z: 0 },
       power: 0,
     }));
+    /* Os estouros NO AR — os que não abrem cratera e por isso não têm nenhum
+       outro canal por onde avisar que aconteceram. Uma Genki Dama que detona a
+       duzentos metros de altura é a maior coisa que este modo desenha, e sem
+       esta fila ela acontecia em SILÊNCIO: `chao` só existe quando o golpe
+       encosta no terreno. Oito por quadro é mais do que cinco esferas e seis
+       discos conseguem produzir juntos. */
+    this.filaNoAr = new Fila(8, () => ({
+      owner: null,
+      kind: null,
+      p: { x: 0, y: 0, z: 0 },
+      power: 0,
+    }));
     this.filaEmpurroes = new Fila(32, () => ({
       owner: null,
       victim: null,
@@ -236,6 +263,12 @@ export class PowerSystem {
       queimando: this.filaQueima.lista,
       chao: this.filaChao.lista,
       empurroes: this.filaEmpurroes.lista,
+      noAr: this.filaNoAr.lista,
+      /* O TREMOR DE CÂMERA do quadro, e não uma lista: sacudir a lente duas
+         vezes no mesmo quadro não é o dobro do tremor, é o tremor mais forte
+         dos dois. Mesma regra da luz, e pelo mesmo motivo — a tela é uma só.
+         Zero quer dizer "nada a sacudir". */
+      abalo: { forca: 0, dur: 0 },
     };
 
     /* O pedido de luz do quadro. Os efeitos locais escrevem aqui e o mais forte
@@ -248,6 +281,16 @@ export class PowerSystem {
       queima: () => this.filaQueima.novo(),
       chao: () => this.filaChao.novo(),
       empurrao: () => this.filaEmpurroes.novo(),
+      noAr: () => this.filaNoAr.novo(),
+      /* O tremor da lente. Como a luz: o mais forte do quadro ganha, e somar
+         dois seria sacudir o dobro por dois acontecimentos que o olho lê como
+         um só. */
+      abalo: (forca, dur) => {
+        const a = this.saida.abalo;
+        if (forca <= a.forca) return;
+        a.forca = forca;
+        a.dur = dur;
+      },
       luz: (x, y, z, cor, forca) => {
         const p = this._luzPedido;
         if (forca <= p.forca) return;
@@ -315,12 +358,18 @@ export class PowerSystem {
     if (!NAMEK.specials[kind]) return null;
     switch (kind) {
       case "kamehameha":
-      case "galick":
         return this.beams.disparar(disparo);
+      /* O GALICK GUN MUDOU DE CASA. Ele era um feixe — o mesmo tubo do
+         Kamehameha, com outra matiz — e virou uma esfera lançada, que é o que a
+         referência mostra e o que o usuário pediu. O roteamento continua sendo
+         por NOME e não por dedução da forma do golpe, e este é exatamente o dia
+         que o comentário acima previa: a mudança foi uma linha, aqui, e nada
+         mais no sistema precisou saber. */
+      case "galick":
+      case "genki":
+        return this.orbes.disparar(disparo);
       case "disk":
         return this.disks.disparar(disparo);
-      case "genki":
-        return this.genkis.disparar(disparo);
       default:
         return null;
     }
@@ -373,12 +422,15 @@ export class PowerSystem {
     this.filaQueima.limpar();
     this.filaChao.limpar();
     this.filaEmpurroes.limpar();
+    this.filaNoAr.limpar();
     this._luzPedido.forca = 0;
+    this.saida.abalo.forca = 0;
+    this.saida.abalo.dur = 0;
 
     this.blasts.update(passo, lista, localId, this.relato, cenario);
     this.beams.update(passo, lista, localId, this.relato);
     this.disks.update(passo, lista, localId, this.relato);
-    this.genkis.update(passo, lista, localId, this.relato);
+    this.orbes.update(passo, lista, localId, this.relato);
     this.bursts.update(passo, lista, localId, this.relato);
 
     this.acenderLuz(passo);
@@ -408,7 +460,7 @@ export class PowerSystem {
       this.blasts.count +
       this.beams.count +
       this.disks.count +
-      this.genkis.count +
+      this.orbes.count +
       this.bursts.count
     );
   }
@@ -419,13 +471,15 @@ export class PowerSystem {
     this.blasts.clear();
     this.beams.clear();
     this.disks.clear();
-    this.genkis.clear();
+    this.orbes.clear();
     this.bursts.clear();
     this.filaAcertos.limpar();
     this.filaQueima.limpar();
     this.filaChao.limpar();
     this.filaEmpurroes.limpar();
+    this.filaNoAr.limpar();
     this._luzPedido.forca = 0;
+    this.saida.abalo.forca = 0;
     this.luz.intensity = 0;
   }
 
@@ -434,7 +488,7 @@ export class PowerSystem {
     this.blasts.dispose();
     this.beams.dispose();
     this.disks.dispose();
-    this.genkis.dispose();
+    this.orbes.dispose();
     this.bursts.dispose();
     this.scene.remove(this.luz);
     this.luz.dispose?.();
@@ -451,5 +505,5 @@ export { escolherAlvo, atingivel, distancia2AoAlvo, distanciaAoFeixe, acharChao 
 export { BlastPool } from "./blast.js";
 export { BeamPool } from "./beam.js";
 export { DiskPool } from "./disk.js";
-export { GenkiPool } from "./genki.js";
+export { OrbPool } from "./orb.js";
 export { BurstPool } from "./burst.js";

@@ -420,43 +420,48 @@ dois nascimentos (§4.2).
   interpolação numa tabela de 21 pontos, um por minuto. Tabela, e não fórmula,
   pela razão de sempre neste projeto: é a tabela que o banco de provas consegue
   corrigir num ponto só sem reescrever a curva inteira.
-* **`escalaJogadores`** = `N^−1,05` (`playerGapExp`), e `gapBase` é a curva de
+* **`escalaJogadores`** = `N^−1,18` (`playerGapExp`), e `gapBase` é a curva de
   **um** defensor.
 
   Era `0,85^(N−1)`, emprestado do modo zumbi, e o empréstimo estava errado por
-  uma razão que só apareceu quando o banco de provas mediu as duas pontas: a
-  capacidade de abate cresce **linearmente** com N — cada defensor é um arco —,
-  e um fator geométrico de 0,85 devolvia ×1,38 de pressão para ×3 de poder de
-  fogo. O resultado é que cada reforço deixava o cerco mais fácil: 0 % de
-  vitórias sozinho, 100 % com três, sem degrau no meio. Era por isso que a sala
-  precisava forçar dois bots na entrada do modo — eles não eram ajuda, eram a
-  calibragem.
+  uma razão que só apareceu quando o banco de provas mediu as duas pontas: um
+  fator geométrico de 0,85 devolvia ×1,38 de pressão para ×3 de poder de fogo.
+  Cada reforço deixava o cerco mais fácil: 0 % de vitórias sozinho, 100 % com
+  três, sem degrau no meio. Era por isso que a sala precisava forçar dois bots
+  na entrada do modo — eles não eram ajuda, eram a calibragem.
 
-  Com a potência, a pressão por defensor é constante e o número de arcos na
-  muralha deixa de mudar a dificuldade do modo, que é o que ele sempre quis
-  dizer. Medido: ~82 % sozinho, ~78 % em dupla, 97 % com três. O que os
-  defensores dividem (34 m de muro, a mesma linha de tiro) continua sendo
-  cobrado, mas do outro lado da conta — quem larga a muralha para içar o trabuco
-  ou remendar o portão não está atirando, e é isso que faz o quarto valer menos
-  que o primeiro.
+  O expoente **passa de 1**, e não fica nele, porque a capacidade de uma
+  guarnição não é a soma dos arcos dela. Duas coisas crescem sozinhas quando a
+  sala enche: o **trabuco** acha aglomerados muito melhores numa rampa cheia
+  (21 % da vazão com um defensor, 40 % com quatro), e a **manivela** custa uma
+  pessoa, sirva ela três ou seis. Em 1,05 isso ainda bastava para o modo
+  afrouxar com gente — 97 % com três defensores contra ~82 % sozinho.
+
+  1,18 é meio-termo medido, e nenhum expoente acerta tudo: em 1,15 a sala de
+  três cai para 61 % e a de quatro fica em 87 %; em 1,20 a de quatro chega aos
+  60 % e a de três desaba para 31 %. O degrau entre elas é do **banco**, não do
+  jogo — é ali que o modelo passa a descontar um arqueiro inteiro para a
+  manivela (§12).
 
 ### 4.1.1 Os três níveis
 
 `gap(t)` ganha um multiplicador de nível, e `gateHealth` outro. Ver
 `difficulties` em `config.js`; `normal` é o cerco de sempre, com tudo em 1,00.
 
-| nível | `gap` | `gate` | `exp` | N=1 | N=2 | N=3 | N=4 |
-|---|---|---|---|---|---|---|---|
-| fácil | 1,08 | 1,15 | — | 93 % | 96 % | 100 % | 100 % |
-| normal | 1,00 | 1,00 | — | ~82 % | ~78 % | 97 % | 100 % |
-| difícil | 0,90 | 0,65 | 1,15 | **25 %** | 6 % | 25 % | 52 % |
+| nível | `gap` | `gate` | N=1 | N=2 | N=3 | N=4 |
+|---|---|---|---|---|---|---|
+| fácil | 1,15 | 1,15 | 94 % | 84 % | 96 % | 100 % |
+| normal | 1,00 | 1,00 | **59 %** | 26 % | 53 % | 77 % |
+| difícil | 0,96 | 0,65 | **26 %** | 3 % | 13 % | 41 % |
 
-`exp` sobrescreve `playerGapExp`, e só o difícil declara o seu — sem isso ele
-media 100 % com quatro defensores, isto é, existia só para quem jogava sozinho.
+Nenhum dos três declara `exp`: a lei de N é uma só (§4.1) e vale para todos. O
+campo existe e continua sendo lido, como porta de saída para um nível futuro que
+precise de outro formato — não como remendo em uso.
 
 **O que estes números valem, e o que não valem.** A coluna N=1 é a que o banco
-mede honestamente, e é a que foi calibrada: 25 % no difícil vem de 300 partidas.
-As outras três carregam dois vieses conhecidos, em direções opostas:
+mede honestamente, e é a que foi calibrada: os 59 % e os 26 % vêm de corridas de
+250 partidas; o resto da tabela, de 70. As outras três colunas carregam dois
+vieses conhecidos, em direções opostas:
 
 * **N=2 lê mais difícil do que joga.** O modelo põe meio arqueiro na manivela
   assim que há dois defensores (§12), e é meio arco em cima de uma capacidade de
@@ -468,11 +473,14 @@ As outras três carregam dois vieses conhecidos, em direções opostas:
   rampa cheia isso é muito: 21 % da vazão com um defensor, 40 % com quatro.
   Jogadores de verdade miram à mão e recarregam em catorze segundos.
 
-Uma corrida só não decide nada aqui. A MESMA configuração do normal devolveu de
-75 % a 88 % em corridas de 100 a 300 partidas — a dispersão é maior que a de uma
-binomial porque o acaso é correlacionado dentro da partida (o sorteio de
-espécies e a fase da maré valem para os dez minutos inteiros). Cem partidas
-distinguem 25 % de 80 %; não distinguem 75 % de 85 %.
+Uma corrida só não decide nada aqui. Uma configuração anterior do normal
+devolveu de 75 % a 88 % em corridas de 100 a 300 partidas — a dispersão é maior
+que a de uma binomial porque o acaso é correlacionado dentro da partida (o
+sorteio de espécies e a fase da maré valem para os dez minutos inteiros). Cem
+partidas distinguem 25 % de 80 %; não distinguem 55 % de 65 %. Toda casa da
+tabela acima que vier a ser usada para decidir alguma coisa precisa de uma
+corrida longa própria — as de 70 partidas servem para ver a FORMA da série, não
+para calibrar contra um alvo.
 
 ### 4.2 Agendado pela CHEGADA — de novo
 

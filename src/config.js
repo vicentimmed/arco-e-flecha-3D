@@ -1620,30 +1620,32 @@ export const CONFIG = {
        *
        * Com os bots deixando de ser obrigatórios (ver `Room.setMode`), a tabela
        * passa a ser lida como sempre esteve escrita, e por isso teve de virar de
-       * verdade a curva de um. O fator saiu do banco: 2,15 põe o defensor
-       * solitário em ~82 % de vitórias (alvo: 75 %, teto de 90 %), com 0 % das
-       * derrotas antes do minuto 6 e a mediana delas no 9,5 — a partida inteira
-       * acontece, e o que decide é o clímax.
+       * verdade a curva de um. São DOIS multiplicadores em bloco, nesta ordem, e
+       * a tabela de hoje é ×2,02 da que existia antes deles:
        *
-       * OS 82 % SÃO A MÉDIA DE 980 PARTIDAS, e o número de uma corrida só não
-       * serve: corridas de 100 a 300 partidas devolveram de 75 % a 88 % para
-       * ESTA MESMA configuração. A dispersão é maior que a de uma binomial
-       * porque o acaso do cerco é correlacionado dentro da partida — o sorteio
-       * de espécies e a fase da maré valem para os dez minutos inteiros, não
-       * para cada chegada em separado. Quem for reajustar isto: 100 partidas
-       * distinguem 25 % de 80 %, e não distinguem 75 % de 85 %.
+       * • ×2,15 — a REANCORAGEM. Punha o solitário em ~82 %, e foi escolhido
+       *   para o encontro com a calibragem antiga cair em N = 3, que era a única
+       *   sala que existia: `2,15 / 3^1,05 = 0,68` contra os `0,85² = 0,72` de
+       *   então. Quem jogava com dois bots continuou jogando a mesma partida.
+       * • ×0,94 — o APERTO. Os ~82 % estavam no teto da faixa que o próprio
+       *   banco chama de certa (60 a 90 %), e um modo que se apresenta como
+       *   "dez minutos de muralha" não deveria ser vencido em quatro de cada
+       *   cinco tentativas. Hoje o solitário mede 59,2 % em 250 partidas — o
+       *   meio da faixa —, com 0 % das derrotas antes do minuto 6 e a mediana
+       *   delas no 9,3. A partida inteira acontece, e o que decide é o clímax.
        *
-       * A FORMA NÃO MUDOU, e isso importa mais que o fator: é a forma que os
-       * lotes anteriores mediram, e multiplicar em bloco preserva todas aquelas
-       * medições. Também é de propósito que o fator tenha sido escolhido para o
-       * encontro com a calibragem antiga cair em N = 3, que era a única sala que
-       * existia: `2,15 / 3^1,05 = 0,68` contra os `0,85² = 0,72` de antes — 6 %
-       * mais apertado, dentro do ruído do banco (a mesma configuração medida
-       * duas vezes varia mais que isso). Um humano com dois bots continua
-       * jogando a partida que foi jogada e aprovada; o que mudou é que agora ela
-       * é uma escolha, e não o piso. */
+       * A FORMA NUNCA MUDOU, e isso importa mais que os fatores: é a forma que
+       * os lotes anteriores mediram, e multiplicar em bloco preserva todas
+       * aquelas medições.
+       *
+       * QUEM FOR REAJUSTAR ISTO PRECISA DE CORRIDAS LONGAS. Uma configuração
+       * anterior devolveu de 75 % a 88 % em corridas de 100 a 300 partidas — a
+       * dispersão é maior que a de uma binomial porque o acaso do cerco é
+       * correlacionado dentro da partida: o sorteio de espécies e a fase da maré
+       * valem para os dez minutos inteiros, não para cada chegada em separado.
+       * Cem partidas distinguem 25 % de 80 %; não distinguem 55 % de 65 %. */
       gapBase: [
-        6.25, 6.0, 5.8, 5.4, 4.95, 4.6, 4.3, 4.0, 3.65, 3.35, 3.0,
+        5.85, 5.65, 5.45, 5.05, 4.65, 4.3, 4.05, 3.75, 3.45, 3.15, 2.8,
       ],
       /* UM ARCO A MAIS É UMA COTA A MAIS DE CERCO: `gap = base / N^exp`.
        *
@@ -1655,25 +1657,37 @@ export const CONFIG = {
        * pontas ao mesmo tempo, e é por isso que o modo precisava dos bots
        * obrigatórios para ser jogável: eles não eram ajuda, eram a calibragem.
        *
-       * A ÂNCORA É 1, e ela vem da conta, não do banco: a capacidade de abate é
-       * LINEAR no número de defensores — cada um é um arco, e matar não se
-       * divide. O que eles dividem (34 m de muro, a mesma linha de tiro, a
-       * manivela do trabuco) já é cobrado do outro lado: o banco desconta o
-       * arqueiro que larga a muralha para içar ou para remendar o portão, e é
-       * esse desconto que faz o quarto defensor render menos que o primeiro sem
-       * precisar de expoente para dizê-lo.
+       * A ÂNCORA SERIA 1: a capacidade de abate é LINEAR no número de
+       * defensores — cada um é um arco, e matar não se divide. Ela é 1,18
+       * porque a capacidade de uma GUARNIÇÃO não é a soma dos arcos dela, e a
+       * diferença foi medida em duas frentes:
        *
-       * 1,05 é o ajuste fino em cima da âncora, e ele é medido. Em 1 exato a
-       * dupla saía em 93 % — acima do teto de 90 % que o banco chama de curva
-       * errada —, porque o segundo arco chega antes de o segundo turno de
-       * manivela cobrar por ele. Os 5 % a mais põem a dupla em 75 %, que é o
-       * alvo, sem tocar no solitário (1^x = 1 para qualquer x).
+       * • O TRABUCO MELHORA COM A MULTIDÃO. Ele acha aglomerados muito
+       *   melhores numa rampa cheia — 21 % da vazão com um defensor, 40 % com
+       *   quatro. É vazão que aparece sem que ninguém tenha atirado uma flecha
+       *   a mais.
+       * • A MANIVELA NÃO ENCARECE. Uma pessoa içando serve os três engenhos,
+       *   custe ela um quinto da sala ou a metade dela.
        *
-       * O TETO ESTÁ EM 1,15, e foi medido também: ali a dupla despenca para
-       * 42 % contra os 75 % do solitário, ou seja, abre-se um buraco no lugar
-       * exato em que a segunda pessoa entra na sala. Entre 1 e 1,15 a série
-       * sobe limpa; passando de 1,15 ela deixa de subir. */
-      playerGapExp: 1.05,
+       * Somadas, faziam o cerco AFROUXAR com gente: em 1,05 a sala de três
+       * media 97 % e a de quatro 100 %, contra ~82 % do solitário. Ou seja, o
+       * modo cooperativo era mais fácil quanto mais gente cooperasse, que é o
+       * contrário do que ele promete.
+       *
+       * 1,18 É UM MEIO-TERMO MEDIDO, e os dois lados dele estão registrados:
+       * em 1,15 a sala de três cai para 61 % (o alvo) mas a de quatro fica em
+       * 87 %; em 1,20 a de quatro chega aos 60 % e a de três desaba para 31 %.
+       * Não há expoente que acerte as duas, porque o degrau entre elas é do
+       * banco, não do jogo — é ali que o modelo passa a descontar um arqueiro
+       * inteiro para a manivela. Fica no meio, e o que sobra de erro fica
+       * documentado em `docs/plano-cerco.md` §4.1.1.
+       *
+       * ELE VALE PARA OS TRÊS NÍVEIS, e é de propósito: a lei de N é UMA, e o
+       * que separa fácil de difícil é quanto o cerco pesa por defensor, não o
+       * formato da curva. O difícil já teve expoente próprio (1,15) enquanto a
+       * âncora era 1,05, e era remendo — hoje a âncora faz o trabalho para
+       * todos, e um nível a menos tem número para desafinar. */
+      playerGapExp: 1.18,
 
       /* ------------------------------------------------------ dificuldade --
          Fácil, normal e difícil — e `normal` É O CERCO DE SEMPRE, com os dois
@@ -1711,32 +1725,32 @@ export const CONFIG = {
          fácil vale inteira no difícil. Muda o volume e a margem; não muda o que
          se está olhando.
 
-         ------------------------------------------------ o `exp` só do difícil
+         --------------------------------------------- nenhum deles tem `exp`
 
-         `exp` sobrescreve o `playerGapExp` — a INCLINAÇÃO da curva por
-         defensor —, e só o difícil declara o seu. Não é assimetria gratuita: é
-         a única forma de o difícil continuar difícil numa sala cheia.
-
-         O motivo está medido. A capacidade de uma guarnição não cresce como o
-         número de arqueiros, cresce mais rápido: o trabuco acha aglomerados
-         muito melhores numa rampa cheia (21 % da vazão sozinho, 40 % com
-         quatro) e o preço da manivela é o mesmo para três ou para seis. Na
-         inclinação normal, o difícil de quatro defensores media 100 % de
-         vitórias — ou seja, o nível existia só para quem jogava sozinho.
-
-         Em 1,15 cada arqueiro a mais traz mais cerco do que traz flecha, e é
-         essa a promessa do nível: chamar gente ajuda, mas não resolve.
+         `exp` existe (`Siege.escalaDeDefensores` ainda o lê) e nenhum dos três
+         o usa. Ele foi de um nível só — o difícil — enquanto `playerGapExp`
+         valia 1,05 e o cerco AFROUXAVA com gente: o difícil precisava da
+         inclinação própria para não virar passeio na sala cheia, e os outros
+         dois viviam com o defeito. Corrigida a âncora, a lei de N passou a
+         servir aos três, e o campo ficou como porta de saída para um nível
+         futuro que precise de outro formato — não como remendo em uso.
 
          --------------------------------------------------------- MEDIDO
 
          `scripts/bench-cerco.js --tabela`, arqueiro de 0,5 tiro/s e 78 % de
-         acerto. A tabela completa está em `docs/plano-cerco.md` §4.1, com o que
-         cada coluna vale — o banco não mede as três iguais, e a de dois
-         defensores é a que ele mede pior. */
+         acerto. A tabela completa está em `docs/plano-cerco.md` §4.1.1, com o
+         que cada coluna vale — o banco não mede as quatro iguais, e a de dois
+         defensores é a que ele mede pior.
+
+         OS MULTIPLICADORES DE FÁCIL E DIFÍCIL FORAM RECOMPENSADOS quando
+         `gapBase` apertou 6 %: 1,08 virou 1,15 e 0,90 virou 0,96, que é a mesma
+         curva absoluta dividida pela nova tabela. Sem isso, apertar o normal
+         teria arrastado os outros dois junto, e o difícil — que estava no alvo
+         de 20 a 30 % — sairia dele sem ninguém ter pedido. */
       difficulties: {
-        easy: { gap: 1.08, gate: 1.15 },
+        easy: { gap: 1.15, gate: 1.15 },
         normal: { gap: 1.0, gate: 1.0 },
-        hard: { gap: 0.9, gate: 0.65, exp: 1.15 },
+        hard: { gap: 0.96, gate: 0.65 },
       },
       /** O nível de sala nova, e o que a porta do lobby entrega. */
       defaultDifficulty: "normal",
@@ -1778,7 +1792,7 @@ export const CONFIG = {
          muda é o passo — sozinho, o mesmo desfile leva o dobro do tempo. */
       opening: {
         count: 18,
-        gap: 3.2, // s entre duas chegadas da coluna, POR DEFENSOR
+        gap: 3.0, // s entre duas chegadas da coluna, POR DEFENSOR
         kind: "soldier",
       },
 

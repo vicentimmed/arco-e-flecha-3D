@@ -1713,15 +1713,14 @@ export class Room {
        * aquela medição descrevia, porém, não era o modo — era a CURVA, que
        * havia sido calibrada contra a sala de três que esta linha criava. Com
        * `gapBase` reancorada no defensor sozinho e a pressão passando a escalar
-       * com quem está no muro (ver `playerGapExp`), o solitário mede ~82 % e os
-       * bots deixam de ser a calibragem para voltar a ser o que a tecla B é em
-       * todo outro modo: uma escolha de quem joga.
+       * com quem está no muro (ver `playerGapExp`), o solitário mede 59 % no
+       * normal, e os bots deixam de ser a calibragem para voltar a ser o que a
+       * tecla B é em todo outro modo: uma escolha de quem joga.
        *
-       * Quem quiser a guarnição de antes aperta B duas vezes — e recebe
-       * praticamente a partida de antes, porque é em N = 3 que a curva nova e a
-       * velha se encontram (97 % contra os 100 % de então). E quem quiser o
-       * aperto de volta agora tem onde pedir: o difícil (ver `difficulties`)
-       * mede 25 % sozinho. */
+       * Chamar a guarnição de antes AJUDA, mas já não resolve: com dois bots o
+       * normal mede 53 %, contra os 100 % que a sala forçada media. E quem
+       * quiser mais aperto tem onde pedir — o difícil (ver `difficulties`) mede
+       * 26 % sozinho e 13 % com dois bots. */
       for (const p of this.players.values()) p.zDownUntil = 0;
       this.repairing.clear();
       for (const t of this.trebuchets) {

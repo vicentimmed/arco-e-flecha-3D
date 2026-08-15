@@ -92,6 +92,18 @@ const _euler = new THREE.Euler(0, 0, 0, "YXZ");
 const _qTombo = new THREE.Quaternion();
 const _cor = new THREE.Color();
 
+/* Os argumentos da aura, pelo mesmo motivo de todos os rascunhos acima: um
+ * literal aqui seriam quinze objetos por quadro — novecentos por segundo — só
+ * para atravessar uma chamada síncrona. */
+const _auraCtx = {
+  intensidade: 0,
+  voo: 0,
+  rapidez: 0,
+  velocidade: null,
+  camera: null,
+  opacidade: 1,
+};
+
 /** O contexto que as funções de pose leem. Um por lutador — ele guarda a fase. */
 function criarContexto() {
   return {
@@ -280,6 +292,10 @@ export class Fighter {
     this.specialIndex = -1;
     this.specialFraction = 0;
     this._esp = 0;
+    /* O rastro é da vida anterior. A aura ainda descobriria sozinha pelo salto
+       de posição (ver `empurrarAmostra`), mas quem renasce ao lado de onde caiu
+       ficaria com a cauda antiga pendurada por quase um segundo. */
+    this.aura.reset();
   }
 
   /* --------------------------------------------------------------- quadro -- */
@@ -300,7 +316,10 @@ export class Fighter {
     this.atualizarCanais(dt);
     const p = this.montarPose();
     this.aplicar(p, false);
-    this.atualizarAura(dt);
+    /* A aura vem DEPOIS de `aplicar`: ela lê a posição e o quaternion que ele
+       acabou de escrever para saber onde nasce a cauda e para converter a
+       direção do voo do mundo para o corpo. */
+    this.atualizarAura(dt, cameraPos);
     this.atualizarDetalhe(cameraPos);
     this.atualizarPiscar();
 
@@ -594,11 +613,22 @@ export class Fighter {
 
   /* --------------------------------------------------------------- aura ---- */
 
-  atualizarAura(dt) {
-    /* Três fontes acendem a mesma aura, e a maior manda. Somá-las estouraria a
-       tela quando alguém carrega ki no meio de um arranque, que é uma coisa que
-       acontece o tempo todo. */
-    let i = Math.max(this._charge, this._boost * 0.9);
+  atualizarAura(dt, cameraPos) {
+    const vx = this.velocity.x;
+    const vy = this.velocity.y;
+    const vz = this.velocity.z;
+    const rapidez = Math.sqrt(vx * vx + vy * vy + vz * vz);
+
+    /* QUATRO fontes acendem a mesma aura, e a maior manda. Somá-las estouraria
+       a tela quando alguém carrega ki no meio de um arranque, que é uma coisa
+       que acontece o tempo todo.
+
+       VOAR É UMA DELAS, e antes não era: a aura só existia na carga e no
+       arranque, então o lutador cruzava o céu em voo de cruzeiro sem ki nenhum
+       em volta. Na referência ninguém voa apagado — quem está no ar está com o
+       ki aceso, mais forte quanto mais rápido vai. */
+    const voando = this._fly * (0.4 + 0.34 * clamp(rapidez / NAMEK.fighter.flySpeed, 0, 1));
+    let i = Math.max(this._charge, this._boost * 0.9, voando);
     if (this._esp > 0.01) {
       // No especial a aura sobe com a carga e recua quando o golpe já saiu: a
       // energia foi embora com o feixe.
@@ -620,7 +650,17 @@ export class Fighter {
       this.aura.setColor(this.color);
     }
 
-    this.aura.update(dt, clamp(i, 0, 1), this._boost, this._nivel >= 2 ? 0.75 : 1);
+    _auraCtx.intensidade = clamp(i, 0, 1);
+    /* O canal de VOO, e não o de arranque: a cauda e o sopro pertencem a quem
+       está no ar, e o arranque só os torna mais compridos porque anda mais
+       rápido. Era o `_boost` sozinho que fazia o rastro nascer e morrer com o
+       botão em vez de com o movimento. */
+    _auraCtx.voo = this._fly;
+    _auraCtx.rapidez = rapidez;
+    _auraCtx.velocidade = this.velocity;
+    _auraCtx.camera = cameraPos ?? null;
+    _auraCtx.opacidade = this._nivel >= 2 ? 0.75 : 1;
+    this.aura.update(dt, _auraCtx);
   }
 
   /* ---------------------------------------------------------- lod e piscar */

@@ -2822,6 +2822,38 @@ export const CONFIG = {
          Fora do cerco (livre, duelo) vale o pátio, por `spawnCenter`. */
       spawnDrop: 0.6, // m
     },
+
+    /* ----------------------------------------------------------- sandbox --
+       Cenário de TESTE, isolado das outras fases: serra pequena e barata para
+       avaliar textura triplanar + pedra instanciada + cratera dinâmica sem
+       tocar no vale. Ver `shared/sandboxField.js` e `entities/sandboxGround.js`. */
+    sandbox: {
+      radius: 46, // m — borda jogável
+      flatRadius: 14, // m — miolo plano, onde a arqueira nasce
+      wallStart: 20, // m — onde a serra começa a subir
+      rampLength: 20, // m — comprimento característico da subida (satura)
+      peak: 26, // m — altura de referência da crista
+      floorNoise: 0.35, // m — ondulação do piso plano
+
+      world: {
+        half: 50, // m — meia-extensão da malha (um pouco além da borda jogável)
+        segments: 110, // malha pequena e uniforme: ~24 k triângulos, cabe barato
+      },
+
+      rocks: { count: 26 },
+      grass: { count: 900 },
+
+      /* ---------------------------------------------------------- cratera --
+         Cratera DINÂMICA de verdade (a Lua é estática, sorteada uma vez — ver
+         `moonField.js`). O raio cresce com a velocidade de impacto da flecha. */
+      destruction: {
+        craterBase: 0.8, // m — raio mínimo, de qualquer tiro que encoste
+        craterGain: 0.55, // m por √(m/s) — quanto a velocidade infla o raio
+        craterMax: 7, // m — teto do raio
+        craterDepth: 0.42, // fundura = craterDepth × raio
+        craterLimit: 24, // crateras simultâneas; a mais velha cede à mais nova
+      },
+    },
   },
 
   debug: {

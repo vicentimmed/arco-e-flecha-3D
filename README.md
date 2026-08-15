@@ -86,10 +86,69 @@ quadro, como quem realmente mira.
 Segurar o arco tensionado por mais de 3 s começa a tremer a mira, e o tremor
 cresce com o tempo — vale soltar e reengatar.
 
+## Namekusei — o outro jogo
+
+A última porta da tela de entrada não leva a uma fase deste jogo: leva a **outro
+jogo**, que divide com ele o servidor e o lobby, e mais nada.
+
+**Batalha em Namekusei** é um mata-mata aéreo para até 15 lutadores — gente,
+bots ou mistura — inspirado em *Dragon Ball Z: Budokai Tenkaichi 3*: voo livre,
+rajadas de ki das duas mãos, Kamehameha, cratera onde o golpe bate e um planeta
+que dá para pôr em tempestade. Nada de Rapier: a colisão ali é analítica contra
+o campo de altura, o que a torna determinística, barata e sem nenhuma superfície
+de contato com o mundo de física do arqueiro.
+
+O desenho, o orçamento e as razões de cada decisão estão em
+**[docs/plano-namekusei.md](docs/plano-namekusei.md)**.
+
+O que importa para quem mexe *neste* jogo é o §0 daquele plano: **o modo não
+pode encostar no arqueiro.** Ele mora inteiro em `src/namek/`,
+`src/shared/namek/` e `server/namek/`, e dos arquivos antigos só toca quatro, e
+só acrescentando:
+
+| Arquivo | O acréscimo |
+|---|---|
+| `src/main.js` | um desvio no arranque, com `import()` dinâmico |
+| `src/ui/lobby.js` | mais uma porta |
+| `src/style.css` | a cor dessa porta |
+| `server/room.js` | duas linhas de roteamento em `RoomHost.ensure` |
+
+A entrada é por **recarga** (`?jogo=namek`), e não por troca de cena, porque o
+`Game` do arqueiro prende um contexto WebGL ao canvas no construtor — um segundo
+contexto sobre o mesmo elemento não nasce. Recarregando, o `main()` desvia antes
+de existir física, vale ou renderer, e o Vite entrega o modo num pacote à parte:
+quem vem jogar arco e flecha não baixa uma linha de Namekusei.
+
+### Controles
+
+Lá dentro **nenhum atalho do arqueiro vale** — nem `T`, nem `R`, nem `~`, nem as
+teclas de fase e de modo. O teclado é outro, e `Esc` é o único que sobrevive.
+
+| Comando | Ação |
+|---|---|
+| **W A S D** | andar e voar · **Shift** correr |
+| **Espaço / Ctrl** | subir e descer · segurar no chão decola |
+| **F** | alterna voo e chão |
+| **Shift** (no ar) / **botão direito** | arrancada com ki |
+| **Botão esquerdo** | rajada de ki — uma bola por mão, alternando |
+| **C** (segurar) | **carregar o ki** — para no lugar, acende a aura |
+| **1 2 3 4** | Kamehameha · Galick Gun · Kienzan · Genki Dama |
+| **Q** | onda de empurrão |
+| **Tab** | travar / soltar o alvo |
+| **Esc** | menu geral |
+
+Os quatro especiais **só saem com a barra de ki CHEIA**, e é ela que gasta toda.
+A rajada custa uma lasca e é o ataque do dia a dia — a mesma divisão do Budokai
+Tenkaichi 3, e o §5 do plano explica por que ela é obrigatória.
+
 ## A física
 
 Tudo em SI, com 1 unidade Three.js = 1 metro. Todas as constantes moram em
 [`src/config.js`](src/config.js).
+
+> Namekusei tem as suas próprias, em
+> [`src/shared/namek/config.js`](src/shared/namek/config.js), e de propósito:
+> ver o §0 do plano de lá.
 
 | Grandeza | Valor | Efeito no jogo |
 |---|---|---|
@@ -242,6 +301,20 @@ src/
     math.js            IK de dois ossos, interpolação, PRNG
     noise.js           ruído de valor + FBM (terreno e vento)
     geometry.js        segmentos que se esticam entre dois pontos
+
+  namek/               O OUTRO JOGO — ver a seção "Namekusei" acima.
+    game.js            laço próprio, passo variável (não há solver aqui)
+    boot.js            arranque, e por que ele é uma recarga
+    movement.js        cápsula cinemática: andar, voar, arrancar com ki
+    camera.js          terceira pessoa que abre na arrancada
+    ki.js              a barra, e a regra do especial só com ela cheia
+    world/             relevo, vegetação, vila, céu, mar, tempestade
+    character/         o rig do lutador e uma pose por ação
+    powers/            rajada, feixes, disco, esfera, onda
+    fx/                poeira, pedras e clarões, em pools
+    net/               conexão e interpolação dos outros
+    ui/                HUD, placar, feed de mortes
+  shared/namek/        o que a sala também importa (puro)
 ```
 
 O relevo alimenta o render **e** o colisor com a mesma geometria, então não

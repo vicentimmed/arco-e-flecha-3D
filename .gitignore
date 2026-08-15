@@ -1,4 +1,10 @@
-node_modules/
+# Sem a barra final, de propósito: com ela o padrão casa DIRETÓRIO e só. Numa
+# worktree o `node_modules` costuma ser um SYMLINK para o do repositório
+# principal (é o que faz o build rodar aqui sem duplicar 300 MB), e o symlink
+# escapava do padrão — aparecia como arquivo novo em todo `git status` e entrava
+# em qualquer `git add -A` distraído, levando junto um caminho absoluto que só
+# existe numa máquina.
+node_modules
 dist/
 .DS_Store
 *.log

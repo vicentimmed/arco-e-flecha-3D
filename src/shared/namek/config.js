@@ -308,7 +308,7 @@ export const NAMEK = {
      * pertencer a quem a merece: especiais (4,2 a 12) e quedas de altura. É
      * também o que a referência faz — bola de ki chamusca, especial abre buraco.
      */
-    craterMinPower: 0.5,
+    craterMinPower: 0.1,
     /** Quantas crateras o terreno guarda antes de aposentar as mais velhas.
      *  Ver `NamekField.addCrater` — é o teto de custo do `heightAt`. */
     craterLimit: 96,

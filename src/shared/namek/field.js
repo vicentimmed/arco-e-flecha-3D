@@ -15,8 +15,8 @@
    horizonte sem uma borda reta.
 
        centro ─────────────────────────────────► borda
-       clareira      colinas      montanhas       mar
-       0–180 m       180–500 m    500–760 m       760 m+
+       clareira      serra + picos       praia        mar
+       0–200 m       200–520 m           520–650 m    650 m+
 
    A clareira não é plana: ela ondula o suficiente para uma cratera ter onde
    aparecer. Terreno perfeitamente liso faz toda deformação parecer um erro de
@@ -69,6 +69,13 @@ const DESL_N = Math.floor((DESL_HALF * 2) / DESL_RES) + 1;
    crateras se somam, e nada as impediria de somar para sempre. */
 const DESL_MIN = -80;
 const DESL_MAX = 25;
+/* m — teto da fundura de UMA cratera que foi sendo aprofundada. Abaixo disto o
+   `DESL_MIN` da grade já estaria aparando de qualquer jeito; o limite aqui
+   existe para o registro não guardar números que a grade nunca vai honrar. */
+const FUNDURA_MAX = 70;
+/* m — célula do índice usado só para achar cratera a fundir. Grande porque a
+   busca varre 3×3 células e as crateras candidatas são poucas. */
+const FUSAO_CELL = 32;
 
 export class NamekField {
   constructor(seed = NAMEK.world.seed) {
@@ -93,6 +100,15 @@ export class NamekField {
      * partida aberto dez buracos ou dez mil.
      */
     this.desl = new Float32Array(DESL_N * DESL_N);
+
+    /**
+     * Índice espacial LEVE, consultado só ao abrir cratera (`craterParaFundir`)
+     * e nunca em `heightAt`. É o que permite achar o buraco a aprofundar sem
+     * varrer o registro inteiro — e é barato justamente porque abrir cratera é
+     * raro comparado a consultar altura.
+     * @type {Map<number, object[]>}
+     */
+    this.fusaoGrid = new Map();
 
     /** @type {object[]} o registro, em ordem de chegada. Só para a rede. */
     this.craters = [];
@@ -192,7 +208,7 @@ export class NamekField {
    * fundo: o chão para de descer em `DESL_MIN` e a borda para de subir em
    * `DESL_MAX`.
    */
-  bakeCrater(c) {
+  bakeCrater(c, sinal = 1) {
     const ix0 = Math.max(0, Math.floor((c.x - c.raio + DESL_HALF) / DESL_RES));
     const ix1 = Math.min(DESL_N - 1, Math.ceil((c.x + c.raio + DESL_HALF) / DESL_RES));
     const iz0 = Math.max(0, Math.floor((c.z - c.raio + DESL_HALF) / DESL_RES));
@@ -206,10 +222,71 @@ export class NamekField {
         const d = this.craterDelta(c, px, pz);
         if (d === 0) continue;
         const k = linha + ix;
-        const v = this.desl[k] + d;
+        const v = this.desl[k] + d * sinal;
         this.desl[k] = v < DESL_MIN ? DESL_MIN : v > DESL_MAX ? DESL_MAX : v;
       }
     }
+  }
+
+  /**
+   * Desassa: tira da grade exatamente o que `bakeCrater` pôs.
+   *
+   * Exato porque assar é uma SOMA, e somar tem inverso. A única exceção é o
+   * ponto que bateu no teto de profundidade — lá a soma foi aparada e não dá
+   * para desfazer o que não entrou. É aceitável porque só acontece no fundo de
+   * um buraco já saturado, onde mais alguns metros não mudam o que se vê.
+   */
+  unbakeCrater(c) {
+    this.bakeCrater(c, -1);
+  }
+
+  /* ------------------------------------------------------------- fusão ----- */
+
+  /** Célula do índice de fusão. Só é consultado ao ABRIR cratera, nunca em `heightAt`. */
+  chaveFusao(x, z) {
+    return ((Math.floor(x / FUSAO_CELL) + 2048) << 16) | (Math.floor(z / FUSAO_CELL) + 2048);
+  }
+
+  indexarParaFusao(c) {
+    const k = this.chaveFusao(c.x, c.z);
+    let lista = this.fusaoGrid.get(k);
+    if (!lista) this.fusaoGrid.set(k, (lista = []));
+    lista.push(c);
+  }
+
+  /**
+   * A cratera existente que este novo golpe deve APROFUNDAR em vez de duplicar.
+   *
+   * Sem isto, segurar o botão da rajada (seis tiros por segundo) criaria seis
+   * entradas por segundo no registro — e o registro é o que viaja no `welcome`
+   * para quem entra no meio. Com isto, insistir no mesmo ponto continua
+   * afundando o buraco (é o que se quer) sem que o registro cresça.
+   *
+   * O critério é o centro do golpe novo cair BEM dentro de um buraco que já
+   * existe. Metade do raio e não o raio inteiro: encostar na borda de uma
+   * cratera é abrir uma cratera vizinha, não aprofundar aquela — e é assim que
+   * um buraco se alarga em vez de virar um poço.
+   */
+  craterParaFundir(x, z, raio) {
+    let melhor = null;
+    let melhorD = Infinity;
+    for (let cx = -1; cx <= 1; cx++) {
+      for (let cz = -1; cz <= 1; cz++) {
+        const lista = this.fusaoGrid.get(this.chaveFusao(x + cx * FUSAO_CELL, z + cz * FUSAO_CELL));
+        if (!lista) continue;
+        for (const c of lista) {
+          const d = Math.hypot(c.x - x, c.z - z);
+          if (d > c.raio * 0.5 || d >= melhorD) continue;
+          /* Não funde golpe grande em cratera pequena: uma Genki Dama que cai
+             dentro do arranhão de uma rajada tem de abrir a cratera DELA, com
+             o raio dela, e não engordar um buraco de quatro metros. */
+          if (raio > c.raio * 1.3) continue;
+          melhorD = d;
+          melhor = c;
+        }
+      }
+    }
+    return melhor;
   }
 
   /**
@@ -236,10 +313,36 @@ export class NamekField {
   addCrater(id, x, z, power) {
     if (this.byId.has(id)) return null;
     const { raio, fundura } = craterFor(power);
-    const c = { id, x, z, raio, fundura };
 
+    /* APROFUNDAR, quando o golpe cai dentro de um buraco que já existe.
+     *
+     * A grade é desassada e reassada com a cratera já crescida, em vez de
+     * simplesmente somar o golpe novo por cima. Parece um rodeio e não é: é o
+     * que mantém a GRADE e o REGISTRO contando a mesma história. Quem está em
+     * campo tem a grade; quem entra no meio recebe o registro e o reassa. Se a
+     * grade guardasse a soma de vinte rajadas e o registro guardasse uma
+     * cratera só, os dois chãos seriam diferentes — e chão diferente entre
+     * jogadores é o pior defeito possível deste modo (§12, critério 5). */
+    const alvo = this.craterParaFundir(x, z, raio);
+    if (alvo) {
+      this.unbakeCrater(alvo);
+      alvo.fundura = Math.min(FUNDURA_MAX, alvo.fundura + fundura * 0.8);
+      /* O raio cresce por soma de ÁREAS (hipotenusa), não de comprimentos:
+         vinte rajadas no mesmo ponto abrem um buraco fundo e só um pouco mais
+         largo, que é como um buraco de verdade se comporta. Somar raios daria
+         uma cratera de cem metros a partir de tiros de quatro. */
+      alvo.raio = Math.min(NAMEK.destruction.craterMax, Math.hypot(alvo.raio, raio * 0.5));
+      this.bakeCrater(alvo);
+      /* O id NOVO passa a apontar para a cratera velha: é o que mantém a
+         idempotência quando a mesma mensagem da sala chega duas vezes. */
+      this.byId.set(id, alvo);
+      return alvo;
+    }
+
+    const c = { id, x, z, raio, fundura };
     this.craters.push(c);
     this.byId.set(id, c);
+    this.indexarParaFusao(c);
     this.bakeCrater(c);
     return c;
   }
@@ -276,6 +379,7 @@ export class NamekField {
       const cratera = { id: c.i, x: c.p[0], z: c.p[1], raio: c.r, fundura: c.f };
       this.craters.push(cratera);
       this.byId.set(c.i, cratera);
+      this.indexarParaFusao(cratera);
       this.bakeCrater(cratera);
     }
   }

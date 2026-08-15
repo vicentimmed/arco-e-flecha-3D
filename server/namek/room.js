@@ -640,6 +640,14 @@ export class NamekRoom {
     const p = clamp(power, 0, 64);
     if (p <= 0) return null;
 
+    /* GOLPE FRACO NÃO GASTA VAGA. O corte é o mesmo dos dois lados — o cliente
+       nem chega a pedir (ver `craterMinPower` e o `reportar` do laço), e aqui
+       ele vale também para o BOT, que fala com a sala por dentro e não passa por
+       aquele caminho. Sem esta linha, quinze bots atirando a 6/s continuariam
+       girando a fila de 96 crateras sozinhos, e a destruição dos especiais
+       apagaria na frente de todo mundo do mesmo jeito. */
+    if (p < NAMEK.destruction.craterMinPower) return null;
+
     /* A COTA VALE PARA TODA CRATERA, não só para as pequenas.
      *
      * A condição era `p < 1`, o que deixava a porta escancarada justamente para

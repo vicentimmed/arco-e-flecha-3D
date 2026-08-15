@@ -169,13 +169,34 @@ export const NAMEK = {
 
     /* A PERSEGUIÇÃO FRACA. Ver §6.1 do plano — "levemente" é o requisito, e
        cada número aqui existe para segurar a palavra "levemente". */
+    /* A CORREÇÃO TOTAL PRECISA SER MENOR QUE O CONE. É a regra inteira, e ela
+     * estava invertida.
+     *
+     * `turnRate × duration` é quanto a bola pode girar na vida dela. Com 95°/s
+     * por 1,1 s isso eram **104°, contra um cone de 35°** — ou seja, qualquer
+     * alvo dentro do cone era acerto garantido, e o cone não limitava nada.
+     * Medido: um disparo 25° fora do alvo a 60 m girava 31° em 0,4 s e acertava.
+     * É exatamente o que o §6.1 do plano diz que não pode acontecer ("uma bola
+     * que persegue de verdade tira o jogo do jogador e o dá ao software").
+     *
+     * Agora são 26°/s por 0,75 s = **19,5° de correção contra um cone de 22°**.
+     * A diferença em jogo:
+     *
+     * • um alvo que ANDA — 34 m/s de través, a 60 m — sai uns 10° do lugar
+     *   durante o voo, e a bola tem sobra para acompanhar: a mira continua
+     *   perdoando movimento, que é o que ela existe para perdoar;
+     * • um alvo na BORDA do cone (22°) fecha para ~2,5°, e 2,5° a 60 m são
+     *   2,6 m — mais que o raio de acerto. Mira ruim continua errando.
+     *
+     * Ou seja: a bola persegue quem você já estava mirando, e não acha quem
+     * você não mirou. */
     homing: {
       /** graus/s — teto de giro da direção. */
-      turnRate: 95,
+      turnRate: 26,
       /** s — depois disto ela segue reta, sempre. */
-      duration: 1.1,
+      duration: 0.75,
       /** graus — meio-ângulo do cone. Fora dele, não corrige. */
-      cone: 35,
+      cone: 22,
       /** m — alcance da escolha de alvo, no instante do disparo. */
       acquire: 50,
     },
@@ -219,7 +240,9 @@ export const NAMEK = {
       windup: 0.7,
       /** O disco não sustenta: ele VOA. `sustain` é a vida dele. */
       sustain: 3.2,
-      range: 520,
+      /* Honesto, pelo mesmo motivo da Genki Dama: 3,2 s a 105 m/s são 336 m, e
+         o 520 que estava aqui nunca foi alcançado por disco nenhum. */
+      range: 336,
       speed: 105,
       hitRadius: 2.2,
       /** O disco corta de uma vez, não por segundo. */
@@ -231,11 +254,20 @@ export const NAMEK = {
       nome: "Genki Dama",
       windup: 3.6,
       sustain: 4.5,
-      range: 700,
+      /* ALCANCE HONESTO. Estava 700, e a vida do projétil é
+         `min(sustain, range / speed)`: com 4,5 s a 46 m/s ela nunca passava de
+         **207 m**. O número grande não fazia nada além de mentir para quem
+         fosse balancear o golpe — e a sala usa `range` para validar acerto, o
+         que abria uma janela de 700 m para um golpe de 207. */
+      range: 210,
       speed: 46,
       hitRadius: 11,
       damage: 96,
-      power: 12,
+      /* 26 e não 12: o §7 do plano anuncia 30 m de cratera para ela, e
+         `craterFor` dá 2,2 + 5,4·√p — com 12 saíam 20,9 m. É o golpe mais caro
+         do jogo (3,6 s parado, a barra inteira) e o buraco é a única coisa que
+         fica dele. */
+      power: 26,
       cor: 0x9ff0ff,
     },
   },
@@ -255,6 +287,22 @@ export const NAMEK = {
     craterDepth: 0.35,
     /** m — maior cratera aceita. Trava contra potência absurda vinda da rede. */
     craterMax: 34,
+    /**
+     * Potência mínima para o buraco ser PERSISTENTE.
+     *
+     * Abaixo disto o golpe ainda levanta poeira, pedra e clarão — só não gasta
+     * uma das 96 vagas do terreno. E precisa ser assim porque a rajada básica
+     * sai seis vezes por segundo POR LUTADOR: com quinze em campo são noventa
+     * pedidos de cratera por segundo contra um teto de 96, e a fila girava
+     * inteira em pouco mais de um segundo. Medido numa partida curta: a sala
+     * carimbou 176 crateras e o campo guardava 96 — buracos apagando na frente
+     * do jogador enquanto ele olhava para eles.
+     *
+     * Com o corte em 0,5, a rajada (0,12) marca e não fica, e a fila passa a
+     * pertencer a quem a merece: especiais (4,2 a 12) e quedas de altura. É
+     * também o que a referência faz — bola de ki chamusca, especial abre buraco.
+     */
+    craterMinPower: 0.5,
     /** Quantas crateras o terreno guarda antes de aposentar as mais velhas.
      *  Ver `NamekField.addCrater` — é o teto de custo do `heightAt`. */
     craterLimit: 96,

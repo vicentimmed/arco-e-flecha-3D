@@ -1014,8 +1014,14 @@ export class NamekGame {
        * imediatos, e é sob eles que o buraco aparece. São dois ou três quadros
        * de rede embaixo de uma nuvem que dura um segundo. */
       this.fx.groundImpact(g.p.x, g.p.y, g.p.z, g.power);
-      this.net.send(NC2S.GROUND_HIT, { p: [g.p.x, g.p.y, g.p.z], power: g.power });
       this.derrubarPorPerto(g.p, g.power);
+      /* Só o que é forte o bastante pede BURACO; o resto marca e some. Ver
+         `craterMinPower` — sem o corte, a rajada consumia a fila inteira de 96
+         crateras em pouco mais de um segundo e a destruição que importa apagava
+         na frente do jogador. */
+      if (g.power >= NAMEK.destruction.craterMinPower) {
+        this.net.send(NC2S.GROUND_HIT, { p: [g.p.x, g.p.y, g.p.z], power: g.power });
+      }
     }
 
     /* `ev.empurroes` não é reportado, e isso é de propósito: a SALA já resolve a

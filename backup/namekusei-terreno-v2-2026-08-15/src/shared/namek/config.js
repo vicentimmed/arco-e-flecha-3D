@@ -17,14 +17,8 @@
 export const NAMEK = {
   /* ------------------------------------------------------------------ mundo */
   world: {
-    /* m — raio da arena.
-     *
-     * Era 900. Caiu para 460 junto com a troca do relevo: o terreno agora é o
-     * da fase Sandbox multiplicado por dez (ver `NamekField.baseHeight`), e
-     * dez vezes 46 m são estes 460. Espaço para voar continua sendo o pedido
-     * do §2 — o que mudou é que o mapa inteiro passou a caber dentro do
-     * alcance dos golpes, que é o que torna montanha um alvo e não cenário. */
-    radius: 460,
+    /** m — raio da arena. Ver §2 do plano: espaço para voar é o pedido. */
+    radius: 900,
     /** m — teto de voo. Acima disto a subida é cortada, sem parede visível. */
     ceiling: 520,
     /** m — nível do mar. O terreno mergulha nele na borda da arena. */
@@ -40,8 +34,8 @@ export const NAMEK = {
      * distância excedida. Quem tenta fugir sente o planeta puxando; quem está
      * lutando nunca descobre que a borda existe. */
     softEdge: {
-      /** m — onde o freio começa a agir. Acompanhou o raio 900 → 460. */
-      start: 420,
+      /** m — onde o freio começa a agir. */
+      start: 820,
       /** 1/s² — força do puxão por metro excedido. */
       pull: 0.9,
     },

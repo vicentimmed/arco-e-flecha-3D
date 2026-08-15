@@ -54,13 +54,9 @@ export class NamekField {
     this.radius = NAMEK.world.radius;
     this.seaLevel = NAMEK.world.seaLevel;
 
-    /* Onde a sala sorteia nascimentos: a CLAREIRA, e só ela.
-
-       O raio acompanha o relevo, e é por isso que ele encolheu junto com a
-       arena: a serra do terreno novo (ver `baseHeight`) começa a subir aos
-       200 m, então um raio de nascimento maior que isso põe gente na encosta
-       ou no topo de um pico — foi o primeiro defeito visto depois da troca. */
-    this.spawnCenter = { x: 0, z: 0, radius: 150, minRadius: 25 };
+    /* Onde a sala sorteia nascimentos. É a clareira e as colinas — nunca a
+       montanha (nasceria dentro da rocha) nem o mar. */
+    this.spawnCenter = { x: 0, z: 0, radius: 460, minRadius: 40 };
 
     /** @type {Map<number, object[]>} célula → crateras que a tocam */
     this.grid = new Map();
@@ -103,29 +99,21 @@ export class NamekField {
   buildPeaks(seed) {
     const rnd = makeRandom(seed ^ 0x5eed);
     const lista = [];
-    /* NOVE, e não vinte e dois. A arena encolheu para 460 m de raio e as
-       montanhas deixaram de ser só a parede do fundo: agora elas ficam DENTRO
-       do alcance, para servirem de alvo. Vinte e dois picos nesse espaço
-       viram uma crista contínua, e crista contínua não se contorna nem se
-       derruba — se margeia. Nove deixam vale entre eles. */
-    const n = 9;
+    const n = 22;
     for (let i = 0; i < n; i++) {
       /* Ângulos em setores, com sobra sorteada dentro de cada um: sorteio livre
-         deixa buracos de 60° e aglomerados de três, e o anel de montanhas some
-         de metade das direções. */
+         em 22 picos deixa buracos de 60° e aglomerados de três, e o anel de
+         montanhas some de metade das direções. */
       const ang = ((i + rnd() * 0.8 - 0.4) / n) * Math.PI * 2;
-      /* 180 a 430 m: fora da clareira central (onde a briga começa e onde um
-         obstáculo no meio irritaria) e dentro do alcance de qualquer especial,
-         que é o que os torna DESTRUTÍVEIS na prática. */
-      const d = 240 + rnd() * 200;
+      const d = 500 + rnd() * 260;
       lista.push({
         x: Math.cos(ang) * d,
         z: Math.sin(ang) * d,
         /* m — altura acrescentada no centro do pico. */
-        h: 60 + rnd() * 105,
+        h: 46 + rnd() * 96,
         /* m — quão largo ele é. Picos altos são largos: um cone de 140 m de
            altura e 40 m de base é uma agulha, e agulha não lê como montanha. */
-        r: 90 + rnd() * 110,
+        r: 78 + rnd() * 120,
         /* Achatamento em uma direção, para nenhum deles ser um cone perfeito. */
         squash: 0.62 + rnd() * 0.5,
         rot: rnd() * Math.PI,
@@ -261,82 +249,55 @@ export class NamekField {
    * dela. Recalcular o ruído a cada re-esculpimento seria pagar FBM por vértice
    * a cada explosão — o cliente guarda o base e só soma a diferença.
    */
-  /**
-   * O relevo, SEM cratera nenhuma.
-   *
-   * ------------------------------------------------- de onde este relevo veio
-   *
-   * É o terreno da fase Sandbox (`shared/sandboxField.js`), com **todas as
-   * escalas multiplicadas por dez**: uma arena de teste de 46 m de raio virou
-   * um planeta de 460 m. Multiplicar por dez quer dizer comprimentos ×10 e
-   * frequências de ruído ÷10 — é a mesma paisagem, vista de um lugar dez vezes
-   * maior, e não uma paisagem diferente que por acaso é grande.
-   *
-   * O relevo antigo (colinas de FBM largo + clareira achatada na cota 4 + anel
-   * de 22 picos a 500–760 m) está guardado na tag `namekusei-terreno-v2` e em
-   * `backup/namekusei-terreno-v2-2026-08-15/`.
-   *
-   * ---------------------------------------------------------- as três camadas
-   *
-   * 1. **O piso.** Ondulação baixa, que dá o chão de onde tudo sai.
-   * 2. **A serra.** Anel de cristas com deformação de domínio — é o que a fase
-   *    de teste tem de melhor: a crista não vira um anel geométrico, ela
-   *    serpenteia.
-   * 3. **As montanhas soltas.** Nove gaussianas achatadas dentro do alcance de
-   *    tiro (ver `buildPeaks`). Elas não existiam no Sandbox; entram aqui
-   *    porque uma montanha só é destrutível se dá para chegar nela.
-   *
-   * E, por último, o mar — que o Sandbox não tem e Namekusei precisa, senão a
-   * malha termina numa borda seca em vez de mergulhar (ver `water.js`).
-   */
   baseHeight(x, z) {
     const d = Math.hypot(x, z);
-    const n = this.noise;
+    const W = NAMEK.world;
 
-    /* 1. O PISO. `floorNoise` 0,35 a 0,05 de frequência no Sandbox; aqui 3,5 a
-       0,005 — dez vezes mais alto e dez vezes mais largo. */
-    let h = 3.5 * n.fbm2(x * 0.005, z * 0.005, 3);
+    /* ONDULAÇÃO GERAL. Duas oitavas largas dão as colinas; a terceira, o granulado
+       que impede a superfície de parecer plástico à distância de voo. */
+    let h = this.noise.fbm2(x * 0.0016, z * 0.0016, 3) * 26;
+    h += this.noise.fbm2(x * 0.0071, z * 0.0071, 3) * 6.5;
 
-    /* 2. A SERRA. `wallStart` 20 → 200 m, `rampLength` 20 → 200 m,
-       `peak` 26 → 260 m. A deformação de domínio (`wx`/`wz`) é o que impede o
-       anel de ler como um círculo desenhado a compasso. */
-    const w = d - 200;
-    if (w > 0) {
-      const wx = x + 70 * n.noise2(x * 0.0015, z * 0.0015);
-      const wz = z + 70 * n.noise2(x * 0.0015 + 91, z * 0.0015 - 33);
-      const crista = 0.5 + 0.5 * n.ridged2(wx * 0.004, wz * 0.004, 4, 2.1, 0.5);
-      const massif = 0.6 + 0.4 * n.fbm2(wx * 0.0012, wz * 0.0012, 2);
-      const rise = 1 - Math.exp(-w / 200);
-      h += 260 * rise * massif * Math.pow(crista, 1.3);
+    /* A CLAREIRA. Perto do centro o relevo é achatado contra a cota 4 — não
+       zerado, ver o cabeçalho. `smoothstep` e não um corte: uma borda dura na
+       clareira apareceria como um degrau circular de 180 m de raio. */
+    const clareira = 1 - smoothstep(140, 320, d);
+    h = h * (1 - clareira * 0.82) + 4 * clareira * 0.82;
+
+    /* AS MONTANHAS. Cada pico é uma gaussiana achatada e girada. O `for` custa
+       22 iterações por consulta, e é por isso que ele está atrás do teste de
+       distância: no miolo da arena — onde estão os jogadores, os bots e a maior
+       parte dos vértices — ele nem começa. */
+    if (d > 300) {
+      for (const p of this.peaks) {
+        const dx = x - p.x;
+        const dz = z - p.z;
+        /* Gira no espaço do pico antes de achatar, senão todo o anel achataria
+           na mesma direção do mundo e a montanha viraria um padrão. */
+        const c = Math.cos(p.rot);
+        const s = Math.sin(p.rot);
+        const rx = dx * c - dz * s;
+        const rz = (dx * s + dz * c) * p.squash;
+        const dist2 = rx * rx + rz * rz;
+        const r2 = p.r * p.r;
+        if (dist2 > r2) continue;
+        const t = 1 - dist2 / r2;
+        /* t² dá uma saia larga e um topo redondo; t linear daria um cone. */
+        h += p.h * t * t;
+      }
+      /* Cristas ridged POR CIMA das montanhas, e só nelas. É o que dá a rocha
+         lascada de Namekusei sem custar oitava nenhuma na clareira. */
+      const forca = smoothstep(420, 620, d);
+      if (forca > 0) {
+        h += this.noise.ridged2(x * 0.0135, z * 0.0135, 3) * 11 * forca;
+      }
     }
 
-    /* 3. AS MONTANHAS SOLTAS. Nove iterações por consulta, cada uma cortada
-       cedo pelo teste de distância — barato o bastante para rodar sempre, o
-       que é obrigatório agora que elas ficam DENTRO da arena e não mais atrás
-       de um `if (d > 300)`. */
-    for (const p of this.peaks) {
-      const dx = x - p.x;
-      const dz = z - p.z;
-      /* Gira no espaço do pico antes de achatar, senão todos achatariam na
-         mesma direção do mundo e a montanha viraria um padrão. */
-      const c = Math.cos(p.rot);
-      const s = Math.sin(p.rot);
-      const rx = dx * c - dz * s;
-      const rz = (dx * s + dz * c) * p.squash;
-      const dist2 = rx * rx + rz * rz;
-      const r2 = p.r * p.r;
-      if (dist2 > r2) continue;
-      const t = 1 - dist2 / r2;
-      /* t² dá uma saia larga e um topo redondo; t linear daria um cone. */
-      h += p.h * t * t;
-    }
-
-    /* O MAR. Depois das montanhas o chão desce e afunda. A descida começa
-       antes da borda da arena para que a barreira macia (§2 do plano)
-       aconteça sobre água aberta — voar para fora e ser freado sobre o oceano
-       lê como o mundo continuando; ser freado sobre um penhasco lê como uma
-       parede invisível. */
-    const praia = smoothstep(520, 650, d);
+    /* O MAR. Depois das montanhas o chão desce e afunda. A descida começa antes
+       da borda da arena para que a barreira macia (§2 do plano) aconteça sobre
+       água aberta — voar para fora e ser freado sobre o oceano lê como o mundo
+       continuando; ser freado sobre um penhasco lê como uma parede invisível. */
+    const praia = smoothstep(700, 880, d);
     h = h * (1 - praia) + (this.seaLevel - 14) * praia;
 
     return h;

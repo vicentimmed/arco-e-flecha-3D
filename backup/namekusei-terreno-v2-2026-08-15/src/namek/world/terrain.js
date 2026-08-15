@@ -85,16 +85,17 @@ const TAU = Math.PI * 2;
  *                    chapa a −22 m debaixo d'água; detalhe ali é invisível. */
 const LOD = [
   [0, 2.6],
-  [180, 2.6],
-  [400, 7],
-  [660, 14],
+  [175, 2.6],
+  [420, 9],
+  [790, 14],
+  [1040, 26],
 ];
 
 /* m — onde a malha termina. NÃO é o raio da arena (900 m): o terreno precisa
    passar da barreira macia e mergulhar, senão a última fileira de triângulos
    fica na linha do mar e aparece como um recorte serrilhado contra a água. O
    que está além disto é oceano aberto, e quem o desenha é `water.js`. */
-const RAIO_MALHA = 660;
+const RAIO_MALHA = 1040;
 
 /** Teto de setores por anel. 512 a 2,8 m de passo radial dá arco de 2,1 m no
  *  fim da clareira — abaixo disto o triângulo vira lasca e só custa vértice. */

@@ -63,11 +63,15 @@ const CSS = `
    Um '--ki' no ':root' seria uma variável global com nome de duas letras num
    documento que já tem o tema do arqueiro — e a primeira colisão seria
    silenciosa. Presas aqui, elas não existem fora desta árvore. */
-.nk-hud {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
+/* A PORTA DE ENTRADA ENTRA NO MESMO SELETOR, e é por isso que os tokens estão
+   num bloco só e o posicionamento do HUD num bloco à parte logo abaixo.
+   Ela não está DENTRO do HUD — quem a monta é a entrada ('ui/porta.js', erguida
+   por 'input.js', que só conhece o canvas) —, então sem esta segunda âncora ela
+   ficaria com a fonte do documento e com 'var(--nk-ouro)' resolvendo para nada.
+   A alternativa era copiar os oito tokens num segundo bloco, e isso é a paleta
+   do modo em duas versões que envelhecem separadas. */
+.nk-hud,
+.nk-porta {
   font-family: "Nunito", "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
   color: var(--nk-tinta);
@@ -90,10 +94,18 @@ const CSS = `
   --nk-skew: -14deg;
 }
 
+.nk-hud {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 /* O contorno grosso, em texto. Quatro sombras em cruz fazem o papel de um
    'stroke' que o HTML não tem, e a quinta afunda o bloco no cenário. Sem isto,
    nome branco sobre céu verde-claro some. */
-.nk-hud .nk-contorno {
+.nk-hud .nk-contorno,
+.nk-porta .nk-contorno {
   text-shadow:
     0 2px 0 var(--nk-traco), 0 -2px 0 var(--nk-traco),
     2px 0 0 var(--nk-traco), -2px 0 0 var(--nk-traco),
@@ -618,6 +630,87 @@ const CSS = `
 
 /* De onde veio. Um HUD sem isto obriga a girar 360° para descobrir quem está
    atirando — e girar é justamente o que não dá tempo de fazer. */
+/* ------------------------------------------------------------- a bússola ----
+
+   Os pinos que dizem onde estão os outros lutadores. Mesma peça dos marcadores
+   de rocha da chuva de meteoros (a classe .mm de src/style.css), com duas
+   diferenças que estão explicadas em NamekHud.setMarcas: a cor vem do LUTADOR e
+   o pino só existe de longe.
+
+   (Sem crase em nenhum lugar deste arquivo, inclusive nos comentários: ele
+   inteiro é UM template literal, e uma crase aqui dentro o fecha no meio.)
+
+   O 'z-index: 1' põe a bússola abaixo das marcas de dano (2) e de tudo o que é
+   placa. Ela é a camada mais funda do HUD de propósito: informa sobre o que
+   está longe, e nada que esteja longe pode tapar o que está acontecendo agora. */
+.nk-bussola { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+
+.nk-pino {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  /* A cor é UMA variável e o bloco inteiro a herda — trocar de lutador é
+     trocar uma linha, e é o que setMarcas escreve. */
+  --nk-pino-cor: #ff8a2a;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95);
+  will-change: transform, opacity;
+}
+
+.nk-pino[hidden] { display: none; }
+
+/* NA TELA: o anel circula o corpo. Miolo vazio — é sobre o lutador que ele
+   cai, e um disco o cobriria justamente quando ele já está visível. */
+.nk-pino-anel {
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--nk-pino-cor);
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.6), inset 0 0 8px rgba(255, 255, 255, 0.18);
+}
+
+.nk-pino-seta {
+  display: none;
+  font-size: 26px;
+  line-height: 1;
+  font-style: normal;
+  color: var(--nk-pino-cor);
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.95));
+  transform: rotate(var(--nk-pino-giro, 0deg));
+}
+
+/* FORA DA TELA: a seta aponta o rumo, o anel sai de cena. */
+.nk-pino.fora .nk-pino-anel { display: none; }
+.nk-pino.fora .nk-pino-seta { display: block; }
+
+.nk-pino-d {
+  font-family: var(--nk-fonte, inherit);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #fff;
+  -webkit-text-stroke: 2px rgba(0, 0, 0, 0.85);
+  paint-order: stroke fill;
+}
+
+/* O ALVO TRAVADO é maior e pulsa. Ele é o único pino que descreve uma decisão
+   sua — os outros descrevem o mundo —, e sem essa separação a bússola vira uma
+   lista em que a pessoa contra quem você está lutando some no meio. */
+.nk-pino.travado {
+  --nk-pino-cor: #fff2b0;
+  animation: nk-pino-pulso 0.9s ease-in-out infinite;
+}
+.nk-pino.travado .nk-pino-seta { font-size: 34px; }
+.nk-pino.travado .nk-pino-anel { width: 38px; height: 38px; border-width: 3px; }
+
+@keyframes nk-pino-pulso {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.6); }
+}
+
 .nk-marcas { position: absolute; inset: 0; z-index: 2; }
 
 .nk-marca {
@@ -938,6 +1031,148 @@ const CSS = `
   color: var(--nk-fraca);
 }
 
+/* ========================================================= a porta de entrada
+   A tela escura do primeiro clique. Ver 'ui/porta.js' para o porquê dela; aqui
+   está só o porquê de cada número.
+
+   O Z-INDEX É A PEÇA QUE FAZ ELA NASCER NA HORA CERTA, e ele está preso entre
+   duas coisas que existem fora deste arquivo:
+
+     • acima de todo o HUD (o maior lá dentro é 9, a tela de morte);
+     • ABAIXO DA TELA DE ENTRADA ('#lobby', z-index 20 em 'src/style.css'). Isto
+       não é detalhe: a porta é montada junto com o resto do modo, enquanto a
+       pessoa ainda está digitando o apelido. Passando por baixo do lobby ela
+       fica invisível e inalcançável até ele sair — e quando ele sai, some com
+       meio segundo de transição e a REVELA. A abertura não custou uma linha de
+       coordenação com o lobby;
+     • abaixo do menu geral ('.nk-menu', z-index 40), que é a única coisa que
+       pode legitimamente cobri-la.
+
+   'pointer-events: auto' porque o '#ui' inteiro é 'none' — e a porta é
+   justamente a exceção: ela precisa comer o clique para que ele não vire um
+   tiro de ki no primeiro quadro. */
+
+.nk-porta {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  /* VINHETA, e não preto chapado: o mundo continua desenhando por baixo e é
+     isso que faz a tela parecer uma ABERTURA e não um erro. O meio fica mais
+     claro que as bordas de propósito — quem chega vê a arena para onde está
+     indo. */
+  background: radial-gradient(
+    ellipse at center,
+    rgba(3, 10, 18, 0.6) 12%,
+    rgba(1, 4, 9, 0.9) 100%
+  );
+  backdrop-filter: blur(2px);
+  animation: nk-porta-entra 0.3s ease-out;
+}
+
+/* O atributo 'hidden' contra um 'display: flex' não vale nada sem isto. */
+.nk-porta[hidden] { display: none !important; }
+
+@keyframes nk-porta-entra { from { opacity: 0; } }
+
+.nk-porta-miolo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 24px;
+  text-align: center;
+}
+
+.nk-porta-selo {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--nk-ouro);
+}
+
+/* A CHAMADA PULSA, e o pulso é o único trabalho desta tela: ele diz que a
+   página não travou, que alguém está esperando você, e que a coisa a fazer é a
+   que está escrita. Sem ele, uma frase parada no meio de uma tela escura é
+   indistinguível de um carregamento emperrado. */
+.nk-porta-chamada {
+  font-size: clamp(26px, 4.6vw, 56px);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.05;
+  text-transform: uppercase;
+  animation: nk-porta-pulso 1.7s ease-in-out infinite;
+}
+
+@keyframes nk-porta-pulso {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.72; transform: scale(0.985); }
+}
+
+/* -------------------------------------------------------------- as dicas ---
+   Três lembretes, e nenhum deles escrito aqui: saem do primeiro item de cada
+   grupo de 'CONTROLES' (ver 'ui/porta.js'). */
+
+.nk-porta-dicas {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 16px;
+  margin-top: 6px;
+  max-width: min(92vw, 720px);
+}
+
+.nk-porta-dica {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px 5px 8px;
+  background: var(--nk-vidro);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.nk-porta-dica-acao { color: rgba(240, 248, 255, 0.84); }
+
+.nk-porta kbd {
+  min-width: 20px;
+  padding: 2px 5px;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.nk-porta-rodape {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nk-fraca);
+}
+
+/* ESPERANDO A TRAVA. O gesto já saiu e o navegador ainda não devolveu o
+   ponteiro (o "too soon" de quem acabou de sair de um lock). A chamada para de
+   pulsar — o pedido já foi atendido, insistir nele seria mentira — e o rodapé
+   passa a dizer o que está acontecendo. */
+.nk-porta--esperando .nk-porta-chamada {
+  animation: none;
+  opacity: 0.55;
+}
+
 /* ------------------------------------------------------------------ telinha --
    Abaixo de 1000 px de largura a placa encolhe em vez de vazar por cima da
    mira. Nada some: o que este HUD mostra já é o mínimo. */
@@ -953,7 +1188,9 @@ const CSS = `
    informam, então elas não somem — param de repetir. */
 @media (prefers-reduced-motion: reduce) {
   .nk-hud *,
-  .nk-hud *::before {
+  .nk-hud *::before,
+  .nk-porta,
+  .nk-porta * {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

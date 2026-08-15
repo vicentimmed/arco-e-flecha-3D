@@ -12,17 +12,17 @@
    ------------------------------------------------- o que muda aqui: VELOCIDADE
 
    No vale um arqueiro anda a 5 m/s e corre a 8. Aqui um lutador cruza a arena a
-   96 m/s no arranque de ki — quase vinte vezes mais rápido. Isso quebra o
+   64 m/s no arranque de ki — mais de doze vezes mais rápido. Isso quebra o
    interpolador do arqueiro em dois pontos, e os dois estão consertados abaixo:
 
-   • **Um buraco de rede de 150 ms custa 14 metros.** A interpolação pura
+   • **Um buraco de rede de 150 ms custa quase dez metros.** A interpolação pura
      congelaria o alvo no ar durante o buraco e o teleportaria ao voltar. Por
      isso a amostra carrega a VELOCIDADE (`v` em `packFighter`) e o remoto
      extrapola por ela dentro de uma janela curta — é a diferença entre um
      adversário que "desliza" e um que pisca.
 
    • **Extrapolar demais é pior que engasgar.** Se a janela fosse generosa, um
-     lutador que freia de 96 m/s para zero seria desenhado quinze metros à
+     lutador que freia de 64 m/s para zero seria desenhado dez metros à
      frente de onde parou, e o tiro que você acertou nele erraria. Daí
      `EXTRAPOLACAO_MAX` ser curta e a extrapolação DESACELERAR conforme
      envelhece, em vez de manter a velocidade cheia.
@@ -78,7 +78,7 @@ class RemoteFighter {
       boostBlend: 0, chargeBlend: 0,
       specialFraction: 0, specialIndex: -1,
       hurtBlend: 0, lastHand: 0, handPose: 0,
-      down: false, invuln: false,
+      down: false, invuln: false, tonto: false, defendendo: false,
     };
   }
 
@@ -129,7 +129,7 @@ class RemoteFighter {
     }
 
     /* DEPOIS da última: extrapola pela velocidade, dentro da janela curta. Ver
-       o cabeçalho — é o que impede o lutador a 96 m/s de congelar no ar num
+       o cabeçalho — é o que impede o lutador a 64 m/s de congelar no ar num
        buraco de rede. */
     const ultima = buf[buf.length - 1];
     const atraso = Math.min(EXTRAPOLACAO_MAX, tempoAlvo - ultima.t) / 1000;
@@ -159,6 +159,7 @@ function copiarPose(a, out) {
   out.specialFraction = a.specialFraction; out.specialIndex = a.specialIndex;
   out.hurtBlend = a.hurtBlend; out.lastHand = a.lastHand; out.handPose = a.handPose;
   out.down = a.down; out.invuln = a.invuln;
+  out.tonto = a.tonto; out.defendendo = a.defendendo;
 }
 
 function interpolarPose(a, b, t, out) {
@@ -191,6 +192,12 @@ function interpolarPose(a, b, t, out) {
   out.lastHand = b.lastHand;
   out.down = b.down;
   out.invuln = b.invuln;
+  /* Caído e defendendo também são DISCRETOS, e pela mesma razão dos vizinhos:
+     não existe meio corpo no chão nem meia guarda de pé. O valor é o da amostra
+     mais nova, porque é a decisão mais recente — e porque atrasar a guarda em
+     meio quadro faria o adversário aparecer aparando o golpe que já passou. */
+  out.tonto = b.tonto;
+  out.defendendo = b.defendendo;
 }
 
 /* ------------------------------------------------------------- a coleção --- */
@@ -320,6 +327,8 @@ export class RemoteFighters {
       f.handPose = p.handPose;
       f.down = p.down;
       f.invuln = p.invuln;
+      f.tonto = p.tonto;
+      f.defendendo = p.defendendo;
       f.update(dt, cameraPos);
     }
   }

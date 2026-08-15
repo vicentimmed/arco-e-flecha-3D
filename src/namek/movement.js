@@ -30,7 +30,7 @@
    2. **Voa-se para onde se OLHA.** O W em voo segue o eixo de mira com pitch
       incluso — apontar para baixo e acelerar é mergulhar. Sem isso, subir e
       descer viram teclas e o voo vira elevador.
-   3. **O atrito do ar é BAIXO** (`airDrag` 1,35). Soltar tudo a 96 m/s não
+   3. **O atrito do ar é BAIXO** (`airDrag` 1,35). Soltar tudo a 64 m/s não
       para: derrapa. É o que dá peso sem dar lentidão.
    4. **O corpo INCLINA na curva** (`roll`, derivado da aceleração lateral).
       Sem rolagem, voo é trilho de trem.
@@ -53,13 +53,13 @@ const TAU = Math.PI * 2;
    de chamadas provocam 175 coletas contra 11 da conta à mão — num caminho que
    roda até seis vezes por quadro, por lutador. Ainda por cima ele paga um
    escalonamento contra overflow que nenhuma distância deste jogo precisa: as
-   coordenadas vivem em ±900 m e as velocidades em ±96 m/s. */
+   coordenadas vivem em ±900 m e as velocidades em ±64 m/s. */
 const modulo = (x, y, z) => Math.sqrt(x * x + y * y + z * z);
 const modulo2 = (x, z) => Math.sqrt(x * x + z * z);
 
 /* ------------------------------------------------------------- subpassos ---
    Um quadro pode ser longo (aba voltando do segundo plano, GC, tela de carga) e
-   a 96 m/s um quadro de 100 ms são DEZ METROS num passo só — o bastante para
+   a 64 m/s um quadro de 100 ms são mais de SEIS METROS num passo só — o bastante para
    atravessar uma crista sem que o teste de altura veja nada. O quadro é picado
    em subpassos limitados por tempo E por distância. */
 /** s — teto de dt aceito. Acima disto o quadro é um soluço, não um quadro. */
@@ -139,6 +139,14 @@ const SEM_ACAO = {
   menuPressed: false,
 };
 
+/* s — teto de tempo caindo, para quem foi derrubado no ar.
+ *
+ * A queda do teto de voo (520 m) leva ~8 s com o tranco inicial; nove dão
+ * folga. Ele existe para o caso em que o chão nunca chega — derrubado sobre o
+ * oceano da borda, por exemplo —, e é o que impede "ficar sem controle" de
+ * virar "ficar sem controle para sempre". Ver `FighterController.derrubar`. */
+const QUEDA_MAX = 9;
+
 export class FighterController {
   /** @param {import("../shared/namek/field.js").NamekField} field */
   constructor(field) {
@@ -159,6 +167,14 @@ export class FighterController {
     this.grounded = true;
     this.flying = false;
     this.stunned = false;
+    /** Derrubado por golpes seguidos: sem controle E sem voo. Ver `derrubar`. */
+    this.caido = false;
+    /** Guarda de pé neste quadro. Quem escreve é o laço principal, pela ação
+     *  `guard`; quem lê são a pose (bit 8 da rede) e a barra de ki. */
+    this.defendendo = false;
+    /** Preso na pose de um especial. Quem escreve é o laço principal, enquanto
+     *  houver golpe em curso — ver o comentário de `preso` em `_integrar`. */
+    this.travado = false;
     /** A arrancada está acesa NESTE quadro (com ki pago). Alimenta a câmera. */
     this.boosting = false;
 
@@ -172,6 +188,11 @@ export class FighterController {
     /* ------------------------------------------------------------ interno -- */
     /** s restantes de atordoamento. */
     this._stun = 0;
+    /** s restantes de queda NO CHÃO. Ver `derrubar` — é mais que um
+     *  atordoamento, e ele só começa a correr quando os pés encostam. */
+    this._caido = 0;
+    /** s restantes do teto de segurança da queda, enquanto ele está no ar. */
+    this._caidoAr = 0;
     /** s de espaço segurado — é o relógio da decolagem. */
     this._espaco = 0;
     /** Velocidade do quadro anterior, para a aceleração lateral da rolagem. */
@@ -289,6 +310,55 @@ export class FighterController {
   }
 
   /**
+   * Cinco golpes seguidos: o lutador PERDE O AR e cai.
+   *
+   * A diferença para o `push` com atordoamento é a que dá nome à coisa: aqui o
+   * VOO DESLIGA. O comentário de `push` explica por que um atordoamento comum
+   * não pode desligá-lo (quem levasse um golpe a 300 m despencaria e a luta
+   * acabaria no primeiro acerto); esta queda é a exceção deliberada a essa
+   * regra, e ela é o preço de ter apanhado cinco vezes seguidas sem reagir.
+   *
+   * O empurrão para baixo (`stagger.drop`) existe porque uma queda que começa
+   * na velocidade zero demora a virar queda: nos primeiros meio segundo o corpo
+   * pareceria apenas ter parado no ar. Com o tranco ele AFUNDA no quadro do
+   * golpe, que é a leitura de "levou uma pancada forte".
+   *
+   * Quem manda derrubar é a sala (`NS2C.STAGGER`), nunca este arquivo: contar
+   * golpes é decisão de partida, e duas contagens — uma aqui, outra lá — seriam
+   * dois jogos diferentes na mesma tela.
+   *
+   * @param {number} segundos quanto tempo no chão
+   */
+  derrubar(segundos) {
+    const S = NAMEK.fighter.stagger;
+    /* O RELÓGIO SÓ COMEÇA A CORRER NO CHÃO, e essa é a peça que faz a janela
+     * valer alguma coisa numa luta AÉREA.
+     *
+     * Medido, quando o relógio era único: derrubado a 120 m, o lutador chegava
+     * ao chão em 2,85 s — e os 2,4 s de queda tinham acabado 0,45 s ANTES,
+     * ainda no ar. Ele recuperava o controle no meio do tombo, voltava a voar e
+     * nunca encostava no chão. Ou seja: a 120 m ou mais, o atordoamento não
+     * existia, e é justamente de 120 m para cima que a briga acontece. Pior
+     * ainda, o pedido explícito — "ele deve cair no chão e criar uma grande
+     * cratera… ali ele deve ficar um pouco tonto" — descreve o chão como o
+     * lugar onde a punição ACONTECE, não como um detalhe do caminho.
+     *
+     * São dois relógios, portanto: `_caido` é o tempo NO CHÃO e só anda com os
+     * pés nele; `_caidoAr` é um teto de segurança para a queda, para ninguém
+     * ficar sem controle para sempre por ter sido derrubado sobre o oceano ou
+     * rente ao teto de voo. Nove segundos são a queda dos 520 m do teto com
+     * folga — ver `NAMEK.world.ceiling`. */
+    this._caido = Math.max(this._caido, segundos);
+    this._caidoAr = QUEDA_MAX;
+    this.caido = true;
+    this.stunned = true;
+    this.flying = false;
+    this.boosting = false;
+    this.defendendo = false;
+    this.velocity.y = Math.min(this.velocity.y, -S.drop);
+  }
+
+  /**
    * Põe o lutador em algum lugar. Nascer, renascer, entrar na partida.
    *
    * Nascer ALTO já entra voando — é o `respawn.dropHeight` de 120 m do plano, e
@@ -306,6 +376,11 @@ export class FighterController {
     this.roll = 0;
     this._stun = 0;
     this.stunned = false;
+    this._caido = 0;
+    this._caidoAr = 0;
+    this.caido = false;
+    this.defendendo = false;
+    this.travado = false;
     this._espaco = 0;
     this._vAntX = 0;
     this._vAntZ = 0;
@@ -382,19 +457,87 @@ export class FighterController {
     }
     this.stunned = this._stun > 0;
 
+    /* A QUEDA, em dois tempos — ver `derrubar`, que explica por que.
+     *
+     * No AR, o corpo despenca e só o teto de segurança corre. NO CHÃO, o
+     * relógio do atordoamento anda. Quando ele zera, o voo NÃO volta sozinho: o
+     * lutador está caído na grama, e voltar ao ar é uma decisão dele, com a
+     * tecla. É o que dá ao outro lado a janela para carregar o golpe. */
+    if (this.caido) {
+      if (this.grounded) {
+        this._caido -= h;
+        if (this._caido <= 0) this._caido = 0;
+      } else {
+        this._caidoAr -= h;
+        if (this._caidoAr <= 0) this._caidoAr = 0;
+      }
+      if (this._caido <= 0 || this._caidoAr <= 0) {
+        this.caido = false;
+        this._caido = 0;
+        this._caidoAr = 0;
+      }
+    }
+    /* Caído implica atordoado, sempre — e é ESTA linha que segura o controle
+       durante a queda inteira, sem depender de o `_stun` ter sido armado com a
+       duração certa (ele não teria como: ninguém sabe de antemão quanto tempo
+       uma queda leva). */
+    if (this.caido) this.stunned = true;
+
     /* CARREGAR KI TRAVA O CORPO (§5 do plano) — e só vale com os pés no chão ou
        voando de verdade. Carregar no meio de uma queda não pode virar um freio
        aéreo de graça: quem está caindo, cai. */
+    /* O ESPECIAL PRENDE O CORPO, e esta linha é a que faz a promessa do
+     * `beam.js` ser verdade.
+     *
+     * Lá está escrito, desde sempre: *"a origem não acompanha o dono, e é de
+     * propósito. Quem solta um especial fica preso na pose — ele não vai a lugar
+     * nenhum durante o golpe."* A primeira metade era código; a segunda era uma
+     * suposição que ninguém impunha. Para o BOT ela valia (`passoDoEspecial`
+     * amortece a velocidade dele a zero); para o humano, não valia nada — dava
+     * para soltar o Kamehameha e sair voando, e o tubo de meio quilômetro ficava
+     * pendurado no ar saindo de um ponto onde não havia mais ninguém.
+     *
+     * `travado` é escrito pelo laço principal enquanto houver especial em curso.
+     * Ele se comporta como a carga de ki: o corpo se segura no lugar, a
+     * gravidade não puxa quem está voando, e não há entrada de movimento. E ele
+     * dura o que a POSE dura, não o que o projétil dura — ver `duracaoDaPose`:
+     * quem lança um disco fica preso 0,45 s depois do arremesso, quem SEGURA um
+     * feixe fica preso enquanto ele estiver aceso. */
+    const preso =
+      !this.stunned && this.travado === true && (this.grounded || this.flying);
+
     const carregando =
       !this.stunned &&
       (ki?.carregando ?? a.charge) === true &&
       (this.grounded || this.flying);
-    const controla = !this.stunned && !carregando;
+
+    /* PARADO NO LUGAR: pela carga de ki OU pela pose do especial. As duas travam
+       o corpo do mesmo jeito e por razões diferentes, e são mantidas separadas
+       porque `_carregando` alimenta a POSE de carregar ki — dobrar as duas numa
+       variável só faria o lutador aparecer de mãos em concha no meio do
+       Kamehameha. */
+    const imovel = carregando || preso;
+
+    /* A GUARDA. Ela não trava o corpo como a carga trava — quem se defende
+     * ainda anda, devagar, e é isso que a torna uma decisão e não uma pausa: dá
+     * para recuar defendendo, que é a manobra inteira do golpe.
+     *
+     * Ela some sozinha quando a barra acaba. Quem decide o gasto é o laço
+     * principal (a barra é dele), e ele escreve `this.defendendo` antes de
+     * chamar este passo; o que se lê aqui é o resultado. Carregar e defender
+     * são mutuamente exclusivos — as duas mãos estão ocupadas de jeitos opostos
+     * —, e a carga ganha porque ela é a que exige o compromisso maior. */
+    const defendendo = !this.stunned && !carregando && this.defendendo === true;
+
+    const controla = !this.stunned && !imovel;
     this._carregando = carregando;
 
     /* ------------------------------------------------------ a arrancada ---- */
     let querImpulso = false;
-    if (controla) {
+    /* DEFENDENDO NÃO SE ARRANCA. O arranque é a manobra de fugir e a guarda é a
+       de aguentar: deixar as duas juntas daria um lutador correndo a 64 m/s com
+       78 % de redução de dano, que é a definição de não haver escolha. */
+    if (controla && !defendendo) {
       /* "Shift no ar, ou botão direito". A metade "no ar" é resolvida AQUI e não
          no teclado porque só este objeto sabe onde estão os pés — no chão, o
          mesmo Shift é a corrida. */
@@ -460,10 +603,10 @@ export class FighterController {
     /* A gravidade corre SEMPRE, menos quando ele está voando e no controle. */
     let gravidade = !this.flying || this.stunned;
 
-    if (carregando) {
-      /* A pose de carga: parado no lugar, aura acesa, vulnerável. No ar ela
-         segura o corpo (é a pose do anime); no chão o atrito do chão já faz
-         isso. Este é o único lugar em que o lutador flutua sem voar. */
+    if (imovel) {
+      /* Parado no lugar, aura acesa, vulnerável. No ar isto segura o corpo (é a
+         pose do anime); no chão o atrito do chão já faz o mesmo. É o único
+         lugar em que o lutador flutua sem voar. */
       ganho = 12;
       temAlvo = true;
       if (this.flying) gravidade = false;
@@ -492,7 +635,7 @@ export class FighterController {
 
       /* Subir e descer têm velocidade própria (`climbSpeed`), mas ela ESCALA
          com a arrancada: quem segura o boost e o espaço espera subir rápido, e
-         26 m/s no meio de um voo de 96 m/s lê como corda bamba. */
+         20 m/s no meio de um voo de 64 m/s lê como corda bamba. */
       if (vertical !== 0) {
         alvoY += vertical * F.climbSpeed * (velMax / F.flySpeed);
         temAlvo = true;
@@ -540,6 +683,17 @@ export class FighterController {
         temAlvo = true;
       }
       ganho = F.airAccel * 0.35;
+    }
+
+    /* A guarda APARA A VELOCIDADE, e não a aceleração: mexer no ganho faria o
+       lutador demorar a chegar à mesma velocidade de sempre, o que lê como
+       lentidão de rede. Cortando o alvo, ele se move devagar e responde na
+       hora — que é a diferença entre um corpo pesado e um controle atrasado. */
+    if (defendendo && temAlvo) {
+      const k = NAMEK.guard.speed;
+      alvoX *= k;
+      alvoY *= k;
+      alvoZ *= k;
     }
 
     /* ------------------------------------------------- a barreira macia ----
@@ -651,7 +805,7 @@ export class FighterController {
       ? this._normal
       : this.field.normalAt(p.x, p.z, 0.8, this._normal);
     /* A velocidade de IMPACTO é a que fecha contra a NORMAL, não a vertical: um
-       mergulho de 96 m/s a 40° e uma queda a prumo de 60 m/s batem diferente, e
+       mergulho de 64 m/s a 40° e uma queda a prumo de 50 m/s batem diferente, e
        bater de raspão numa encosta não pode abrir a mesma cratera que bater de
        frente nela. */
     const vn = v.x * n.x + v.y * n.y + v.z * n.z;

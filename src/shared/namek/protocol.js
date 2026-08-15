@@ -142,8 +142,11 @@ export const NS2C = {
   /** Onde renascer: `{ id, p:[x,y,z], yaw, invulnUntil }`. */
   SPAWN: "spawn",
 
-  /** Cratera nova, para todos: `{ i, p:[x,y,z], power }`.
-   *  `i` é o id da sala — é ele que deixa o cliente reaplicar sem duplicar. */
+  /** Cratera nova, para todos: `{ i, p:[x,y,z], power, by }`.
+   *  `i` é o id da sala — é ele que deixa o cliente reaplicar sem duplicar.
+   *  `by` é quem a abriu (ou null): quem atirou já tocou o próprio estouro no
+   *  instante do impacto, e sem este campo ele o tocaria de novo ao receber o
+   *  carimbo de volta. */
   CRATER: "crater",
 
   /** Objeto do cenário quebrado: `{ kind, i, by }`. */

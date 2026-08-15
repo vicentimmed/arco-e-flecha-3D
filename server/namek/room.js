@@ -674,6 +674,12 @@ export class NamekRoom {
       i: id,
       p: [round(x), round(y), round(z)],
       power: round(p),
+      /* QUEM abriu. O cliente já desenhou a poeira e já tocou o estouro do
+         PRÓPRIO golpe no instante do impacto — ele não espera a rede para isso.
+         Sem este campo ele não tem como saber que a cratera que volta é a dele,
+         e o estouro sairia duas vezes: uma na hora e outra meio segundo depois.
+         Um número por cratera, e crateras são raras. */
+      by: dono?.id ?? null,
     });
     return c;
   }

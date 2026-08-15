@@ -44,6 +44,7 @@ import { NamekCamera } from "./camera.js";
 import { NamekInput } from "./input.js";
 import { NamekHud, NamekMenu } from "./ui/index.js";
 import { KiMeter } from "./ki.js";
+import { NamekAudio } from "./audio.js";
 import { NamekClient } from "./net/client.js";
 import { RemoteFighters } from "./net/remote.js";
 
@@ -101,6 +102,10 @@ export class NamekGame {
     this.cam = new NamekCamera(this.camera3, this.field);
     this.input = new NamekInput(canvas);
     this.hud = new NamekHud(uiRoot);
+    /* O som nasce MUDO e só acorda no primeiro clique — ver `NamekAudio.unlock`.
+       Todo navegador suspende o contexto de áudio até um gesto do usuário, e
+       aqui o gesto é o mesmo que captura o ponteiro. */
+    this.audio = new NamekAudio(this.camera3, this.scene);
     /* A ÚNICA superfície de comando do modo. Pôr bot e virar o clima moram aqui
        porque o pedido fechou o teclado em "só o menu geral" — e sem um lugar
        para elas, a IA inteira e a tempestade ficariam escritas e inalcançáveis.
@@ -175,6 +180,17 @@ export class NamekGame {
 
     this._onResize = () => this.resize();
     window.addEventListener("resize", this._onResize);
+
+    /* O PRIMEIRO GESTO destrava o áudio, e ele precisa ser um ouvinte próprio.
+     *
+     * O navegador só libera o contexto de som dentro de um `click`/`keydown` de
+     * verdade — não adianta chamar `resume()` de dentro do laço, por mais que o
+     * jogador já esteja jogando. `once: true` porque destravar é irreversível e
+     * um ouvinte permanente na janela inteira seria custo eterno por um evento
+     * que acontece uma vez na partida. */
+    const destravar = () => this.audio.unlock();
+    window.addEventListener("pointerdown", destravar, { once: true });
+    window.addEventListener("keydown", destravar, { once: true });
 
     this.bindNetwork();
     this.bindParticles();
@@ -309,6 +325,11 @@ export class NamekGame {
         target: msg.target ?? null,
         local: false,
       });
+      /* A bola dos OUTROS também soa. Sem isto o campo de batalha é mudo
+         exceto por você, e quinze lutadores brigando viram um filme sem trilha
+         — pior, você deixa de ouvir de que lado vem o tiro. A cota por lutador
+         em `NamekAudio.rajada` é o que impede isso de virar serra elétrica. */
+      this.audio.rajada(vecFrom(msg.o), msg.owner);
     });
 
     net.on(NS2C.SPECIAL, (msg) => {
@@ -320,6 +341,7 @@ export class NamekGame {
         dir: vecFrom(msg.d),
         local: false,
       });
+      this.audio.especial(vecFrom(msg.o), msg.kind);
     });
 
     net.on(NS2C.BURST, (msg) => {
@@ -331,6 +353,7 @@ export class NamekGame {
          aparecia, e o resto daquele pacote morria junto. */
       const origem = vecFrom(msg.p);
       this.powers.spawnBurst({ owner: msg.owner, origem, local: false });
+      this.audio.ondaDeChoque(origem);
       /* O EMPURRÃO EM MIM É CALCULADO AQUI, e não pelo sistema de poderes.
        *
        * Lá o empurrão só é resolvido para a onda de quem é DONO dela, e o dono
@@ -351,6 +374,7 @@ export class NamekGame {
         this.health = msg.health;
         const fracao = Math.min(1, (antes - msg.health) / 34);
         this.hud.hurtFlash(fracao);
+        this.audio.levouDano(this.controller.position, fracao > 0.4);
         this.cam.shake(0.3 + fracao * 0.7, 0.25);
         const de = this.remotes.get(msg.by);
         if (de) this.hud.damageFrom(this.anguloNaTela(de.pose));
@@ -367,6 +391,7 @@ export class NamekGame {
          * deduzir, o `hit(null)` deixava toda dor igual, que é justamente o que
          * o `Fighter.hit` documenta que não pode acontecer. */
         r.fighter.hit(this.direcaoDoGolpe(msg.by, r.pose), msg.amount > 20);
+        this.audio.acertoNoCorpo(r.pose, msg.amount > 20);
       }
     });
 
@@ -374,8 +399,11 @@ export class NamekGame {
       const dir = msg.d ? vecFrom(msg.d) : null;
       if (msg.victim === this.myId) {
         this.morrer(dir);
+        this.audio.morreu(this.controller.position);
       } else {
-        this.remotes.get(msg.victim)?.fighter.die(dir);
+        const morto = this.remotes.get(msg.victim);
+        morto?.fighter.die(dir);
+        if (morto) this.audio.morreu(morto.pose);
         if (this.lockId === msg.victim) this.lockId = null;
       }
       /* Os DOIS como objeto, e não como nome solto: o feed pinta cada lado com
@@ -396,7 +424,15 @@ export class NamekGame {
        devolver null é o sinal de que não há nada novo a esculpir. */
     net.on(NS2C.CRATER, (msg) => {
       const c = this.field.addCrater(msg.i, msg.p[0], msg.p[2], msg.power);
-      if (c) this.world.applyCrater(c);
+      if (c) {
+        this.world.applyCrater(c);
+        /* O estouro de quem NÃO sou eu. O meu já soou no `reportar`, no
+           instante do impacto; este chega pelo carimbo da sala, e é o que faz a
+           destruição alheia existir para o ouvido. */
+        if (msg.by !== this.myId) {
+          this.audio.estouroNoChao({ x: msg.p[0], y: msg.p[1], z: msg.p[2] }, msg.power);
+        }
+      }
     });
 
     net.on(NS2C.PROP_DOWN, (msg) => {
@@ -415,6 +451,7 @@ export class NamekGame {
 
     net.on(NS2C.BOLT, (msg) => {
       this.world.strikeBolt(msg.p[0], msg.p[1]);
+      this.audio.raio(msg.p[0], msg.p[1]);
       /* O tremor só se sente PERTO. Um raio a 800 m sacudindo a câmera diria
          que ele caiu ao lado, e a tempestade inteira viraria um tremor
          constante sem informação nenhuma. */
@@ -618,6 +655,7 @@ export class NamekGame {
       }
     }
     this.lockId = melhor?.id ?? null;
+    if (this.lockId !== null) this.audio.travou();
     this.hud.setCrosshair(this.lockId !== null ? "travado" : "livre");
   }
 
@@ -665,6 +703,7 @@ export class NamekGame {
     });
     this.me.lastHand = mao;
     this.me.handPose = 1;
+    this.audio.rajada(origem, this.myId);
 
     this.net.send(NC2S.BLAST, {
       id,
@@ -754,6 +793,7 @@ export class NamekGame {
        para o céu, o que apaga o custo de se comprometer — que é a única coisa
        que o windup existe para cobrar. */
     this.powers.spawnSpecial({ owner: this.myId, kind, origem, dir, local: true });
+    this.audio.especial(origem, kind);
     this.net.send(NC2S.SPECIAL, {
       kind,
       o: [origem.x, origem.y, origem.z],
@@ -767,6 +807,7 @@ export class NamekGame {
     if (!this.ki.gastar(NAMEK.ki.burstCost)) return;
     const origem = this.me.chestPoint();
     this.powers.spawnBurst({ owner: this.myId, origem, local: true });
+    this.audio.ondaDeChoque(origem);
     this.net.send(NC2S.BURST, { p: [origem.x, origem.y, origem.z] });
   }
 
@@ -822,7 +863,10 @@ export class NamekGame {
     /* ------------------------------------------------------------ ki --- */
     this.ki.carregando = acoes.charge && !this.down && !this.casting;
     this.ki.update(dt);
-    if (this.ki.encheuAgora) this.hud.toast("ki cheio — especial pronto");
+    if (this.ki.encheuAgora) {
+      this.hud.toast("ki cheio — especial pronto");
+      this.audio.kiEncheu();
+    }
 
     /* -------------------------------------------------------- controle --- */
     /* Carregar ki PRENDE no lugar, e é a troca central do modo: poder em troca
@@ -845,6 +889,7 @@ export class NamekGame {
     if (pouso && pouso.speed >= NAMEK.destruction.slamSpeed) {
       const power = (pouso.speed - NAMEK.destruction.slamSpeed) * NAMEK.destruction.slamPower;
       this.fx.slam(pouso.p.x, pouso.p.y, pouso.p.z, pouso.speed);
+      this.audio.quedaNoChao(pouso.p, pouso.speed);
       this.cam.shake(Math.min(1, power * 0.6), 0.3);
       this.net.send(NC2S.SLAM, {
         p: [pouso.p.x, pouso.p.y, pouso.p.z],
@@ -966,6 +1011,16 @@ export class NamekGame {
     }
     this.hud.update(dt);
 
+    /* Os sons CONTÍNUOS. Um só lugar, uma vez por quadro: carga, feixe e vento
+       são estados, não acontecimentos, e tratá-los como evento produziria um
+       `play()` por quadro. */
+    const v = c.velocity;
+    this.audio.update({
+      carregando: this.ki.carregando,
+      feixeAceso: this.casting !== null && this.casting.t >= specialInfo(this.casting.kind).windup,
+      velocidade: Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z),
+    });
+
     /* ------------------------------------------------------------ rede ---- */
     this.pushState(agora);
 
@@ -992,6 +1047,7 @@ export class NamekGame {
         p: [a.p.x, a.p.y, a.p.z],
       });
       this.fx.bodyHit(a.p.x, a.p.y, a.p.z, 0xbfe8ff);
+      this.audio.acertoNoCorpo(a.p);
     }
 
     for (const q of ev.queimando) {
@@ -1014,6 +1070,7 @@ export class NamekGame {
        * imediatos, e é sob eles que o buraco aparece. São dois ou três quadros
        * de rede embaixo de uma nuvem que dura um segundo. */
       this.fx.groundImpact(g.p.x, g.p.y, g.p.z, g.power);
+      this.audio.estouroNoChao(g.p, g.power);
       this.derrubarPorPerto(g.p, g.power);
       /* Só o que é forte o bastante pede BURACO; o resto marca e some. Ver
          `craterMinPower` — sem o corte, a rajada consumia a fila inteira de 96
@@ -1056,6 +1113,7 @@ export class NamekGame {
     this.input.dispose();
     this.hud.dispose();
     this.menu.dispose();
+    this.audio.dispose();
     this.remotes.dispose();
     this.powers.dispose();
     this.fx.dispose();

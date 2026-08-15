@@ -94,12 +94,22 @@ const ALCANCE_SOLENE = 1400;
 
 /* A ÚNICA exceção à síntese (ver o comentário do topo do arquivo): uma trilha
    de fundo é música, não energia, e não existe receita de ruído filtrado que
-   substitua uma composição de verdade. O volume é DELIBERADAMENTE baixo pelo
-   mesmo motivo do arqueiro (`systems/audio.js`, `MUSIC_VOLUME_DAY`): o que
-   precisa ser ouvido é a rajada, o especial e o acerto — são eles que dizem ao
-   jogador o que acabou de acontecer, e uma trilha no volume dos efeitos os
-   encobre justamente nos instantes que importam. */
-const VOLUME_TRILHA = 0.1;
+   substitua uma composição de verdade.
+   ---------------------------------------------------------------- o volume
+
+   Eram 0,1, herdados do `MUSIC_VOLUME_DAY` do arqueiro, e o argumento de lá
+   ("a trilha não pode encobrir a rajada e o acerto") estava certo sobre a
+   PRIORIDADE e errado sobre o NÚMERO. Os efeitos deste modo são sintetizados
+   e normalizados a pico (`normalizar`, logo abaixo): eles saem muito mais
+   altos que uma faixa mixada para escuta, e um décimo do ganho contra isso não
+   é "discreto" — é inaudível. O relato foi literal: *"Aumente o volume da
+   música. Está muito baixo."*
+
+   0,34 põe a trilha na faixa em que ela se ouve por baixo do tiroteio sem
+   disputar com ele: um estouro no chão (pico 1,0, e o mais alto do modo)
+   continua três vezes acima dela, e o silêncio entre duas trocas de tiro
+   deixou de ser silêncio. */
+const VOLUME_TRILHA = 0.34;
 
 /* ------------------------------------------------------------- síntese ----- */
 

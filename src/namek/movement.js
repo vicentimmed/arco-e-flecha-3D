@@ -76,6 +76,14 @@ const SUBPASSOS_MAX = 6;
 const TEMPO_DECOLAGEM = 0.16;
 /** m/s — empurrão para cima no instante em que o voo engata. */
 const IMPULSO_DECOLAGEM = 3.2;
+/** m/s — o TRANCO para baixo do `F` no ar. Ver `_bordas`: é o que transforma
+ *  "desligar o voo" num mergulho em vez de uma flutuação. 30 m/s são metade da
+ *  arrancada, o que dá a leitura de peso sem virar um teleporte para o chão. */
+const MERGULHO_F = 30;
+/** m/s — o salto do `F` com os pés no chão. ~11 m de altura antes de o voo
+ *  assumir: o "impulso para cima, como se voasse com um shift por alguns
+ *  metros" do pedido. */
+const SALTO_F = 16;
 /** m — o quanto o corpo "cola" no relevo ao descer uma ladeira. Sem isso, cada
  *  lombada é uma rampa de salto e a corrida vira uma sequência de pulinhos. */
 const COLA_CHAO = 0.55;
@@ -396,17 +404,36 @@ export class FighterController {
 
   /* ------------------------------------------------------------- interno -- */
 
-  /** A cota do chão: relevo, com o mar como piso.
+  /**
+   * A cota do chão. **É o relevo, e só o relevo.**
    *
-   *  O mar é PISO e não buraco por um motivo de jogo: a arena termina em oceano
-   *  aberto (§2 do plano) e a barreira macia acontece sobre ele. Sem piso, quem
-   *  fosse empurrado para fora afundaria para sempre — e "cair pelo mundo" é o
-   *  tipo de bug que ninguém perdoa num modo de voo. Aqui ele bate na superfície
-   *  e pode subir de novo. */
+   * Havia aqui um piso no nível do mar (`return h > mar ? h : mar`), e ele era
+   * a resposta certa para uma pergunta que mudou. O argumento de então: a arena
+   * termina em oceano aberto, e sem piso quem fosse empurrado para fora
+   * afundaria para sempre.
+   *
+   * Só que esse piso valia em TODA a arena, inclusive no meio da clareira — e a
+   * partir do momento em que cavar até a lava virou requisito, ele passou a ser
+   * a coisa que impedia o requisito. O relato foi exatamente isto: *"ao ficar
+   * atirando no chão, muitas vezes no local ele vai furando, porém parece ter um
+   * limite. Ao fundo tem algo mais duro em que não é possível furar mais. Eu
+   * queria fazer aquele teste de furar até chegar na lava e não funcionou."*
+   *
+   * O "algo mais duro" era esta linha: o buraco continuava afundando no campo de
+   * altura (a grade aceita até −80 m) e os PÉS paravam a −8, sobre um chão
+   * invisível. A lava assenta a −14 e só acende a partir de −18: ela estava seis
+   * metros abaixo de um piso que ninguém conseguia atravessar. O mesmo piso, do
+   * lado do desenho, deixava o disco do oceano aparecer dentro das crateras
+   * fundas — a chapa d'água no fundo do buraco do relato (ver `world/water.js`,
+   * que agora começa depois da costa).
+   *
+   * O medo original continua legítimo e a resposta a ele deixou de ser um piso:
+   * quem cai no mar **morre** (`NAMEK.world.afogar`, cobrado pela sala em
+   * `afogarNoMar`). Não há mais o que proteger com um chão falso — afundar no
+   * oceano passou a ser uma consequência, e não um bug.
+   */
   _chao(x, z) {
-    const h = this.field.heightAt(x, z);
-    const mar = NAMEK.world.seaLevel;
-    return h > mar ? h : mar;
+    return this.field.heightAt(x, z);
   }
 
   /** As bordas de um toque. Uma vez por QUADRO — nunca por subpasso, senão um
@@ -419,13 +446,47 @@ export class FighterController {
 
     if (this.stunned) return;
 
-    /* `F` alterna o voo. Desligar no ar é deixar-se cair — é a manobra de
-       descer rápido do BT3, e é de graça: a gravidade já está escrita. */
+    /* `F` continua sendo UMA tecla com dois sentidos, e os dois ficaram mais
+     * fortes — foi o pedido: *"ao apertar a F, o player deve descer bem mais
+     * rápido do que ele desce hoje. E se ele estiver no chão e apertar F, ele
+     * deve dar um bom impulso para cima, como se voasse com um shift por alguns
+     * metros."*
+     *
+     * O que havia era um interruptor: `F` alternava o voo, e o comentário dizia
+     * que desligá-lo no ar "é deixar-se cair — de graça, a gravidade já está
+     * escrita". De graça era, e lenta também: soltar o voo a 200 m começava a
+     * queda do ZERO, e com −11,4 m/s² o corpo levava quase um segundo para
+     * atingir os 11 m/s que a caminhada faz no plano. Na tela isso lia como o
+     * lutador flutuando para baixo, não como um mergulho.
+     *
+     * Agora cada sentido paga um TRANCO, e é o tranco que dá a leitura:
+     *
+     * • NO AR — o voo desliga e o corpo é atirado para baixo a `MERGULHO_F`.
+     *   Não é "cair mais rápido que a gravidade": é a gravidade partindo de uma
+     *   velocidade que já é de queda. Daí em diante ela acelera normalmente, e
+     *   apertar `F` de novo religa o voo e freia — que é a manobra inteira.
+     * • NO CHÃO — o voo liga com um empurrão vertical grande em vez do
+     *   `IMPULSO_DECOLAGEM` de 3,2 m/s, que era um cambota. `SALTO_F` são
+     *   16 m/s, ou uns 11 m de altura antes de o corpo começar a voar de
+     *   verdade: o "shift por alguns metros" do pedido, tirado do chão de uma
+     *   vez em vez de subido a 20 m/s de `climbSpeed`.
+     *
+     * O `Math.min`/`Math.max` em vez de atribuição direta é o de sempre: quem já
+     * está caindo mais rápido que o mergulho não é freado por ele, e quem já foi
+     * arremessado para cima mais forte que o salto não é aparado por ele. */
     if (a.flyPressed) {
       this.flying = !this.flying;
-      if (this.flying && this.grounded) {
-        this.grounded = false;
-        this.velocity.y = Math.max(this.velocity.y, IMPULSO_DECOLAGEM);
+      if (this.flying) {
+        if (this.grounded) {
+          this.grounded = false;
+          this.velocity.y = Math.max(this.velocity.y, SALTO_F);
+        } else {
+          /* Religou no ar: o voo já segura o corpo sozinho (a gravidade só corre
+             para quem não está voando), e um empurrão aqui viraria um pulo duplo
+             de graça. Nada a fazer. */
+        }
+      } else if (!this.grounded) {
+        this.velocity.y = Math.min(this.velocity.y, -MERGULHO_F);
       }
     }
 
@@ -721,6 +782,12 @@ export class FighterController {
        velocidade de fuga que vai caindo com a profundidade — vento contra, não
        parede — e o puxão do config cuida de trazer de volta quem está lá fora
        sem motor nenhum (arremessado, atordoado). */
+    /* O freio é medido contra `flyRadius`, e não contra `radius`. Ver o
+       comentário dos dois no config: `radius` é o raio de JOGO (nascimento,
+       cratera, grade de deslocamento) e `flyRadius` é o de PASSEIO. Enquanto
+       eram o mesmo número, o jogador era virado de volta a 420 m — antes de a
+       serra terminar —, e a praia e o mar eram cenário inalcançável. */
+    const limite = W.flyRadius ?? W.radius;
     const r = modulo2(p.x, p.z);
     if (r > W.softEdge.start) {
       const inv = 1 / r;
@@ -728,18 +795,19 @@ export class FighterController {
       const nz = p.z * inv;
       const excesso = r - W.softEdge.start;
 
-      const t = clamp(excesso / (W.radius - W.softEdge.start), 0, 1);
+      const t = clamp(excesso / (limite - W.softEdge.start), 0, 1);
       const paraFora = alvoX * nx + alvoZ * nz;
       if (paraFora > 0) {
         alvoX -= nx * paraFora * t;
         alvoZ -= nz * paraFora * t;
       }
 
-      /* Fora do RAIO o puxão dobra. `isInsideWorld` é quem responde por isso, e
-         é a garantia de que ninguém fica pendurado no vazio: mesmo um teleporte
-         a mil metros da borda volta. */
-      const forca =
-        W.softEdge.pull * excesso * (this.field.isInsideWorld(p.x, p.z) ? 1 : 2);
+      /* Fora do LIMITE de voo o puxão dobra. É a garantia de que ninguém fica
+         pendurado no vazio: mesmo um teleporte a mil metros da borda volta.
+         Contra `flyRadius`, pelo mesmo motivo de cima — `isInsideWorld` responde
+         pelo raio de jogo (460 m), que hoje é bem menor que o de passeio, e
+         usá-lo aqui dobraria o freio já em cima da montanha. */
+      const forca = W.softEdge.pull * excesso * (r > limite ? 2 : 1);
       v.x -= nx * forca * h;
       v.z -= nz * forca * h;
     }

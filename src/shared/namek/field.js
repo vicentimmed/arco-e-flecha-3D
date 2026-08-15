@@ -452,8 +452,8 @@ export class NamekField {
    * afunda o terreno. O rascunho é de instância — a pergunta acontece uma vez
    * por estouro, não por quadro, mas não custa nada não alocar.
    */
-  raioDeCratera(x, z, power) {
-    const { raio, fundura } = craterFor(power);
+  raioDeCratera(x, z, power, fundo = 1) {
+    const { raio, fundura } = craterFor(power, fundo);
     const c = this._medida ?? (this._medida = {});
     c.id = 0;
     c.x = x;
@@ -464,9 +464,9 @@ export class NamekField {
     return c.raio;
   }
 
-  addCrater(id, x, z, power) {
+  addCrater(id, x, z, power, fundo = 1) {
     if (this.byId.has(id)) return null;
-    const { raio, fundura } = craterFor(power);
+    const { raio, fundura } = craterFor(power, fundo);
 
     /* APROFUNDAR, quando o golpe cai dentro de um buraco que já existe.
      *
@@ -955,6 +955,30 @@ export class NamekField {
   /** Está dentro do círculo da arena? */
   isInsideWorld(x, z) {
     return x * x + z * z <= this.radius * this.radius;
+  }
+
+  /**
+   * Aqui é MAR ABERTO — o oceano de verdade, e não o fundo de um buraco.
+   *
+   * A pergunta parece a mesma que `heightAt(x, z) < seaLevel` e não é, e a
+   * diferença é a razão de esta função existir. Desde que as crateras passaram a
+   * furar até a lava (`destruction.lava`), o fundo de um buraco na clareira
+   * também está abaixo da linha d'água — e ele não é mar: é um poço seco no meio
+   * do continente, com rocha em volta.
+   *
+   * Quem responde é o relevo BASE, sem cratera nenhuma. Ele é função pura de
+   * (x, z) com semente fixa, portanto idêntico em toda máquina e imune a
+   * qualquer coisa que a partida cave. É por isso que a sala pode afogar alguém
+   * (`afogarNoMar`) e o cliente pode deixar de tratar o mar como piso
+   * (`FighterController._chao`) sem que os dois discordem sobre onde a água
+   * começa.
+   *
+   * A margem de meio metro é para a faixa em que a praia encosta na água: o
+   * relevo cruza a cota exata do mar num anel de uns poucos metros, e sem ela
+   * quem corresse na areia molhada piscaria entre "mar" e "terra" a cada passo.
+   */
+  ehMar(x, z) {
+    return this.baseHeight(x, z) < this.seaLevel - 0.5;
   }
 
   /** Dá para ficar de pé aqui? Fora d'água, dentro da arena e sem ser parede. */

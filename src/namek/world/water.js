@@ -41,6 +41,29 @@ import { NAMEK_SOL_DIR, NAMEK_BRUMA_SOL, NAMEK_BRUMA_BRASA } from "./sky.js";
 
 /** m — até onde o oceano vai. Ver `NAMEK_CAMERA_FAR` em `sky.js`. */
 const RAIO_MAR = 3200;
+
+/* m — ONDE O OCEANO COMEÇA, e este é o número que conserta o "algo mais duro no
+   fundo do buraco".
+ *
+ * O mar era um DISCO cheio: uma chapa a −8 m cobrindo a arena inteira, do centro
+ * da clareira ao horizonte. Enquanto o relevo do continente ficou acima da linha
+ * d'água, isso não custou nada — o teste de profundidade escondia a chapa
+ * debaixo do terreno e ninguém nunca a viu.
+ *
+ * As crateras mudaram isso. Cavar abaixo de −8 m no meio da clareira passou a
+ * expor a água POR CIMA: o fundo do buraco virava uma superfície turquesa, lisa,
+ * que não deformava com tiro nenhum — que é exatamente o relato (*"ao fundo tem
+ * algo mais duro em que não é possível furar mais… veja o print: apareceu algo
+ * que ele não deforma"*). Não era rocha, não era limite de grade: era o oceano
+ * visto de dentro do continente.
+ *
+ * 520 m é onde a serra começa a ceder para a orla (ver `NamekField.baseHeight`,
+ * o `smoothstep(500, 580)`), e a linha d'água de verdade só cai por volta de
+ * 612 m. Ou seja: o anel começa quase cem metros antes de haver água, coberto
+ * pela areia, e não há um pixel de mar faltando na costa. Para dentro dele o
+ * oceano simplesmente não existe — e o fundo de uma cratera passou a ser rocha,
+ * que é o que ele sempre deveria ter sido. */
+const RAIO_INTERNO = 520;
 /** Setores do disco. Fixo: o detalhe é do fragmento, e o que a malha precisa
  *  entregar é só o marulho de 300 m e uma silhueta redonda no horizonte. */
 const SETORES = 96;
@@ -291,19 +314,20 @@ export class NamekWater {
    */
   montarDisco() {
     const raios = [];
-    let r = 0;
+    let r = RAIO_INTERNO;
+    raios.push(r);
     while (r < RAIO_MAR) {
       r += this.passoEm(r);
       raios.push(Math.min(r, RAIO_MAR));
     }
 
     const aneis = raios.length;
-    const nVerts = 1 + aneis * SETORES;
+    const nVerts = aneis * SETORES;
     const pos = new Float32Array(nVerts * 3);
-    const idx = new Uint32Array((SETORES + (aneis - 1) * SETORES * 2) * 3);
+    const idx = new Uint32Array((aneis - 1) * SETORES * 2 * 3);
 
     for (let k = 0; k < aneis; k++) {
-      const off = 1 + k * SETORES;
+      const off = k * SETORES;
       for (let s = 0; s < SETORES; s++) {
         const ang = (s / SETORES) * Math.PI * 2;
         pos[(off + s) * 3] = Math.cos(ang) * raios[k];
@@ -315,14 +339,12 @@ export class NamekWater {
        de x para z, a sequência ingênua deixa a face virada para baixo e o mar
        some por backface culling. Aqui o material é `DoubleSide` e o defeito não
        apareceria — mas a normal do triângulo continuaria invertida, e é dela que
-       sai o lado em que a névoa e o tonemap são aplicados. */
+       sai o lado em que a névoa e o tonemap são aplicados.
+
+       O LEQUE DO CENTRO SAIU junto com o vértice 0 — ver `RAIO_INTERNO`. O que
+       era um disco virou um ANEL, e um anel não tem miolo para tampar. */
     let w = 0;
-    const vert = (k, s) => 1 + k * SETORES + (((s % SETORES) + SETORES) % SETORES);
-    for (let s = 0; s < SETORES; s++) {
-      idx[w++] = 0;
-      idx[w++] = vert(0, s + 1);
-      idx[w++] = vert(0, s);
-    }
+    const vert = (k, s) => k * SETORES + (((s % SETORES) + SETORES) % SETORES);
     for (let k = 0; k < aneis - 1; k++) {
       for (let s = 0; s < SETORES; s++) {
         const a0 = vert(k, s);

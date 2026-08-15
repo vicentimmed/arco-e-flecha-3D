@@ -446,6 +446,10 @@ export class BlastPool {
             e.p.y = y;
             e.p.z = z;
             e.power = B.power;
+            /* Bacia de sempre. Escrito mesmo valendo 1: o registro da fila e
+               REAPROVEITADO, e um `fundo` deixado pelo Kamehameha do quadro
+               anterior viraria um poco aqui. */
+            e.fundo = 1;
           }
           morreu = true;
           break;
@@ -483,6 +487,10 @@ export class BlastPool {
                 e.p.y = y;
                 e.p.z = z;
                 e.power = B.power;
+                /* Bacia de sempre. Escrito mesmo valendo 1: o registro da fila e
+                   REAPROVEITADO, e um `fundo` deixado pelo Kamehameha do quadro
+                   anterior viraria um poco aqui. */
+                e.fundo = 1;
               }
               morreu = true;
               break;

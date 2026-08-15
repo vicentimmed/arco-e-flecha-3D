@@ -233,10 +233,21 @@ export class PowerSystem {
       kind: null,
       dt: 0,
     }));
-    this.filaChao = new Fila(24, () => ({
+    /* Vinte e quatro eram o teto de quando cada golpe abria UM buraco. O
+       Kamehameha agora perfura o relevo e deixa uma cratera a cada sete metros
+       de rocha atravessada (ver `atravessar`, em `beam.js`): um tiro que corta
+       uma montanha de 200 m enfileira ~28 pedidos, e seis feixes fazendo isso no
+       mesmo quadro é o pior caso honesto. 96 cobre isso; a `Fila` descarta o que
+       passar, e descartar aqui só custaria alguns metros de corredor. */
+    this.filaChao = new Fila(96, () => ({
       owner: null,
       p: { x: 0, y: 0, z: 0 },
       power: 0,
+      /* Multiplicador de FUNDURA. 1 é "a cratera de sempre"; o Kamehameha manda
+         3,5 para pedir um buraco estreito e fundo em vez de largo e raso. Ver
+         `craterFor`, que é quem o interpreta, e `NC2S.GROUND_HIT.df`, que é como
+         ele chega à sala. */
+      fundo: 1,
     }));
     /* Os estouros NO AR — os que não abrem cratera e por isso não têm nenhum
        outro canal por onde avisar que aconteceram. Uma Genki Dama que detona a

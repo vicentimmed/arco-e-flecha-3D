@@ -25,6 +25,28 @@ export const NAMEK = {
      * do §2 — o que mudou é que o mapa inteiro passou a caber dentro do
      * alcance dos golpes, que é o que torna montanha um alvo e não cenário. */
     radius: 460,
+
+    /* m — ATÉ ONDE SE PODE VOAR, e ele é MAIOR que o raio da arena de propósito.
+     *
+     * Os dois números respondem a perguntas diferentes e estavam colados num só,
+     * o que produzia exatamente a queixa: *"o player está impedido de ir muito
+     * além do cenário. Ele deve conseguir voar bem além da praia, mas não muito,
+     * inclusive a fundo no mar, mas não muito longe no mar."*
+     *
+     * `radius` (460 m) é o raio de JOGO: onde se nasce, onde a sala aceita
+     * cratera, o que a grade de deslocamento cobre. Ele não muda.
+     *
+     * `flyRadius` é o raio de PASSEIO, e a régua dele é o relevo (ver
+     * `NamekField.baseHeight`): a serra cede aos 500 m, a praia é a faixa entre
+     * 580 e 630 m, e a linha d'água cai por volta de 612 m. Com o freio velho
+     * começando aos 420 m, o jogador era virado de volta ANTES de a montanha
+     * acabar — a praia inteira e o mar existiam no cenário e eram inalcançáveis.
+     *
+     * 760 m deixam ~150 m de mar aberto depois da rebentação: o bastante para
+     * sobrevoar a água, mergulhar nela (e morrer, ver `NAMEK.world.afogar`) e
+     * olhar a ilha de fora; e curto o bastante para o oceano nunca virar um
+     * lugar para onde fugir de uma briga. */
+    flyRadius: 760,
     /** m — teto de voo. Acima disto a subida é cortada, sem parede visível. */
     ceiling: 520,
     /** m — nível do mar. O terreno mergulha nele na borda da arena. */
@@ -40,10 +62,41 @@ export const NAMEK = {
      * distância excedida. Quem tenta fugir sente o planeta puxando; quem está
      * lutando nunca descobre que a borda existe. */
     softEdge: {
-      /** m — onde o freio começa a agir. Acompanhou o raio 900 → 460. */
-      start: 420,
+      /* m — onde o freio começa a agir.
+       *
+       * Passou a ser medido contra `flyRadius` e não contra `radius`: o freio é
+       * a borda do PASSEIO, e ele começava aos 420 m — cem metros antes de a
+       * serra sequer terminar. Aos 700 m o jogador já cruzou a praia e está
+       * sobre a água; os 60 m que sobram até `flyRadius` são a faixa em que o
+       * planeta vai puxando de volta. */
+      start: 700,
       /** 1/s² — força do puxão por metro excedido. */
       pull: 0.9,
+    },
+
+    /* ------------------------------------------------------------ o afogamento
+     *
+     * "Caso algum player caia no mar, ele morre" — e é uma regra melhor do que
+     * parece à primeira vista: sem ela, o mar aberto que `flyRadius` acabou de
+     * liberar seria um lugar sem risco nenhum para descansar no meio de uma
+     * partida. Com ela, sair da ilha é uma escolha com preço.
+     *
+     * Quem cobra é a SALA (`NamekRoom.afogarNoMar`), pelo mesmo caminho da lava
+     * e pelo mesmo motivo: vida é do servidor. O que este bloco define é a
+     * FRONTEIRA, e ela não pode ser "y abaixo do nível do mar" — depois que as
+     * crateras passaram a furar até a lava (ver `destruction.lava`), o fundo de
+     * um buraco na clareira também está abaixo de −8 m, e afogar quem está
+     * dentro do próprio buraco seria absurdo.
+     *
+     * A fronteira é o RELEVO BASE: é mar onde o terreno natural, sem cratera
+     * nenhuma, já estava debaixo d'água. Isso é função pura da posição, igual
+     * nos dois lados da rede, e nenhuma cratera a move. */
+    afogar: {
+      /** m — quanto abaixo da linha d'água os pés precisam estar. */
+      fundura: 1.2,
+      /** s — quanto tempo submerso antes de morrer. Curto, mas não instantâneo:
+       *  um mergulho raspando a água na perseguição não pode matar. */
+      tempo: 0.7,
     },
   },
 
@@ -337,12 +390,21 @@ export const NAMEK = {
     rate: 6,
     /** m — deslocamento lateral da mão que atira, no espaço do lutador. */
     handOffset: 0.52,
-    /* Potência para a cratera. Baixa de propósito: 0,12 dá um arranhão de 4 m
-       (`craterFor`), e é o que se quer — a rajada é o tiro COMUM, sai seis vezes
-       por segundo, e se cada bola abrisse a cratera de 7 m que a potência 1 abre,
-       trinta segundos de tiroteio deixariam a clareira com cara de queijo suíço
-       e o teto de 96 crateras seria gasto inteiro em quinze segundos. */
-    power: 0.12,
+    /* Potência para a cratera.
+     *
+     * Era 0,12 — um arranhão de 4 m —, e o argumento de então era o teto de 96
+     * crateras: seis tiros por segundo por lutador gastariam a fila inteira em
+     * quinze segundos. **Esse teto não existe mais.** As crateras são assadas
+     * num mapa de deslocamento (`NamekField.bakeCrater`), o custo de consultar
+     * altura é o mesmo com dez ou dez mil buracos, e insistir no mesmo ponto
+     * AFUNDA em vez de gastar vaga. O último motivo para a rajada mal marcar o
+     * chão caiu junto.
+     *
+     * 0,45 abre 8,3 m — o buraco de uma pessoa. É o "as crateras dos poderes
+     * pequenos devem ser bem maiores" literal, e é ele que faz a promessa da
+     * ilha destruída: o especial sai uma vez por barra cheia, a rajada sai o
+     * tempo todo, e destruição acumulada é feita do que sai o tempo todo. */
+    power: 0.45,
 
     /* A PERSEGUIÇÃO FRACA. Ver §6.1 do plano — "levemente" é o requisito, e
        cada número aqui existe para segurar a palavra "levemente". */
@@ -393,12 +455,113 @@ export const NAMEK = {
       range: 620,
       /** m/s — velocidade da frente do feixe. */
       speed: 340,
-      /** m — raio de morte em torno do eixo. */
-      hitRadius: 3.6,
-      /** dano por segundo dentro do feixe. */
-      dps: 62,
-      /** Potência para a conta da cratera. Ver `craterFor`. */
-      power: 4.2,
+      /* m — raio de morte em torno do eixo, e ele É a grossura do feixe: a
+       * casca do desenho vale exatamente este número (ver `RAIO_CASCA` em
+       * `powers/beam.js`), então engrossar o golpe e engrossar o que mata são a
+       * mesma linha.
+       *
+       * Eram 3,6 m, e a queixa foi direta: *"o poder de Kamehameha está muito
+       * fino no geral. Ele deve ser bem mais grosso, cobra grossa."* A régua que
+       * faltava é a do CORPO: 3,6 m de raio contra um lutador de 1,78 m de
+       * altura dava um tubo de sete metros — largo no papel, e visto de sessenta
+       * metros (a distância de briga deste modo) ele é um risco fino contra o
+       * céu. 6,6 m dão treze metros de diâmetro, ou sete vezes a altura de quem
+       * atirou: aí sim é a cobra grossa da referência.
+       *
+       * O que segura isso de virar uma parede na cara do jogador é o
+       * afunilamento na base (`BASE_TAPER`, 14 % do raio no punho) — a câmera
+       * está a sete metros do peito e um tubo cheio ali seria a tela inteira em
+       * branco. Ver o comentário de `PERFIL` em `powers/beam.js`. */
+      hitRadius: 6.6,
+      /* dano por segundo dentro do feixe.
+       *
+       * Eram 62/s, ou 148 de dano numa sustentação inteira — uma vida e meia. O
+       * pedido reescreveu a régua de todos os golpes grandes: *"qualquer poder
+       * grande que acertou em cheio deve tirar metade da vida. A Genki Dama
+       * deve tirar a vida inteira."*
+       *
+       * "Em cheio", para um feixe, é a sustentação inteira em cima de alguém —
+       * e 21/s por 2,4 s são exatamente 50, metade dos 100 de vida. Um encostão
+       * de meio segundo tira 10, que é a graduação que só um golpe contínuo tem
+       * e que é a razão de ele cobrar por segundo.
+       *
+       * A queda de 62 para 21 parece brutal e não é: com 6,6 m de raio de morte
+       * (o dobro do de antes) ele acerta muito mais, e a conta de quanto ele
+       * tira de quem fica no eixo continua sendo a mesma metade da vida. O que
+       * ele deixou de fazer é matar sozinho — que é o lugar da Genki Dama. */
+      dps: 21,
+      /* Potência para a conta da cratera. Ver `craterFor`.
+       *
+       * 0,58 dá 9 m de boca, e o número foi escolhido contra o IMPACTO e não
+       * contra a força do golpe: *"a cratera do Kamehameha deve ser uma cratera
+       * basicamente um pouco maior que o tamanho do seu impacto e bem funda."* O
+       * impacto é o `hitRadius` de 6,6 m; 9 m são um pouco maiores que ele, e é
+       * literalmente o que foi pedido. */
+      power: 0.58,
+      /* O MULTIPLICADOR DE FUNDURA — a outra metade do "bem funda".
+       *
+       * A cratera é redonda por construção: `craterFor` tira a profundidade do
+       * raio (`craterDepth`), então um buraco estreito é um buraco raso, e não
+       * havia como pedir "estreito E fundo" com um número só. Este campo separa
+       * as duas coisas.
+       *
+       * 3,5 sobre os 5,6 m que os 9 m de raio dariam são **19,5 m de fundo** —
+       * o feixe não amassa o chão, ele o PERFURA. Somado à perfuração ao longo
+       * do caminho (ver `atravessar`, em `powers/beam.js`), é o que faz um
+       * Kamehameha no chão abrir poço até a rocha e, com insistência, até a
+       * lava.
+       *
+       * Ele viaja na rede junto com a potência — ver `NC2S.GROUND_HIT` — porque
+       * quem cava é o cliente que atirou e quem carimba é a sala, e um buraco
+       * fundo de um lado e raso do outro seriam duas topografias. */
+      craterDeep: 3.5,
+
+      /* ------------------------------------------------------ ELE ATRAVESSA
+       *
+       * O pedido: *"quando eu falo que o Kamehameha atravessa uma montanha ou
+       * atravessa o chão todo de uma vez e já sai a lava, o tamanho já é um
+       * buraco do tamanho da cratera que ele forma… a gente consegue deixar
+       * furos na montanha e o player consegue passar por dentro se ele quiser."*
+       *
+       * O feixe PARAVA no primeiro ponto de relevo que encostava (`tocouChao`
+       * devolvia a fatia e `alcance` virava `frente`). Agora ele continua, e o
+       * que ele deixa para trás é uma fila de crateras ao longo do caminho
+       * enterrado — uma VALA que corta a montanha de lado a lado, larga o
+       * bastante para se voar dentro dela.
+       *
+       * -------------------------------------------------- e por que é vala, e
+       *                                                     não túnel de teto
+       *
+       * O terreno deste modo é um campo de ALTURA (`NamekField`): uma função
+       * y = f(x, z). Um túnel com teto é uma superfície que tem dois valores de
+       * y na mesma coluna, e isso não cabe num campo de altura por definição —
+       * não é uma limitação de esforço, é o tipo do dado. Fazer túnel de verdade
+       * pediria voxel ou malha de volume, o que é outro motor de terreno e outra
+       * física (o §4 do plano existe justamente para não haver dois).
+       *
+       * O que cabe, e é o que foi feito, é o corte aberto: o feixe entra pela
+       * encosta, sai do outro lado, e no meio fica um corredor com paredes dos
+       * dois lados e céu em cima. Voa-se por dentro, o relevo em volta está
+       * intacto, e a leitura de "a montanha foi furada" é a mesma. A parte que o
+       * pedido já marcava como opcional — *"se essa última parte ficar muito
+       * complexa de fazer, pode pular"*, sobre a montanha desabar quando sobra
+       * pouco apoio — sai de graça na medida em que os cortes se cruzam: duas
+       * valas em cruz deixam quatro torres, e a terceira leva o miolo.
+       */
+      atravessar: {
+        /** m — de quantos em quantos metros de rocha o feixe deixa uma cratera.
+         *  Menor que o raio do buraco (9 m), para os discos se fundirem numa
+         *  vala contínua em vez de virarem uma fileira de poços. */
+        passo: 7,
+        /** m — quanto de relevo ele aguenta perfurar num disparo. Uma montanha
+         *  deste mapa tem 90 a 220 m de base; 260 atravessam a maior delas de
+         *  lado a lado e ainda travam o caso patológico (um tiro rasante que
+         *  correria enterrado por meio quilômetro). */
+        alcance: 260,
+        /** Fração da potência em cada cratera do trajeto. Menos que na boca: a
+         *  entrada é a cratera cheia, o corredor é o rastro dela. */
+        potencia: 0.62,
+      },
       cor: 0x6fd8ff,
 
       /* ELE FAZ CURVA — e é a mudança mais funda que este golpe já teve.
@@ -502,9 +665,19 @@ export const NAMEK = {
       range: 475,
       speed: 95,
       hitRadius: 6.5,
-      /** Corta de uma vez, como o disco e a Genki Dama. */
-      damage: 62,
-      power: 6.4,
+      /* Corta de uma vez, como o disco e a Genki Dama.
+       *
+       * 50 e não 62: é o "qualquer poder grande que acertou em cheio deve tirar
+       * metade da vida" aplicado sem exceção. Os três golpes de corte seco
+       * (este, o Kienzan e o Kamehameha somado) valem a MESMA metade — o que os
+       * separa passou a ser inteiramente forma, alcance e perseguição, que é
+       * onde a diferença entre eles devia estar desde sempre. */
+      damage: 50,
+      /* 9,2 e não 6,4: a escala das crateras subiu (ver `craterBase`) e a régua
+         deste golpe subiu com ela. Dá 26,3 m de boca — a bola tem 6,5 m de raio
+         de morte e deixa um buraco quatro vezes maior que ela, que é a leitura
+         de uma esfera densa arrebentando no chão. */
+      power: 9.2,
       cor: 0xc07bff,
       /* ELE PERSEGUE, e persegue MUITO mais do que a bola de ki.
        *
@@ -552,9 +725,16 @@ export const NAMEK = {
          espessura de VERDADE, que é a outra metade da reclamação, está em
          `powers/disk.js`: o gume virou um toro, e ele tem volume. */
       hitRadius: 3.4,
-      /** O disco corta de uma vez, não por segundo. */
-      damage: 48,
-      power: 1.4,
+      /** O disco corta de uma vez, não por segundo. Metade da vida, como todo
+       *  poder grande — ver `galick.damage`. */
+      damage: 50,
+      /* 3,6 e não 1,4. O comentário antigo do arquivo chamava o buraco dele de
+         "uma cicatriz e não uma cratera", e isso fazia sentido enquanto a régua
+         de todo mundo era menor. Com a escala nova, 1,4 daria 12,2 m — já maior
+         que o Kamehameha de antes — e continuaria sendo o menor do repertório,
+         que é o lugar dele. 3,6 dão 17,6 m: o talho de uma lâmina de sete metros
+         de diâmetro passando rente ao chão, que é o que se vê na referência. */
+      power: 3.6,
       cor: 0xa8ff6f,
       /* ELE PERSEGUE — "o Kienzan deve seguir o usuário", e o usuário completou
        * a regra na mesma frase: "é possível escapar, mas o player tem que se
@@ -594,12 +774,29 @@ export const NAMEK = {
       range: 322,
       speed: 46,
       hitRadius: 11,
-      damage: 96,
-      /* 26 e não 12: o §7 do plano anuncia 30 m de cratera para ela, e
-         `craterFor` dá 2,2 + 5,4·√p — com 12 saíam 20,9 m. É o golpe mais caro
-         do jogo (3,6 s parado, a barra inteira) e o buraco é a única coisa que
-         fica dele. */
-      power: 26,
+      /* A VIDA INTEIRA. "A Genki Dama deve tirar a vida inteira do player que
+       * mirou, inclusive de outros players que estiverem na explosão dela."
+       *
+       * 96 era um golpe que quase mata: quem estivesse com a barra cheia de vida
+       * sobrevivia com 4 e voltava atirando, o que apagava a única coisa que
+       * justifica 3,6 s parado no ar carregando a bola à vista de todo mundo.
+       * 100 é exatamente `maxHealth`, e a leitura é a da referência — quem for
+       * pego pela Genki Dama não levanta.
+       *
+       * A segunda metade do pedido ("inclusive de outros players") já era
+       * verdade no código e agora vale a pena registrar por quê: a detonação
+       * varre TODOS os alvos dentro dos 11 m de raio e emite uma queimadura por
+       * um deles (ver `detonar`, em `powers/orb.js`), e a sala cobra cada vítima
+       * uma vez (`exposicao`, em `registrarQueimadura`). Onze metros de raio
+       * pegam um grupo inteiro, e agora cada um deles morre. */
+      damage: 100,
+      /* 34 e não 26: ela continua sendo a maior cratera do jogo por larga
+         margem, e com a escala nova (`craterBase` 3,2 + 7,6·√p) isso são 47,5 m
+         — batendo no teto de `craterMax` (44 m). Bater no teto aqui é o certo: o
+         golpe mais caro do modo deve ser o que abre o maior buraco que o jogo
+         aceita, e o teto existe contra potência absurda vinda da rede, não
+         contra este golpe. */
+      power: 34,
       cor: 0x9ff0ff,
 
       /* ELA PASSOU A PERSEGUIR — e este bloco desmente, de propósito, um "nunca
@@ -644,14 +841,40 @@ export const NAMEK = {
      Ver §7 do plano. A conta da cratera é COMPARTILHADA de propósito: os dois
      lados precisam chegar ao mesmo buraco, ou duas abas veem chões diferentes. */
   destruction: {
+    /* ------------------------------------------------- a escala das crateras
+     *
+     * Os três números abaixo subiram juntos, e o pedido explica por quê: *"ao
+     * fazer crateras, todas elas devem ficar mais fundas… as crateras dos
+     * poderes pequenos devem ser bem maiores; inclusive aumente o tamanho das
+     * crateras de todos os poderes. O objetivo é fazer a ilha ficar totalmente
+     * destruída no final da batalha."*
+     *
+     * "Totalmente destruída" é um requisito de ORÇAMENTO, não de estética: numa
+     * partida de dez minutos a soma das crateras tem de cobrir a clareira. Com
+     * os valores antigos uma bola de ki abria 4,1 m e um Kamehameha 13,3 m —
+     * uma clareira de 300 m de diâmetro (70 000 m²) precisaria de mil e
+     * duzentos Kamehamehas para ficar coberta. A rajada, que é o que sai o
+     * tempo todo, mal marcava.
+     *
+     * Agora a rajada abre 8,3 m e o Kamehameha, 9 m de boca com 20 m de fundo
+     * (ver `craterDeep` no golpe). O que muda de verdade é a base: com 3,2 m,
+     * QUALQUER coisa que encoste no chão deixa buraco de gente, e é a soma
+     * desses buracos — não os quatro especiais — que come a ilha.
+     *
+     * `craterDepth` de 0,35 para 0,62 é o "mais fundas" literal. Ele não faz a
+     * cratera virar poço porque a bacia é um cosseno elevado (`craterDelta`):
+     * fundo redondo, parede que suaviza na borda. O que ele muda é que dá para
+     * ENTRAR no buraco — 8,3 m de boca por 5,1 m de fundo é uma bacia em que um
+     * lutador de 1,78 m se esconde, e era isso que faltava para a destruição
+     * ser terreno em vez de textura. */
     /** m — raio base de qualquer cratera. */
-    craterBase: 2.2,
+    craterBase: 3.2,
     /** m — quanto o raio cresce com a raiz da potência. */
-    craterGain: 5.4,
+    craterGain: 7.6,
     /** fração do raio que vira profundidade. */
-    craterDepth: 0.35,
+    craterDepth: 0.62,
     /** m — maior cratera aceita. Trava contra potência absurda vinda da rede. */
-    craterMax: 34,
+    craterMax: 44,
     /**
      * Potência mínima para o buraco ser PERSISTENTE.
      *
@@ -891,11 +1114,25 @@ export function dificuldadeBot(id) {
  * mantém a bola de ki num arranhão de 3 m enquanto a Genki Dama abre 30 m sem
  * que a escala do meio fique sem graça.
  */
-export function craterFor(power) {
+/**
+ * @param {number} power
+ * @param {number} [fundo] multiplicador SÓ da profundidade — o jeito de pedir
+ *   um buraco estreito e fundo, que a potência sozinha não sabe expressar
+ *   (ela move raio e fundura juntos, porque a fundura é uma fração do raio).
+ *   Ver `NAMEK.specials.kamehameha.craterDeep`, que é quem o usa.
+ *
+ *   Ele é aparado em [0,25 · 6] aqui, e não em quem chama, porque ele VIAJA NA
+ *   REDE (`NC2S.GROUND_HIT.df`): o número vem de um cliente, e um multiplicador
+ *   absurdo aqui é um poço de trezentos metros no chão de todo mundo. O piso
+ *   existe pelo motivo espelhado — zero ou negativo transformaria a cratera num
+ *   morro.
+ */
+export function craterFor(power, fundo = 1) {
   const p = Math.max(0, Math.min(power, 64));
   const D = NAMEK.destruction;
+  const f = Number.isFinite(fundo) ? Math.max(0.25, Math.min(fundo, 6)) : 1;
   const raio = Math.min(D.craterMax, D.craterBase + D.craterGain * Math.sqrt(p));
-  return { raio, fundura: raio * D.craterDepth };
+  return { raio, fundura: raio * D.craterDepth * f };
 }
 
 /** A definição de um especial pelo id, ou null se o id não existir. */

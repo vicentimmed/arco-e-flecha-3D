@@ -151,15 +151,27 @@ const VIDA = { rocha: 58, arvore: 30, casa: 96, moita: 6, capim: 4 };
    e o que fazer se ela mudar. */
 const QUANTIDADE = {
   rochas: 230,
-  bosques: 36,
-  arvoresPorBosque: [7, 15],
-  vilas: 3,
+  /* MAIS BOSQUE E MAIS MATO — *"adicione um pouco mais de vegetação"*.
+   *
+   * Os três números que subiram (bosques 36 → 46, árvores por bosque e
+   * touceiras 74 → 104) valem ~19 k triângulos somados, e eles não são de graça:
+   * o orçamento do §3 está no cabeçalho deste arquivo. O que os paga é a
+   * segunda metade da mesma mudança — três espécies de árvore em vez de uma.
+   * Densidade percebida não é contagem de peças, é quantas peças DIFERENTES o
+   * olho encontra num mesmo lugar: quinze ajisas idênticas leem como um objeto
+   * repetido quinze vezes, e quinze árvores de três famílias leem como floresta.
+   * Foi por isso que o aumento de contagem ficou modesto e o de variedade não. */
+  bosques: 46,
+  arvoresPorBosque: [9, 17],
+  /* QUATRO, e a primeira é a do CENTRO — ver `escolherVilas`, que a põe à mão
+     antes da varredura em espiral. Eram três, todas no anel de 250 a 630 m. */
+  vilas: 4,
   casasPorVila: [10, 15],
   /* A vegetação rasteira nasce EM TOUCEIRAS, nunca espalhada uniformemente.
      Mato de verdade cresce onde já há mato: uma distribuição uniforme com o
      dobro das peças pareceria menos densa que esta com metade, porque densidade
      é uma coisa LOCAL e o olho a mede olhando para um lugar, não para o mapa. */
-  touceiras: 74,
+  touceiras: 104,
   moitasPorTouceira: [3, 9],
   capimPorTouceira: [5, 13],
 };
@@ -497,6 +509,193 @@ function geoCopa(raio, altura, desvioX, lados = 10, laminas = 5) {
      ajisa, seria justamente o que denunciaria o erro. */
   copa.translate(desvioX, 0, 0);
   return sombrearPorAltura(copa, 0.72, 1.2, 1.4);
+}
+
+/**
+ * A COPA REDONDA — a segunda espécie de árvore, e a mais banal de propósito.
+ *
+ * O pedido é *"adicione um pouco mais de vegetação, algumas árvores
+ * diferentes"*, e a resposta certa não é uma ajisa maior: é uma árvore de outra
+ * FAMÍLIA. A ajisa é toda horizontal (guarda-sóis empilhados, lâminas saindo
+ * pela borda); um bosque só dela lê como um bosque de uma coisa só, por mais
+ * variação de escala que se ponha.
+ *
+ * Esta é o oposto: uma bola de folhagem sobre um tronco quase reto. Duas esferas
+ * deslocadas em vez de uma, porque uma esfera sozinha é uma bola — e o que faz
+ * uma copa parecer copa é ela ter dois volumes que se cruzam, com a sombra de um
+ * caindo no outro. Doze e oito segmentos são o mínimo em que a silhueta contra o
+ * céu ainda lê como redonda em vez de facetada.
+ */
+function geoCopaBola(raio, altura, desvioX) {
+  const partes = [];
+  /* Achatada em y: uma esfera perfeita lê como fruta. Copa de verdade é mais
+     larga que alta, porque a folha cresce para a luz e a luz vem de cima. */
+  const a = new THREE.SphereGeometry(raio, 12, 8);
+  a.scale(1, 0.78, 1);
+  a.translate(0, altura, 0);
+  partes.push(a);
+
+  const b = new THREE.SphereGeometry(raio * 0.62, 10, 7);
+  b.scale(1, 0.8, 1);
+  b.translate(raio * 0.42, altura + raio * 0.34, -raio * 0.3);
+  partes.push(b);
+
+  const copa = mergeGeometries(partes);
+  for (const p of partes) p.dispose();
+  copa.translate(desvioX, 0, 0);
+  return sombrearPorAltura(copa, 0.66, 1.25, 1.1);
+}
+
+/**
+ * A COPA CÔNICA — a terceira espécie, e a que dá VERTICAL ao bosque.
+ *
+ * Três cones empilhados, cada um mais estreito e mais curto que o de baixo. É a
+ * conífera de qualquer floresta, e ela entra aqui por uma razão de composição e
+ * não de botânica: as outras duas espécies são largas, e uma paisagem em que
+ * tudo tem a mesma proporção é uma paisagem sem ritmo. Contra o anel de
+ * montanhas, um punhado de agulhas verticais é o que dá escala ao que está atrás.
+ *
+ * `openEnded` na base de cada cone: eles se sobrepõem, e a tampa de baixo nunca
+ * é vista — são 8 triângulos por cone que ninguém olha, e trinta espécies de
+ * economia como esta são o orçamento do §3.
+ */
+function geoCopaConifera(raio, altura, desvioX) {
+  const partes = [];
+  const camadas = 3;
+  for (let i = 0; i < camadas; i++) {
+    const t = i / camadas;
+    const r = raio * (1 - t * 0.55);
+    const h = altura * 0.42 * (1 - t * 0.2);
+    const cone = new THREE.ConeGeometry(r, h, 9, 1, true);
+    /* Cada camada começa acima do meio da anterior: sobrepostas, a silhueta é
+       serrilhada (que é o que se quer); encostadas ponta com base, ela vira um
+       cone só e a divisão em três não aparece. */
+    cone.translate(0, altura * (0.45 + t * 0.46) + h * 0.5, 0);
+    partes.push(cone);
+  }
+  const copa = mergeGeometries(partes);
+  for (const p of partes) p.dispose();
+  copa.translate(desvioX, 0, 0);
+  return sombrearPorAltura(copa, 0.6, 1.2, 0.9);
+}
+
+/**
+ * A CASA-ESFERA — a casa do pedido, literalmente.
+ *
+ * *"No centro, algumas casas diferentes também, casas que parecem aquelas casas
+ * do Dragon Ball mesmo, de formato esférico."* A casa que a série mostra é uma
+ * bola apoiada num anel baixo, com uma janela redonda grande e uma porta em
+ * arco — e é justamente o que a `geoCasa` em cebola NÃO é: aquela é um domo que
+ * afina até uma pontinha, e a diferença entre as duas silhuetas a cem metros é
+ * a diferença entre uma vila e uma vila repetida.
+ *
+ * A esfera é cortada em `phiStart/phiLength` — meia esfera de cima mais um
+ * pedaço de baixo — e não uma esfera inteira: enterrar uma bola até o equador
+ * come a porta, e deixá-la pousada mostra o polo sul flutuando acima do chão. O
+ * corte a 0,62 π deixa a bola sentada no anel, que é como ela se apoia na
+ * referência.
+ */
+function geoCasaEsfera(escala) {
+  const partes = [];
+
+  const bojo = new THREE.SphereGeometry(3.4 * escala, 16, 12, 0, TAU, 0, Math.PI * 0.62);
+  bojo.translate(0, 3.5 * escala, 0);
+  pintar(bojo, PALETA.casa, 0.55);
+  partes.push(bojo);
+
+  /* O anel de apoio. Baixo e um pouco mais largo que a bola: é o que faz a casa
+     parecer POUSADA e não meio enterrada. */
+  const base = new THREE.CylinderGeometry(2.9 * escala, 3.15 * escala, 1.1 * escala, 16);
+  base.translate(0, 0.55 * escala, 0);
+  pintar(base, PALETA.casa, 0.7);
+  partes.push(base);
+
+  /* A JANELA grande, na altura do olho de quem está lá dentro. O `z` fica
+     alguns centímetros à frente da casca pela mesma razão da `geoCasa`: disco
+     plano colado numa superfície de revolução encosta nas facetas e o sintoma é
+     z-fighting piscando conforme a câmera anda. */
+  const janela = new THREE.CircleGeometry(1.25 * escala, 14);
+  janela.translate(0, 4.0 * escala, 3.28 * escala);
+  pintar(janela, PALETA.janela, 0);
+  partes.push(janela);
+
+  const janelinha = new THREE.CircleGeometry(0.6 * escala, 10);
+  janelinha.translate(-1.9 * escala, 4.9 * escala, 2.3 * escala);
+  pintar(janelinha, PALETA.janela, 0);
+  partes.push(janelinha);
+
+  const vao = new THREE.PlaneGeometry(1.6 * escala, 1.6 * escala);
+  vao.translate(0, 1.0 * escala, 3.25 * escala);
+  pintar(vao, PALETA.porta, 0);
+  partes.push(vao);
+  const arco = new THREE.CircleGeometry(0.8 * escala, 10);
+  arco.translate(0, 1.8 * escala, 3.25 * escala);
+  pintar(arco, PALETA.porta, 0);
+  partes.push(arco);
+
+  const casa = mergeGeometries(partes);
+  for (const p of partes) p.dispose();
+  return casa;
+}
+
+/**
+ * A CASA-COGUMELO — a terceira forma, e a que quebra a família das outras duas.
+ *
+ * *"E algumas de outros formatos."* As duas anteriores são superfícies de
+ * revolução macias (cebola e bola); esta tem uma ARESTA: um corpo cilíndrico
+ * reto com um chapéu largo pousado em cima, e a linha horizontal onde um
+ * encontra o outro é a única quina do bairro. É ela que faz as três se lerem
+ * como três construções e não como três tamanhos da mesma.
+ *
+ * O chapéu passa bem da largura do corpo de propósito — um beiral. Sem ele, o
+ * cilindro com um domo do mesmo diâmetro é um silo.
+ */
+function geoCasaCogumelo(escala) {
+  const partes = [];
+
+  const corpo = new THREE.CylinderGeometry(2.2 * escala, 2.5 * escala, 4.2 * escala, 14);
+  corpo.translate(0, 2.1 * escala, 0);
+  pintar(corpo, PALETA.casa, 0.6);
+  partes.push(corpo);
+
+  /* Meia esfera achatada, e larga: 3,9 contra os 2,2 do corpo. */
+  const chapeu = new THREE.SphereGeometry(3.9 * escala, 16, 8, 0, TAU, 0, Math.PI * 0.5);
+  chapeu.scale(1, 0.62, 1);
+  chapeu.translate(0, 4.2 * escala, 0);
+  pintar(chapeu, PALETA.casa, 0.35);
+  partes.push(chapeu);
+
+  /* A borda do chapéu, fechada por um anel voltado para baixo: sem ela o beiral
+     é uma casca de um triângulo de espessura, e visto de baixo — que é o ângulo
+     normal num jogo de voo — ele some. */
+  const beiral = new THREE.CylinderGeometry(3.9 * escala, 3.6 * escala, 0.35 * escala, 16);
+  beiral.translate(0, 4.1 * escala, 0);
+  pintar(beiral, PALETA.casa, 0.75);
+  partes.push(beiral);
+
+  const janela = new THREE.CircleGeometry(0.78 * escala, 12);
+  janela.translate(0, 2.8 * escala, 2.28 * escala);
+  pintar(janela, PALETA.janela, 0);
+  partes.push(janela);
+
+  const janela2 = new THREE.CircleGeometry(0.78 * escala, 12);
+  janela2.rotateY(Math.PI * 0.66);
+  janela2.translate(
+    Math.sin(Math.PI * 0.66) * 2.28 * escala,
+    2.8 * escala,
+    Math.cos(Math.PI * 0.66) * 2.28 * escala,
+  );
+  pintar(janela2, PALETA.janela, 0);
+  partes.push(janela2);
+
+  const vao = new THREE.PlaneGeometry(1.4 * escala, 2.0 * escala);
+  vao.translate(0, 1.0 * escala, 2.36 * escala);
+  pintar(vao, PALETA.porta, 0);
+  partes.push(vao);
+
+  const casa = mergeGeometries(partes);
+  for (const p of partes) p.dispose();
+  return casa;
 }
 
 /**
@@ -918,6 +1117,31 @@ export class NamekScenery {
    */
   escolherVilas() {
     const achadas = [];
+
+    /* A VILA DO CENTRO, e ela é posta À MÃO antes da varredura.
+     *
+     * O pedido é *"no centro, algumas casas diferentes também"*, e a espiral
+     * abaixo nunca chegaria lá: ela começa a amostrar a 250 m da origem, o que
+     * era a decisão certa enquanto o miolo era só a clareira de nascimento.
+     * Deixou de ser — a clareira é onde a briga acontece o tempo todo, e um
+     * punhado de casas destrutíveis ali é a diferença entre lutar sobre um campo
+     * e lutar sobre um LUGAR.
+     *
+     * Ela não fica em (0, 0): esse é o ponto exato para onde `pickSpawn` manda
+     * quem nasce quando o sorteio falha (ver `NamekField.pickSpawn`), e nascer
+     * dentro de uma casa seria o primeiro defeito relatado. Sessenta metros de
+     * lado a põem dentro da clareira e fora do miolo do nascimento — o raio
+     * mínimo de spawn é 25 m e o das casas em torno da praça vai a 58 m, então
+     * elas se tocam sem se sobrepor.
+     *
+     * `centro: true` é lido por `montarCasas` para favorecer as formas novas
+     * aqui: é a vila que o jogador vê de perto, e é onde a variedade se paga. */
+    for (const [x, z] of [[62, -34], [-52, 44], [0, 74]]) {
+      if (!this.field.isFlatGround(x, z, 18, 0.95)) continue;
+      achadas.push({ x, z, centro: true });
+      break;
+    }
+
     const passos = 900;
     for (let i = 0; i < passos && achadas.length < QUANTIDADE.vilas; i++) {
       /* Ângulo áureo entre amostras consecutivas, raio crescendo com √t.
@@ -944,11 +1168,19 @@ export class NamekScenery {
 
   montarCasas(vilas) {
     const rnd = this.rnd;
-    /* Duas variantes de tamanho. Casas todas iguais em três vilas fazem
-       trinta e seis cópias do mesmo objeto no mesmo quadro, e o olho pega a
-       repetição bem mais rápido do que pegaria trinta e seis formas distintas. */
-    const geos = [geoCasa(1.0), geoCasa(0.72)];
-    const baldes = [[], []];
+    /* QUATRO VARIANTES, e duas delas são formas novas — é o pedido: *"no centro,
+       algumas casas diferentes também, casas que parecem aquelas casas do Dragon
+       Ball mesmo, de formato esférico, e algumas de outros formatos."*
+       Eram duas variantes do MESMO domo em cebola, uma grande e uma pequena, e
+       "duas variantes de tamanho" nunca foi variedade: a silhueta era uma só, e
+       a cem metros duas escalas do mesmo objeto leem como um objeto. Agora há
+       três silhuetas (cebola, bola, cogumelo) mais a cebola pequena, e nenhuma
+       delas se confunde com a outra contra o céu. */
+    const geos = [geoCasa(1.0), geoCasa(0.72), geoCasaEsfera(1.0), geoCasaCogumelo(1.0)];
+    const baldes = [[], [], [], []];
+    /* Raio de cada variante com escala de instância 1. A cebola pequena já tem o
+       0,72 assado na geometria; as outras três são desenhadas em tamanho cheio. */
+    const raios = [3.6, 3.6 * 0.72, 3.4, 3.9];
     // Lista única das casas já postas, para o teste de distância mínima. Um
     // `concat` dos dois baldes dentro do laço alocaria um array por tentativa.
     const postas = [];
@@ -973,16 +1205,34 @@ export class NamekScenery {
         }
         if (!posto) continue;
 
-        const variante = rnd() < 0.55 ? 0 : 1;
+        /* A VILA DO CENTRO puxa para as formas novas, e as de fora para a
+           cebola. Não é enfeite: o centro é onde a briga começa e onde o jogador
+           passa a maior parte do tempo, e é lá que a variedade é vista. As
+           vilas do anel são silhueta a trezentos metros — ali a cebola, que é a
+           marca do planeta, é a leitura certa. */
+        const sorte = rnd();
+        const variante = vila.centro
+          ? sorte < 0.38
+            ? 2
+            : sorte < 0.68
+              ? 3
+              : sorte < 0.86
+                ? 0
+                : 1
+          : sorte < 0.44
+            ? 0
+            : sorte < 0.68
+              ? 1
+              : sorte < 0.86
+                ? 2
+                : 3;
         const escala = 0.85 + rnd() * 0.3;
         // A frente (o +z da geometria, onde estão porta e janela) olha para a
         // praça: é o que transforma um aglomerado de domos numa vila.
         const yaw = Math.atan2(vila.x - posto.x, vila.z - posto.z);
         /* `raio` é sempre a medida da peça com escala de instância 1 — a escala
-           entra uma vez só, em `criarEspecie`. A variante pequena já tem o 0,72
-           assado na geometria, e é por isso que ele aparece aqui e não lá. */
-        const raio = 3.6 * (variante ? 0.72 : 1);
-        baldes[variante].push({ ...posto, escala, yaw, raio });
+           entra uma vez só, em `criarEspecie`. Ver a tabela `raios`. */
+        baldes[variante].push({ ...posto, escala, yaw, raio: raios[variante] });
         postas.push(posto);
       }
     }
@@ -1007,9 +1257,35 @@ export class NamekScenery {
   /** @returns {Array<{x:number,z:number}>} os centros dos bosques. Ver `build`. */
   montarArvores(vilas) {
     const rnd = this.rnd;
-    const troncos = [geoTronco(11.5, 0.34, 0.17, 1.5), geoTronco(6.8, 0.28, 0.15, 0.9)];
-    const copas = [geoCopa(3.4, 11.5, 1.5), geoCopa(2.3, 6.8, 0.9)];
-    const baldes = [[], []];
+    /* QUATRO VARIANTES, TRÊS ESPÉCIES.
+     *
+     * As duas primeiras são a ajisa de sempre (alta e baixa) — o tronco curvo e
+     * os guarda-sóis empilhados, que são a assinatura de Namekusei e continuam
+     * sendo a maioria do bosque. As duas novas respondem ao *"algumas árvores
+     * diferentes"* do pedido, e cada uma resolve uma coisa que a ajisa não faz:
+     *
+     * • a de COPA REDONDA é larga e macia, e o tronco dela quase não curva
+     *   (0,45 contra 1,5): é a árvore banal que dá contraste à exótica;
+     * • a CONÍFERA é a única coisa vertical do cenário inteiro. Tudo aqui é
+     *   largo — as ajisas, as rochas, as casas, as montanhas —, e um punhado de
+     *   agulhas é o que dá ritmo à silhueta de um bosque visto de cima, que é
+     *   como ele é visto num jogo de voo.
+     *
+     * O `desvioX` de cada copa é o topo do tronco correspondente: o tronco curva
+     * e termina fora do eixo, e a copa tem de ir junto. Ver `geoCopa`. */
+    const troncos = [
+      geoTronco(11.5, 0.34, 0.17, 1.5),
+      geoTronco(6.8, 0.28, 0.15, 0.9),
+      geoTronco(9.0, 0.42, 0.24, 0.45),
+      geoTronco(13.5, 0.3, 0.12, 0.2),
+    ];
+    const copas = [
+      geoCopa(3.4, 11.5, 1.5),
+      geoCopa(2.3, 6.8, 0.9),
+      geoCopaBola(4.1, 9.0, 0.45),
+      geoCopaConifera(3.0, 13.5, 0.2),
+    ];
+    const baldes = [[], [], [], []];
     const centros = [];
 
     for (let b = 0; b < QUANTIDADE.bosques; b++) {
@@ -1045,14 +1321,23 @@ export class NamekScenery {
           posto = { x, z };
         }
         if (!posto) continue;
-        const variante = rnd() < 0.6 ? 0 : 1;
+        /* A MISTURA DO BOSQUE. A ajisa continua sendo a maioria (57 %) porque é
+           ela que identifica o planeta; as duas espécies novas entram como
+           minoria visível — 26 % de copa redonda e 17 % de conífera. Sorteio por
+           ÁRVORE e não por bosque de propósito: um bosque monoespecífico é
+           botanicamente plausível e visualmente é o problema que estas espécies
+           vieram resolver. */
+        const s = rnd();
+        const variante = s < 0.36 ? 0 : s < 0.57 ? 1 : s < 0.83 ? 2 : 3;
+        /* Meia-altura da variante — é o raio da esfera de acerto, e ela cobre a
+           árvore inteira (ver `centro`/`acerto` em `criarEspecie`). */
+        const meiaAltura = [5.75, 3.4, 4.5, 6.75][variante];
         baldes[variante].push({
           ...posto,
           escala: 0.78 + rnd() * 0.5,
           yaw: rnd() * TAU,
           tinta: Math.floor(rnd() * PALETA.copa.length),
-          // Meia-altura da variante: 11,5 m a alta, 6,8 m a baixa.
-          raio: variante ? 3.4 : 5.75,
+          raio: meiaAltura,
         });
       }
     }

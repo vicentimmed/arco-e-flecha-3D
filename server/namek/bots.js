@@ -1296,10 +1296,26 @@ export class NamekBotSquad {
       p.y = minimo;
       if (v.y < 0) v.y = 0;
     }
-    /* O mar não é chão: quem cair abaixo do nível dele é erguido de volta. Sem
-       isto um bot com a velocidade errada afundaria no oceano da borda e ficaria
-       ali, vivo, sem nunca mais ver ninguém. */
-    if (p.y < W.seaLevel + 2) p.y = W.seaLevel + 2;
+    /* O PISO NO NÍVEL DO MAR SAIU, e ele era o gêmeo do que saiu de
+     * `FighterController._chao` — pela mesma razão e com a mesma consequência.
+     *
+     * O que ele fazia: erguer de volta qualquer bot que caísse abaixo de −6 m,
+     * "sem isto um bot com a velocidade errada afundaria no oceano da borda e
+     * ficaria ali, vivo, sem nunca mais ver ninguém". O medo era legítimo; a
+     * régua é que estava errada, porque ela valia em TODO o mapa. Com as
+     * crateras furando até a lava, o piso passou a impedir o bot de entrar em
+     * qualquer buraco fundo: ele pairava a −6 m sobre uma cratera de trinta,
+     * imune à lava do fundo e visivelmente flutuando sobre o nada.
+     *
+     * O medo tem outra resposta agora: quem cai no mar MORRE
+     * (`NamekRoom.afogarNoMar`, que varre humanos e bots pela mesma lista). Um
+     * bot que afunde no oceano da borda não fica ali para sempre — ele morre e
+     * renasce na clareira, que é exatamente o que se queria. E `foraDoMundo`
+     * (lá embaixo, com a folga de `seaLevel − 40`) continua sendo a rede de
+     * segurança para o caso patológico.
+     *
+     * A linha acima — o teto do relevo — continua valendo, e é ela que impede o
+     * bot de atravessar o chão. Ela usa `heightAt`, então acompanha a cratera. */
   }
 
   /* ---------------------------------------------------------------- a pose -- */

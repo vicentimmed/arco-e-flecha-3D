@@ -661,6 +661,9 @@ class Esfera {
         ? this.field.heightAt(this.x, this.z)
         : -1e9;
     const noChao = this.y - S.hitRadius <= chao;
+    /* A altura do relevo LOGO ABAIXO, guardada mesmo quando ela não para a bola.
+       É o que permite a detonação no ar ainda arrancar chão — ver `detonar`. */
+    this.chaoAbaixo = chao;
 
     let encostou = noChao;
     if (!encostou) {
@@ -779,13 +782,45 @@ class Esfera {
         e.kind = this.kind;
         e.dt = 0;
       }
-      if (alturaDoChao !== null) {
+      /* A CRATERA, e ela NÃO exige mais que a bola tenha encostado no chão.
+       *
+       * O critério era `alturaDoChao !== null`, ou seja: só crateriza quem para
+       * NO relevo. Na prática essas esferas quase nunca param no relevo — elas
+       * perseguem um lutador e detonam em cima dele, no ar. O resultado é o que
+       * foi relatado: *"eu testei aqui o Galek-Gun e a Jinkidama e o Kinzan. Me
+       * pareceu que não foram criadas crateras para esses poderes."* Não era
+       * bug de cratera: era a explosão nunca tocando o chão.
+       *
+       * O critério novo é FÍSICO em vez de binário: uma esfera de 11 m de raio
+       * detonando a 15 m do solo arranca chão, e uma detonando a 200 m não. A
+       * margem é `hitRadius · 2` — o bastante para a explosão de uma Genki Dama
+       * (11 m) morder o terreno de até 22 m abaixo dela, e curto o bastante para
+       * uma briga em altitude não ir cavando a ilha por baixo sem que ninguém
+       * veja.
+       *
+       * A potência cai com a distância ao chão: em cima dele é o buraco inteiro,
+       * na borda da margem é um arranhão. Sem isso, o mesmo golpe abriria a
+       * mesma cratera encostado no solo e a vinte metros dele, e o jogador
+       * perderia a informação que mais importa — que mirar baixo destrói mais. */
+      const solo = alturaDoChao !== null ? alturaDoChao : (this.chaoAbaixo ?? -1e9);
+      const acima = this.y - solo;
+      const margem = S.hitRadius * 2;
+      if (acima <= margem) {
+        const perto = Math.max(0, Math.min(1, 1 - Math.max(0, acima) / margem));
         const e = relato.chao();
         e.owner = this.owner;
         e.p.x = this.x;
-        e.p.y = alturaDoChao;
+        e.p.y = solo;
         e.p.z = this.z;
-        e.power = S.power;
+        /* Nunca abaixo de um terço: uma Genki Dama que detonou a vinte metros
+           do chão continua sendo uma Genki Dama, e um arranhão ali leria como
+           a explosão não ter acontecido. */
+        e.power = S.power * (0.34 + 0.66 * perto);
+        /* Bacia larga e rasa, que é o que uma esfera faz. Quem pede buraco
+           estreito e fundo é o feixe (`craterDeep`). O campo tem de ser escrito
+           mesmo valendo 1: o registro da fila é REAPROVEITADO, e um `fundo` de
+           3,5 deixado por um Kamehameha do quadro anterior viraria um poço aqui. */
+        e.fundo = 1;
       }
     }
 

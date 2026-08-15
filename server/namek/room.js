@@ -238,6 +238,7 @@ export class NamekRoom {
     this.relogioDaQueda(t);
     this.economiaDeKi(dt, t);
     this.queimarNaLava(dt, t);
+    this.afogarNoMar(dt, t);
     this.montarCorpos(t);
     this.bots.tick(dt, {
       field: this.field,
@@ -346,6 +347,64 @@ export class NamekRoom {
            Sem isto, cada tique viraria um anúncio de acerto separado. */
         continuo: true,
       });
+    }
+  }
+
+  /**
+   * **Quem cai no mar, morre.** É o pedido literal, e ele fecha o buraco que a
+   * ampliação do voo abriu.
+   *
+   * Enquanto o `flyRadius` era o mesmo 460 m da arena, o oceano era decoração
+   * atrás de uma parede macia. Agora dá para atravessar a praia e mergulhar
+   * (ver `NAMEK.world.flyRadius`), e sem preço nenhum o mar aberto seria o
+   * melhor lugar do mapa para descansar no meio de uma partida: sem cenário,
+   * sem cratera, sem ninguém.
+   *
+   * Três decisões, e nenhuma delas é óbvia:
+   *
+   * • **A fronteira é o RELEVO BASE, não a altura atual** (`NamekField.ehMar`).
+   *   Depois que as crateras passaram a furar até a lava, o fundo de um buraco
+   *   na clareira também está abaixo da linha d'água — e afogar quem está dentro
+   *   do próprio buraco seria o oposto do que se quer. É mar onde o terreno
+   *   NATURAL já estava submerso, e cratera nenhuma move isso.
+   *
+   * • **Tem um relógio** (`afogar.tempo`). Instantâneo, um mergulho raspando a
+   *   água no fim de uma perseguição mataria — e raspar a água é justamente a
+   *   manobra que a praia existe para permitir. Sete décimos de segundo são
+   *   longos o bastante para sair e curtos o bastante para não parecer perdão.
+   *
+   * • **Não dá abate a ninguém.** Mesmo critério da lava e da queda: não há
+   *   culpado, e premiar quem por acaso empurrou seria premiar o acaso. Quem
+   *   morre no mar morre para o mar.
+   *
+   * O relógio é do LUTADOR e não da sala, porque quinze podem estar molhados ao
+   * mesmo tempo, e ele zera fora d'água — é a mesma janela deslizante do
+   * `contarGolpe`, com um contador só.
+   */
+  afogarNoMar(dt) {
+    const A = NAMEK.world.afogar;
+    const linha = NAMEK.world.seaLevel - A.fundura;
+    for (const f of this.todos()) {
+      if (!f.alive) {
+        f.afogando = 0;
+        continue;
+      }
+      const p = this.pontoDe(f);
+      /* Os PÉS, e não o peito: `pontoDe` devolve a base da cápsula, que é a
+         convenção de posição do modo inteiro. Afogar pelo peito deixaria alguém
+         de pé no fundo raso com a cabeça fora d'água morrendo assim mesmo. */
+      if (p.y > linha || !this.field.ehMar(p.x, p.z)) {
+        f.afogando = 0;
+        continue;
+      }
+      f.afogando = (f.afogando ?? 0) + dt;
+      if (f.afogando < A.tempo) continue;
+      f.afogando = 0;
+      /* `matar` direto, e não `aplicarDano` com um número grande: o mar não tira
+         vida, ele acaba com ela. Um dano enorme daria o mesmo resultado e
+         mentiria no `HURT` que sai antes — o jogador veria a barra despencar
+         como se tivesse levado um golpe. */
+      this.matar(f, null, "mar", p, [0, -1, 0], this.now());
     }
   }
 
@@ -904,7 +963,14 @@ export class NamekRoom {
    * retorno da rede. Mandar de volta para o autor não é desperdício — é o que
    * dá a ele o id oficial.
    */
-  cratera(x, z, power, dono = null) {
+  /**
+   * @param {number} [fundo] multiplicador SÓ da profundidade, declarado por quem
+   *   atirou. É como o Kamehameha pede um buraco estreito e fundo em vez de um
+   *   largo e raso — a potência sozinha move raio e fundura juntos. Ver
+   *   `craterFor`, que é quem o apara em [0,25 · 6]: aparar aqui de novo seria
+   *   um segundo limite para manter em dia.
+   */
+  cratera(x, z, power, dono = null, fundo = 1) {
     if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(power)) return null;
     if (x * x + z * z > NAMEK.world.radius ** 2) return null;
     const p = clamp(power, 0, 64);
@@ -935,7 +1001,7 @@ export class NamekRoom {
     const y = this.field.heightAt(x, z);
 
     const id = proximaCratera++;
-    const c = this.field.addCrater(id, x, z, p);
+    const c = this.field.addCrater(id, x, z, p, fundo);
     if (!c) return null;
     this.crateras++;
 
@@ -944,6 +1010,13 @@ export class NamekRoom {
       i: id,
       p: [round(x), round(y), round(z)],
       power: round(p),
+      /* O multiplicador de fundura VIAJA junto com a potência, e tem de viajar:
+         os dois lados chegam ao mesmo buraco a partir de (id, x, z, potência),
+         e desde que existe um segundo número na conta ele é parte do contrato.
+         Sem ele, quem atirou veria o poço do Kamehameha e todo mundo veria uma
+         bacia rasa no mesmo lugar. Só sai da mensagem quando é 1, que é o caso
+         de quase toda cratera — ver o `?? 1` do lado do cliente. */
+      df: fundo !== 1 ? round(fundo) : undefined,
       /* QUEM abriu. O cliente já desenhou a poeira e já tocou o estouro do
          PRÓPRIO golpe no instante do impacto — ele não espera a rede para isso.
          Sem este campo ele não tem como saber que a cratera que volta é a dele,
@@ -980,9 +1053,34 @@ export class NamekRoom {
   podeCravar(f) {
     const agora = this.now();
     const passo = 1000 / CRATERAS_POR_SEGUNDO;
-    /* Balde com folga de meio segundo: rajadas curtas passam inteiras, spray
-       contínuo é aparado. */
-    const base = Math.max(f.crateraAte ?? 0, agora - 500);
+    /* Balde com folga: rajadas curtas passam inteiras, spray contínuo é aparado.
+     *
+     * A FOLGA CRESCE ENQUANTO UM GOLPE PERFURANTE ESTÁ NO AR, e isto não é uma
+     * porta dos fundos — é o balde deixando de aparar o que ele nunca quis
+     * aparar. Ele foi dimensionado contra a RAJADA (6 tiros/s por pessoa, quinze
+     * pessoas), e o comentário de `CRATERAS_POR_SEGUNDO` diz isso: "golpe GRANDE
+     * passa sempre, ele acontece uma vez por barra cheia e a cratera dele é o
+     * assunto do golpe".
+     *
+     * O Kamehameha perfurante é um golpe grande que pede VINTE buracos em vez de
+     * um — o corredor que ele abre na montanha é uma fila de crateras a cada
+     * sete metros de rocha (ver `atravessar`, em `powers/beam.js`). Com meio
+     * segundo de folga, dois passavam e o resto era descartado: o feixe
+     * atravessava o morro e deixava dois furos soltos em vez de um túnel.
+     *
+     * O sinal que separa os dois casos é o que a sala JÁ registra: `especial` é
+     * o golpe em curso daquele lutador, com a janela de tempo dele
+     * (`registrarEspecial`), e ele só existe porque custou a barra cheia. Quatro
+     * segundos de folga cobrem o corredor inteiro de um disparo e nada mais —
+     * quando a janela do especial fecha, o balde volta ao tamanho de sempre.
+     *
+     * O teto do abuso continua sendo o mesmo de antes: quem mentir sobre o ponto
+     * ainda esbarra no alcance máximo (`registrarChao`) e ainda precisa ter
+     * gastado a barra inteira para abrir a janela. */
+    const perfurando =
+      f.especial && f.especial.info?.atravessar && agora <= f.especial.ate;
+    const folga = perfurando ? 4000 : 500;
+    const base = Math.max(f.crateraAte ?? 0, agora - folga);
     if (base > agora) return false;
     f.crateraAte = base + passo;
     return true;
@@ -1774,11 +1872,17 @@ export class NamekRoom {
     /* A cota por lutador é cobrada dentro de `cratera()`, para valer também
        para o bot e para o baque de queda. Ver o comentário lá.
 
-       O teto é a potência do golpe mais forte do jogo (a Genki Dama, 12), com
-       uma folga para a queda. `craterFor` já apara em 64 e `craterMax` apara o
-       raio em 34 m; isto apara mais cedo, porque uma potência absurda vinda da
-       rede também vira uma cratera absurda no índice espacial. */
-    this.cratera(msg.p[0], msg.p[2], Math.min(power, 16), player);
+       O teto é a potência do golpe mais forte do jogo com uma folga para a
+       queda. Ele ERA 16, dimensionado quando a Genki Dama tinha potência 12 — e
+       ela subiu para 34 junto com a escala das crateras (ver `craterBase`). Um
+       teto abaixo da potência de um golpe legítimo não protege nada: ele só apara
+       em silêncio o maior buraco do jogo, e o sintoma seria a Genki Dama abrindo
+       a mesma cratera do Galick Gun. 44 é a Genki Dama com um terço de folga.
+
+       `craterFor` já apara em 64 e `craterMax` apara o raio em 44 m; isto apara
+       mais cedo, porque uma potência absurda vinda da rede também vira uma
+       cratera absurda no índice espacial. */
+    this.cratera(msg.p[0], msg.p[2], Math.min(power, 44), player, msg.df);
   }
 
   registrarProp(player, msg) {

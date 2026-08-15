@@ -167,6 +167,43 @@ const PALETA = {
   raso: new THREE.Color("#2c6f6c"),
   /** Cor das fissuras de magma na tempestade. Ver `aMagma`. */
   magma: new THREE.Color("#ff5a1e"),
+
+  /* ---------------------------------------------------- O QUE ESTÁ EMBAIXO
+   *
+   * As cinco camadas da cratera, e elas existem por uma queixa muito específica:
+   * *"ao fazer crateras, todas elas… devem ter cor de terra. Atualmente está
+   * ficando com cor de grama."*
+   *
+   * A queixa estava certa e a causa era estrutural: `applyCrater` re-esculpia
+   * posição e normal e **não tocava na cor**. O comentário de lá até dizia por
+   * quê — "o buraco é lido pela normal e pela sombra própria, e repintar o anel
+   * a cada explosão custaria um terceiro buffer subindo para a placa por golpe".
+   * O argumento vale para um arranhão de quatro metros e deixa de valer para uma
+   * bacia de oito por cinco de fundo: a essa escala o que se vê é uma tigela de
+   * GRAMA, e grama no fundo de uma cratera desmente a explosão inteira.
+   *
+   * A segunda metade do pedido é a que dá as cinco cores: *"se possível, quanto
+   * mais fundo, mais a cor vai mudando seria melhor — como se fosse um marrom
+   * cada vez mais escuro até chegar na lava, ou talvez um marrom indo pro cinza
+   * e depois chega na lava, como se fosse uma camada de rocha. Nas primeiras
+   * camadas é marrom de terra mesmo, normal."*
+   *
+   * É literalmente um perfil de solo, e por isso as camadas são medidas em
+   * METROS CAVADOS e não em cota absoluta: um buraco de dez metros no alto de
+   * uma montanha mostra as mesmas camadas que um buraco de dez metros na
+   * clareira, porque o que se vê num corte é a distância à superfície de onde o
+   * corte começou. A única exceção é a brasa, que é por COTA — ver
+   * `corDeCratera`. */
+  /** 0–2 m: a terra raspada, clara e seca. É o que aparece assim que a grama sai. */
+  escavado: new THREE.Color("#9c7f56"),
+  /** 2–9 m: o horizonte B, mais escuro e mais úmido. */
+  terraFunda: new THREE.Color("#68492c"),
+  /** 9–20 m: o marrom vira cinza — começou a rocha. */
+  rochaFunda: new THREE.Color("#565049"),
+  /** 20 m+: rocha-mãe, quase sem cor. */
+  rochaProfunda: new THREE.Color("#2f2c2a"),
+  /** O que aparece quando o fundo se aproxima da lava. Ver `corDeCratera`. */
+  brasa: new THREE.Color("#b8431a"),
 };
 
 const _cor = new THREE.Color();
@@ -370,9 +407,11 @@ export class NamekTerrain {
    * fragmento. Tentar descrever o grão aqui exigiria célula de 20 cm — cento
    * e sessenta vezes mais vértices no campo.
    *
-   * `applyCrater` não mexe em cor de propósito: o buraco é lido pela normal e
-   * pela sombra própria, e repintar o anel a cada explosão custaria um
-   * terceiro buffer subindo para a placa por golpe.
+   * `applyCrater` **repinta**, e isto mudou: ver `corDeCratera` e o comentário
+   * do bloco de subsolo em `PALETA`. O argumento antigo ("o buraco é lido pela
+   * normal e pela sombra própria") valia para um arranhão de quatro metros e
+   * deixou de valer para uma bacia de oito por cinco de fundo — a essa escala o
+   * que se via era uma tigela de grama.
    */
   corDeSuperficie(x, z, h, ny, out, celula = 2.8) {
     const n = this.noise;
@@ -632,10 +671,77 @@ export class NamekTerrain {
     const h = this.positions[v * 3 + 1];
     const z = this.positions[v * 3 + 2];
     this.corDeSuperficie(x, z, h, this.normals[v * 3 + 1], _cor, celula);
+    /* O QUE FOI CAVADO ENTRA POR CIMA DA REGIÃO, e nesta ordem de propósito: a
+       cor de região (campo, rocha, praia) descreve o planeta, e a cratera
+       descreve o que foi arrancado dele. Uma bacia de oito metros no meio da
+       praia tem de mostrar terra e não areia — o que se vê num corte é o
+       subsolo, não a superfície que estava ali antes.
+
+       `displacementAt` e não uma diferença entre `h` e `base[v]`: é a MESMA
+       leitura que a altura faz (ver `alturaDeVertice`), e ter a conta em dois
+       lugares seria ter duas topografias — uma pintada e outra pisada. */
+    this.corDeCratera(_cor, this.field.displacementAt(x, z), h);
     this.colors[v * 3] = _cor.r;
     this.colors[v * 3 + 1] = _cor.g;
     this.colors[v * 3 + 2] = _cor.b;
     this.magma[v] = this.magmaEm(x, z, h);
+  }
+
+  /**
+   * As camadas do subsolo, pintadas por METROS CAVADOS.
+   *
+   * Ver o bloco de cores em `PALETA`: é um perfil de solo, e por isso a régua é
+   * a distância à superfície original e não a cota. As transições são
+   * `smoothstep` sobrepostos em vez de faixas com borda: um corte de verdade
+   * não tem linha entre o horizonte A e o B, tem uma passagem de um metro ou
+   * dois — e uma borda dura aqui apareceria como um ANEL de cor no meio da
+   * bacia, que é a assinatura de um buraco pintado por fórmula.
+   *
+   * @param {THREE.Color} out a cor de região, já resolvida; mutada no lugar
+   * @param {number} desl deslocamento — NEGATIVO onde foi cavado, positivo na
+   *   borda levantada
+   * @param {number} h a cota final deste ponto
+   */
+  corDeCratera(out, desl, h) {
+    /* A BORDA LEVANTADA também é terra, e esquecer disso era metade do defeito:
+       o anel de ejeção em volta do buraco é material que SAIU de dentro dele, e
+       ele estava ficando verde. Só a camada clara — o que voa para fora é o
+       horizonte de cima. */
+    if (desl > 0.3) {
+      out.lerp(PALETA.escavado, smoothstep(0.3, 1.8, desl) * 0.8);
+      return out;
+    }
+
+    const cav = -desl;
+    /* Meio decímetro de folga: abaixo disso é ruído do bilinear da grade, e
+       pintar por causa dele deixaria o campo inteiro levemente marrom. */
+    if (cav <= 0.05) return out;
+
+    // 1. a grama sai. Rápido — raspou, virou terra.
+    out.lerp(PALETA.escavado, smoothstep(0.15, 1.6, cav));
+    // 2. o marrom escurece
+    out.lerp(PALETA.terraFunda, smoothstep(2.5, 9, cav));
+    // 3. o marrom vira cinza: começou a rocha
+    out.lerp(PALETA.rochaFunda, smoothstep(9, 20, cav));
+    // 4. rocha-mãe
+    out.lerp(PALETA.rochaProfunda, smoothstep(20, 34, cav));
+
+    /* 5. A BRASA, e ela é a única camada medida por COTA e não por escavação.
+     *
+     * O motivo é que ela não descreve o solo, descreve a proximidade do que está
+     * embaixo dele: a lava assenta numa cota fixa (`lava.nivel`, −14 m) e não a
+     * uma profundidade fixa. Um poço de trinta metros aberto no topo de uma
+     * montanha de 140 m para a 110 m de altitude — não há brasa nenhuma lá. O
+     * mesmo poço aberto na clareira chega aos −26 e está quente.
+     *
+     * É também o aviso que o jogador precisa para o teste que ele descreveu
+     * ("furar até chegar na lava"): a cor esquenta antes de a poça acender, e é
+     * ela que diz "continue cavando aqui" em vez de deixar a pessoa adivinhando
+     * se o buraco está fundo o bastante. */
+    const L = NAMEK.destruction.lava;
+    const quente = smoothstep(L.nivel + 16, L.nivel - 2, h);
+    if (quente > 0.001) out.lerp(PALETA.brasa, quente * 0.85);
+    return out;
   }
 
   /* ------------------------------------------------------------- costura --- */
@@ -929,9 +1035,21 @@ export class NamekTerrain {
     /* Margem de duas células no raio das normais. Duas e não uma porque a
        derivada radial de um vértice usa os anéis k−1 e k+1: quem está uma
        célula fora do buraco ainda enxerga o fundo dele. */
-    const margem = c.raio + 2 * this.celulaEm(Math.hypot(c.x, c.z));
+    const dist = Math.hypot(c.x, c.z);
+    const margem = c.raio + 2 * this.celulaEm(dist);
+    /* A CÉLULA do lugar do buraco, resolvida uma vez. `corDeSuperficie` a usa
+       para saber que escalas de ruído a malha aqui sustenta (o `fino` de lá), e
+       perguntá-la por vértice seria varrer a tabela de LOD a cada ponto de uma
+       cratera que pode ter centenas deles. É uma aproximação — a cratera pode
+       cruzar duas bandas de LOD —, e é a mesma que a construção já faz por anel:
+       a diferença de célula dentro de um disco de dez metros é de centímetros. */
+    const cel = this.celulaEm(dist);
     this.percorrerDisco(c.x, c.z, margem, (k, s) => {
       this.escreverNormal(k, s);
+      /* A COR VEM DEPOIS DA NORMAL, e a ordem é obrigatória: `corDeSuperficie`
+         lê `ny` para decidir rocha, praia e oclusão. Repintar com a normal velha
+         deixaria a parede da cratera com a cor do chão plano que ela era. */
+      this.corDeVertice(this.vert(k, s), cel);
       marcar(this.vert(k, s));
     });
 
@@ -939,12 +1057,22 @@ export class NamekTerrain {
 
     const pos = this.geometry.attributes.position;
     const nor = this.geometry.attributes.normal;
+    const col = this.geometry.attributes.color;
+    const mag = this.geometry.attributes.aMagma;
     const inicio = vMin * 3;
     const conta = (vMax - vMin + 1) * 3;
     pos.addUpdateRange(inicio, conta);
     nor.addUpdateRange(inicio, conta);
+    col.addUpdateRange(inicio, conta);
     pos.needsUpdate = true;
     nor.needsUpdate = true;
+    col.needsUpdate = true;
+    /* O magma é UM float por vértice, então a faixa dele é a outra — e ele muda
+       junto porque `corDeVertice` o reescreve: a fissura depende da altura, e a
+       altura acabou de mudar. Sem esta faixa, o atributo ficaria com o valor
+       velho na placa e a tempestade acenderia veios no ar sobre o buraco. */
+    mag.addUpdateRange(vMin, vMax - vMin + 1);
+    mag.needsUpdate = true;
   }
 
   /**

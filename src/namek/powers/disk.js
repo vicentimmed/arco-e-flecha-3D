@@ -409,6 +409,10 @@ class Disco {
       e.p.y = this.y;
       e.p.z = this.z;
       e.power = this.info.power;
+      /* Talho largo e raso, que é o que uma lâmina rente ao chão faz. Escrito
+         mesmo valendo 1 porque o registro da fila é REAPROVEITADO: um `fundo` de
+         3,5 deixado pelo Kamehameha do quadro anterior viraria um poço aqui. */
+      e.fundo = 1;
     }
     gameEvents.emit(EventType.PARTICLES, {
       position: { x: this.x, y: this.y, z: this.z },

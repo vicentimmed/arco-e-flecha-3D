@@ -348,6 +348,34 @@ class Feixe {
     this.bateu = false;
     this.saiu = false;
 
+    /* ------------------------------------------------------- a perfuração --
+       Ver `NAMEK.specials.kamehameha.atravessar`, que tem o argumento inteiro
+       (inclusive o motivo de o resultado ser uma VALA aberta e não um túnel com
+       teto: o terreno é um campo de altura, e campo de altura não tem teto).
+
+       `furando` é o estado "a cabeça está DENTRO do relevo": ela continua
+       andando, e a cada `passo` metros de rocha deixa uma cratera. Ele liga na
+       primeira encostada e desliga quando a cabeça sai do outro lado — e pode
+       religar, que é o que acontece quando o feixe corta dois picos em fila. */
+    this.atravessa = S.atravessar ?? null;
+    this.furando = false;
+    /** m de arco em que a cabeça entrou na rocha desta vez. */
+    this.entrada = 0;
+    /** m de arco do próximo buraco do corredor. */
+    this.proxFuro = 0;
+    /** m de rocha já perfurados neste disparo, SOMANDO todas as entradas
+     *  ANTERIORES — a corrente é somada em `perfurar` e só é fechada aqui
+     *  quando a cabeça sai da rocha. */
+    this.perfurado = 0;
+    /** Há um buraco de corredor a enfileirar neste quadro. Ver `perfurar`. */
+    this.furo = false;
+    /** A BOCA: onde ele entrou no relevo. As fagulhas do impacto saem daqui
+     *  enquanto ele fura — no fundo do corredor elas ficariam enterradas, e o
+     *  jogador precisa ver de onde a poeira está saindo. */
+    this.bocaX = 0;
+    this.bocaY = 0;
+    this.bocaZ = 0;
+
     this.ox = origem.x;
     this.oy = origem.y;
     this.oz = origem.z;
@@ -541,6 +569,20 @@ class Feixe {
 
     const passo = Math.min(this.info.speed * dt, this.alcance - this.frente);
     if (passo <= 0) return;
+
+    /* JÁ ESTÁ DENTRO DA ROCHA: o passo é simples (não há o que testar contra a
+       superfície, ele está abaixo dela) e o trabalho é decidir quando sai e
+       onde deixar o próximo buraco do corredor. */
+    if (this.furando) {
+      this.hx += this.hdir.x * passo;
+      this.hy += this.hdir.y * passo;
+      this.hz += this.hdir.z * passo;
+      this.frente += passo;
+      this.perfurar();
+      this.gravar();
+      return;
+    }
+
     const nx = this.hx + this.hdir.x * passo;
     const ny = this.hy + this.hdir.y * passo;
     const nz = this.hz + this.hdir.z * passo;
@@ -554,8 +596,22 @@ class Feixe {
       this.hy += this.hdir.y * fatia;
       this.hz += this.hdir.z * fatia;
       this.frente += fatia;
-      this.alcance = this.frente;
-      this.bateu = true;
+      /* A BOCA. Guardada antes de qualquer decisão porque ela é o ponto do
+         impacto — a cratera de entrada sai daqui, e as fagulhas continuam
+         saindo daqui enquanto ele estiver enterrado. */
+      this.bocaX = this.hx;
+      this.bocaY = this.hy;
+      this.bocaZ = this.hz;
+
+      if (this.atravessa && this.perfurado < this.atravessa.alcance) {
+        /* ELE NÃO PARA: entra. Ver `atravessar` no config. */
+        this.furando = true;
+        this.entrada = this.frente;
+        this.proxFuro = this.frente + this.atravessa.passo;
+      } else {
+        this.alcance = this.frente;
+        this.bateu = true;
+      }
     } else {
       this.hx = nx;
       this.hy = ny;
@@ -563,6 +619,54 @@ class Feixe {
       this.frente += passo;
     }
     this.gravar();
+  }
+
+  /**
+   * Um passo DENTRO da rocha: mede o quanto já foi furado, enfileira o buraco
+   * do corredor e decide se ele sai do outro lado ou se a montanha o segurou.
+   *
+   * A fila de crateras é a mesma que a boca usa (`relato.chao`), e é ela que
+   * transforma "o feixe passou por aqui" em terreno de verdade nas duas pontas
+   * da rede — cada buraco vira um `NC2S.GROUND_HIT`, a sala carimba, e todo
+   * mundo vê o mesmo corredor. É por isso que a perfuração não precisa de uma
+   * mensagem própria nem de um segundo caminho de sincronização.
+   *
+   * Três saídas, e as três importam:
+   *
+   * • **saiu** — a cabeça voltou a ficar acima do relevo. `furando` desliga e o
+   *   feixe segue livre; se houver outro pico à frente, ele fura de novo. É
+   *   assim que um tiro rasante atravessa dois morros em fila.
+   * • **cansou** — gastou o orçamento de rocha (`atravessar.alcance`). A
+   *   montanha ganhou: o feixe para ali dentro e explode enterrado, o que deixa
+   *   um poço em vez de um corredor. É a leitura certa de "não foi fundo o
+   *   bastante".
+   * • **nem uma nem outra** — continua furando no quadro seguinte.
+   */
+  perfurar() {
+    const T = this.atravessa;
+    /* O orçamento é do DISPARO, e não de cada pico: `perfurado` é o que já foi
+       gasto em entradas anteriores, e a entrada corrente soma por cima. Sem essa
+       soma, um feixe rasante que raspa dez cristas gastaria o limite dez vezes e
+       abriria meio quilômetro de vala. */
+    const total = this.perfurado + (this.frente - this.entrada);
+
+    if (this.frente >= this.proxFuro) {
+      this.proxFuro += T.passo;
+      this.furo = true; // consumido por `bater`, que é quem fala com o relato
+    }
+
+    if (this.hy > this.field.heightAt(this.hx, this.hz)) {
+      // Saiu do outro lado. Fecha a conta desta entrada e segue livre.
+      this.perfurado = total;
+      this.furando = false;
+      return;
+    }
+    if (total >= T.alcance) {
+      this.perfurado = total;
+      this.furando = false;
+      this.alcance = this.frente;
+      this.bateu = true;
+    }
   }
 
   /**
@@ -976,17 +1080,41 @@ class Feixe {
    * buraco, cobrado vinte vezes.
    */
   bater(relato, localId, dt) {
-    if (!this.bateu) return;
+    const encostado = this.bateu || this.furando;
+    if (!encostado) return;
+    const meu = this.owner === localId;
 
+    /* A CRATERA DE ENTRADA — a boca. Uma só, no quadro em que a cabeça toca o
+       relevo pela primeira vez, e com o multiplicador de fundura do golpe
+       (`craterDeep`): é ela que faz o Kamehameha abrir um poço em vez de amassar
+       o chão. Ver `NAMEK.specials.kamehameha.craterDeep`. */
     if (!this.reportouChao) {
       this.reportouChao = true;
-      if (this.owner === localId) {
+      if (meu) {
+        const e = relato.chao();
+        e.owner = this.owner;
+        e.p.x = this.bocaX || this.hx;
+        e.p.y = this.bocaY || this.hy;
+        e.p.z = this.bocaZ || this.hz;
+        e.power = this.info.power;
+        e.fundo = this.info.craterDeep ?? 1;
+      }
+    }
+
+    /* O CORREDOR. Um buraco a cada `atravessar.passo` metros de rocha, na
+       posição da cabeça — e é a soma deles, sobrepostos, que vira a vala por
+       onde se voa. A potência é menor que a da boca de propósito: a entrada é a
+       cratera cheia, o corredor é o rastro dela. */
+    if (this.furo) {
+      this.furo = false;
+      if (meu && this.atravessa) {
         const e = relato.chao();
         e.owner = this.owner;
         e.p.x = this.hx;
         e.p.y = this.hy;
         e.p.z = this.hz;
-        e.power = this.info.power;
+        e.power = this.info.power * this.atravessa.potencia;
+        e.fundo = this.info.craterDeep ?? 1;
       }
     }
 
@@ -998,8 +1126,15 @@ class Feixe {
     this._imp -= dt;
     if (this._imp > 0) return;
     this._imp = 0.12;
+    /* ENQUANTO ELE FURA, AS FAGULHAS SAEM DA BOCA e não da cabeça: a cabeça está
+       dentro da montanha, e um sopro de partículas lá dentro é um sopro que
+       ninguém vê. Da boca, ele lê como o que de fato está acontecendo — o feixe
+       entrou ali e está cuspindo rocha de volta. */
+    const fx = this.furando ? this.bocaX : this.hx;
+    const fy = this.furando ? this.bocaY : this.hy;
+    const fz = this.furando ? this.bocaZ : this.hz;
     gameEvents.emit(EventType.PARTICLES, {
-      position: { x: this.hx, y: this.hy, z: this.hz },
+      position: { x: fx, y: fy, z: fz },
       count: 10,
       color: this.info.cor,
       speed: 26,

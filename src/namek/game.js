@@ -43,6 +43,7 @@ import { FighterController } from "./movement.js";
 import { NamekCamera } from "./camera.js";
 import { NamekInput } from "./input.js";
 import { NamekHud, NamekMenu } from "./ui/index.js";
+import { EVENTO_MENU } from "./ui/menu.js";
 import { KiMeter } from "./ki.js";
 import { NamekAudio } from "./audio.js";
 import { NamekClient } from "./net/client.js";
@@ -216,6 +217,34 @@ export class NamekGame {
 
     this.bindNetwork();
     this.bindParticles();
+    this.bindMenu();
+  }
+
+  /**
+   * A FICHA DE TECLAS SEGUE O MENU, sempre — por qualquer caminho.
+   *
+   * O Esc abre duas telas ao mesmo tempo: o cartão de comandos (`ui/menu.js`, na
+   * metade de baixo) e a ficha de teclas (`hud.showHelp`, no topo). Quem as
+   * abria era o `step`, no pulso de `menuPressed`, e ele também as fechava — mas
+   * o menu tem um SEGUNDO jeito de fechar, que é o clique no fundo. Por esse
+   * caminho o cartão sumia e a ficha de teclas ficava na tela, sozinha, sem nada
+   * que a tirasse de lá a não ser um Esc e outro clique. É o relato literal:
+   * *"se eu clicar enquanto esses menus estão ativos, somente um menu some;
+   * aquele menu de teclas continua. Todos devem sumir ao clicar."*
+   *
+   * A defesa é a mesma que `EVENTO_MENU` já tinha inventado para o `NamekInput`,
+   * e por isso ela não custa nada aqui: **toda** mudança de estado do menu passa
+   * por `toggle()`, e `toggle()` grita. Escutando o grito, a ficha não depende
+   * mais de ninguém lembrar de fechá-la — nem hoje, nem no botão novo que
+   * alguém acrescentar amanhã.
+   *
+   * O `showHelp` é idempotente (sai na primeira linha quando o estado já bate),
+   * então o caminho do Esc — que agora avisa duas vezes, uma pelo `step` e outra
+   * por aqui — não pisca nada.
+   */
+  bindMenu() {
+    this._onMenu = (e) => this.hud.showHelp(!!e.detail?.aberto);
+    document.addEventListener(EVENTO_MENU, this._onMenu);
   }
 
   /**
@@ -545,7 +574,11 @@ export class NamekGame {
        localmente. `addCrater` é idempotente por id justamente para isso, e
        devolver null é o sinal de que não há nada novo a esculpir. */
     net.on(NS2C.CRATER, (msg) => {
-      const c = this.field.addCrater(msg.i, msg.p[0], msg.p[2], msg.power);
+      /* `msg.df` é o multiplicador de FUNDURA, e ele só vem quando não é 1 (ver
+         `NamekRoom.cratera`). Sem o `?? 1` toda cratera comum viraria um buraco
+         de profundidade `undefined` — que em multiplicação é NaN, e um NaN no
+         mapa de deslocamento apaga o chão em vez de cavá-lo. */
+      const c = this.field.addCrater(msg.i, msg.p[0], msg.p[2], msg.power, msg.df ?? 1);
       if (c) {
         this.world.applyCrater(c);
         /* O estouro de quem NÃO sou eu. O meu já soou no `reportar`, no
@@ -710,7 +743,7 @@ export class NamekGame {
    * peça só some da tela quando ela confirma, e é isso que faz a vila cair igual
    * para todo mundo. Aqui só se pede.
    */
-  derrubarPorPerto(ponto, power) {
+  derrubarPorPerto(ponto, power, fundo = 1) {
     /* O RAIO DA ENCOSTA, e não o da clareira.
      *
      * Era `craterFor(power).raio` — o buraco de terreno plano —, e desde que a
@@ -721,7 +754,7 @@ export class NamekGame {
      * mede a inclinação com a MESMA conta que esculpe o terreno, que é o que
      * garante que a área que derruba árvore e a área que afunda o chão sejam a
      * mesma área. */
-    const raio = this.field.raioDeCratera(ponto.x, ponto.z, power);
+    const raio = this.field.raioDeCratera(ponto.x, ponto.z, power, fundo);
     /* Uma peça grande na borda ainda é atingida: o teste é contra o raio dela
        mais o do estouro, não contra o centro. */
     const props = this.world.props;
@@ -1479,13 +1512,20 @@ export class NamekGame {
        * de rede embaixo de uma nuvem que dura um segundo. */
       this.fx.groundImpact(g.p.x, g.p.y, g.p.z, g.power);
       this.audio.estouroNoChao(g.p, g.power);
-      this.derrubarPorPerto(g.p, g.power);
+      this.derrubarPorPerto(g.p, g.power, g.fundo);
       /* Só o que é forte o bastante pede BURACO; o resto marca e some. Ver
          `craterMinPower` — sem o corte, a rajada consumia a fila inteira de 96
          crateras em pouco mais de um segundo e a destruição que importa apagava
          na frente do jogador. */
       if (g.power >= NAMEK.destruction.craterMinPower) {
-        this.net.send(NC2S.GROUND_HIT, { p: [g.p.x, g.p.y, g.p.z], power: g.power });
+        this.net.send(NC2S.GROUND_HIT, {
+          p: [g.p.x, g.p.y, g.p.z],
+          power: g.power,
+          /* O multiplicador de fundura. Só sobe quando não é 1, que é o caso de
+             quase todo golpe — ver `craterFor`, que é quem o interpreta e o
+             apara. É ele que faz o Kamehameha perfurar em vez de amassar. */
+          df: g.fundo !== 1 ? g.fundo : undefined,
+        });
       }
     }
 
@@ -1516,6 +1556,7 @@ export class NamekGame {
   dispose() {
     this.running = false;
     window.removeEventListener("resize", this._onResize);
+    if (this._onMenu) document.removeEventListener(EVENTO_MENU, this._onMenu);
     this._offParticles?.();
     this.net.disconnect();
     this.input.dispose();

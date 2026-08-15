@@ -2040,6 +2040,7 @@ class Game {
     if (a.setMode) this.askModeChange(a.setMode, a.doMenu === true);
     if (a.setLevel) this.askLevelChange(a.setLevel, a.doMenu === true);
     if (a.setMeteorRain) this.askMeteorRain(a.setMeteorRain);
+    if (a.setSiege) this.askSiege(a.setSiege);
     /* Pôr e tirar bot é PEDIDO À SALA. O aviso na tela não sai daqui: ele vem
        do `S2C.JOIN`/`S2C.LEAVE` que o servidor manda para todo mundo, porque um
        adversário novo em campo é notícia para a sala inteira, não só para quem
@@ -2324,7 +2325,11 @@ class Game {
       /* O nível da chuva vem do ESTADO, não desta mensagem, e chega a tempo:
          a sala manda o `METEOR_STATUS` antes do `MODE` (ver `Room.setMode`, em
          que o `broadcastMode` é a última linha) e o WebSocket entrega em ordem.
-         Quem entra na sala já vem com ele no `snapshot`. */
+         Quem entra na sala já vem com ele no `snapshot`.
+
+         SÓ A CHUVA: o cerco tem nível também, mas não tem faixa — ela é
+         suprimida para ele em `Hud.setMode`, e o nível dele sai no rótulo do
+         portão. Passá-lo aqui seria alimentar um parâmetro que ninguém lê. */
       this.meteorState?.difficulty ?? null,
     );
 
@@ -3135,6 +3140,22 @@ class Game {
   askMeteorRain(level) {
     if (!this.net.connected) return;
     this.net.send(C2S.METEOR_DIFFICULTY, { level });
+  }
+
+  /**
+   * O cerco ao castelo num nível: fácil, normal ou difícil.
+   *
+   * Gêmeo do `askMeteorRain`, e pelas mesmas razões — sem pergunta e sem o
+   * guarda de fase. O guarda recusaria isto na Lua (o cerco só existe no
+   * castelo), e recusar seria pior que a verdade: a sala sabe levar a fase
+   * junto, então clicar daqui viaja para o castelo e começa o cerco, que é o
+   * que o botão promete.
+   *
+   * Trocar de nível recomeça o cerco, sempre — ver `C2S.SIEGE_DIFFICULTY`.
+   */
+  askSiege(level) {
+    if (!this.net.connected) return;
+    this.net.send(C2S.SIEGE_DIFFICULTY, { level });
   }
 
   /** Começa a estocada, preservando o ponto atual da recarga. */

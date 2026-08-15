@@ -117,8 +117,14 @@
  * problema, porque a dificuldade é da SALA. Ela jogaria o difícil de todo mundo
  * chamando aquilo de chuva normal, sem nada na tela dizendo o contrário, e o
  * relato que chegaria seria "o modo ficou impossível do nada".
+ *
+ * 22 — o CERCO ganhou os mesmos três níveis (`C2S.SIEGE_DIFFICULTY`), e a razão
+ * de subir a versão é a do item 21, agravada: aqui o nível também muda a VIDA
+ * DO PORTÃO. Uma aba antiga desenharia a barra do portão cheia sobre uma
+ * madeira que tem dois terços do que ela mostra — não é só um rótulo faltando
+ * na tela, é o mostrador principal do modo mentindo.
  */
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 
 /* --------------------------------------------------------- cliente → servidor */
 
@@ -196,6 +202,17 @@ export const C2S = {
    *  todo mundo. Não confundir com o `BOT_DIFFICULTY`, que é a pontaria dos
    *  bots — aqui é o tamanho e o ritmo da chuva. */
   METEOR_DIFFICULTY: "meteorDifficulty",
+  /** Cerco ao castelo em fácil, normal ou difícil: `{ level }`.
+   *
+   *  Mesmo contrato do `METEOR_DIFFICULTY`, e de propósito: ENTRA NO MODO e
+   *  recomeça o cerco, sempre. Aqui a razão é ainda mais direta que na chuva —
+   *  o nível decide a vida do portão, e trocá-lo no meio da partida ou deixaria
+   *  a madeira com mais vida do que o máximo dela, ou a mataria de uma vez.
+   *
+   *  Vale para a SALA inteira: o portão é um só. Não confundir com o
+   *  `BOT_DIFFICULTY`, que é a pontaria dos arqueiros de CPU — aqui é o peso da
+   *  rampa e a espessura da madeira. */
+  SIEGE_DIFFICULTY: "siegeDifficulty",
   /** "Disparei o especial": `{ o:[x,y,z], d:[x,y,z], w }`.
    *  A direção é TRAVADA aqui — girar depois não entorta o feixe. */
   KAME: "kame",

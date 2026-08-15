@@ -434,10 +434,45 @@ dois nascimentos (§4.2).
 
   Com a potência, a pressão por defensor é constante e o número de arcos na
   muralha deixa de mudar a dificuldade do modo, que é o que ele sempre quis
-  dizer. Medido: 75 % sozinho, 74 % em dupla, 97 % com três. O que os defensores
-  dividem (34 m de muro, a mesma linha de tiro) continua sendo cobrado, mas do
-  outro lado da conta — quem larga a muralha para içar o trabuco ou remendar o
-  portão não está atirando, e é isso que faz o quarto valer menos que o primeiro.
+  dizer. Medido: ~82 % sozinho, ~78 % em dupla, 97 % com três. O que os
+  defensores dividem (34 m de muro, a mesma linha de tiro) continua sendo
+  cobrado, mas do outro lado da conta — quem larga a muralha para içar o trabuco
+  ou remendar o portão não está atirando, e é isso que faz o quarto valer menos
+  que o primeiro.
+
+### 4.1.1 Os três níveis
+
+`gap(t)` ganha um multiplicador de nível, e `gateHealth` outro. Ver
+`difficulties` em `config.js`; `normal` é o cerco de sempre, com tudo em 1,00.
+
+| nível | `gap` | `gate` | `exp` | N=1 | N=2 | N=3 | N=4 |
+|---|---|---|---|---|---|---|---|
+| fácil | 1,08 | 1,15 | — | 93 % | 96 % | 100 % | 100 % |
+| normal | 1,00 | 1,00 | — | ~82 % | ~78 % | 97 % | 100 % |
+| difícil | 0,90 | 0,65 | 1,15 | **25 %** | 6 % | 25 % | 52 % |
+
+`exp` sobrescreve `playerGapExp`, e só o difícil declara o seu — sem isso ele
+media 100 % com quatro defensores, isto é, existia só para quem jogava sozinho.
+
+**O que estes números valem, e o que não valem.** A coluna N=1 é a que o banco
+mede honestamente, e é a que foi calibrada: 25 % no difícil vem de 300 partidas.
+As outras três carregam dois vieses conhecidos, em direções opostas:
+
+* **N=2 lê mais difícil do que joga.** O modelo põe meio arqueiro na manivela
+  assim que há dois defensores (§12), e é meio arco em cima de uma capacidade de
+  um e meio. No jogo, o segundo defensor costuma ser um *bot*, e bot não vai à
+  manivela nem repara portão — ele é um arco inteiro. Os 6 % do difícil são o
+  pior caso do modelo, não o caso comum.
+* **N≥3 lê mais fácil do que joga.** O trabuco do banco é o teto do engenho:
+  três deles, sempre achando o melhor aglomerado, nunca errando o ponto. Numa
+  rampa cheia isso é muito: 21 % da vazão com um defensor, 40 % com quatro.
+  Jogadores de verdade miram à mão e recarregam em catorze segundos.
+
+Uma corrida só não decide nada aqui. A MESMA configuração do normal devolveu de
+75 % a 88 % em corridas de 100 a 300 partidas — a dispersão é maior que a de uma
+binomial porque o acaso é correlacionado dentro da partida (o sorteio de
+espécies e a fase da maré valem para os dez minutos inteiros). Cem partidas
+distinguem 25 % de 80 %; não distinguem 75 % de 85 %.
 
 ### 4.2 Agendado pela CHEGADA — de novo
 

@@ -39,22 +39,44 @@
      node scripts/bench-cerco.js 1 0.5 0.78 60
      node scripts/bench-cerco.js 3 0.5 0.78 60 --sem-trabuco
      node scripts/bench-cerco.js 1 0.5 0.60 60          # o jogador ruim
+     node scripts/bench-cerco.js 1 0.5 0.78 60 --dificil
+     node scripts/bench-cerco.js --tabela 60            # os três níveis × 1 a 4
    --------------------------------------------------------------------------- */
 
 import { CONFIG } from "../src/config.js";
 import { CastleField } from "../src/shared/castleField.js";
-import { Siege } from "../server/siegeSim.js";
+import { Siege, siegeDifficultyOf } from "../server/siegeSim.js";
 import { gateInfo, trebuchetPosts } from "../src/shared/castleProps.js";
 
 const PASSO = 1 / 10; // o mesmo relógio de 10 Hz da sala
 const GATE = gateInfo();
 
-const defensores = Number(process.argv[2] ?? 1);
-const taxaTiro = Number(process.argv[3] ?? 0.5); // tiros por segundo, por arqueiro
-const pAcerto = Number(process.argv[4] ?? 0.78);
-const rodadas = Number(process.argv[5] ?? 60);
+/* A TABELA é o modo em que este banco responde à pergunta que os níveis criam,
+   e ela não cabe numa corrida só: "o difícil está difícil?" só tem resposta
+   olhando os três níveis contra vários tamanhos de guarnição ao mesmo tempo.
+   Rodar nove vezes à mão e copiar os números para um lugar é justamente como se
+   erra uma calibragem. */
+const tabela = process.argv.includes("--tabela");
+/* AS BANDEIRAS SAEM DA CONTA DOS POSICIONAIS. Misturadas, `--tabela 40` lia o
+   40 como taxa de tiro e o "--tabela" como número de rodadas — e o banco
+   respondia `NaN %` em toda casa, que ao menos é um erro alto. */
+const pos = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+/* Na `--tabela` a guarnição é o eixo da tabela, então o primeiro posicional
+   passa a ser o número de rodadas. */
+const defensores = Number((tabela ? 1 : pos[0]) ?? 1);
+const taxaTiro = Number(pos[1] ?? 0.5); // tiros por segundo, por arqueiro
+const pAcerto = Number(pos[2] ?? 0.78);
+const rodadas = Number((tabela ? pos[0] : pos[3]) ?? 60);
 const semTrabuco = process.argv.includes("--sem-trabuco");
 const semReparo = process.argv.includes("--sem-reparo");
+/** O nível pedido na linha de comando. Sem bandeira, o padrão da sala. */
+const nivel = siegeDifficultyOf(
+  process.argv.includes("--facil")
+    ? "easy"
+    : process.argv.includes("--dificil")
+      ? "hard"
+      : "normal",
+);
 
 const terreno = new CastleField();
 const S = CONFIG.modes.siege;
@@ -106,10 +128,15 @@ class Engenho {
   }
 }
 
-/** Uma partida inteira. */
-function partida() {
+/**
+ * Uma partida inteira.
+ *
+ * Os dois eixos vêm por PARÂMETRO, e não das constantes do topo, porque a
+ * `--tabela` precisa variar os dois na mesma corrida.
+ */
+function partida(defensores, nivel) {
   const cerco = new Siege(terreno);
-  cerco.start(defensores);
+  cerco.start(defensores, nivel);
 
   /* Os defensores ficam no adarve, sobre o portão. A posição importa só para
      o xamã e a catapulta decidirem visada; para o tiro, não. */
@@ -262,13 +289,43 @@ function maisPertoDoPortao(cerco) {
 
 /* ------------------------------------------------------------------ saída -- */
 
+/** Uma corrida: `rodadas` partidas com a mesma guarnição e o mesmo nível. */
+function corrida(defensores, nivel) {
+  const res = [];
+  for (let i = 0; i < rodadas; i++) res.push(partida(defensores, nivel));
+  return res;
+}
+
+/* ------------------------------------------------------- a tabela dos níveis --
+   Três níveis × quatro tamanhos de guarnição, de uma vez. Responde às duas
+   perguntas que os níveis criam e que uma corrida sozinha não responde: se o
+   difícil está na faixa pedida, e se cada nível se comporta IGUAL em salas de
+   tamanhos diferentes — que é o que "proporcional ao número de jogadores"
+   quer dizer, e o que a escala por defensor existe para garantir. */
+if (tabela) {
+  console.log(
+    `cerco — os três níveis, ${taxaTiro} tiro/s, ${(pAcerto * 100).toFixed(0)} % de acerto, ` +
+      `${rodadas} partidas por casa\n`,
+  );
+  console.log("nível     N=1     N=2     N=3     N=4");
+  for (const nome of ["easy", "normal", "hard"]) {
+    const linha = [1, 2, 3, 4].map((n) => {
+      const res = corrida(n, nome);
+      const v = (res.filter((r) => r.venceu).length / res.length) * 100;
+      return `${v.toFixed(0).padStart(3)}%`.padEnd(7);
+    });
+    console.log(`${nome.padEnd(9)} ${linha.join(" ")}`);
+  }
+  process.exit(0);
+}
+
 console.log(
-  `cerco — ${defensores} defensor(es), ${taxaTiro} tiro/s, ${(pAcerto * 100).toFixed(0)} % de acerto, ` +
+  `cerco — ${defensores} defensor(es), nível ${nivel}, ${taxaTiro} tiro/s, ` +
+    `${(pAcerto * 100).toFixed(0)} % de acerto, ` +
     `${rodadas} partidas${semTrabuco ? ", SEM TRABUCO" : ""}${semReparo ? ", SEM REPARO" : ""}`,
 );
 
-const res = [];
-for (let i = 0; i < rodadas; i++) res.push(partida());
+const res = corrida(defensores, nivel);
 
 const vitorias = res.filter((r) => r.venceu);
 const derrotas = res.filter((r) => !r.venceu);

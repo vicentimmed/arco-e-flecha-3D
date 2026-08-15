@@ -72,7 +72,7 @@ import { ElkWolfPack } from "./elkWolves.js";
 import { BirdFlock } from "./birdSim.js";
 import { ZombieNight } from "./zombieSim.js";
 import { MeteorRain, meteorDifficultyOf } from "./meteorSim.js";
-import { Siege } from "./siegeSim.js";
+import { Siege, siegeDifficultyOf } from "./siegeSim.js";
 import { BatSwarm } from "./batSim.js";
 import { TargetSeries } from "./targetSeries.js";
 import {
@@ -1713,13 +1713,15 @@ export class Room {
        * aquela medição descrevia, porém, não era o modo — era a CURVA, que
        * havia sido calibrada contra a sala de três que esta linha criava. Com
        * `gapBase` reancorada no defensor sozinho e a pressão passando a escalar
-       * com quem está no muro (ver `playerGapExp`), o solitário mede 75 % e os
+       * com quem está no muro (ver `playerGapExp`), o solitário mede ~82 % e os
        * bots deixam de ser a calibragem para voltar a ser o que a tecla B é em
        * todo outro modo: uma escolha de quem joga.
        *
        * Quem quiser a guarnição de antes aperta B duas vezes — e recebe
        * praticamente a partida de antes, porque é em N = 3 que a curva nova e a
-       * velha se encontram (97 % contra os 100 % de então). */
+       * velha se encontram (97 % contra os 100 % de então). E quem quiser o
+       * aperto de volta agora tem onde pedir: o difícil (ver `difficulties`)
+       * mede 25 % sozinho. */
       for (const p of this.players.values()) p.zDownUntil = 0;
       this.repairing.clear();
       for (const t of this.trebuchets) {
@@ -4738,6 +4740,18 @@ export class Room {
            a chuva da horda 1. Trocar de nível no meio de uma horda dimensionada
            pelo nível anterior não daria nenhum dos dois modos. */
         this.requestMode(player, "meteorRain");
+        break;
+      }
+
+      case C2S.SIEGE_DIFFICULTY: {
+        /* Grava PRIMEIRO, entra depois — a mesma ordem (e a mesma armadilha) do
+           `METEOR_DIFFICULTY`: `requestMode` termina em `setMode`, que chama
+           `siege.start()`, e é o `start` que lê o nível para dimensionar o
+           portão e o passo da coluna de abertura. Invertida, a ordem daria o
+           primeiro cerco no nível anterior. */
+        this.siege.dificuldade = siegeDifficultyOf(msg.level);
+        this.log(`cerco: ${this.siege.dificuldade}`);
+        this.requestMode(player, "siege");
         break;
       }
 

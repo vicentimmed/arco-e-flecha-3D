@@ -1621,10 +1621,17 @@ export const CONFIG = {
        * Com os bots deixando de ser obrigatórios (ver `Room.setMode`), a tabela
        * passa a ser lida como sempre esteve escrita, e por isso teve de virar de
        * verdade a curva de um. O fator saiu do banco: 2,15 põe o defensor
-       * solitário na faixa de 75 a 80 % de vitórias (alvo: 75 %; corridas de
-       * 100 e de 120 partidas), com 0 % das derrotas antes do minuto 6 e a
-       * mediana delas no 9,7 — a partida inteira acontece, e o que decide é o
-       * clímax.
+       * solitário em ~82 % de vitórias (alvo: 75 %, teto de 90 %), com 0 % das
+       * derrotas antes do minuto 6 e a mediana delas no 9,5 — a partida inteira
+       * acontece, e o que decide é o clímax.
+       *
+       * OS 82 % SÃO A MÉDIA DE 980 PARTIDAS, e o número de uma corrida só não
+       * serve: corridas de 100 a 300 partidas devolveram de 75 % a 88 % para
+       * ESTA MESMA configuração. A dispersão é maior que a de uma binomial
+       * porque o acaso do cerco é correlacionado dentro da partida — o sorteio
+       * de espécies e a fase da maré valem para os dez minutos inteiros, não
+       * para cada chegada em separado. Quem for reajustar isto: 100 partidas
+       * distinguem 25 % de 80 %, e não distinguem 75 % de 85 %.
        *
        * A FORMA NÃO MUDOU, e isso importa mais que o fator: é a forma que os
        * lotes anteriores mediram, e multiplicar em bloco preserva todas aquelas
@@ -1667,6 +1674,72 @@ export const CONFIG = {
        * exato em que a segunda pessoa entra na sala. Entre 1 e 1,15 a série
        * sobe limpa; passando de 1,15 ela deixa de subir. */
       playerGapExp: 1.05,
+
+      /* ------------------------------------------------------ dificuldade --
+         Fácil, normal e difícil — e `normal` É O CERCO DE SEMPRE, com os dois
+         multiplicadores em 1,00. Mesma regra da chuva de meteoros: ligar este
+         bloco não muda uma vírgula do que o banco de provas já mediu.
+
+         MULTIPLICADORES, e não três cópias das tabelas. Cópias envelhecem em
+         separado, e além disso escondem a única coisa que o leitor precisa ver
+         aqui: quanto cada nível se afasta do centro.
+
+         Eles MULTIPLICAM a escala por defensor, não a substituem (ver
+         `Siege.escalaDoRitmo`), e é isso que faz os três níveis serem
+         proporcionais ao número de jogadores sem nenhuma tabela a mais: o
+         difícil de quatro pessoas é quatro vezes o difícil de uma.
+
+         --------------------------------------------------- por que DOIS botões
+
+         `gap` é o pedido — o intervalo entre duas chegadas ao portão, que é a
+         pressão do modo inteiro. Se fosse o único, porém, os três níveis seriam
+         INVISÍVEIS: a curva é tão sensível que 13 % de aperto leva a vitória de
+         75 % para 25 %, e 13 % é coisa que ninguém enxerga na rampa. Ninguém
+         conta os segundos entre dois soldados saindo do bosque.
+
+         `gate` é o mostrador do nível. A madeira cedendo mais cedo se vê, se
+         ouve e muda o que a pessoa faz com o tempo dela — é a diferença entre
+         "está mais difícil" e "não sei por que perdi". Ele também é o que
+         mantém o difícil difícil na sala cheia: `gap` divide a pressão entre os
+         defensores, mas a vida do portão é uma só, e é ela que impede quatro
+         arqueiros de transformarem qualquer nível em passeio.
+
+         O QUE NÃO ENTRA, e é a decisão que dá coerência ao conjunto: a
+         composição da horda, os escalões, a velocidade de quem sobe a rampa e o
+         dano de cada espécie. Um soldado é um soldado nos três níveis, e as
+         duas flechas que ele custa são as mesmas — a leitura que se aprende no
+         fácil vale inteira no difícil. Muda o volume e a margem; não muda o que
+         se está olhando.
+
+         ------------------------------------------------ o `exp` só do difícil
+
+         `exp` sobrescreve o `playerGapExp` — a INCLINAÇÃO da curva por
+         defensor —, e só o difícil declara o seu. Não é assimetria gratuita: é
+         a única forma de o difícil continuar difícil numa sala cheia.
+
+         O motivo está medido. A capacidade de uma guarnição não cresce como o
+         número de arqueiros, cresce mais rápido: o trabuco acha aglomerados
+         muito melhores numa rampa cheia (21 % da vazão sozinho, 40 % com
+         quatro) e o preço da manivela é o mesmo para três ou para seis. Na
+         inclinação normal, o difícil de quatro defensores media 100 % de
+         vitórias — ou seja, o nível existia só para quem jogava sozinho.
+
+         Em 1,15 cada arqueiro a mais traz mais cerco do que traz flecha, e é
+         essa a promessa do nível: chamar gente ajuda, mas não resolve.
+
+         --------------------------------------------------------- MEDIDO
+
+         `scripts/bench-cerco.js --tabela`, arqueiro de 0,5 tiro/s e 78 % de
+         acerto. A tabela completa está em `docs/plano-cerco.md` §4.1, com o que
+         cada coluna vale — o banco não mede as três iguais, e a de dois
+         defensores é a que ele mede pior. */
+      difficulties: {
+        easy: { gap: 1.08, gate: 1.15 },
+        normal: { gap: 1.0, gate: 1.0 },
+        hard: { gap: 0.9, gate: 0.65, exp: 1.15 },
+      },
+      /** O nível de sala nova, e o que a porta do lobby entrega. */
+      defaultDifficulty: "normal",
 
       /* -------------------------------------------------------- a abertura --
          A COLUNA DO PRIMEIRO MINUTO. Ver `Siege.enfileirarAbertura`.

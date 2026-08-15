@@ -268,9 +268,29 @@ export class Besieger {
 
 /* --------------------------------------------------------------------- cerco */
 
+/**
+ * O nome de um nível de dificuldade, peneirado.
+ *
+ * Mesmo contrato do `meteorDifficultyOf`, e pelo mesmo motivo: todo caminho que
+ * chega aqui vem da REDE (`C2S.SIEGE_DIFFICULTY`), e um cerco dimensionado por
+ * um campo que o cliente escolheu seria a sala inteira refém de quem digitou
+ * qualquer coisa no console. O que não estiver na tabela vira o padrão, calado.
+ *
+ * @param {unknown} nivel
+ * @returns {"easy"|"normal"|"hard"}
+ */
+export function siegeDifficultyOf(nivel) {
+  const S = CONFIG.modes.siege;
+  return typeof nivel === "string" && S.difficulties[nivel] ? nivel : S.defaultDifficulty;
+}
+
 export class Siege {
   constructor(terrain) {
     this.terrain = terrain;
+    /* FORA do `start`, e é de propósito: a dificuldade é uma escolha da SALA e
+       sobrevive ao fim da partida. Recomeçar o cerco com Enter não devolve
+       ninguém ao normal — quem pediu o difícil pediu o difícil. */
+    this.dificuldade = CONFIG.modes.siege.defaultDifficulty;
     this.ativo = false;
     this.over = false;
     this.venceu = false;
@@ -317,14 +337,27 @@ export class Siege {
     for (const b of this.lista) b.terrain = terrain;
   }
 
-  start(nPlayers = 1) {
+  /**
+   * @param {number} [nPlayers]
+   * @param {string} [dificuldade] o nível pedido. Omitido, o que já valia
+   *   continua valendo — recomeçar o cerco não é trocar de nível.
+   */
+  start(nPlayers = 1, dificuldade = undefined) {
     const S = CONFIG.modes.siege;
+    /* ANTES de tudo: `perfil` decide a vida do portão e o passo da coluna de
+       abertura, e as duas coisas são escritas logo abaixo. */
+    if (dificuldade !== undefined) this.dificuldade = siegeDifficultyOf(dificuldade);
     this.ativo = true;
     this.over = false;
     this.venceu = false;
     this.lista = [];
-    this.gateHp = S.gateHealth;
-    this.gateMax = S.gateHealth;
+    /* O PORTÃO É O SEGUNDO MOSTRADOR do nível, e ele existe porque o primeiro
+       não se vê. Apertar a chegada em 13 % — que é o que separa o difícil do
+       normal — é invisível na rampa: ninguém conta segundos entre dois soldados
+       saindo do bosque. A madeira cedendo mais cedo, essa se vê, se ouve e
+       muda o que a pessoa faz com o tempo dela. */
+    this.gateHp = S.gateHealth * this.perfil.gate;
+    this.gateMax = this.gateHp;
     this.gateAlive = true;
     this.t = 0;
     this.espera = S.startDelay;
@@ -437,7 +470,33 @@ export class Siege {
     const i = Math.floor(m);
     const f = m - i;
     const base = tab[i] + (tab[Math.min(i + 1, tab.length - 1)] - tab[i]) * f;
-    return base * this.tide(fase) * this.escalaDeDefensores();
+    return base * this.tide(fase) * this.escalaDoRitmo();
+  }
+
+  /**
+   * Os multiplicadores do nível em curso. Ver `difficulties` no config.
+   */
+  get perfil() {
+    const S = CONFIG.modes.siege;
+    return S.difficulties[this.dificuldade] ?? S.difficulties[S.defaultDifficulty];
+  }
+
+  /**
+   * O intervalo entre chegadas, inteiro: guarnição VEZES nível.
+   *
+   * As duas coisas se MULTIPLICAM, e é isso que faz o pedido "os níveis devem
+   * ser proporcionais ao número de jogadores" ser verdade sem nenhuma tabela a
+   * mais. O nível escolhe o quanto o cerco pesa por defensor; a guarnição diz
+   * quantos defensores existem. O difícil de quatro pessoas é quatro vezes o
+   * difícil de uma, e não um difícil diferente.
+   *
+   * Se o nível SUBSTITUÍSSE a escala em vez de multiplicá-la, cada um dos três
+   * precisaria da sua própria lei de N — três curvas para manter afinadas em vez
+   * de uma, que é exatamente o erro que a tabela de `difficulties` evita ao ser
+   * multiplicador em vez de cópia.
+   */
+  escalaDoRitmo() {
+    return this.escalaDeDefensores() * this.perfil.gap;
   }
 
   /**
@@ -465,7 +524,11 @@ export class Siege {
    */
   escalaDeDefensores(n = this.players) {
     const S = CONFIG.modes.siege;
-    return Math.pow(Math.max(1, n), -S.playerGapExp);
+    /* O EXPOENTE É DO NÍVEL, e o do config é a âncora de quem não declara o
+       seu. É aqui que o fácil e o difícil deixam de ser o mesmo cerco com o
+       volume mudado: no difícil cada arqueiro a mais traz mais cerco do que traz
+       flecha, e no fácil o contrário. Ver `difficulties` no config. */
+    return Math.pow(Math.max(1, n), -(this.perfil.exp ?? S.playerGapExp));
   }
 
   /**
@@ -746,7 +809,7 @@ export class Siege {
        dezoito continuam saindo do bosque, e é a contagem que faz a coluna ser
        uma coluna. O que muda é o passo dela, exatamente como no resto da curva:
        sozinho, a mesma coluna leva o dobro do tempo para desfilar. */
-    const passo = A.gap * this.escalaDeDefensores();
+    const passo = A.gap * this.escalaDoRitmo();
     for (let i = 0; i < A.count; i++) {
       const chegada = this.abertura + i * passo;
       this.pendentes.push({ kind: A.kind, chegada, nascimento: chegada - viagem });
@@ -1818,6 +1881,11 @@ export class Siege {
       over: this.over,
       venceu: this.venceu,
       critical: Math.round(this.criticalTime),
+      /* O NÍVEL VIAJA COM O ESTADO, e não numa mensagem própria — mesma decisão
+         do `METEOR_STATUS`, pelas mesmas duas razões: ele muda uma vez por
+         partida, junto com o começo do cerco (que é quando este pacote já sai),
+         e assim quem chega no meio o recebe de graça pelo `snapshot`. */
+      difficulty: this.dificuldade,
     };
   }
 

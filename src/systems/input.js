@@ -108,6 +108,10 @@ export class Input {
          `setMode: "meteorRain"` do Shift+9 entra no nível que a sala já tem.
          Só o menu escreve neste campo: não há tecla, e é o pedido. */
       setMeteorRain: null,
+      /* O cerco COM NÍVEL: "easy" | "normal" | "hard". Separado do `setMode`
+         pelo mesmo motivo do `setMeteorRain`, e só o menu escreve nele — a
+         tecla 8 continua entrando no cerco no nível que a sala já tem. */
+      setSiege: null,
       setLevel: null, // "valley" | "moon" — a FASE, não o modo
       toggleBot: null, // "add" | "remove" — adversário de CPU
       cycleBotDifficulty: 0, // N: +1 avança, Shift+N volta, 0 = nada
@@ -623,6 +627,7 @@ export class Input {
     a.jumpReleased = false;
     a.setMode = null;
     a.setMeteorRain = null;
+    a.setSiege = null;
     return snapshot;
   }
 }

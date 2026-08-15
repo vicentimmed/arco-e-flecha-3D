@@ -21,6 +21,17 @@ import { radToDeg } from "../utils/math.js";
  */
 const NIVEIS_DA_CHUVA = { easy: "FÁCIL", normal: "NORMAL", hard: "DIFÍCIL" };
 
+/**
+ * Os do cerco. Tabela à parte da chuva, e não uma constante compartilhada, pelo
+ * mesmo motivo que a de cima é do HUD: são PALAVRAS, e duas telas que hoje
+ * dizem o mesmo podem passar a dizer coisas diferentes sem que uma deva
+ * arrastar a outra. Fundi-las custaria uma linha e cobraria essa liberdade.
+ *
+ * Estas vão para o rótulo do PORTÃO, e não para uma faixa: o cerco não tem
+ * faixa de modo (ver `setMode`).
+ */
+const NIVEIS_DO_CERCO = { easy: "FÁCIL", normal: "NORMAL", hard: "DIFÍCIL" };
+
 /** Um trecho de texto puro. Nunca `innerHTML`: nomes vêm da rede. */
 function texto(conteudo, classe = "") {
   const span = document.createElement("span");
@@ -104,8 +115,16 @@ const ATALHOS = [
          também. Até aqui a única porta de entrada dele era a tela inicial, e
          quem trocasse de modo por engano no meio de uma partida não tinha como
          voltar sem recarregar a página. O menu resolve isso sem gastar tecla:
-         `kbd: false` desenha a linha só com o botão. */
-      [[], "cerco ao castelo", ["setMode", "siege"]],
+         `kbd: false` desenha a linha só com o botão.
+
+         TRÊS LINHAS, pelo mesmo raciocínio da chuva logo abaixo: escolher o
+         nível é a mesma decisão que entrar no modo, e duas decisões que se
+         tomam juntas devem caber num gesto. A linha sem nível saiu — ela
+         entraria no que a sala já tem, que é justamente a ambiguidade que estas
+         três resolvem. */
+      [[], "cerco ao castelo: fácil", ["setSiege", "easy"]],
+      [[], "cerco ao castelo: normal", ["setSiege", "normal"]],
+      [[], "cerco ao castelo: difícil", ["setSiege", "hard"]],
       /* A CHUVA APARECE COMO TRÊS LINHAS, e não como uma linha mais um ajuste
          em outro canto.
        *
@@ -650,7 +669,7 @@ export class HUD {
      * arena nova — e deixar o menu por cima disso o obrigaria a fechá-lo às
      * cegas. Todo o resto (bot, porco, música, traçado) é justamente o que se
      * quer encadear sem fechar nada. */
-    this.comandosQueFecham = new Set(["setMode", "setLevel", "setMeteorRain"]);
+    this.comandosQueFecham = new Set(["setMode", "setLevel", "setMeteorRain", "setSiege"]);
     /** Chamado ao abrir e ao fechar, para o input soltar/retomar o ponteiro. */
     this.onCommandMenuToggle = null;
     this.el.cmdCorpo.appendChild(
@@ -910,6 +929,11 @@ export class HUD {
        modo: "LUA · CHUVA DE METEOROS · DIFÍCIL". Não é adorno — numa sala, quem
        não clicou no botão precisa saber em que nível o outro acabou de pôr
        todo mundo, e a faixa é a única coisa que ele lê ao entrar. */
+    /* SÓ A CHUVA, e não o cerco: o cerco não tem faixa. Ele sai lá em cima por
+       `banner.hidden = true` — o painel do portão é o cabeçalho dele —, então
+       uma linha aqui para `siege` seria código morto. O nível do cerco mora no
+       rótulo do portão (ver `setSiege`), que é melhor do que a faixa para
+       o que ele precisa: fica a partida inteira em vez de sumir em segundos. */
     if (mode === "meteorRain" && NIVEIS_DA_CHUVA[difficulty]) {
       banner.append(texto("   ·   "), texto(NIVEIS_DA_CHUVA[difficulty], "forte"));
     }
@@ -1284,9 +1308,19 @@ export class HUD {
     const critico = f < 0.3;
     p.classList.toggle("critico", critico);
     p.classList.toggle("ferido", !critico && f < 0.62);
+    /* O NÍVEL VIVE NO RÓTULO DO PORTÃO, e não num canto novo — mesma escolha do
+       chip da chuva. A faixa que o anuncia ao entrar some em segundos; o que
+       sobra pelo resto da partida é isto, e "PORTÃO 40 %" sozinho não responde
+       a pergunta que aparece no minuto 8: se a madeira está cedendo porque o
+       nível é o difícil ou porque a pessoa está jogando mal o normal.
+
+       O NORMAL NÃO ESCREVE NADA. Ele é o cerco de sempre, e um rótulo em toda
+       partida gastaria a atenção que os outros dois precisam ter. */
+    const nivel = NIVEIS_DO_CERCO[estado.difficulty];
+    const sufixo = nivel && estado.difficulty !== "normal" ? ` · ${nivel}` : "";
     this.el.siegeGateLabel.textContent = estado.gateAlive
-      ? `PORTÃO ${Math.round(f * 100)}%`
-      : "PORTÃO CAÍDO";
+      ? `PORTÃO ${Math.round(f * 100)}%${sufixo}`
+      : `PORTÃO CAÍDO${sufixo}`;
 
     const fila = estado.fila ?? 0;
     this.el.siegeQueue.textContent = String(fila);

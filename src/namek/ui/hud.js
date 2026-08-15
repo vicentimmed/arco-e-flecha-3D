@@ -74,7 +74,7 @@ const CONTROLES = [
       [["C"], "segure: carregar ki"],
       [["1", "2", "3", "4"], "armar o especial"],
       [["Q"], "onda de choque"],
-      [["Tab"], "travar o alvo"],
+      [["E"], "travar o alvo"],
     ],
   },
   {

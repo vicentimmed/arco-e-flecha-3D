@@ -144,7 +144,7 @@ export class NamekInput {
       flyPressed: false,
       /** `Q`. */
       burstPressed: false,
-      /** `Tab`. */
+      /** `E`. */
       lockPressed: false,
       /** `Esc` — o único atalho do jogo antigo que sobrevive aqui. */
       menuPressed: false,
@@ -413,14 +413,7 @@ export class NamekInput {
       case "KeyQ":
         this._pOnda = true;
         break;
-      case "Tab":
-        /* O Tab é a tecla de NAVEGAÇÃO da página, e o arqueiro desistiu dela
-           por isso (ver `Input.scoreboard`). Aqui ela é o pedido explícito do
-           mapa de teclas, então fica — com `preventDefault`, que segura o foco
-           enquanto a janela é do jogo. Com o ponteiro travado ela é nossa sem
-           discussão; no modo livre, um navegador teimoso ainda pode levar o
-           foco embora, e nesse caso o próximo clique no canvas o traz de volta. */
-        e.preventDefault();
+      case "KeyE":
         this._pTravar = true;
         break;
       case "Escape":

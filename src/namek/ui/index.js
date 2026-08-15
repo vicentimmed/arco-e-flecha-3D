@@ -18,7 +18,11 @@
    HUD já os carrega dentro de si.
    --------------------------------------------------------------------------- */
 
-export { NamekHud } from "./hud.js";
+export { NamekHud, CONTROLES } from "./hud.js";
 export { NamekScoreboard, NamekKillFeed, nomeDoGolpe, corHex } from "./scoreboard.js";
 export { aplicarEstiloNamek } from "./style.js";
-export { NamekMenu } from "./menu.js";
+export { NamekMenu, EVENTO_MENU } from "./menu.js";
+/* A porta de entrada sai por aqui pela mesma razão do placar e do feed — para a
+   bancada poder montá-la sozinha. O JOGO não a constrói: quem a monta é
+   `input.js`, que é quem sabe se o ponteiro está travado. Ver `./porta.js`. */
+export { NamekPorta } from "./porta.js";

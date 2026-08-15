@@ -77,15 +77,32 @@ const entre = (a, b) => a + Math.random() * (b - a);
  * @param {number} fator    multiplicador de contagem do LOD (0..1)
  * @param {number} tamFator multiplicador de tamanho do LOD
  * @param {number} forca    1 = golpe de energia · <1 = queda, prop quebrado
+ * @param {number} encosta  0 = chão plano · 1 = parede. Ver a AVALANCHE abaixo.
+ * @param {number} dx,dz    versor horizontal morro abaixo
  */
-export function poeiraDeImpacto(pool, x, y, z, raio, field, fator, tamFator, forca = 1) {
+export function poeiraDeImpacto(
+  pool, x, y, z, raio, field, fator, tamFator, forca = 1, encosta = 0, dx = 0, dz = 0,
+) {
   /* AS CONTAGENS SAEM DO RAIO DA CRATERA, e não da potência crua. O raio já
      passou pela raiz quadrada e pelo teto de `craterFor`, então a bola de ki
      (4 m) e a Genki Dama (21 m) ficam a uma distância visual honesta uma da
      outra: cinco vezes mais partículas, cinco vezes maiores. Escalar na potência
      crua daria cem vezes, e a bola de ki desapareceria. */
-  const nAnel = Math.max(4, Math.round((5 + raio * 2.1) * fator));
-  const nColuna = Math.max(2, Math.round((2 + raio * 0.8) * fator));
+  /* OS TETOS — 72 e 30 — não são folga defensiva, eles são a mesma ideia do LOD
+     de `NamekFx` aplicada ao TAMANHO DO GOLPE em vez de à distância: passado
+     certo ponto, mais partículas param de acrescentar nuvem e passam a
+     acrescentar só custo.
+     Eles existem por uma medição: com o buraco de encosta 60 % maior (ver
+     `esculpirNaco`), a Genki Dama numa parede pedia 105 do anel e 40 da coluna,
+     e TRÊS delas no mesmo quadro enchiam o pool de 520 até a última vaga — ou
+     seja, o quarto impacto do quadro não levantava um floco. O teto corta a
+     contagem e deixa o tamanho crescer sozinho (`tam` é `raio × 0,3`), que é
+     exatamente a troca que `CORTE` já documenta: menos flocos, maiores, cobrindo
+     a mesma área de tela.
+     Nenhum golpe em terreno PLANO chega perto deles — a Genki Dama pede 67 e 26
+     — então nada do que existia mudou de aparência. */
+  const nAnel = Math.min(72, Math.max(4, Math.round((5 + raio * 2.1) * fator)));
+  const nColuna = Math.min(30, Math.max(2, Math.round((2 + raio * 0.8) * fator)));
 
   const tam = raio * 0.3 * tamFator;
   /* Vida entre 1,5 s e 2,5 s, crescendo com o tamanho do buraco: uma nuvem de
@@ -108,10 +125,14 @@ export function poeiraDeImpacto(pool, x, y, z, raio, field, fator, tamFator, for
     const pz = z + sa * d;
     /* A cota é medida onde a partícula NASCE, não onde o golpe bateu. Numa
        encosta, um anel de vinte metros preso à cota do centro fica com metade
-       enterrada e metade pairando a três metros do chão. Só vale o preço acima
-       de seis metros de raio: abaixo disso o relevo não muda o bastante para o
-       olho notar, e `heightAt` custa duas FBM por consulta. */
-    const chao = field && raio > 6 ? field.heightAt(px, pz) : y;
+       enterrada e metade pairando a três metros do chão.
+       O corte era só `raio > 6`, e ele deixava passar justamente o caso que o
+       usuário reclamaria: um golpe numa ladeira íngreme com raio pequeno punha a
+       nuvem inteira na cota do ponto de impacto — poeira pairando no ar de um
+       lado da encosta e enterrada do outro. Numa parede, o relevo muda metros
+       dentro do raio de qualquer buraco, e o `heightAt` (duas FBM) passa a valer
+       o preço já a partir de um metro. */
+    const chao = field && (raio > 6 || encosta > 0.08) ? field.heightAt(px, pz) : y;
 
     const v = vAbre * entre(0.7, 1.15);
     decodeCor(TONS[(Math.random() * TONS.length) | 0], _rgb);
@@ -179,6 +200,68 @@ export function poeiraDeImpacto(pool, x, y, z, raio, field, fator, tamFator, for
         0.3,
         0.55,
         y,
+      )
+    ) {
+      return;
+    }
+  }
+
+  /* ---------------------------------------------------------- a avalanche -- */
+
+  /* O QUE DESCE A ENCOSTA.
+   *
+   * Um sopro radial num terreno inclinado é geometricamente certo e visualmente
+   * errado: metade dele entra no morro. O material que uma explosão arranca de
+   * uma ladeira não fica em volta do buraco — ele DESCE, e desce por muito mais
+   * do que o raio da cratera.
+   *
+   * É essa língua de pó descendo que diz, de trezentos metros de distância, que
+   * o que acabou de acontecer foi um pedaço de montanha se soltando, e não um
+   * tiro qualquer no chão. Ela nasce ao longo dos primeiros `raio × 1,6` metros
+   * morro abaixo, cada partícula com a cota do PONTO DELA (não a do impacto),
+   * corre encosta abaixo e mal sobe: `grav` levemente positivo só para ela não
+   * grudar no chão, e arrasto baixo para ela viajar.
+   *
+   * Só existe a partir de 0,12 de inclinação — uns 7° — porque abaixo disso não
+   * há "abaixo": a língua sairia numa direção sorteada pelo ruído do relevo. */
+  if (encosta <= 0.12 || !field) return;
+  const nAval = Math.min(30, Math.max(3, Math.round((3 + raio * 0.9) * fator * encosta)));
+  const vDesce = 5 + raio * 0.9;
+  for (let i = 0; i < nAval; i++) {
+    const t = Math.random();
+    /* Espalhamento lateral proporcional a quanto ela já desceu: a língua ABRE em
+       leque, como abre qualquer coisa que escorre por uma ladeira. Um corredor
+       de largura constante lê como um jato, não como material caindo. */
+    const lat = (Math.random() * 2 - 1) * raio * (0.3 + 0.55 * t);
+    const px = x + dx * raio * 1.6 * t - dz * lat;
+    const pz = z + dz * raio * 1.6 * t + dx * lat;
+    const chao = field.heightAt(px, pz);
+    const v = vDesce * entre(0.6, 1.25);
+    decodeCor(TONS[(Math.random() * TONS.length) | 0], _rgb);
+    const brilho = entre(0.84, 1.05);
+    if (
+      !pool.spawn(
+        px,
+        chao + entre(0.2, 1.1) * tamFator,
+        pz,
+        dx * v + (Math.random() * 2 - 1) * v * 0.3,
+        entre(0.4, 1.8),
+        dz * v + (Math.random() * 2 - 1) * v * 0.3,
+        _rgb[0] * brilho,
+        _rgb[1] * brilho,
+        _rgb[2] * brilho,
+        tam * entre(0.7, 1.3),
+        entre(1.8, 2.8),
+        vida * entre(0.85, 1.2),
+        entre(0.1, 0.5),
+        /* Arrasto BAIXO — 1,5 contra os 2,3 do anel. A avalanche precisa viajar:
+           com o arrasto do anel ela pararia em três metros e viraria um segundo
+           anel deslocado, que é a pior coisa que ela poderia parecer. */
+        1.5,
+        entre(0.5, 0.7) * forca,
+        0.25,
+        0.6,
+        chao,
       )
     ) {
       return;

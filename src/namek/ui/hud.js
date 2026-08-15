@@ -3,7 +3,7 @@
 
    DOM puro, sem framework e sem dependência nova — o padrão da casa, e o mesmo
    de `src/ui/hud.js`. O que muda é o jogo por baixo: lá se mira parado e o HUD
-   informa; aqui se voa a 96 m/s no meio de uma explosão azul e o HUD tem de
+   informa; aqui se voa a 64 m/s no meio de uma explosão azul e o HUD tem de
    GRITAR. Daí o contorno preto em tudo, as barras grandes e inclinadas e o
    número da vida do tamanho que está.
 
@@ -54,8 +54,21 @@ import { NamekScoreboard, NamekKillFeed, corHex } from "./scoreboard.js";
    A onda de choque está no `Q`, e não no espaço como a tabela do §6 do plano
    sugeria: o espaço aqui é a subida, e uma tecla que sobe quando se está no
    chão e detona quando se está no ar é a fonte de erro que este HUD não teria
-   como explicar em uma linha. */
-const CONTROLES = [
+   como explicar em uma linha.
+
+   A trava de alvo está no `R` e NÃO no `Tab`: o Tab é a tecla de navegação da
+   página e levava o foco do jogo embora. Quem quiser o "por quê" inteiro
+   encontra a seção "o TAB, que saiu do mapa" no cabeçalho de `../input.js`.
+
+   E a guarda está no `E`, escrita aqui com o "segure:" na frente igual ao `C`,
+   porque o que ela tem de mais fácil de errar não é onde fica — é que ela vale
+   enquanto o dedo estiver embaixo, e não por toque.
+
+   EXPORTADA porque a porta de entrada (`ui/porta.js`) mostra o primeiro item de
+   cada grupo na tela do primeiro clique. Ela LÊ esta tabela em vez de ter uma
+   sua — e isso é o rodapé de `input.js` cobrado no primeiro lugar em que ele
+   poderia ter sido esquecido. */
+export const CONTROLES = [
   {
     titulo: "Voar",
     itens: [
@@ -72,9 +85,10 @@ const CONTROLES = [
     itens: [
       [["Botão esq."], "rajada de ki — o tiro comum"],
       [["C"], "segure: carregar ki"],
+      [["E"], "segure: defender — o dano quase todo aparado"],
       [["1", "2", "3", "4"], "armar o especial"],
       [["Q"], "onda de choque"],
-      [["E"], "travar o alvo"],
+      [["R"], "travar o alvo"],
     ],
   },
   {
@@ -94,6 +108,10 @@ const MARCA_VIDA = 1.4;
 /** Quantas marcas de dano existem. Oito porque quinze lutadores não acertam
  *  todos ao mesmo tempo, e porque o nono aviso já não é lido. */
 const MARCAS = 8;
+
+/** A lista vazia da bússola. Congelada: ninguém escreve nela, e ter uma só
+ *  evita alocar um array por quadro em que não há ninguém longe. */
+const SEM_MARCAS = Object.freeze([]);
 /** s — vida de um aviso de canto. */
 const AVISO_VIDA = 2.4;
 /** 1/s — velocidade com que o clarão vermelho apaga. */
@@ -360,6 +378,54 @@ export class NamekHud {
     }
     this._marcaProxima = 0;
 
+    /* ------------------------------------------------------------ a bússola
+     *
+     * Os PINOS que dizem onde estão os outros lutadores. É a mesma peça dos
+     * marcadores de rocha da chuva de meteoros (`Hud.setMeteorMarks`, no HUD do
+     * arqueiro), trazida para cá pelo mesmo motivo que ela existe lá: **um alvo
+     * pequeno num céu grande é invisível**, e girar a câmera à toa procurando
+     * gente não é jogar.
+     *
+     * Duas formas no mesmo nó, como lá: ANEL quando o lutador está dentro da
+     * tela (ele já está ali, o anel só o circula), SETA girada na borda quando
+     * está fora (a única maneira de apontar para o que não está no quadro).
+     *
+     * A diferença para o modo de meteoros está em duas escolhas:
+     *
+     * • **O pino some de perto.** É o pedido literal — "quando o jogador está
+     *   perto a setinha some; ela só aparece quando está longe e difícil de
+     *   enxergar". E é a decisão certa: numa briga colada, catorze pinos em
+     *   volta da mira seriam a própria briga escondida atrás da bússola. Quem
+     *   decide o limiar é quem sabe a distância — ver `NamekGame.bussola`.
+     * • **A cor é a do LUTADOR**, e não o laranja fixo da rocha. Aqui os alvos
+     *   têm identidade: o gi de cada um tem uma cor, o placar usa a mesma, e o
+     *   pino que combina com o corpo é o que deixa saber QUEM está vindo antes
+     *   de conseguir enxergar o corpo. */
+    this.bussolaEl = document.createElement("div");
+    this.bussolaEl.className = "nk-bussola";
+    /** Pool fixo, um por adversário possível. Ver o teto da sala. */
+    this._pinos = [];
+    for (let i = 0; i < NAMEK.net.maxPlayers - 1; i++) {
+      const el = document.createElement("div");
+      el.className = "nk-pino";
+      // Esqueleto FIXO, sem uma única interpolação — ver o cabeçalho.
+      el.innerHTML = `<i class="nk-pino-seta">▲</i><div class="nk-pino-anel"></div><span class="nk-pino-d"></span>`;
+      el.hidden = true;
+      this.bussolaEl.appendChild(el);
+      this._pinos.push({
+        el,
+        dEl: el.querySelector(".nk-pino-d"),
+        /* O que já está NA TELA. Escrever `textContent` e `style` a 60 Hz num
+           valor que não mudou é pedir recálculo de layout por nada, catorze
+           vezes por quadro. Ver o §custo do cabeçalho. */
+        dist: -1,
+        cor: null,
+        fora: null,
+        travado: null,
+        op: -1,
+      });
+    }
+
     this.miraEl = document.createElement("div");
     this.miraEl.className = "nk-mira";
     this.miraEl.innerHTML = `
@@ -381,6 +447,10 @@ export class NamekHud {
     this.el.append(
       this.flashEl,
       this.marcasEl,
+      /* A bússola entra ANTES da mira e das placas: ela é o fundo da leitura,
+         e um pino passando por cima do retrato do adversário travado esconderia
+         a informação mais importante da tela atrás da menos importante. */
+      this.bussolaEl,
       this.miraEl,
       this.placaEu,
       this.placaAlvo,
@@ -511,9 +581,16 @@ export class NamekHud {
 
     const rodape = document.createElement("div");
     rodape.className = "nk-ajuda-rodape";
+    /* A porcentagem sai do config e não é escrita à mão, pelo mesmo motivo do
+       limiar do especial em `setVitals`: no dia em que a guarda aparar mais (ou
+       menos), esta frase acompanha sozinha em vez de virar a única mentira do
+       painel que ensina o modo. */
+    const passa = Math.round((NAMEK.guard?.damage ?? 0.22) * 100);
     rodape.textContent =
       "Só o Esc é atalho geral — todas as outras teclas valem dentro de Namekusei. " +
-      "O especial só sai com a barra de ki cheia: segure C para carregar.";
+      "O especial só sai com a barra de ki cheia: segure C para carregar. " +
+      `Segure E para defender: passa só ${passa} % do dano, e a barra de ki ` +
+      "escoa enquanto os braços estiverem cruzados.";
 
     el.append(titulo, grades, rodape);
     return el;
@@ -781,6 +858,84 @@ export class NamekHud {
   hurtFlash(intensidade) {
     const v = clamp01(intensidade);
     if (v > this._flash) this._flash = v;
+  }
+
+  /**
+   * Os PINOS dos outros lutadores — a bússola. Ver o comentário do construtor.
+   *
+   * A lista chega ORDENADA e o pool é reaproveitado por índice, e as duas
+   * coisas juntas são o que impede o pino de piscar: se a ordem mudasse de um
+   * quadro para o outro, o mesmo nó do DOM passaria a descrever outra pessoa e
+   * a transição de opacidade recomeçaria do zero em toda troca. Quem ordena é
+   * quem monta a lista (`NamekGame.bussola`), por distância.
+   *
+   * @param {{angulo:number|null, x:number, y:number, dist:number, cor:number,
+   *          travado:boolean, forca:number}[]} lista
+   *   `angulo` não-nulo = está FORA da tela, e o valor é o rumo em radianos;
+   *   nulo = está na tela, e `x`/`y` são as coordenadas normalizadas (−1..1).
+   *   `forca` é 0..1 e é a opacidade — é ela que faz o pino nascer e morrer
+   *   desbotando em vez de aparecer de um estalo.
+   */
+  setMarcas(lista) {
+    const marcas = lista ?? SEM_MARCAS;
+    for (let i = 0; i < this._pinos.length; i++) {
+      const p = this._pinos[i];
+      const d = marcas[i];
+      if (!d) {
+        if (p.op !== 0) {
+          p.op = 0;
+          p.el.hidden = true;
+        }
+        continue;
+      }
+      if (p.op === 0) p.el.hidden = false;
+
+      const fora = d.angulo != null;
+      if (fora !== p.fora) {
+        p.fora = fora;
+        p.el.classList.toggle("fora", fora);
+      }
+      if (d.travado !== p.travado) {
+        p.travado = d.travado;
+        p.el.classList.toggle("travado", d.travado === true);
+      }
+      if (d.cor !== p.cor) {
+        p.cor = d.cor;
+        p.el.style.setProperty("--nk-pino-cor", corHex(d.cor));
+      }
+
+      if (fora) {
+        /* Elipse inscrita na tela, como no marcador de rocha: a seta encosta na
+           borda mais próxima daquele rumo em vez de andar num círculo que sobra
+           nos cantos. Os 42/38 são os mesmos de lá — a mesma tela, a mesma
+           margem para o pino não ser cortado. */
+        const x = Math.cos(d.angulo) * 42;
+        const y = -Math.sin(d.angulo) * 38;
+        p.el.style.transform = `translate(-50%, -50%) translate(${x}vw, ${y}vh)`;
+        /* A SETA gira; o resto do pino, não. Ninguém lê "180 m" de cabeça para
+           baixo — é a mesma razão pela qual a rotação mora na seta lá também. */
+        p.el.style.setProperty("--nk-pino-giro", `${90 - (d.angulo * 180) / Math.PI}deg`);
+      } else {
+        p.el.style.transform = `translate(-50%, -50%) translate(${d.x * 50}vw, ${-d.y * 50}vh)`;
+        p.el.style.setProperty("--nk-pino-giro", "0deg");
+      }
+
+      /* Opacidade em degraus de 5 %: o valor é contínuo (é uma rampa de
+         distância) e escrevê-lo cru mandaria um estilo novo ao DOM em todo
+         quadro em que o lutador se mexesse um centímetro. Vinte degraus são
+         mais do que o olho separa numa transparência. */
+      const op = Math.round(clamp01(d.forca) * 20) / 20;
+      if (op !== p.op) {
+        p.op = op;
+        p.el.style.opacity = op;
+      }
+
+      const dist = d.dist;
+      if (dist !== p.dist) {
+        p.dist = dist;
+        p.dEl.textContent = `${dist} m`;
+      }
+    }
   }
 
   /** @param {"livre"|"travado"|"carregando"} estado */

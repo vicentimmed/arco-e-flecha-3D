@@ -153,10 +153,93 @@ function soltar(pool, material, x, y, z, n, tam, vel, espalha, vida, chaoY) {
  * pedregulhos de metro e meio.
  */
 export function pedrasDeImpacto(pool, x, y, z, raio, fator, tamFator) {
-  const n = Math.max(2, Math.round((3 + raio * 1.15) * fator));
+  /* Teto de 40, pelo mesmo motivo dos tetos de `poeiraDeImpacto`: o buraco de
+     encosta é 60 % maior e a Genki Dama numa parede pedia 58 lascas de um pool
+     de 288 — três delas tomariam dois terços dele. O maior golpe em terreno
+     plano pede 37 e não encosta no teto, então nada do que já existia mudou. */
+  const n = Math.min(40, Math.max(2, Math.round((3 + raio * 1.15) * fator)));
   const tam = (0.16 + raio * 0.055) * tamFator;
   const vel = 6 + raio * 0.95;
   soltar(pool, "chao", x, y, z, n, tam, vel, raio * 0.35, 2.4 + raio * 0.04, y);
+}
+
+/**
+ * O NACO DE MONTANHA: os blocos grandes que saem de uma encosta atingida.
+ *
+ * É a metade visível do pedido *"as montanhas... devem explodir parte dela"*. A
+ * outra metade é o campo de altura, e ela já está feita (`esculpirNaco`, em
+ * `shared/namek/field.js`) — só que o buraco no terreno é uma coisa que o
+ * jogador descobre DEPOIS, quando a poeira baixa. O que ele vê ACONTECER é isto.
+ *
+ * Três coisas separam esta leva da de `pedrasDeImpacto`, e as três são a mesma
+ * decisão vista de ângulos diferentes: o que voa aqui é MATÉRIA DA MONTANHA, não
+ * cascalho levantado.
+ *
+ * • **São poucas e enormes.** Nove blocos de dois metros e meio, contra vinte e
+ *   sete pedras de trinta centímetros. Trinta pedrinhas a mais não somam escala
+ *   nenhuma — o olho não conta partícula —, mas um bloco do tamanho de um
+ *   lutador passando pela tela é uma medida que ele lê na hora.
+ * • **Elas saem MORRO ABAIXO.** O naco não sobe: ele se solta e desce. A direção
+ *   é o versor horizontal da normal do terreno, que aponta para o vale por
+ *   construção, e a elevação é baixa — entre 12° e 50°, contra os 35° a 78° de
+ *   uma explosão comum. O que se vê é material despencando pela encosta.
+ * • **Elas vivem mais.** Um bloco lançado ladeira abaixo tem uma ladeira inteira
+ *   para descer, e cortá-lo em dois segundos e meio seria apagá-lo no meio da
+ *   queda, que é a parte que interessa.
+ *
+ * A cor vem da paleta da ROCHA, e não do chão: o que a montanha mostra quando
+ * perde um pedaço é a pedra de dentro, não a grama de fora.
+ *
+ * @param {number} dx,dz versor horizontal morro abaixo
+ */
+export function nacoDeEncosta(pool, x, y, z, raio, dx, dz, fator, tamFator, chaoY) {
+  const n = Math.max(3, Math.round((3 + raio * 0.28) * fator));
+  const tam = (0.35 + raio * 0.1) * tamFator;
+  const vel = 7 + raio * 0.6;
+  const cores = PALETA.rocha;
+  const forma = FORMA.rocha;
+
+  for (let i = 0; i < n; i++) {
+    /* O leque em torno da descida: ±50°, e não os 360° de uma explosão. Um naco
+       que saísse para o lado do morro entraria na montanha no primeiro quadro. */
+    const a = Math.atan2(dz, dx) + entre(-0.88, 0.88);
+    const elev = entre(0.21, 0.88);
+    const cosE = Math.cos(elev);
+    const sinE = Math.sin(elev);
+    const v = vel * entre(0.6, 1.3);
+    /* Bloco grande e IRREGULAR no tamanho: a leva tem de ter um pedaço grande
+       demais e dois pequenos, senão os nove viram nove cópias da mesma pedra e a
+       repetição denuncia o pool. */
+    const t = tam * entre(0.45, 1.7);
+    const c = cores[(Math.random() * cores.length) | 0];
+    decodeCor(c, _rgb);
+    const brilho = entre(0.78, 1.16);
+    if (
+      !pool.spawn(
+        x + Math.cos(a) * raio * 0.3 * Math.random(),
+        y + entre(0.2, 1.1) * tam,
+        z + Math.sin(a) * raio * 0.3 * Math.random(),
+        Math.cos(a) * cosE * v,
+        sinE * v,
+        Math.sin(a) * cosE * v,
+        _rgb[0] * brilho,
+        _rgb[1] * brilho,
+        _rgb[2] * brilho,
+        t * forma[0],
+        t * forma[1],
+        t * forma[2],
+        3.2 + raio * 0.06,
+        /* Rodopio LENTO. Um bloco de dois metros girando como um seixo perde o
+           peso na hora: massa grande, inércia grande, e o olho sabe disso sem
+           precisar que ninguém lhe explique. */
+        3.4,
+        entre(0.18, 0.34),
+        chaoY,
+      )
+    ) {
+      return;
+    }
+  }
 }
 
 /**

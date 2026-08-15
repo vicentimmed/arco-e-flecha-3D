@@ -37,7 +37,7 @@
 import * as THREE from "three";
 import { clamp, smoothstep } from "../../utils/math.js";
 import { NAMEK } from "../../shared/namek/config.js";
-import { NAMEK_SOL_DIR } from "./sky.js";
+import { NAMEK_SOL_DIR, NAMEK_BRUMA_SOL, NAMEK_BRUMA_BRASA } from "./sky.js";
 
 /** m — até onde o oceano vai. Ver `NAMEK_CAMERA_FAR` em `sky.js`. */
 const RAIO_MAR = 3200;
@@ -64,7 +64,13 @@ const DIA = {
   /** Tinta do céu refletida no fresnel. Combina com o horizonte de `sky.js` —
    *  se as duas divergirem, aparece uma linha na junção do mar com o céu. */
   ceu: new THREE.Color("#d8f5c9"),
-  sol: new THREE.Color("#fff4d2"),
+  /* A tinta do SOL na água, e ela é mais quente que a do disco no céu de
+     propósito: o que se reflete numa superfície horizontal é a luz que chega
+     rasante, e rasante ela já atravessou o dobro de atmosfera. Um rastro branco
+     num mar turquesa lê como reflexo de holofote. */
+  sol: new THREE.Color("#ffdba4"),
+  /** Força da bruma acesa. Ver o trecho no fim de `MAR_FRAG`. */
+  bruma: 0.55,
   agitacao: 1,
 };
 
@@ -74,6 +80,10 @@ const TEMPESTADE = {
   crista: new THREE.Color("#ffb489"),
   ceu: new THREE.Color("#8e1c11"),
   sol: new THREE.Color("#ff7a48"),
+  /* Cai para um terço, e não a zero: na tempestade ainda há uma fonte de luz
+     atrás da fumaça, e é justamente o resto de brasa no horizonte que impede o
+     mar escuro de virar um vazio preto sem profundidade nenhuma. */
+  bruma: 0.18,
   agitacao: 3.1,
 };
 
@@ -106,6 +116,8 @@ const MAR_FRAG = /* glsl */ `
   uniform vec3 corCrista;
   uniform vec3 corCeu;
   uniform vec3 corSol;
+  uniform vec3 corBruma;
+  uniform float brumaForca;
   uniform vec3 solDir;
   uniform vec3 olho;
   uniform float tempo;
@@ -165,10 +177,19 @@ const MAR_FRAG = /* glsl */ `
     float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.6);
     vec3 col = mix(agua, corCeu, fres * 0.82);
 
-    // Brilho especular do sol — a única coisa que faz a onda "correr" no olho.
+    /* O BRILHO DO SOL, em DOIS lobos, e o segundo é o retoque.
+       O apertado (expoente 120) é a cintilação: pontos de luz correndo pela
+       crista, e é ele que faz a onda "correr" no olho.
+       O largo (expoente 14) é o RASTRO — a estrada de sol que vai do observador
+       até o horizonte. Ele não existia, e a falta dele era o motivo de o mar
+       ficar bonito e mudo: com o sol a 32° de altura o rastro é comprido, e um
+       oceano com sol baixo e SEM rastro é a coisa que denuncia água pintada.
+       Um lobo largo custa um pow por pixel de mar e resolve por construção —
+       ele nasce apontando para o sol porque sai do mesmo meio-vetor. */
     vec3 H = normalize(L + V);
-    float esp = pow(clamp(dot(N, H), 0.0, 1.0), 120.0);
-    col += corSol * esp * 1.9;
+    float nh = clamp(dot(N, H), 0.0, 1.0);
+    col += corSol * pow(nh, 120.0) * 1.9;
+    col += corSol * pow(nh, 14.0) * 0.30;
 
     /* ESPUMA. Só no topo da crista, e mais na tempestade: no dia calmo ela é um
        fiapo, e um mar de espuma constante lê como corredeira, não como oceano. */
@@ -183,6 +204,29 @@ const MAR_FRAG = /* glsl */ `
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
     #include <fog_fragment>
+
+    /* A BRUMA ACESA, e ela vem DEPOIS da névoa de propósito.
+     *
+     * A FogExp2 da cena é uma cor só, igual em todas as direções — é o que a
+     * perspectiva aérea tem de mais simples e é o que apagava o horizonte deste
+     * modo: com o sol a 32° de altura, a faixa de mar que fica ENTRE o
+     * observador e o sol devia estar dourada, e ela saía do mesmo turquesa
+     * enevoado do lado oposto. Uma névoa que não sabe onde o sol está é uma
+     * névoa que mata o horizonte em vez de construí-lo.
+     *
+     * O conserto é aditivo e cabe em três linhas: quanto mais longe (o próprio
+     * fogFactor, que a inclusão acima já calculou e deixou em escopo) e quanto
+     * mais a linha de visada aponta para o sol, mais luz espalhada volta ao
+     * olho. pow(_, 3.0) é o que mantém isso um FEIXE em torno do sol em vez de
+     * um verniz dourado na tela inteira.
+     *
+     * A cor é a MESMA do terreno (NAMEK_BRUMA_SOL, dona em sky.js), e tem de
+     * ser: mar e montanha se encontram numa linha, e duas brumas diferentes
+     * apareceriam exatamente ali. */
+    #ifdef USE_FOG
+      float aoSol = max(dot(normalize(vMundo - olho), normalize(solDir)), 0.0);
+      gl_FragColor.rgb += corBruma * (pow(aoSol, 3.0) * fogFactor * brumaForca);
+    #endif
   }
 `;
 
@@ -214,6 +258,8 @@ export class NamekWater {
           corCrista: { value: DIA.crista.clone() },
           corCeu: { value: DIA.ceu.clone() },
           corSol: { value: DIA.sol.clone() },
+          corBruma: { value: NAMEK_BRUMA_SOL.clone() },
+          brumaForca: { value: DIA.bruma },
           // O sol principal vem de `sky.js`, que é quem o possui.
           solDir: { value: NAMEK_SOL_DIR.clone() },
           olho: { value: new THREE.Vector3() },
@@ -320,6 +366,11 @@ export class NamekWater {
     u.corCrista.value.lerpColors(DIA.crista, TEMPESTADE.crista, s);
     u.corCeu.value.lerpColors(DIA.ceu, TEMPESTADE.ceu, s);
     u.corSol.value.lerpColors(DIA.sol, TEMPESTADE.sol, s);
+    /* A bruma acompanha o mesmo dial de todo o resto — é isso que garante que o
+       horizonte dourado vire horizonte de brasa no MESMO instante em que o céu
+       vira, e não meio segundo depois. Ver o cabeçalho de `world/index.js`. */
+    u.corBruma.value.lerpColors(NAMEK_BRUMA_SOL, NAMEK_BRUMA_BRASA, s);
+    u.brumaForca.value = DIA.bruma + (TEMPESTADE.bruma - DIA.bruma) * s;
     u.agitacao.value = DIA.agitacao + (TEMPESTADE.agitacao - DIA.agitacao) * s;
   }
 

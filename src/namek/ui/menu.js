@@ -29,6 +29,42 @@
 
 import { NAMEK } from "../../shared/namek/config.js";
 
+/**
+ * O aviso de "o menu abriu / o menu fechou", disparado em `document`.
+ *
+ * BUG PAGO, e caro: o menu tinha DOIS jeitos de fechar e só um deles avisava o
+ * input. O laço (`game.js`) faz `input.setMenuOpen(menu.toggle())` quando o Esc
+ * chega — esse caminho é honesto. Mas o clique no FUNDO fechava o menu por
+ * dentro, chamando `toggle(false)` direto daqui, e ninguém avisava ninguém: a
+ * tela sumia e o `NamekInput._menuAberto` ficava ligado para sempre. Com ele
+ * ligado, `_segura()` mente para todas as teclas, `_mouse()` ignora a mira e
+ * `engage()` se recusa a repedir o ponteiro — o jogo vira uma foto. Era o
+ * "às vezes o menu sai e eu não consigo mais controlar o player" do relato: o
+ * "às vezes" era "quando você fecha com o mouse em vez do Esc".
+ *
+ * A defesa não é lembrar de avisar em cada caminho novo — é não ter caminho que
+ * não avise. Toda mudança de estado passa por `toggle()`, e `toggle()` grita.
+ * Quem quiser fechar o menu por um botão novo amanhã ganha o aviso de graça.
+ */
+export const EVENTO_MENU = "namek:menu";
+
+/* Uma linha por nível, dizendo o que ele MUDA — e não o quanto ele é difícil.
+ *
+ * "Fácil / Médio / Difícil" não informa nada a quem nunca jogou: a pessoa
+ * escolhe pelo nome e descobre a diferença apanhando. Dizendo o que muda
+ * ("voam devagar, quase não soltam especial"), a escolha passa a ser sobre o
+ * jogo que ela quer ter, que é a decisão que ela está de fato tomando.
+ *
+ * `parado` ganha a frase mais explícita das quatro porque ele não é um nível de
+ * dificuldade — é um alvo de treino, e alguém que o ligue esperando "muito
+ * fácil" precisa entender em uma linha por que ninguém está revidando. */
+const NOTA_DIF = {
+  parado: "alvo de treino: paira, não ataca, e volta a subir depois de cair",
+  facil: "voam devagar, erram muito e quase não soltam especial",
+  medio: "reagem, desviam e soltam especial de vez em quando",
+  dificil: "perícia cheia — desviam, guardam a barra e não perdoam",
+};
+
 const CSS = `
 .nk-menu {
   position: absolute; inset: 0; z-index: 40;
@@ -66,6 +102,12 @@ const CSS = `
   color: rgba(231, 243, 236, 0.45);
 }
 .nk-menu-linha { display: flex; gap: 8px; }
+/* Quatro botões numa linha só: eles são curtos e a comparação entre os níveis
+   é a informação — em duas linhas, o "Parado" e o "Difícil" deixam de ser lidos
+   como pontas da mesma régua. O 'gap' menor e o texto menor compensam a
+   largura, e o 'flex: 1' que todo botão do menu já tem os deixa iguais. */
+.nk-menu-linha--4 { gap: 6px; }
+.nk-menu-linha--4 button { padding: 9px 4px; font-size: 12px; }
 .nk-menu button {
   flex: 1; padding: 9px 10px;
   border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14);
@@ -138,6 +180,12 @@ export class NamekMenu {
         </div>
 
         <div class="nk-menu-grupo">
+          <span class="nk-menu-rot">Dificuldade dos bots</span>
+          <div class="nk-menu-linha nk-menu-linha--4" data-nk="dificuldades"></div>
+          <div class="nk-menu-conta" data-nk="dif-nota"></div>
+        </div>
+
+        <div class="nk-menu-grupo">
           <span class="nk-menu-rot">Clima do planeta</span>
           <div class="nk-menu-linha">
             <button type="button" data-nk="clima-dia">Dia</button>
@@ -147,12 +195,32 @@ export class NamekMenu {
 
         <button type="button" class="nk-menu-sair" data-nk="sair">sair da arena</button>
 
-        <div class="nk-menu-rodape">Esc fecha · o clima vale para a sala inteira</div>
+        <div class="nk-menu-rodape">Esc fecha · clima e dificuldade valem para a sala inteira</div>
       </div>
     `;
     root.appendChild(this.el);
 
     this.conta = this.el.querySelector('[data-nk="conta"]');
+
+    /* OS BOTÕES DE DIFICULDADE SÃO GERADOS, e não escritos no esqueleto acima.
+     *
+     * É a única exceção à regra de "marcação fixa à mão" deste arquivo, e ela é
+     * a favor da regra e não contra: a lista de níveis mora em
+     * `NAMEK.bot.dificuldadeOrdem`, que o servidor também lê, e escrevê-la aqui
+     * à mão criaria uma segunda lista que envelheceria separada — um nível novo
+     * no config apareceria no jogo e não no menu. O texto vem de `nome`, que é
+     * constante do próprio config; nada aqui vem da rede. */
+    this.botoesDif = {};
+    const linhaDif = this.el.querySelector('[data-nk="dificuldades"]');
+    for (const id of NAMEK.bot.dificuldadeOrdem) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = NAMEK.bot.dificuldades[id].nome;
+      b.addEventListener("click", () => this.acoes.setDificuldade?.(id));
+      linhaDif.appendChild(b);
+      this.botoesDif[id] = b;
+    }
+    this.difNota = this.el.querySelector('[data-nk="dif-nota"]');
     this.botoesClima = {
       dia: this.el.querySelector('[data-nk="clima-dia"]'),
       tempestade: this.el.querySelector('[data-nk="clima-tempestade"]'),
@@ -178,25 +246,32 @@ export class NamekMenu {
     this.el.addEventListener("click", this._fundo);
   }
 
-  /**
-   * @param {boolean} [forcar] omitido alterna
-   *
-   * TODO SEGUINTE PASSA POR AQUI, e é por isso que `acoes.aoAlternar` é
-   * chamado aqui dentro e não em quem chama `toggle`. Havia um bug em que o
-   * Esc (via `NamekGame.step`) destravava o teclado e fechava a ficha de
-   * controles, mas o clique no FUNDO (`_fundo`, abaixo) chamava `toggle`
-   * direto — fechava só o cartão do menu, e a ficha de controles e o teclado
-   * travado ficavam presos porque ninguém mais avisava `hud.showHelp` e
-   * `input.setMenuOpen`. Com o aviso aqui dentro, todo jeito de abrir ou
-   * fechar o menu — Esc, fundo, ou o que vier depois — passa pelo mesmo cano.
-   */
+  /** @param {boolean} [forcar] omitido alterna */
   toggle(forcar) {
     const novo = forcar === undefined ? !this.aberto : forcar;
     if (novo === this.aberto) return this.aberto;
     this.aberto = novo;
     this.el.hidden = !novo;
-    this.acoes.aoAlternar?.(novo);
+    this._anunciar();
     return this.aberto;
+  }
+
+  /* O grito. Ver `EVENTO_MENU` no cabeçalho para o porquê.
+
+     É um evento de `document` e não um callback no construtor de propósito: o
+     laço já constrói o menu passando só `acoes`, e um parâmetro novo ali seria
+     uma linha em `game.js` — que é justamente o arquivo que não se toca. Um
+     evento não pede nada de quem constrói e ainda serve a quem chegar depois
+     (a tela de entrada, o placar) sem passar por aqui.
+
+     Quem escuta trata o aviso como IDEMPOTENTE: `setMenuOpen` sai na primeira
+     linha quando o estado já bate. Por isso o caminho do Esc, que avisa duas
+     vezes (uma pelo `game.js`, outra por aqui), não faz mal nenhum. */
+  _anunciar() {
+    if (typeof document === "undefined") return;
+    document.dispatchEvent(
+      new CustomEvent(EVENTO_MENU, { detail: { aberto: this.aberto } }),
+    );
   }
 
   /** Quantos estão em campo, para o botão de bot dizer alguma coisa. */
@@ -209,6 +284,18 @@ export class NamekMenu {
     this.el.querySelector('[data-nk="bot-menos"]').disabled = bots <= 0;
   }
 
+  /**
+   * Qual dificuldade está valendo. Vem da SALA — do `welcome` ou do
+   * `NS2C.DIFFICULTY` —, e nunca do clique: o botão aceso tem de descrever o
+   * que os bots estão fazendo, não o que esta pessoa pediu por último.
+   */
+  setDificuldade(id) {
+    for (const [nome, botao] of Object.entries(this.botoesDif)) {
+      botao.classList.toggle("nk-on", nome === id);
+    }
+    this.difNota.textContent = NOTA_DIF[id] ?? "";
+  }
+
   /** Qual clima está no ar, para o botão certo ficar aceso. */
   setWeather(id) {
     for (const [nome, botao] of Object.entries(this.botoesClima)) {
@@ -219,5 +306,9 @@ export class NamekMenu {
   dispose() {
     this.el.removeEventListener("click", this._fundo);
     this.el.remove();
+    /* Sumir da tela É fechar. Um menu descartado aberto deixaria o mesmo rastro
+       do bug de cima em quem sobrevivesse a ele. Passa pelo `toggle` para o
+       aviso sair pelo mesmo cano de sempre. */
+    this.toggle(false);
   }
 }

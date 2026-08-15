@@ -19,14 +19,40 @@
    ------------------------------------------------------------------ a escala
 
    Tudo é dimensionado pelo RAIO DA CRATERA, nunca pela potência crua. A potência
-   vai de 0,12 (bola de ki) a 12 (Genki Dama) — cem vezes —, e cem vezes mais
-   partículas não é uma escala, é um interruptor: ou a bola de ki não faz nada ou
-   a Genki Dama consome o pool inteiro. O raio já passou pela raiz quadrada e
-   pelo teto de `craterFor`, e vai de 4 m a 21 m: cinco vezes. Cinco vezes é uma
-   escala que o olho lê como "isto foi maior que aquilo" em vez de "isto é outra
-   coisa". Medido: a bola de ki solta 41 partículas ao todo (19 de poeira), o
-   Kamehameha 93 e a Genki Dama 136 — com flocos três vezes maiores, que é o que
-   faz ela encher a tela.
+   vai de 0,12 (bola de ki) a 26 (Genki Dama) — duzentas vezes —, e duzentas
+   vezes mais partículas não é uma escala, é um interruptor: ou a bola de ki não
+   faz nada ou a Genki Dama consome o pool inteiro. O raio já passou pela raiz
+   quadrada e pelo teto de `craterFor`, e vai de 4 m a 30 m: sete vezes. Sete
+   vezes é uma escala que o olho lê como "isto foi maior que aquilo" em vez de
+   "isto é outra coisa". Medido: a bola de ki solta 41 partículas ao todo (19 de
+   poeira), o Kamehameha 93 e a Genki Dama 136 — com flocos três vezes maiores,
+   que é o que faz ela encher a tela.
+
+   ---------------------------------------------------------------- na encosta
+
+   Um golpe numa LADEIRA custa mais, e tem de custar: o campo de altura abre ali
+   um buraco 60 % maior (`esculpirNaco`, em `shared/namek/field.js`), e por cima
+   dele saem duas emissões que o terreno plano não pede — o NACO (blocos grandes
+   descendo o morro, em `debris.js`) e a AVALANCHE (a língua de pó que escorre,
+   em `dust.js`).
+
+   Medido, com a câmera em cima do impacto (o LOD no talo):
+
+       golpe                    total   poeira   detrito
+       bola de ki, plano           41       19         8
+       Kamehameha, plano           93       46        18
+       Kamehameha, encosta        169       91        36
+       Galick Gun, encosta        192      106        42
+       Genki Dama, encosta        232      132        56
+
+   Terreno plano NÃO MUDOU nem uma partícula, e isso é condição: a clareira é
+   onde a briga acontece e o que já estava calibrado lá continua calibrado.
+
+   O pior caso realista — três Genki Dama numa parede, no mesmo quadro — dá 696
+   partículas: poeira 396 de 520, brilho 126 de 300, detrito 168 de 288. A folga
+   que `RESERVA_IMPACTO` protege continua de pé, e ela só continua porque as
+   contagens ganharam TETO em `dust.js` e em `debris.js` — sem eles, a mesma
+   medição enchia o pool de poeira até a última vaga. Ver os comentários lá.
 
    ------------------------------------------------------------ nenhuma luz
 
@@ -41,8 +67,15 @@
 
 import { NAMEK } from "../../shared/namek/config.js";
 import { SpritePool, ChipPool, RingPool, decodeCor } from "./pool.js";
+import { clamp, smoothstep } from "../../utils/math.js";
 import { poeiraDeImpacto, poeiraDeQueda, poeiraDeProp, poeiraDeRastro } from "./dust.js";
-import { pedrasDeImpacto, pedrasDeQueda, estilhacarProp, atualizarDetritos } from "./debris.js";
+import {
+  pedrasDeImpacto,
+  pedrasDeQueda,
+  nacoDeEncosta,
+  estilhacarProp,
+  atualizarDetritos,
+} from "./debris.js";
 
 /* ------------------------------------------------------------------ tetos --
    Os quatro pools somados são ~1 128 partículas, ou 118 KB de `Float32Array`.
@@ -127,9 +160,31 @@ export function raioDeImpacto(power) {
   return r > D.craterMax ? D.craterMax : r;
 }
 
+/**
+ * Quanto ESTE ponto é encosta, em [0, 1] — a mesma régua de `esculpirNaco`.
+ *
+ * A cópia é do mesmo tipo que a de `raioDeImpacto`, e existe pelo mesmo motivo:
+ * lá o problema é a alocação por chamada, aqui é a ENTRADA. `esculpirNaco` mede
+ * a declividade com quatro `baseHeight` em torno da cratera; este módulo já tem
+ * a normal do terreno na mão (`normalDoChao` a calcula para deitar o anel de
+ * choque), e de uma normal a declividade sai por uma divisão.
+ *
+ * O que TEM de bater são os dois limiares — 0,22 e 0,78 —, porque é deles que
+ * saem o tamanho do buraco e o tamanho do efeito. Divergindo, o Kamehameha
+ * abriria numa ladeira um buraco 60 % maior que a poeira que o anunciou, e o
+ * jogador veria a nuvem baixar sobre uma cratera que não é a dela.
+ */
+function encostaDe(ny) {
+  if (ny >= 0.999) return 0;
+  const declividade = Math.sqrt(Math.max(0, 1 - ny * ny)) / Math.max(0.05, ny);
+  return smoothstep(0.22, 0.78, declividade);
+}
+
 /* Escratchpads do módulo. Nenhum deles é criado depois da carga. */
 const _rgb = new Float32Array(3);
 const _norm = { x: 0, y: 1, z: 0 };
+/** Versor horizontal morro abaixo. Preenchido por `normalDoChao`. */
+const _desce = { x: 0, z: 0 };
 
 const entre = (a, b) => a + Math.random() * (b - a);
 
@@ -201,6 +256,38 @@ export class NamekFx {
     return true;
   }
 
+  /**
+   * A normal do terreno em (x, z), em `_norm`, e a inclinação dele como retorno.
+   *
+   * `normalAt` custa quatro `heightAt` e acontece UMA vez por impacto — barato o
+   * bastante para não valer a pena aproximar, e a diferença é grande: um anel
+   * horizontal sobre uma ladeira de vinte metros entra pela terra de um lado e
+   * paira do outro.
+   *
+   * A componente horizontal da normal aponta MORRO ABAIXO por construção (uma
+   * superfície inclinada tem a normal tombada para o vale), e é dela que saem as
+   * duas direções que este módulo precisa: para onde o naco voa e para onde a
+   * poeira escorre. Ela sai daqui já normalizada em `_desce`, e vale (0, 0) em
+   * terreno plano — onde "abaixo" não existe e não deve ser inventado.
+   */
+  normalDoChao(x, z) {
+    if (this.field) this.field.normalAt(x, z, 0.8, _norm);
+    else {
+      _norm.x = 0;
+      _norm.y = 1;
+      _norm.z = 0;
+    }
+    const h = Math.hypot(_norm.x, _norm.z);
+    if (h > 1e-4) {
+      _desce.x = _norm.x / h;
+      _desce.z = _norm.z / h;
+    } else {
+      _desce.x = 0;
+      _desce.z = 0;
+    }
+    return encostaDe(_norm.y);
+  }
+
   /* ------------------------------------------------------------- clarão -- */
 
   /**
@@ -263,16 +350,11 @@ export class NamekFx {
       -Infinity,
     );
 
-    /* O ANEL DEITA NA ENCOSTA. `normalAt` custa quatro `heightAt` e acontece uma
-       vez por impacto — barato o bastante para não valer a pena aproximar, e a
-       diferença é grande: um anel horizontal sobre uma ladeira de vinte metros
-       entra pela terra de um lado e paira do outro. */
-    if (this.field) this.field.normalAt(x, z, 0.8, _norm);
-    else {
-      _norm.x = 0;
-      _norm.y = 1;
-      _norm.z = 0;
-    }
+    /* O ANEL DEITA NA ENCOSTA, e a normal já está em `_norm`: quem chama tem de
+       ter passado por `normalDoChao` antes. Ela era medida aqui dentro, e agora
+       não é porque o impacto INTEIRO depende dela — o naco, a avalanche e o
+       tamanho do buraco saem todos da mesma inclinação, e medi-la duas vezes no
+       mesmo impacto seria pagar oito `heightAt` para obter o mesmo número. */
     this.onda.spawn(
       x,
       y + 0.25,
@@ -320,9 +402,31 @@ export class NamekFx {
    * quinto do tamanho, quase sem crescer e com meio segundo de vida. É essa
    * proporção que está aqui, escalada pelo raio.
    */
-  fagulhas(x, y, z, raio, cor, n, alcance) {
+  /**
+   * @param {{x,y,z}|null} [dir] eixo do sopro, quando ele TEM um. Ver abaixo.
+   * @param {number} [spread] 0 = feixe apertado no eixo, 1 = esfera inteira.
+   */
+  fagulhas(x, y, z, raio, cor, n, alcance, dir = null, spread = 1) {
     decodeCor(cor, _rgb);
     const tam = (0.1 + raio * 0.045) * this._tamFator;
+    /* A DIREÇÃO VOLTOU A EXISTIR, e vale registrar o que estava acontecendo:
+     * este método sorteava a direção numa esfera SEMPRE, e o barramento de
+     * partículas (`NamekGame.bindParticles`) nem chegava a repassar o `direction`
+     * que os emissores mandavam. Ou seja, todo sopro direcional do modo — o
+     * clarão da boca do Kamehameha, o talho do Kienzan saindo na direção do voo,
+     * o rastro que persegue a esfera, a poeira do impacto subindo do chão —
+     * saía como uma bola de fagulhas isotrópica. Os quatro pediam uma forma;
+     * nenhum recebia. Nada quebrava, nada errava: só ficava tudo igual, que é o
+     * defeito mais difícil de notar num sistema de partículas.
+     *
+     * A mistura é direta: sorteia-se na esfera e interpola-se com o eixo por
+     * `spread`. Com 0 sai um feixe, com 1 sai a esfera de antes — e é por isso
+     * que o padrão é 1: quem não manda direção nenhuma continua com exatamente
+     * o comportamento que tinha. */
+    const ex = dir ? dir.x : 0;
+    const ey = dir ? dir.y : 0;
+    const ez = dir ? dir.z : 0;
+    const mistura = dir ? clamp(spread, 0, 1) : 1;
     for (let i = 0; i < n; i++) {
       /* Direção sorteada numa esfera, puxada para cima: fagulha que sai para
          baixo entra no chão no primeiro quadro e o sopro perde metade da
@@ -332,14 +436,30 @@ export class NamekFx {
       const r = Math.sqrt(Math.max(0, 1 - u * u));
       const v = alcance * entre(0.45, 1.3);
       const brilho = entre(0.85, 1.15);
+      /* A esfera, e depois a mistura com o eixo. `u*0.55 + 0.55` é o puxão
+         para cima do sorteio livre; ele só vale na parte ESFÉRICA, senão um
+         sopro apontado para baixo (a poeira que desce de uma encosta) sairia
+         torto para cima. */
+      let vx = Math.cos(a) * r;
+      let vy = u * 0.55 + 0.55;
+      let vz = Math.sin(a) * r;
+      if (mistura < 1) {
+        vx = ex * (1 - mistura) + vx * mistura;
+        vy = ey * (1 - mistura) + vy * mistura;
+        vz = ez * (1 - mistura) + vz * mistura;
+        const m = Math.sqrt(vx * vx + vy * vy + vz * vz) || 1;
+        vx /= m;
+        vy /= m;
+        vz /= m;
+      }
       if (
         !this.brilho.spawn(
           x,
           y + 0.2,
           z,
-          Math.cos(a) * r * v,
-          (u * 0.55 + 0.55) * v,
-          Math.sin(a) * r * v,
+          vx * v,
+          vy * v,
+          vz * v,
           _rgb[0] * brilho,
           _rgb[1] * brilho,
           _rgb[2] * brilho,
@@ -373,8 +493,18 @@ export class NamekFx {
    */
   groundImpact(x, y, z, power, cor = 0xbfe8ff) {
     if (!this.detalhar(x, y, z)) return;
-    const raio = raioDeImpacto(power);
     const f = this._fator;
+
+    /* A INCLINAÇÃO DECIDE O TAMANHO DE TUDO, e ela vem primeiro por isso.
+     *
+     * `raioDeImpacto(power)` é o buraco de terreno PLANO. Numa encosta o campo
+     * de altura abre 60 % mais (ver `esculpirNaco`, em `shared/namek/field.js`),
+     * e o mesmo `1 + enc × 0,6` tem de valer aqui — o efeito é a régua com que o
+     * jogador mede o golpe, e uma nuvem menor que o buraco que ela cobre é a
+     * única forma de fazer um Kamehameha numa montanha parecer MENOS do que ele
+     * foi. */
+    const enc = this.normalDoChao(x, z);
+    const raio = raioDeImpacto(power) * (1 + enc * 0.6);
 
     this.clarao(x, y, z, raio, cor, 1);
     this.fagulhas(
@@ -387,7 +517,25 @@ export class NamekFx {
       10 + raio * 2.2,
     );
     pedrasDeImpacto(this.detrito, x, y, z, raio, f, this._tamFator);
-    poeiraDeImpacto(this.poeira, x, y, z, raio, this.field, f, this._tamFator, 1);
+
+    /* O NACO. Só numa encosta de verdade e só a partir de um buraco de 7 m —
+     * ou seja, a partir de potência 0,8, bem acima do `craterMinPower` de 0,5.
+     *
+     * O corte por raio é o que mantém a promessa do §7 do plano e o que o
+     * usuário pediu por escrito: bola de ki CHAMUSCA (potência 0,12, raio 4,1 m —
+     * não chega aqui e não abre cratera nenhuma), especial ARRANCA. Sem ele, uma
+     * rajada básica numa ladeira cuspiria blocos de pedra do tamanho de um
+     * lutador seis vezes por segundo, e a montanha inteira viraria confete.
+     */
+    if (enc > 0.15 && raio > 7) {
+      nacoDeEncosta(
+        this.detrito, x, y, z, raio, _desce.x, _desce.z, f, this._tamFator, y,
+      );
+    }
+
+    poeiraDeImpacto(
+      this.poeira, x, y, z, raio, this.field, f, this._tamFator, 1, enc, _desce.x, _desce.z,
+    );
   }
 
   /**
@@ -420,19 +568,15 @@ export class NamekFx {
       return;
     }
 
-    const raio = raioDeImpacto(D.slamPower * excesso);
-
     /* SEM CLARÃO COLORIDO. Um corpo não é energia — o que ele levanta é chão. O
        que fica do "clarão" é o anel de choque, pálido e fraco: a onda de ar
        existe, a explosão não. Dar a este pouso o mesmo flash de um Kamehameha
        faria toda queda parecer um especial, e o jogador deixaria de distinguir
        de longe quem levou um golpe de quem só desceu depressa. */
-    if (this.field) this.field.normalAt(x, z, 0.8, _norm);
-    else {
-      _norm.x = 0;
-      _norm.y = 1;
-      _norm.z = 0;
-    }
+    const enc = this.normalDoChao(x, z);
+    // A mesma correção de encosta do `groundImpact`, e pelo mesmo motivo: a sala
+    // manda a potência da queda e o campo de altura a cresce na ladeira.
+    const raio = raioDeImpacto(D.slamPower * excesso) * (1 + enc * 0.6);
     decodeCor(0xdfe8d8, _rgb);
     this.onda.spawn(
       x,
@@ -472,6 +616,27 @@ export class NamekFx {
     const chao = this.field ? this.field.heightAt(x, z) : y;
     estilhacarProp(this.detrito, kind, x, y, z, raio, f, this._tamFator, chao);
     poeiraDeProp(this.poeira, kind, x, y, z, raio, f, this._tamFator, chao);
+  }
+
+  /**
+   * Só a POEIRA de uma peça que quebrou. O estilhaço fica de fora.
+   *
+   * Existe porque a destruição do cenário tem DOIS donos, e cada um faz metade
+   * bem: `NamekScenery.breakProp` derruba a peça com a animação da espécie
+   * (árvore tomba em torno da base, casa desaba sobre si mesma, rocha racha) e
+   * já cospe as lascas pelo pool de detritos DELE, que sabe de que material era
+   * a coisa. O que falta ali é o pó — e `propBreak`, que é o caminho completo,
+   * traria junto uma segunda leva de estilhaços por cima da primeira: dois
+   * montes de caco no mesmo lugar, cada um com uma física.
+   *
+   * Chamar isto em vez daquilo é, portanto, o conserto certo para o caminho do
+   * `NS2C.PROP_DOWN`: casa desabando em silêncio, sem pó de reboco, era metade
+   * do efeito faltando.
+   */
+  propDust(kind, x, y, z, raio) {
+    if (!this.detalhar(x, y, z)) return;
+    const chao = this.field ? this.field.heightAt(x, z) : y;
+    poeiraDeProp(this.poeira, kind, x, y, z, raio, this._fator, this._tamFator, chao);
   }
 
   /**

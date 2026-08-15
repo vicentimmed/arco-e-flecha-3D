@@ -2,10 +2,21 @@
    A bola de ki — o tiro comum de Namekusei.
 
    É o ataque mais usado do modo e por larga margem: sai a seis por segundo POR
-   JOGADOR enquanto o botão estiver apertado, vive 2,6 s, e a conta fecha em
-   ~234 bolas no ar com a sala cheia. Nada aqui pode custar por bola aquilo que
-   um efeito raro pode: nem uma luz, nem um `Mesh`, nem um objeto novo por
-   quadro.
+   JOGADOR enquanto o botão estiver apertado e vive 5 s (ver `NAMEK.blast.life`
+   — ela cresceu para atender ao "os poderes não devem sumir"). Nada aqui pode
+   custar por bola aquilo que um efeito raro pode: nem uma luz, nem um `Mesh`,
+   nem um objeto novo por quadro.
+
+   **O TETO DE 256 PASSOU A MORDER, e isso é uma decisão e não um descuido.**
+   Com a vida em 5 s, quinze jogadores segurando o gatilho produzem 450 bolas —
+   quase o dobro do pool. O que acontece então está escrito em `spawn`: a MAIS
+   VELHA é reciclada, ou seja, a bola que já voou quatro segundos some para dar
+   lugar à que acabou de sair da mão. Preferir isso a crescer o pool é escolher
+   onde pagar: 450 bolas seriam 183 mil triângulos (ver o comentário das
+   camadas), e o caso que as produz — quinze pessoas metralhando ao mesmo tempo,
+   sem parar, por cinco segundos — é justamente aquele em que ninguém vai
+   sentir falta de uma bola perdida no fim da vida dela. Medido numa partida de
+   verdade, o pico fica em ~110 bolas vivas.
 
    Daí as três decisões que este arquivo inteiro serve:
 
@@ -51,9 +62,10 @@ import * as THREE from "three";
 import { NAMEK } from "../../shared/namek/config.js";
 import { gameEvents, EventType } from "../../core/events.js";
 
-/* Teto de bolas simultâneas. 15 jogadores × 6 tiros/s × 2,6 s de vida = 234, e
-   as 22 de folga cobrem a rajada de abertura em que todo mundo aperta o botão
-   no mesmo quadro. Custo: ~13 KB de `Float32Array`. */
+/* Teto de bolas simultâneas. Custo: ~13 KB de `Float32Array`.
+   Ele deixou de ser o pior caso aritmético quando a vida da bola dobrou — ver
+   o cabeçalho, que explica por que 256 continua sendo o número certo e o que a
+   sala faz quando ele estoura. */
 const CAPACIDADE = 256;
 
 /** Fração da altura de um corpo em que fica o peito. Sai de `NAMEK.fighter`, e
@@ -160,13 +172,39 @@ export class BlastPool {
     this.dono = new Array(capacidade).fill(null);
     this.alvo = new Array(capacidade).fill(null);
 
+    /* A BOLA DE KI É REDONDA, e antes ela não era.
+     *
+     * O halo era `IcosahedronGeometry(1, 0)`: um icosaedro cru, vinte faces —
+     * literalmente um poliedro, e ele é a camada de FORA, ou seja, era ele que
+     * desenhava a silhueta. O núcleo tinha 80 faces. O resultado é o que o
+     * usuário descreveu: "os poderes rápidos que saem da mão estão meio
+     * quadrados". A 0,42 m de raio passando a poucos metros da lente, um
+     * vinte-faces não lê como esfera — lê como pedra lapidada.
+     *
+     * Subdivisão 2 no núcleo (320 faces) e 1 no halo (80): a silhueta do núcleo
+     * vira um polígono de ~20 lados, que a esta escala é indistinguível de um
+     * círculo, e o halo — que é translúcido a 0,26 e some contra o fundo —
+     * fecha o contorno sem pagar a subdivisão cheia.
+     *
+     * O CUSTO, porque ele não é desprezível e o §3 do plano cobra: no teto de
+     * 256 bolas simultâneas são 256 × (320 + 80 + 8) ≈ 104 mil triângulos,
+     * contra 28 mil antes. É a maior linha de triângulos do modo depois do
+     * cenário (~173 mil), e ela cabe: as chamadas de desenho — que são o
+     * recurso realmente escasso aqui — continuam TRÊS, porque isto é
+     * `InstancedMesh` e a contagem de instâncias não mudou. Num tiroteio real
+     * medido, o número de bolas vivas fica perto de 110, ou ~45 mil triângulos.
+     *
+     * Uma esfera de verdade (`SphereGeometry`) daria a mesma silhueta por
+     * triângulo parecido, e o icosaedro foi mantido por um motivo bobo e real:
+     * ele não tem polos, então não há um aperto de vértices no topo da bola
+     * para o brilho aditivo acusar. */
     this.nucleo = this.camada(
-      new THREE.IcosahedronGeometry(1, 1),
+      new THREE.IcosahedronGeometry(1, 2),
       COR_NUCLEO,
       0.95,
       13,
     );
-    this.halo = this.camada(new THREE.IcosahedronGeometry(1, 0), COR_HALO, 0.26, 11);
+    this.halo = this.camada(new THREE.IcosahedronGeometry(1, 1), COR_HALO, 0.26, 11);
     this.rastro = this.camada(cauda(), COR_RASTRO, 0.2, 10);
 
     /* As três, num array MONTADO UMA VEZ.
@@ -847,9 +885,13 @@ export function acharChao(field, ox, oy, oz, dx, dy, dz, alcanceMax) {
  * distância: quem está a 8 m atrás do seu ombro não é para quem você está
  * olhando, e mirar por proximidade daria a sensação de a bola escolher sozinha.
  */
-export function escolherAlvo(alvos, ox, oy, oz, dx, dy, dz, meuId) {
+export function escolherAlvo(alvos, ox, oy, oz, dx, dy, dz, meuId, raio = null) {
   if (!alvos) return null;
-  const R = NAMEK.blast.homing.acquire;
+  /* O alcance é o da rajada por padrão e o do GOLPE quando ele tem o próprio.
+     O Kienzan e o Galick Gun perseguem (ver `homing` em `NAMEK.specials`) e
+     escolhem de muito mais longe que uma bola de ki — 300 m contra 50 —, porque
+     eles são disparados de longe e a promessa deles é que chegam. */
+  const R = raio ?? NAMEK.blast.homing.acquire;
   let melhor = null;
   let melhorCos = 0; // < 0 é atrás de quem atirou: nunca
   for (let k = 0; k < alvos.length; k++) {
@@ -869,6 +911,77 @@ export function escolherAlvo(alvos, ox, oy, oz, dx, dy, dz, meuId) {
     }
   }
   return melhor;
+}
+
+/**
+ * Quem tem este id na lista de alvos, ou null. Busca linear porque a lista tem
+ * quinze entradas no pior caso e um `Map` reconstruído por quadro custaria mais
+ * do que a varredura inteira.
+ */
+export function alvoPorId(alvos, id) {
+  if (id === null || id === undefined || !alvos) return null;
+  for (let k = 0; k < alvos.length; k++) if (alvos[k].id === id) return alvos[k];
+  return null;
+}
+
+/**
+ * Gira uma direção EM DIREÇÃO a um ponto, com teto de ângulo. O motor da
+ * perseguição, compartilhado.
+ *
+ * É a mesma conta que `Bolas.perseguir` faz sobre os arrays de bolas, extraída
+ * para os golpes que perseguem um a um (o Kienzan e o Galick Gun) — e extraída,
+ * e não copiada, porque a fórmula tem uma sutileza que ninguém acerta duas
+ * vezes seguidas: a rotação é feita no PLANO dos dois vetores, usando a
+ * componente do alvo ortogonal à direção como segundo eixo. Duas
+ * multiplicações, sem quaternion e sem produto vetorial.
+ *
+ * As três travas são as do §6.1 do plano, e valem para todo golpe que persegue:
+ * teto de giro por segundo, prazo de validade, e um CONE fora do qual não há
+ * correção nenhuma. É o cone que faz o passo lateral funcionar — sair dele é
+ * uma decisão de quem está fugindo, e é ela que precisa continuar valendo
+ * alguma coisa.
+ *
+ * @param {{x,y,z}} dir versor mutado no lugar
+ * @param {number} tx alvo, em espaço de mundo
+ * @param {number} cosCone cosseno do meio-ângulo do cone
+ * @param {number} maxRad teto de giro DESTE passo, em radianos
+ * @returns {boolean} houve correção
+ */
+export function perseguirPonto(dir, tx, ty, tz, ox, oy, oz, cosCone, maxRad) {
+  let ax = tx - ox;
+  let ay = ty - oy;
+  let az = tz - oz;
+  const dist = comp(ax, ay, az);
+  if (dist < 1e-3) return false;
+  ax /= dist;
+  ay /= dist;
+  az /= dist;
+
+  const cos = dir.x * ax + dir.y * ay + dir.z * az;
+  if (cos < cosCone) return false; // fora do cone: reta, e ponto
+  if (cos > 0.999999) return false; // já apontando: nada a girar
+
+  const ang = Math.acos(cos < -1 ? -1 : cos > 1 ? 1 : cos);
+  const passo = ang < maxRad ? ang : maxRad;
+  let px = ax - dir.x * cos;
+  let py = ay - dir.y * cos;
+  let pz = az - dir.z * cos;
+  const plen = comp(px, py, pz);
+  if (plen < 1e-6) return false;
+  px /= plen;
+  py /= plen;
+  pz /= plen;
+
+  const c = Math.cos(passo);
+  const s = Math.sin(passo);
+  const nx = dir.x * c + px * s;
+  const ny = dir.y * c + py * s;
+  const nz = dir.z * c + pz * s;
+  const inv = 1 / (comp(nx, ny, nz) || 1);
+  dir.x = nx * inv;
+  dir.y = ny * inv;
+  dir.z = nz * inv;
+  return true;
 }
 
 export { PEITO, TETO_DO_RELEVO };

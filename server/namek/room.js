@@ -236,6 +236,7 @@ export class NamekRoom {
 
     const t = this.now();
     this.economiaDeKi(dt, t);
+    this.queimarNaLava(dt, t);
     this.montarCorpos(t);
     this.bots.tick(dt, {
       field: this.field,
@@ -314,6 +315,39 @@ export class NamekRoom {
    * (`idleDelay`) é o que impede que ela pague pela rajada em curso: quem está
    * atirando não regenera, quem parou volta a encher devagar.
    */
+  /**
+   * Quem está com os pés na lava perde vida enquanto ficar lá.
+   *
+   * A SALA é quem cobra, como cobra todo o resto do dano: o cliente desenha a
+   * poça e sente o calor, mas quem tira vida é um só, senão duas telas
+   * discordariam sobre quem morreu.
+   *
+   * Nem a poça nem o gatilho viajam pela rede. Elas são DERIVADAS do relevo
+   * (`NamekField.avaliarLava`), e o relevo já é o mesmo dos dois lados porque
+   * as crateras são sincronizadas — o mesmo motivo pelo qual ninguém precisa
+   * transmitir onde fica cada buraco.
+   *
+   * Morrer na lava não dá abate a ninguém, pelo mesmo critério da queda: não
+   * há culpado, e inventar um seria premiar quem por acaso cavou ali antes.
+   */
+  queimarNaLava(dt, agora) {
+    if (!this.field.lavaPools.length) return;
+    const L = NAMEK.destruction.lava;
+    for (const f of this.todos()) {
+      if (!f.alive) continue;
+      const p = this.pontoDe(f);
+      if (!this.field.naLava(p.x, p.y, p.z)) continue;
+      this.aplicarDano(f, L.dano * dt, {
+        kind: "lava",
+        p,
+        d: [0, 1, 0],
+        /* Contínuo: é o mesmo caminho do feixe, que também cobra por quadro.
+           Sem isto, cada tique viraria um anúncio de acerto separado. */
+        continuo: true,
+      });
+    }
+  }
+
   economiaDeKi(dt, agora) {
     const K = NAMEK.ki;
     for (const f of this.todos()) {

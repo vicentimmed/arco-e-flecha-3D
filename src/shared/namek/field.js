@@ -110,6 +110,15 @@ export class NamekField {
      */
     this.fusaoGrid = new Map();
 
+    /**
+     * As poças de lava abertas. Derivadas do relevo (ver `avaliarLava`), não
+     * transmitidas: os dois lados chegam nelas sozinhos.
+     * @type {Array<{x:number,z:number,raio:number}>}
+     */
+    this.lavaPools = [];
+    /** Avisa quem desenha que nasceu (ou cresceu) uma poça. Nulo no servidor. */
+    this.onLava = null;
+
     /** @type {object[]} o registro, em ordem de chegada. Só para a rede. */
     this.craters = [];
     /** @type {Map<number, object>} id da sala → cratera, contra duplicata */
@@ -240,6 +249,73 @@ export class NamekField {
     this.bakeCrater(c, -1);
   }
 
+  /* --------------------------------------------------------------- lava ----
+
+     Cavar fundo o bastante FURA A CROSTA, e o que estava embaixo sobe. */
+
+  /**
+   * A cratera furou? Se furou, vira poça de lava.
+   *
+   * Roda depois de cada `bakeCrater`, nos DOIS lados: o servidor precisa saber
+   * onde queima para cobrar vida, o cliente para desenhar. Como os dois chegam
+   * ao mesmo `heightAt` a partir da mesma sequência de crateras, chegam também
+   * à mesma lista de poças — sem uma mensagem de rede sequer.
+   *
+   * O raio sai por AMOSTRAGEM do fundo, e não da geometria da cratera: depois
+   * de vários golpes somados o buraco já não tem forma de cratera nenhuma, e
+   * perguntar ao relevo onde ele cruza o nível da lava é a única medida que
+   * continua valendo.
+   */
+  avaliarLava(c) {
+    const L = NAMEK.destruction.lava;
+    if (this.heightAt(c.x, c.z) > L.gatilho) return;
+
+    let raio = 0;
+    for (let r = 2; r <= L.raioMax; r += 2) {
+      /* Quatro direções bastam: a poça é desenhada como um disco, então o que
+         importa é onde ela deixa de ser poça em MÉDIA, não o contorno exato. */
+      let dentro = 0;
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2;
+        if (this.heightAt(c.x + Math.cos(a) * r, c.z + Math.sin(a) * r) < L.nivel) dentro++;
+      }
+      if (dentro < 3) break;
+      raio = r;
+    }
+    if (raio < 2) return;
+
+    /* Duas poças que se encostam viram UMA: dois discos sobrepostos deixam uma
+       borda visível no meio da lava. */
+    for (const p of this.lavaPools) {
+      if (Math.hypot(p.x - c.x, p.z - c.z) < p.raio) {
+        if (raio > p.raio) {
+          p.raio = raio;
+          this.onLava?.(p);
+        }
+        return;
+      }
+    }
+    const nova = { x: c.x, z: c.z, raio };
+    this.lavaPools.push(nova);
+    this.onLava?.(nova);
+  }
+
+  /**
+   * Este ponto está encostando na lava?
+   * @param {number} y altura dos PÉS — quem chama passa a base do lutador
+   */
+  naLava(x, y, z) {
+    const L = NAMEK.destruction.lava;
+    if (y > L.nivel + L.margem) return false;
+    for (let i = 0; i < this.lavaPools.length; i++) {
+      const p = this.lavaPools[i];
+      const dx = x - p.x;
+      const dz = z - p.z;
+      if (dx * dx + dz * dz <= p.raio * p.raio) return true;
+    }
+    return false;
+  }
+
   /* ------------------------------------------------------------- fusão ----- */
 
   /** Célula do índice de fusão. Só é consultado ao ABRIR cratera, nunca em `heightAt`. */
@@ -333,6 +409,7 @@ export class NamekField {
          uma cratera de cem metros a partir de tiros de quatro. */
       alvo.raio = Math.min(NAMEK.destruction.craterMax, Math.hypot(alvo.raio, raio * 0.5));
       this.bakeCrater(alvo);
+      this.avaliarLava(alvo);
       /* O id NOVO passa a apontar para a cratera velha: é o que mantém a
          idempotência quando a mesma mensagem da sala chega duas vezes. */
       this.byId.set(id, alvo);
@@ -344,6 +421,7 @@ export class NamekField {
     this.byId.set(id, c);
     this.indexarParaFusao(c);
     this.bakeCrater(c);
+    this.avaliarLava(c);
     return c;
   }
 
@@ -381,6 +459,7 @@ export class NamekField {
       this.byId.set(c.i, cratera);
       this.indexarParaFusao(cratera);
       this.bakeCrater(cratera);
+      this.avaliarLava(cratera);
     }
   }
 
@@ -464,13 +543,32 @@ export class NamekField {
       h += p.h * t * t;
     }
 
-    /* O MAR. Depois das montanhas o chão desce e afunda. A descida começa
-       antes da borda da arena para que a barreira macia (§2 do plano)
-       aconteça sobre água aberta — voar para fora e ser freado sobre o oceano
-       lê como o mundo continuando; ser freado sobre um penhasco lê como uma
-       parede invisível. */
-    const praia = smoothstep(520, 650, d);
-    h = h * (1 - praia) + (this.seaLevel - 14) * praia;
+    /* A PRAIA E O MAR, em DOIS passos — e são dois de propósito.
+     *
+     * Num passo só (uma interpolação da serra direto para o fundo do mar) a
+     * água encostava num paredão: a costa descia de ~130 m para −22 m em
+     * pouco mais de cem metros, o que é uma encosta de quase 50°. O mar batia
+     * num bloco, sem faixa nenhuma de areia entre uma coisa e outra.
+     *
+     * Agora a serra desce primeiro até a COTA DA PRAIA, um pouco acima da
+     * linha d'água, e só depois a areia mergulha — devagar, porque é a
+     * inclinação suave que faz a maré ter onde ficar e a areia ter onde
+     * aparecer. Quem pinta a faixa clara é `corDeSuperficie`, e ela pinta por
+     * ALTURA: sem esta cota intermediária não havia altura nenhuma para ela
+     * pintar. */
+    const cotaPraia = this.seaLevel + 3;
+
+    // 1. a serra cede e vira orla
+    const orla = smoothstep(500, 580, d);
+    h = h * (1 - orla) + cotaPraia * orla;
+
+    // 2. a areia entra na água. A linha d'água cai por volta de 612 m.
+    const areia = smoothstep(580, 630, d);
+    h = h * (1 - areia) + (this.seaLevel - 2.5) * areia;
+
+    // 3. e o fundo se aprofunda, já longe da vista
+    const fundo = smoothstep(630, 700, d);
+    h = h * (1 - fundo) + (this.seaLevel - 18) * fundo;
 
     return h;
   }

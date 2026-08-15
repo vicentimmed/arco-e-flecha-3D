@@ -87,14 +87,15 @@ const LOD = [
   [0, 2.6],
   [180, 2.6],
   [400, 7],
-  [660, 14],
+  [560, 9],
+  [700, 16],
 ];
 
 /* m — onde a malha termina. NÃO é o raio da arena (900 m): o terreno precisa
    passar da barreira macia e mergulhar, senão a última fileira de triângulos
    fica na linha do mar e aparece como um recorte serrilhado contra a água. O
    que está além disto é oceano aberto, e quem o desenha é `water.js`. */
-const RAIO_MALHA = 660;
+const RAIO_MALHA = 700;
 
 /** Teto de setores por anel. 512 a 2,8 m de passo radial dá arco de 2,1 m no
  *  fim da clareira — abaixo disto o triângulo vira lasca e só custa vértice. */
@@ -128,7 +129,10 @@ const PALETA = {
   campoFundo: new THREE.Color("#1c6a5b"),
   rocha: new THREE.Color("#7c8477"),
   rochaEscura: new THREE.Color("#4a5350"),
-  praia: new THREE.Color("#d9dfba"),
+  /* Areia clara. Puxou para o branco (era #d9dfba, um bege esverdeado que
+     sumia contra o campo turquesa): a faixa de praia só lê como praia se
+     contrastar com a terra atrás dela. */
+  praia: new THREE.Color("#ece7d3"),
   raso: new THREE.Color("#2c6f6c"),
   /** Cor das fissuras de magma na tempestade. Ver `aMagma`. */
   magma: new THREE.Color("#ff5a1e"),
@@ -374,7 +378,7 @@ export class NamekTerrain {
        planeta ganha um deserto costeiro que não é dele. */
     const mar = this.field.seaLevel;
     const praia = smoothstep(mar + 7, mar + 1.2, h) * smoothstep(0.55, 0.86, ny);
-    if (praia > 0.001) out.lerp(PALETA.praia, praia * 0.9);
+    if (praia > 0.001) out.lerp(PALETA.praia, praia);
 
     // Abaixo da linha d'água o fundo escurece e satura: é o que dá profundidade
     // à água rasa, que é translúcida junto à costa.

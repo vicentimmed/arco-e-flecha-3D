@@ -32,6 +32,8 @@ import { NamekTerrain } from "./terrain.js";
 import { NamekScenery } from "./scenery.js";
 import { NamekSky, NAMEK_CAMERA_FAR } from "./sky.js";
 import { NamekWater } from "./water.js";
+import { NamekLava } from "./lava.js";
+import { NamekGrass } from "./grass.js";
 
 export { NAMEK_CAMERA_FAR };
 
@@ -54,6 +56,8 @@ export class NamekWorld {
     this.scenery = null;
     this.sky = null;
     this.water = null;
+    this.lava = null;
+    this.grass = null;
     this.root = null;
   }
 
@@ -85,6 +89,17 @@ export class NamekWorld {
     progresso(0.78, "plantando as ajisas…");
     this.scenery = new NamekScenery(this.field).build(this.root);
 
+    /* A lava DEPOIS do terreno, porque ela lê `field.lavaPools` — que quem
+       entra no meio da partida já recebeu preenchida, via a lista de crateras
+       do `welcome`. E o gancho, para as poças que abrirem daqui em diante. */
+    this.lava = new NamekLava(this.field).build(this.root);
+    this.field.onLava = (poca) => this.lava?.acender(poca);
+
+    progresso(0.9, "semeando o campo…");
+    /* O mato por último: ele consulta `heightAt` e `slopeAt` por tufo, e as
+       duas já têm de incluir toda cratera que o `welcome` trouxe. */
+    this.grass = new NamekGrass(this.field).build(this.root);
+
     // O clima entra INSTANTÂNEO na montagem: quem chega no meio de uma
     // tempestade não pode ver oito segundos de dia antes de o céu fechar.
     this.aplicarClima(this.storm);
@@ -113,6 +128,7 @@ export class NamekWorld {
     this.water?.setStorm(s);
     this.terrain?.setStorm(s);
     this.scenery?.setStorm(s);
+    this.grass?.setStorm(s);
   }
 
   /* ---------------------------------------------------------------- quadro - */
@@ -137,6 +153,8 @@ export class NamekWorld {
     this.sky?.update(dt, cameraPos, tempoSala);
     this.water?.update(dt, cameraPos, tempoSala);
     this.scenery?.update(dt, cameraPos, tempoSala);
+    this.lava?.update(dt);
+    this.grass?.update(dt, tempoSala);
   }
 
   /* -------------------------------------------------------------- cratera -- */
@@ -159,6 +177,10 @@ export class NamekWorld {
     this.terrain?.applyCrater(cratera);
     // Quem estava em cima do buraco desce junto. Ver `NamekScenery.reassentar`.
     this.scenery?.reassentar(cratera.x, cratera.z, cratera.raio);
+    /* E o mato de dentro do buraco MORRE — não desce junto, como as peças.
+       Uma touceira intacta no fundo de uma cratera de Genki Dama seria a
+       única coisa do campo que a explosão respeitou. */
+    this.grass?.cortarNoRaio(cratera.x, cratera.z, cratera.raio);
   }
 
   /* ---------------------------------------------------------------- raios -- */
@@ -214,6 +236,9 @@ export class NamekWorld {
     this.terrain?.dispose();
     this.water?.dispose();
     this.scenery?.dispose();
+    this.lava?.dispose();
+    this.grass?.dispose();
+    this.field.onLava = null;
 
     const contagem = { geometries: 0, materials: 0, textures: 0 };
     if (this.root) {
@@ -252,6 +277,8 @@ export class NamekWorld {
     this.scenery = null;
     this.sky = null;
     this.water = null;
+    this.lava = null;
+    this.grass = null;
     return contagem;
   }
 }

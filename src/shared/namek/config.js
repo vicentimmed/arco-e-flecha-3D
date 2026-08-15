@@ -316,6 +316,26 @@ export const NAMEK = {
     slamSpeed: 26,
     /** Potência de uma queda, por (m/s) acima do limite. */
     slamPower: 0.055,
+
+    /* ------------------------------------------------------------- lava ----
+       Cavar fundo o bastante FURA A CROSTA, e o que estava embaixo sobe.
+
+       O nível fica abaixo da linha d'água de propósito: é a leitura de "o
+       buraco chegou onde não devia". Um buraco raso não acende nada; é preciso
+       atravessar a terra toda, e só a insistência (ou uma Genki Dama num ponto
+       já cavado) chega lá. */
+    lava: {
+      /** m — a cota em que a lava assenta. Abaixo do mar (−8). */
+      nivel: -14,
+      /** m — o fundo tem de passar disto para a poça acender. */
+      gatilho: -18,
+      /** dano por segundo em quem encosta. Alto: é para doer, não para coçar. */
+      dano: 34,
+      /** m — quanto acima da superfície da lava o toque ainda conta. */
+      margem: 1.8,
+      /** m — teto do raio de uma poça, por segurança contra número absurdo. */
+      raioMax: 40,
+    },
   },
 
   /* ------------------------------------------------------------------- morte */

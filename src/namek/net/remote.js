@@ -251,10 +251,22 @@ export class RemoteFighters {
     }
   }
 
-  /** Poses recebidas em lote (`NS2C.STATES`). */
+  /**
+   * Poses recebidas em lote (`NS2C.STATES`).
+   *
+   * A entrada JÁ É a pose — os campos de `packFighter` vêm achatados ao lado do
+   * `id`, não aninhados. Ver o comentário de `NS2C.STATES` no protocolo, que
+   * existe por causa de exatamente este trecho.
+   *
+   * O carimbo preferido é o `w` da própria entrada e não o `time` do lote:
+   * quando a sala reencaminha a pose de um humano, ela vale do instante em que
+   * o dono a capturou, não do instante em que o pacote saiu. Usar o do lote
+   * jogaria todas as poses do quadro para a frente no tempo e o interpolador
+   * passaria a comparar amostras que não são contemporâneas.
+   */
   applyStates(msg) {
     for (const entrada of msg.s ?? []) {
-      this.byId.get(entrada.id)?.pushSample(msg.time, entrada.s);
+      this.byId.get(entrada.id)?.pushSample(entrada.w ?? msg.time, entrada);
     }
   }
 

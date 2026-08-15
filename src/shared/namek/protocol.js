@@ -101,7 +101,22 @@ export const NS2C = {
   /** Alguém saiu: `{ id, name }`. */
   LEAVE: "leave",
 
-  /** Poses de todos os OUTROS, 20 Hz: `{ time, s: [...] }`. */
+  /** Poses de todos os OUTROS, 20 Hz.
+   *
+   *  `{ time, s: [ { id, w, ...packFighter() }, ... ] }` — a pose vem
+   *  **ACHATADA** dentro da entrada, não aninhada num campo `s`. Fica dito em
+   *  letra e não em reticências porque as duas metades já divergiram aqui uma
+   *  vez: a sala achatava, o cliente procurava `entrada.s`, e o resultado foi
+   *  cinco lutadores existindo, brigando e perdendo vida — todos parados na
+   *  origem do mundo. Nenhum erro em lugar nenhum.
+   *
+   *  Achatada porque é mais barata: são 15 poses 20 vezes por segundo, e o
+   *  objeto intermediário custaria três bytes por lutador por pacote para não
+   *  dizer nada.
+   *
+   *  E ela vem PODADA: todo canal que valha o padrão é omitido (ver
+   *  `unpackFighter`, que por isso lê tudo com `?? 0`). Numa sala de quinze isso
+   *  cortou a descida de 55,6 para 41,0 KB/s. */
   STATES: "states",
 
   /** Vida e ki de todos, 10 Hz: `{ h: [[id, health, ki], ...] }`.
@@ -200,16 +215,28 @@ export function packFighter(f) {
   };
 }
 
-/** Escreve um `packFighter()` numa amostra do buffer de interpolação. */
+/**
+ * Escreve um `packFighter()` numa amostra do buffer de interpolação.
+ *
+ * **Todo campo é opcional.** A sala poda da mensagem tudo o que valha o padrão
+ * (ver `NS2C.STATES`), então uma pose legítima pode chegar sem `v`, sem `y` e
+ * sem mais nada além da posição. Ler qualquer um deles direto produz `undefined`
+ * — e `undefined` em conta de interpolação vira `NaN`, que é a pior falha
+ * possível aqui: o corpo some da tela sem erro nenhum, porque o Three.js
+ * simplesmente não desenha uma matriz com `NaN`. Daí o `?? 0` em tudo, inclusive
+ * nos vetores.
+ */
 export function unpackFighter(s, out) {
-  out.x = s.p[0];
-  out.y = s.p[1];
-  out.z = s.p[2];
-  out.vx = s.v[0];
-  out.vy = s.v[1];
-  out.vz = s.v[2];
-  out.yaw = s.y;
-  out.pitch = s.i;
+  const p = s.p ?? VEC_ZERO;
+  const v = s.v ?? VEC_ZERO;
+  out.x = p[0] ?? 0;
+  out.y = p[1] ?? 0;
+  out.z = p[2] ?? 0;
+  out.vx = v[0] ?? 0;
+  out.vy = v[1] ?? 0;
+  out.vz = v[2] ?? 0;
+  out.yaw = s.y ?? 0;
+  out.pitch = s.i ?? 0;
   out.roll = s.r ?? 0;
   out.gaitPhase = s.g ?? 0;
   out.runBlend = s.n ?? 0;
@@ -221,10 +248,14 @@ export function unpackFighter(s, out) {
   out.hurtBlend = s.hu ?? 0;
   out.lastHand = s.ha ?? 0;
   out.handPose = s.hp ?? 0;
-  out.down = (s.b & 1) === 1;
-  out.invuln = (s.b & 2) === 2;
+  const b = s.b ?? 0;
+  out.down = (b & 1) === 1;
+  out.invuln = (b & 2) === 2;
   return out;
 }
+
+/** Lido quando a pose chega sem posição ou sem velocidade. Ver `unpackFighter`. */
+const VEC_ZERO = [0, 0, 0];
 
 /* -------------------------------------------------------------------- ids --- */
 

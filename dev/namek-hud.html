@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bancada do HUD de Namekusei</title>
+    <style>
+      /* ---------------------------------------------------------------------
+         Bancada do HUD de Namekusei — ferramenta de desenvolvimento, fora do
+         jogo.
+
+         Ela monta o `NamekHud` DE VERDADE, com o `NAMEK` de verdade, e alimenta
+         só o que o laço principal alimentaria: vida, ki, alvo, placar, mortes.
+         O que ela substitui é o mundo — não há Three.js, não há sala e não há
+         rede aqui.
+
+         Ela existe porque este HUD é julgado por uma coisa que não cabe num
+         teste: se ele CONTINUA LEGÍVEL com uma explosão branca atrás. O palco
+         abaixo é um céu de Namekusei pintado em gradiente com um clarão no
+         meio, e é contra ele que se decide se o contorno está grosso o
+         bastante.
+
+         Aberta em /dev/namek-hud.html com o servidor de desenvolvimento
+         rodando. Não entra no build de produção: o Vite só empacota o que a
+         página de entrada alcança.
+         --------------------------------------------------------------------- */
+      :root { color-scheme: dark; --ui: #7fe3ff; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #0a0e14;
+        color: #e8e6e1;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+
+      /* O palco: onde o HUD mora. Tudo dentro dele é cenário falso. */
+      #palco {
+        position: fixed;
+        inset: 0 0 0 292px;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 61% 33%, rgba(255, 255, 255, 0.98) 0 4%,
+                          rgba(190, 240, 255, 0.9) 9%, rgba(120, 200, 255, 0) 30%),
+          radial-gradient(circle at 61% 33%, rgba(120, 210, 255, 0.5) 0 16%,
+                          rgba(120, 210, 255, 0) 40%),
+          linear-gradient(180deg, #c7f5a9 0%, #8fe8cf 38%, #3aa9bd 60%, #14536b 100%);
+      }
+      /* Tempestade: o planeta indo embora (ver §1 do plano). O HUD tem de
+         aguentar os dois céus, e o vermelho é o mais difícil para o dourado. */
+      body.tempestade #palco {
+        background:
+          radial-gradient(circle at 61% 33%, rgba(255, 255, 255, 0.98) 0 4%,
+                          rgba(255, 220, 160, 0.9) 9%, rgba(255, 120, 60, 0) 30%),
+          linear-gradient(180deg, #7a1408 0%, #c8451a 34%, #e08a2c 52%, #3a1207 100%);
+      }
+      body.limpo #palco { background: #12161d; }
+
+      /* Três montanhas e uma ilha flutuante: contraste alto e bordas duras,
+         que é justamente o fundo em que um HUD some. */
+      .relevo { position: absolute; background: rgba(12, 60, 52, 0.72); }
+      #m1 { left: 4%; bottom: 0; width: 42%; height: 46%; clip-path: polygon(0 100%, 34% 8%, 62% 46%, 100% 100%); }
+      #m2 { right: 2%; bottom: 0; width: 46%; height: 38%; clip-path: polygon(0 100%, 40% 18%, 72% 54%, 100% 100%); }
+      #m3 { left: 34%; bottom: 0; width: 34%; height: 26%; clip-path: polygon(0 100%, 46% 12%, 100% 100%); background: rgba(8, 44, 40, 0.85); }
+      #ilha {
+        left: 18%; top: 18%; width: 190px; height: 54px;
+        clip-path: polygon(6% 0, 94% 0, 100% 44%, 60% 100%, 22% 62%, 0 40%);
+        background: rgba(20, 90, 70, 0.8);
+      }
+
+      /* --------------------------------------------------------- o painel -- */
+      #painel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 292px;
+        padding: 12px 14px 18px;
+        background: rgba(8, 11, 17, 0.96);
+        border-right: 1px solid rgba(255, 255, 255, 0.12);
+        overflow-y: auto;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ui);
+      }
+      h2 {
+        margin: 14px 0 7px;
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6f7a86;
+        border-top: 1px solid rgba(255, 255, 255, 0.09);
+        padding-top: 9px;
+      }
+      .linha { margin-bottom: 9px; }
+      .linha > label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #a7a49d;
+        margin-bottom: 3px;
+      }
+      input[type="range"] { width: 100%; }
+      .botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+      button {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.3);
+        color: #cfccc5;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:hover { border-color: rgba(255, 255, 255, 0.32); }
+      button.on { border-color: var(--ui); background: rgba(127, 227, 255, 0.16); color: var(--ui); }
+      #nota {
+        margin-top: 12px;
+        font-size: 10.5px;
+        line-height: 1.5;
+        color: #6f7a86;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="palco">
+      <i class="relevo" id="m1"></i>
+      <i class="relevo" id="m2"></i>
+      <i class="relevo" id="m3"></i>
+      <i class="relevo" id="ilha"></i>
+      <!-- O HUD monta a si mesmo aqui dentro, como faria em #ui. -->
+    </div>
+
+    <div id="painel">
+      <h1>Bancada do HUD — Namekusei</h1>
+
+      <h2>Você</h2>
+      <div class="linha">
+        <label>vida <span data-eco="vida">100</span></label>
+        <input id="vida" type="range" min="0" max="100" step="1" value="100" />
+      </div>
+      <div class="linha">
+        <label>ki <span data-eco="ki">0</span></label>
+        <input id="ki" type="range" min="0" max="100" step="1" value="0" />
+      </div>
+      <div class="botoes">
+        <button id="carregar">carregar ki (C)</button>
+        <button id="gastar">gastar tudo</button>
+      </div>
+
+      <h2>Alvo travado</h2>
+      <div class="linha">
+        <label>vida do alvo <span data-eco="alvo">78</span></label>
+        <input id="alvo" type="range" min="0" max="100" step="1" value="78" />
+      </div>
+      <div class="botoes">
+        <button id="travar" class="on">travado</button>
+        <button id="trocar">trocar de alvo</button>
+      </div>
+
+      <h2>Especial armado</h2>
+      <div class="botoes" id="especiais"></div>
+
+      <h2>Mira</h2>
+      <div class="botoes" id="miras"></div>
+
+      <h2>Apanhar</h2>
+      <div class="botoes">
+        <button id="tomar">levar 18 de dano</button>
+        <button id="rajada">rajada nas costas</button>
+        <button id="morrer">morrer</button>
+      </div>
+
+      <h2>Avisos</h2>
+      <div class="botoes">
+        <button id="faixa">faixa</button>
+        <button id="aviso">aviso</button>
+        <button id="abate">abate no feed</button>
+        <button id="ajuda">atalhos</button>
+      </div>
+
+      <h2>Céu</h2>
+      <div class="botoes">
+        <button id="dia" class="on">dia</button>
+        <button id="tempestade">tempestade</button>
+        <button id="limpo">chapado</button>
+      </div>
+
+      <div id="nota">
+        O placar tem um nome com marcação dentro de propósito: se ele aparecer
+        como texto literal, a saída está em <b>textContent</b> e a defesa está
+        no lugar. Se virar HTML, o bug é grave.
+      </div>
+    </div>
+
+    <script type="module">
+      import { NamekHud } from "../src/namek/ui/hud.js";
+      import { NAMEK } from "../src/shared/namek/config.js";
+
+      const palco = document.getElementById("palco");
+      const hud = new NamekHud(palco);
+
+      /* ------------------------------------------------------------ o mundo
+         Um estado falso, escrito à mão, com as mesmas grandezas que a sala
+         mandaria. Nada aqui simula física — o que se julga nesta página é
+         LEITURA, não jogo. */
+      const mundo = {
+        vida: 100,
+        ki: 0,
+        alvoVida: 78,
+        alvoIndice: 0,
+        armado: 0,
+        travado: true,
+        carregando: false,
+        morteRestante: null,
+      };
+
+      /* Um nome com marcação dentro. Ele existe para provar, a cada abertura
+         desta página, que a saída deste HUD passa por `textContent`: o que se
+         lê na tela tem de ser a etiqueta literal, e não uma imagem quebrada. */
+      const ELENCO = [
+        { id: 1, nome: "Você", cor: 0x9ff0ff, kills: 7, deaths: 3, eu: true },
+        { id: 2, nome: "Vegeta", cor: 0xc07bff, kills: 9, deaths: 4 },
+        { id: 3, nome: "Freeza", cor: 0xff7ad9, kills: 6, deaths: 2 },
+        { id: 4, nome: "Piccolo", cor: 0xa8ff6f, kills: 4, deaths: 6 },
+        { id: 5, nome: "Krillin", cor: 0xffd34d, kills: 2, deaths: 9 },
+        { id: 6, nome: '<img src=x onerror="alert(1)">', cor: 0xff6b4a, kills: 1, deaths: 5 },
+      ];
+      const ALVOS = ELENCO.slice(1);
+
+      hud.setScores(ELENCO);
+      hud.banner("NAMEKUSEI", 3);
+      hud.toast("bem-vindo à bancada");
+      hud.killFeed(ELENCO[1], ELENCO[3], "kamehameha");
+      hud.killFeed(ELENCO[2], ELENCO[0], "blast");
+
+      /* ------------------------------------------------------------ ligações */
+      const eco = (nome, v) => {
+        for (const el of document.querySelectorAll(`[data-eco="${nome}"]`)) {
+          el.textContent = String(v);
+        }
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      $("vida").addEventListener("input", (e) => {
+        mundo.vida = Number(e.target.value);
+        eco("vida", mundo.vida);
+      });
+      $("ki").addEventListener("input", (e) => {
+        mundo.ki = Number(e.target.value);
+        eco("ki", mundo.ki);
+      });
+      $("alvo").addEventListener("input", (e) => {
+        mundo.alvoVida = Number(e.target.value);
+        eco("alvo", mundo.alvoVida);
+      });
+
+      $("carregar").addEventListener("mousedown", () => {
+        mundo.carregando = true;
+      });
+      addEventListener("mouseup", () => {
+        mundo.carregando = false;
+      });
+      $("gastar").addEventListener("click", () => {
+        mundo.ki = 0;
+        $("ki").value = "0";
+        eco("ki", 0);
+        hud.toast("Kamehameha!");
+      });
+
+      $("travar").addEventListener("click", (e) => {
+        mundo.travado = !mundo.travado;
+        e.target.classList.toggle("on", mundo.travado);
+        hud.setCrosshair(mundo.travado ? "travado" : "livre");
+      });
+      $("trocar").addEventListener("click", () => {
+        mundo.alvoIndice = (mundo.alvoIndice + 1) % ALVOS.length;
+        mundo.alvoVida = 30 + Math.round(Math.random() * 70);
+        $("alvo").value = String(mundo.alvoVida);
+        eco("alvo", mundo.alvoVida);
+      });
+
+      // Os quatro especiais, montados da MESMA ordem que o HUD usa.
+      const fileira = $("especiais");
+      NAMEK.specialOrder.forEach((kind, i) => {
+        const b = document.createElement("button");
+        b.textContent = `${i + 1} ${NAMEK.specials[kind].nome}`;
+        b.className = i === 0 ? "on" : "";
+        b.addEventListener("click", () => {
+          mundo.armado = i;
+          for (const outro of fileira.children) outro.classList.remove("on");
+          b.classList.add("on");
+        });
+        fileira.appendChild(b);
+      });
+
+      const miras = $("miras");
+      for (const estado of ["livre", "travado", "carregando"]) {
+        const b = document.createElement("button");
+        b.textContent = estado;
+        b.addEventListener("click", () => {
+          for (const outro of miras.children) outro.classList.remove("on");
+          b.classList.add("on");
+          hud.setCrosshair(estado);
+        });
+        miras.appendChild(b);
+      }
+
+      $("tomar").addEventListener("click", () => {
+        mundo.vida = Math.max(0, mundo.vida - 18);
+        $("vida").value = String(mundo.vida);
+        eco("vida", mundo.vida);
+        hud.hurtFlash(0.55);
+        hud.damageFrom(Math.random() * Math.PI * 2);
+      });
+      $("rajada").addEventListener("click", () => {
+        // Seis bolas em um segundo: é o teste do fantasma, que precisa mostrar
+        // o estrago da rajada INTEIRA e não o da primeira bola.
+        let n = 0;
+        const bater = () => {
+          mundo.vida = Math.max(0, mundo.vida - NAMEK.blast.damage);
+          $("vida").value = String(mundo.vida);
+          eco("vida", mundo.vida);
+          hud.hurtFlash(0.3);
+          hud.damageFrom(Math.PI + (Math.random() - 0.5) * 0.4);
+          if (++n < 6) setTimeout(bater, 1000 / NAMEK.blast.rate);
+        };
+        bater();
+      });
+      $("morrer").addEventListener("click", () => {
+        mundo.vida = 0;
+        $("vida").value = "0";
+        eco("vida", 0);
+        mundo.morteRestante = NAMEK.respawn.delay;
+        hud.killFeed(ALVOS[mundo.alvoIndice], ELENCO[0], "genki");
+      });
+
+      $("faixa").addEventListener("click", () => hud.banner("A TEMPESTADE CHEGOU", 2.5));
+      $("aviso").addEventListener("click", () => hud.toast("cratera aberta a 40 m"));
+      $("abate").addEventListener("click", () => {
+        const a = ELENCO[1 + Math.floor(Math.random() * (ELENCO.length - 1))];
+        const b = ELENCO[1 + Math.floor(Math.random() * (ELENCO.length - 1))];
+        const kinds = [...NAMEK.specialOrder, "blast", "burst", "queda"];
+        hud.killFeed(a, b === a ? ELENCO[0] : b, kinds[Math.floor(Math.random() * kinds.length)]);
+      });
+      let ajudaAberta = false;
+      $("ajuda").addEventListener("click", (e) => {
+        ajudaAberta = !ajudaAberta;
+        e.target.classList.toggle("on", ajudaAberta);
+        hud.showHelp(ajudaAberta);
+      });
+
+      for (const [id, classe] of [["dia", ""], ["tempestade", "tempestade"], ["limpo", "limpo"]]) {
+        $(id).addEventListener("click", (e) => {
+          document.body.className = classe;
+          for (const outro of ["dia", "tempestade", "limpo"]) $(outro).classList.remove("on");
+          e.target.classList.add("on");
+        });
+      }
+
+      /* -------------------------------------------------------------- o laço
+         O mesmo desenho do laço do jogo: alimentar o HUD e chamar `update`. Se
+         alguma coisa aqui alocar por quadro, é aqui que se vê. */
+      let anterior = performance.now();
+      function quadro(agora) {
+        const dt = Math.min((agora - anterior) / 1000, 0.1);
+        anterior = agora;
+
+        if (mundo.carregando) {
+          mundo.ki = Math.min(NAMEK.ki.max, mundo.ki + NAMEK.ki.chargeRate * dt);
+          $("ki").value = String(Math.round(mundo.ki));
+          eco("ki", Math.round(mundo.ki));
+        }
+        if (mundo.morteRestante != null) {
+          mundo.morteRestante -= dt;
+          if (mundo.morteRestante <= -0.6) {
+            mundo.morteRestante = null;
+            mundo.vida = NAMEK.fighter.maxHealth;
+            $("vida").value = String(mundo.vida);
+            eco("vida", mundo.vida);
+          }
+        }
+
+        hud.setVitals(mundo.vida, NAMEK.fighter.maxHealth, mundo.ki, NAMEK.ki.max);
+        hud.setSpecials(mundo.armado, mundo.ki >= NAMEK.ki.max - 0.001);
+        hud.setDead(mundo.morteRestante);
+        if (mundo.travado) {
+          const a = ALVOS[mundo.alvoIndice];
+          hud.setTarget({
+            id: a.id,
+            nome: a.nome,
+            cor: a.cor,
+            vida: mundo.alvoVida,
+            vidaMax: NAMEK.fighter.maxHealth,
+          });
+        } else {
+          hud.setTarget(null);
+        }
+        hud.update(dt);
+        requestAnimationFrame(quadro);
+      }
+      requestAnimationFrame(quadro);
+
+      // Para cutucar de dentro do console.
+      window.hud = hud;
+      window.mundo = mundo;
+    </script>
+  </body>
+</html>

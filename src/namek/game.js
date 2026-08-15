@@ -33,8 +33,9 @@ import * as THREE from "three";
 import { NAMEK, specialInfo } from "../shared/namek/config.js";
 import { NamekField } from "../shared/namek/field.js";
 import { NC2S, NS2C, packFighter, vecFrom } from "../shared/namek/protocol.js";
+import { gameEvents, EventType } from "../core/events.js";
 
-import { NamekWorld } from "./world/index.js";
+import { NamekWorld, NAMEK_CAMERA_FAR } from "./world/index.js";
 import { NamekFx } from "./fx/index.js";
 import { PowerSystem } from "./powers/index.js";
 import { Fighter } from "./character/index.js";
@@ -70,13 +71,15 @@ export class NamekGame {
     this.renderer.info.autoReset = false;
 
     this.scene = new THREE.Scene();
+    /* O `far` vem do CENÁRIO e não de um palpite daqui: quem sabe onde está o
+       domo do céu (2 600 m do olho) e até onde vai o mar (3 200 m) é quem os
+       construiu. Um número maior escolhido "por segurança" custaria precisão de
+       profundidade em todo o resto da cena sem mostrar um metro a mais. */
     this.camera3 = new THREE.PerspectiveCamera(
       68,
       window.innerWidth / window.innerHeight,
       0.15,
-      // A arena tem 1800 m de lado e o teto está a 520 m: quem voa alto vê a
-      // borda oposta a ~2 km. Cortar antes disso mostraria o mundo terminando.
-      4200,
+      NAMEK_CAMERA_FAR,
     );
 
     /* --------------------------------------------------------- o mundo --- */
@@ -130,6 +133,45 @@ export class NamekGame {
     window.addEventListener("resize", this._onResize);
 
     this.bindNetwork();
+    this.bindParticles();
+  }
+
+  /**
+   * A ponte entre os poderes e os efeitos.
+   *
+   * `src/namek/powers/` emite os floreios — a fagulha da pose de carga, o
+   * clarão da boca do feixe, a faísca do talho do Kienzan — por
+   * `gameEvents.emit(EventType.PARTICLES)`, que é o barramento que
+   * `systems/impactFx.js` já usa no jogo do arqueiro. É a escolha certa: o
+   * emissor não deve conhecer o desenhista.
+   *
+   * Só que quem escuta aquele barramento é `installImpactEffects()`, e ela roda
+   * dentro do `Game` do arqueiro — que neste modo nunca é construído (ver
+   * `boot.js`). Sem esta assinatura o barramento não tem NINGUÉM do outro lado:
+   * o que é estrutural aparece (feixe, disco, esfera, casca são malhas de
+   * verdade) e todo o resto fica mudo, sem erro nenhum para acusar. É o pior
+   * tipo de defeito — o que só se percebe comparando com o que deveria estar lá.
+   *
+   * O barramento é um módulo puro de pub/sub e não arrasta nada do arqueiro
+   * junto; assinar aqui não é acoplamento, é fechar o circuito.
+   */
+  bindParticles() {
+    this._offParticles = gameEvents.on(EventType.PARTICLES, (p) => {
+      const pos = p.position;
+      if (!pos) return;
+      this.fx.fagulhas(
+        pos.x,
+        pos.y,
+        pos.z,
+        p.size ?? 0.5,
+        p.color ?? 0xbfe8ff,
+        /* Teto na contagem: um pedido de 200 partículas para um floreio esvazia
+           o pool e engole a poeira do impacto, que é a informação que importa.
+           O emissor pede o que quer; quem tem o orçamento é quem desenha. */
+        Math.min(p.count ?? 12, 40),
+        p.speed ?? 12,
+      );
+    });
   }
 
   build(progresso = () => {}) {
@@ -306,6 +348,12 @@ export class NamekGame {
     if (!spawn) return;
     const p = spawn.p ? vecFrom(spawn.p) : { x: 0, y: NAMEK.respawn.dropHeight, z: 0 };
     this.controller.teleport(p.x, p.y, p.z, spawn.yaw ?? 0);
+    /* A LENTE TAMBÉM TELEPORTA. Sem isto ela persegue amortecida o ponto novo e
+       varre a arena inteira no caminho — meio segundo de montanha passando de
+       lado toda vez que alguém renasce, e o jogador volta ao jogo já perdido no
+       espaço. É a mesma marcação que `PlayerPhysics.markTeleport` faz no jogo do
+       arqueiro, e pelo mesmo motivo. */
+    this.cam.markTeleport();
     this.me.revive();
     this.down = false;
     this.deadUntil = 0;
@@ -633,9 +681,10 @@ export class NamekGame {
     this.me.specialIndex = this.casting ? this.casting.indice : -1;
     this.me.down = this.down;
     this.me.invuln = agora < this.invulnUntil;
-    // O braço estendido do tiro volta sozinho — se não voltasse, o lutador
-    // ficaria apontando para sempre depois da última bola.
-    this.me.handPose = Math.max(0, this.me.handPose - dt * 4);
+    /* O braço estendido do tiro volta sozinho DENTRO do `Fighter` — havia um
+       decaimento aqui também, e os dois somados devolviam o braço rápido demais
+       para a rajada parecer uma rajada. Quem manda na volta é quem manda na
+       pose. */
     this.me.update(dt, this.camera3.position);
 
     /* --------------------------------------------------------- os outros -- */
@@ -760,6 +809,7 @@ export class NamekGame {
   dispose() {
     this.running = false;
     window.removeEventListener("resize", this._onResize);
+    this._offParticles?.();
     this.net.disconnect();
     this.input.dispose();
     this.hud.dispose();

@@ -30,6 +30,12 @@ import { BotSquad, obstaculosDe } from "./botSim.js";
 import { simularFlechaDoBot, orientacaoDe } from "./botArrow.js";
 import { SpaceField } from "./spaceSim.js";
 import { FlagField } from "./flagSim.js";
+/* A OUTRA sala — Namekusei. Ver `docs/plano-namekusei.md`.
+   É a única linha deste arquivo que o modo novo escreveu, e o import não custa
+   nada ao jogo do arqueiro: `server/namek/room.js` não constrói coisa alguma ao
+   ser carregado — nem campo de altura, nem timer, nem estado — e o primeiro
+   byte de Namekusei só é alocado quando alguém pede a sala dela. */
+import { NAMEK_LEVEL, ensureNamekRoom } from "./namek/room.js";
 import {
   DEFAULT_LEVEL,
   LEVEL_IDS,
@@ -5501,6 +5507,13 @@ export class RoomHost {
    * recusado lá dentro (`join`), e o que se quer aqui é achar o LUGAR certo.
    */
   ensure({ level = DEFAULT_LEVEL, mode = "free" } = {}) {
+    /* NAMEKUSEI ANTES DA VALIDAÇÃO, e é obrigatório que seja antes: "namek" não
+       está em `LEVEL_IDS` de propósito (§0 do plano — pô-lo lá o colocaria na
+       rotação de fases da tecla 9, no `levelForMode` e na checagem de
+       integridade de `levels/index.js`), então a linha seguinte o trocaria pelo
+       vale e o modo nunca abriria. */
+    if (level === NAMEK_LEVEL) return ensureNamekRoom(this);
+
     const fase = LEVEL_IDS.includes(level) ? level : DEFAULT_LEVEL;
     const modo = fallbackMode(fase, mode);
 

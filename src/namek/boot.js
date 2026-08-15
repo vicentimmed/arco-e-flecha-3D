@@ -77,16 +77,38 @@ export async function bootNamek(setStep = () => {}) {
   setStep("acordando Namekusei…");
   const game = new NamekGame(canvas, ui);
 
-  /* O `build` é síncrono, mas cede o quadro entre as etapas para a barra de
+  /* O `build` é síncrono, mas cede o quadro antes de começar para a barra de
      progresso do lobby de fato PINTAR. Sem isso a tela fica congelada no
      primeiro passo e só volta a existir com o mundo pronto — e o progresso vira
      enfeite que ninguém chega a ver. */
-  await new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      game.build((_f, texto) => setStep(texto));
-      resolve();
-    });
-  });
+  await nextFrame();
+  game.build((_f, texto) => setStep(texto));
 
   return game;
+}
+
+/**
+ * Um quadro — ou 100 ms, o que vier primeiro.
+ *
+ * A corrida com o `setTimeout` não é cinto de segurança: **`requestAnimationFrame`
+ * não dispara em aba oculta**, e sem ela o arranque de Namekusei simplesmente
+ * NÃO ACONTECE numa aba de segundo plano. O sintoma é o pior possível — a tela
+ * de entrada parada em "acordando Namekusei…" para sempre, sem erro nenhum no
+ * console, porque não há erro: a função só nunca é chamada. Custou uma sessão
+ * de depuração descobrir isso aqui, e o `main.js` do arqueiro já tinha a mesma
+ * corrida escrita pelo mesmo motivo.
+ *
+ * Com aba visível o rAF ganha sempre, então o caminho normal não paga nada.
+ */
+function nextFrame() {
+  return new Promise((resolve) => {
+    let pronto = false;
+    const fim = () => {
+      if (pronto) return;
+      pronto = true;
+      resolve();
+    };
+    requestAnimationFrame(fim);
+    setTimeout(fim, 100);
+  });
 }

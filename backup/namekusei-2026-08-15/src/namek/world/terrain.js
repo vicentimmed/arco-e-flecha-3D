@@ -55,7 +55,6 @@ import * as THREE from "three";
 import { ValueNoise } from "../../utils/noise.js";
 import { clamp, smoothstep } from "../../utils/math.js";
 import { NAMEK } from "../../shared/namek/config.js";
-import { DETALHE_GLSL, texturaDeDetalhe, descartarDetalhe } from "./detail.js";
 
 const TAU = Math.PI * 2;
 
@@ -330,38 +329,28 @@ export class NamekTerrain {
   /* ------------------------------------------------------------------ cor -- */
 
   /**
-   * Cor por vértice — a REGIÃO do planeta: campo, rocha, praia, fundo raso.
+   * Cor por vértice — e não textura, porque o repositório inteiro não carrega
+   * um único arquivo de imagem (§3: zero texturas).
    *
-   * A divisão de trabalho com `world/detail.js` é o que faz as duas coisas
-   * caberem: aqui se resolve o que muda em dezenas ou centenas de metros, e
-   * isso é calculado UMA vez na construção e custa zero por quadro; o que
-   * muda dentro de um metro quadrado é do grão triplanar, que é por
-   * fragmento. Tentar descrever o grão aqui exigiria célula de 20 cm — cento
-   * e sessenta vezes mais vértices no campo.
-   *
-   * `applyCrater` não mexe em cor de propósito: o buraco é lido pela normal e
-   * pela sombra própria, e repintar o anel a cada explosão custaria um
-   * terceiro buffer subindo para a placa por golpe.
+   * Tudo aqui é resolvido UMA vez, na construção, e depois custa zero por
+   * quadro. É onde mora metade da leitura do planeta, e é por isso que dá para
+   * caprichar sem pesar. `applyCrater` não mexe em cor de propósito: o buraco é
+   * lido pela normal e pela sombra própria, e repintar o anel a cada explosão
+   * custaria um terceiro buffer subindo para a placa por golpe.
    */
   corDeSuperficie(x, z, h, ny, out) {
     const n = this.noise;
     const inclinacao = 1 - ny; // 0 = plano, 1 = parede
     const mancha = n.fbm2(x * 0.0042, z * 0.0042, 2);
     const grao = n.fbm2(x * 0.062, z * 0.062, 2);
-    /* Uma TERCEIRA escala, no meio das outras duas (~55 m) e com origem
-       deslocada para não correlacionar com nenhuma delas. Com só duas, a
-       transição entre a mancha larga e o grão fino deixava uma faixa de
-       distância — justamente a de voo baixo — em que o campo lia como um
-       degradê liso. Mesmo remédio que o vale usa (`grain` + `patch`). */
-    const veio = n.fbm2(x * 0.018 - 61.3, z * 0.018 + 27.9, 2);
 
-    /* O campo. Três variações de escala diferente: a mancha larga (~240 m) dá
-       as regiões, o veio (~55 m) quebra o degradê a média distância, e o grão
-       (~16 m) impede que tudo isso vire papel de parede à distância de voo. */
+    /* O campo. Duas variações de escala diferente: a mancha larga (~240 m) dá
+       as regiões, e o grão (~16 m) impede que a mancha vire um degradê de
+       papel de parede à distância de voo. */
     out
       .copy(PALETA.campo)
-      .lerp(PALETA.campoClaro, clamp(0.42 + 0.58 * mancha + 0.3 * veio + 0.18 * grao, 0, 1))
-      .lerp(PALETA.campoFundo, clamp(0.28 - 0.62 * mancha - 0.24 * veio, 0, 1) * 0.8);
+      .lerp(PALETA.campoClaro, clamp(0.42 + 0.7 * mancha + 0.22 * grao, 0, 1))
+      .lerp(PALETA.campoFundo, clamp(0.28 - 0.75 * mancha, 0, 1) * 0.8);
 
     /* A ROCHA aflora pela inclinação E pela altitude. Só pela inclinação, um
        cume achatado de 120 m continuaria coberto de campo verde-azulado, o que
@@ -604,25 +593,17 @@ export class NamekTerrain {
   /* ------------------------------------------------------------ material --- */
 
   /**
-   * `MeshStandardMaterial` com TRÊS enxertos: o grão da superfície, as
-   * fissuras de magma e o dial da tempestade.
+   * `MeshStandardMaterial` com dois enxertos: as fissuras de magma e o dial da
+   * tempestade.
    *
    * `onBeforeCompile` em vez de um `ShaderMaterial` inteiro porque a
    * iluminação, a névoa e o tonemap do repositório já estão resolvidos no
    * material padrão — reescrevê-los para ganhar uma linha de emissivo seria
    * assinar a manutenção deles.
    *
-   * Os três enxertos moram na MESMA função porque `onBeforeCompile` é um só.
-   * É por isso que `world/detail.js` devolve trechos de GLSL em vez de aplicar
-   * o enxerto sozinho: quem monta o shader tem de ser o dono do material.
-   *
-   * Pontos de injeção, e por que cada um:
-   * • `<color_fragment>`  — logo depois de a cor de VÉRTICE entrar em
-   *   `diffuseColor`; o grão multiplica o que a região já decidiu.
-   * • `<normal_fragment_maps>` — depois de a normal geométrica estar pronta;
-   *   é onde o relevo falso do grão pode perturbá-la.
-   * • `<emissivemap_fragment>` — o único ponto em que
-   *   `totalEmissiveRadiance` já foi declarado e ainda não foi usado.
+   * O ponto de injeção é `<emissivemap_fragment>`: é o chunk que existe em
+   * todas as versões recentes do Three e o único ponto em que
+   * `totalEmissiveRadiance` já foi declarado e ainda não foi usado.
    */
   criarMaterial() {
     const mat = new THREE.MeshStandardMaterial({
@@ -633,26 +614,21 @@ export class NamekTerrain {
     });
 
     const uStorm = this.uStorm;
-    const uDetalhe = DETALHE_GLSL.uniforms(texturaDeDetalhe());
-
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.storm = uStorm;
       shader.uniforms.magmaCor = { value: PALETA.magma.clone() };
-      Object.assign(shader.uniforms, uDetalhe);
 
       shader.vertexShader = shader.vertexShader
         .replace(
           "#include <common>",
           `#include <common>
            attribute float aMagma;
-           varying float vMagma;
-           ${DETALHE_GLSL.vertexCommon}`,
+           varying float vMagma;`,
         )
         .replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
-           vMagma = aMagma;
-           ${DETALHE_GLSL.vertexBody}`,
+           vMagma = aMagma;`,
         );
 
       shader.fragmentShader = shader.fragmentShader
@@ -661,18 +637,7 @@ export class NamekTerrain {
           `#include <common>
            uniform float storm;
            uniform vec3 magmaCor;
-           varying float vMagma;
-           ${DETALHE_GLSL.fragmentCommon}`,
-        )
-        .replace(
-          "#include <color_fragment>",
-          `#include <color_fragment>
-           ${DETALHE_GLSL.fragmentColor}`,
-        )
-        .replace(
-          "#include <normal_fragment_maps>",
-          `#include <normal_fragment_maps>
-           ${DETALHE_GLSL.fragmentNormal}`,
+           varying float vMagma;`,
         )
         .replace(
           "#include <emissivemap_fragment>",
@@ -683,11 +648,6 @@ export class NamekTerrain {
            totalEmissiveRadiance += magmaCor * (vMagma * storm * storm * 1.6);`,
         );
     };
-
-    /* Sem isto o Three reaproveita o programa já compilado de qualquer outro
-       `MeshStandardMaterial` com as mesmas flags, e o enxerto acima é ignorado
-       em silêncio — o chão volta a ser chapado sem nenhum erro no console. */
-    mat.customProgramCacheKey = () => "namek-terreno-detalhe-at";
 
     this.material = mat;
     return mat;
@@ -823,10 +783,6 @@ export class NamekTerrain {
   }
 
   dispose() {
-    /* A textura de detalhe é de MÓDULO (uma só para o modo inteiro), então
-       quem a solta é o dispose — este modo não tem o registro de recursos
-       compartilhados do jogo do arqueiro (§0), a limpeza é explícita. */
-    descartarDetalhe();
     this.geometry?.dispose();
     this.material?.dispose();
     this.mesh?.parent?.remove(this.mesh);

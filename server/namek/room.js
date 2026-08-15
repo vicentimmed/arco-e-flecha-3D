@@ -990,6 +990,12 @@ export class NamekRoom {
           kind: ev.kind,
           o: vec(ev.o),
           d: vec(ev.d),
+          /* O ALVO, que faltava — e a falta era visível: sem este campo o
+             cliente recebia `target: undefined`, e o especial de todo bot voava
+             RETO na tela enquanto o mesmo golpe de um humano contornava. Um
+             Kienzan de bot e um Kienzan de gente eram dois golpes diferentes.
+             `alvoId` é a trava do bot; é o que a tecla R é para o humano. */
+          target: ev.alvo ?? null,
           w: agora,
         });
         break;
@@ -1543,7 +1549,16 @@ export class NamekRoom {
       target: Number.isFinite(msg.target) ? msg.target : null,
       w: clampTempo(msg.w, agora),
     });
-    this.bots.avisarEspecial({ owner: player.id, kind: msg.kind, o: msg.o, d: msg.d });
+    /* O ALVO vai junto: o fantasma que os bots consultam para desviar tem de
+       CURVAR como o golpe de verdade curva. Sem ele, o bot se afastava do eixo
+       do disparo e o Kamehameha ia atrás dele — a esquiva o entregava. */
+    this.bots.avisarEspecial({
+      owner: player.id,
+      kind: msg.kind,
+      o: msg.o,
+      d: msg.d,
+      target: msg.target,
+    });
   }
 
   /**
@@ -1595,23 +1610,41 @@ export class NamekRoom {
 
     /* GOLPE QUE PERSEGUE NÃO TEM EIXO, e a conferência tem de mudar com ele.
      *
-     * O teste abaixo — distância da vítima à reta que sai da boca do golpe — é
-     * exato para o Kamehameha e para a Genki Dama, que viajam em linha reta.
-     * O Kienzan e o Galick Gun CURVAM (ver `homing` em `NAMEK.specials`): um
-     * disco que faz 165° de correção acerta alguém que está a noventa graus do
-     * rumo original, e o teste do eixo recusaria justamente o acerto legítimo —
-     * o golpe simplesmente não machucaria ninguém que ele perseguiu.
+     * O teste da distância à reta que sai da boca do golpe é exato para quem
+     * viaja em linha reta — e desde que "todos os poderes devem perseguir o
+     * player", ninguém viaja. Um Kienzan que faz 165° de correção acerta alguém
+     * a noventa graus do rumo original, e o teste do eixo recusaria justamente o
+     * acerto legítimo: o golpe não machucaria ninguém que ele perseguiu.
      *
-     * A troca é honesta e vale a pena registrá-la: para esses dois, o que
-     * sobra é a ESFERA — a vítima tem de estar dentro do alcance do golpe,
-     * medido da origem. É uma janela mais larga que a do eixo, e um cliente
-     * mentiroso poderia escolher a vítima dentro dela em vez de a que ele de
-     * fato acertou. O que segura o abuso é o resto do cerco, que continua
-     * inteiro: o golpe tem de existir e estar dentro da janela de tempo dele
-     * (`e.ate`), custou a barra CHEIA, e cada vítima só pode ser cobrada UMA
-     * vez (`exposicao`). O teto do estrago de uma mentira é, portanto, um
-     * acerto por golpe — que é o mesmo teto de um acerto honesto. */
-    if (e.info.homing) {
+     * São dois casos, e a diferença entre eles é o teto de correção total:
+     *
+     * • QUEM TEM `arcMax` (o Kamehameha e a Genki Dama) ganha um CONE. O teto
+     *   dá um limite geométrico de graça: a posição do golpe é a integral de
+     *   versores que nunca se afastam mais de `arcMax` da direção do disparo, e
+     *   a média de vetores dentro de um cone fica dentro do mesmo cone. Ou seja,
+     *   o golpe inteiro cabe num cone de meia-abertura `arcMax` em torno de `d`,
+     *   e a margem lateral aceita a `t` metros é `t · tan(arcMax)` — um cone que
+     *   é frouxo longe, sim, mas oito vezes e meia mais apertado que a esfera em
+     *   ângulo sólido, e o mais apertado que se pode afirmar com honestidade.
+     *
+     * • QUEM NÃO TEM (o Kienzan, o Galick Gun) fica com a ESFERA: a vítima tem
+     *   de estar dentro do alcance, medido da origem. Para eles não existe cone
+     *   honesto — 165° de correção é mais que um hemisfério.
+     *
+     * A troca da esfera vale a pena registrar: um cliente mentiroso poderia
+     * escolher a vítima dentro dela em vez de a que ele de fato acertou. O que
+     * segura o abuso é o resto do cerco, que continua inteiro: o golpe tem de
+     * existir e estar dentro da janela de tempo dele (`e.ate`), custou a barra
+     * CHEIA, e cada vítima só pode ser cobrada UMA vez (`exposicao`). O teto do
+     * estrago de uma mentira é, portanto, um acerto por golpe — que é o mesmo
+     * teto de um acerto honesto.
+     *
+     * E é por isso que o Kamehameha PRECISA do cone e não podia herdar a esfera:
+     * ele cobra por SEGUNDO, então "uma vez por vítima" vale 2,4 s de dps em vez
+     * de um corte, e a esfera de 620 m em torno de quem atirou é grande demais
+     * para uma cobrança dessa. */
+    const arcMax = e.info.homing?.arcMax;
+    if (e.info.homing && arcMax === undefined) {
       const d = Math.hypot(vx, vy, vz);
       if (d > e.info.range + TOLERANCIA) return;
     } else {
@@ -1629,7 +1662,10 @@ export class NamekRoom {
     const t = vx * dx + vy * dy + vz * dz;
     if (t < 0 || t > e.info.range + TOLERANCIA) return;
 
-    const raio = (e.info.hitRadius ?? 4) + TOLERANCIA;
+    /* A abertura do cone. Zero para quem não persegue — e aí isto é, linha por
+       linha, o teste de eixo que sempre esteve aqui. */
+    const abre = arcMax === undefined ? 0 : t * Math.tan((arcMax * Math.PI) / 180);
+    const raio = (e.info.hitRadius ?? 4) + abre + TOLERANCIA;
     const fora = Math.hypot(vx - dx * t, vy - dy * t, vz - dz * t);
     if (fora > raio) return;
     }

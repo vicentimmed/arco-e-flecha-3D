@@ -925,6 +925,31 @@ export function alvoPorId(alvos, id) {
 }
 
 /**
+ * Quanto este golpe pode girar NESTE passo, em radianos.
+ *
+ * Duas travas numa conta só: o teto por segundo (`turnRate`, que todo golpe que
+ * persegue tem) e o teto da correção TOTAL (`arcMax`, que só alguns declaram).
+ * O segundo precisa de um acumulador, e o acumulador é do projétil — por isso
+ * ele entra como parâmetro em vez de morar aqui.
+ *
+ * Mora junto de `perseguirPonto`, e não em cada golpe, porque a alternativa era
+ * um campo de configuração que os arquivos que não o leem ignoram em silêncio:
+ * declarar `arcMax` num Kienzan e ver o disco contornar do mesmo jeito é o tipo
+ * de armadilha que custa uma tarde para achar.
+ *
+ * @param {object} H o bloco `homing` do golpe
+ * @param {number} dt segundos
+ * @param {number} arco radianos já gastos do teto total
+ * @returns {number} radianos — 0 quando o teto total acabou
+ */
+export function passoDeGiro(H, dt, arco) {
+  const passo = ((H.turnRate * Math.PI) / 180) * dt;
+  if (H.arcMax === undefined) return passo;
+  const sobra = (H.arcMax * Math.PI) / 180 - arco;
+  return sobra <= 0 ? 0 : passo < sobra ? passo : sobra;
+}
+
+/**
  * Gira uma direção EM DIREÇÃO a um ponto, com teto de ângulo. O motor da
  * perseguição, compartilhado.
  *
@@ -941,25 +966,32 @@ export function alvoPorId(alvos, id) {
  * uma decisão de quem está fugindo, e é ela que precisa continuar valendo
  * alguma coisa.
  *
+ * A QUARTA TRAVA — o teto de correção TOTAL (`arcMax`) — não mora aqui, e é de
+ * propósito: ela é um acumulador, e acumular é do projétil. Quem a usa (o
+ * Kamehameha e a Genki Dama) soma este retorno e encolhe o próprio `maxRad` até
+ * zero. Ver `NAMEK.specials.kamehameha.homing`.
+ *
  * @param {{x,y,z}} dir versor mutado no lugar
  * @param {number} tx alvo, em espaço de mundo
  * @param {number} cosCone cosseno do meio-ângulo do cone
  * @param {number} maxRad teto de giro DESTE passo, em radianos
- * @returns {boolean} houve correção
+ * @returns {number} radianos efetivamente girados — 0 quando não houve
+ *   correção, o que continua sendo falso para quem só quisesse o sim ou não
  */
 export function perseguirPonto(dir, tx, ty, tz, ox, oy, oz, cosCone, maxRad) {
+  if (!(maxRad > 0)) return 0;
   let ax = tx - ox;
   let ay = ty - oy;
   let az = tz - oz;
   const dist = comp(ax, ay, az);
-  if (dist < 1e-3) return false;
+  if (dist < 1e-3) return 0;
   ax /= dist;
   ay /= dist;
   az /= dist;
 
   const cos = dir.x * ax + dir.y * ay + dir.z * az;
-  if (cos < cosCone) return false; // fora do cone: reta, e ponto
-  if (cos > 0.999999) return false; // já apontando: nada a girar
+  if (cos < cosCone) return 0; // fora do cone: reta, e ponto
+  if (cos > 0.999999) return 0; // já apontando: nada a girar
 
   const ang = Math.acos(cos < -1 ? -1 : cos > 1 ? 1 : cos);
   const passo = ang < maxRad ? ang : maxRad;
@@ -967,7 +999,7 @@ export function perseguirPonto(dir, tx, ty, tz, ox, oy, oz, cosCone, maxRad) {
   let py = ay - dir.y * cos;
   let pz = az - dir.z * cos;
   const plen = comp(px, py, pz);
-  if (plen < 1e-6) return false;
+  if (plen < 1e-6) return 0;
   px /= plen;
   py /= plen;
   pz /= plen;
@@ -981,7 +1013,7 @@ export function perseguirPonto(dir, tx, ty, tz, ox, oy, oz, cosCone, maxRad) {
   dir.x = nx * inv;
   dir.y = ny * inv;
   dir.z = nz * inv;
-  return true;
+  return passo;
 }
 
 export { PEITO, TETO_DO_RELEVO };

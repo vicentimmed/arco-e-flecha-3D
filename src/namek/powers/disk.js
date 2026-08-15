@@ -46,6 +46,7 @@ import {
   distancia2AoAlvo,
   pegarVaga,
   alvoPorId,
+  passoDeGiro,
   perseguirPonto,
   PEITO,
   TETO_DO_RELEVO,
@@ -159,6 +160,8 @@ class Disco {
        de ki (§6.1). Um disco que escolhesse a vítima sozinho, em cada tela,
        voaria para lados diferentes em cada tela. */
     this.alvo = target;
+    /** Radianos já gastos do teto total de correção. Ver `passoDeGiro`. */
+    this.arco = 0;
 
     this.x = origem.x;
     this.y = origem.y;
@@ -349,7 +352,11 @@ class Disco {
       this.alvo = null;
       return;
     }
-    perseguirPonto(
+    /* O Kienzan não declara `arcMax` — contornar é o que ele tem —, então
+       `passoDeGiro` devolve aqui o teto por segundo puro. Ela está no caminho
+       assim mesmo para que o dia em que alguém quiser limitar a curva do disco
+       seja um número na configuração, e não uma visita a este arquivo. */
+    this.arco += perseguirPonto(
       this.dir,
       a.x,
       a.y + a.altura * PEITO,
@@ -358,7 +365,7 @@ class Disco {
       this.y,
       this.z,
       Math.cos((H.cone * Math.PI) / 180),
-      (H.turnRate * Math.PI) / 180 * dt,
+      passoDeGiro(H, dt, this.arco),
     );
   }
 

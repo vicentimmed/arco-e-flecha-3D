@@ -1084,17 +1084,28 @@ export class NamekGame {
     const dir = this.direcaoDeTiro(origem);
     /* O ALVO DO GOLPE QUE PERSEGUE, escolhido AGORA e nunca revisto.
      *
-     * Só os que têm `homing` escolhem — o Kienzan e o Galick Gun. A trava manual
-     * (a tecla R) ganha de tudo, porque ela é a intenção declarada do jogador;
-     * sem trava, vale o mais alinhado com a mira dentro do alcance de aquisição
-     * do golpe, que é bem maior que o de uma bola de ki (300 m contra 50).
+     * Todos os quatro especiais têm `homing` hoje — o pedido foi literal ("todos
+     * os poderes devem perseguir o player, alguns perseguem mais, outros
+     * menos"). A trava manual (a tecla R) ganha de tudo, porque ela é a intenção
+     * declarada do jogador; sem trava, vale o mais alinhado com a mira dentro do
+     * alcance de aquisição do golpe, que é bem maior que o de uma bola de ki
+     * (300 m contra 50).
+     *
+     * O KAMEHAMEHA É A EXCEÇÃO, e ela é o pedido: "para fazer curva, ele só faz
+     * curva quando o player está travado o foco no inimigo". `soTrava` corta a
+     * aquisição automática — sem a tecla R ele sai sem alvo, e sem alvo ele é o
+     * feixe reto que sempre foi. É uma regra boa por si só: a trava vira o PREÇO
+     * da curvatura, e quem quiser o gancho tem de se comprometer com alguém
+     * antes de gastar a barra inteira.
      *
      * É a mesma regra do §6.1 aplicada a um golpe caro, e ela precisa ser
      * resolvida aqui e viajar na mensagem: dois clientes escolhendo sozinhos
-     * dariam duas trajetórias para o mesmo disco. */
-    const alvo = info.homing
-      ? this.lockId ?? this.escolherAlvoDeEspecial(origem, dir, info)
-      : null;
+     * dariam duas trajetórias para o mesmo golpe. */
+    const alvo = !info.homing
+      ? null
+      : info.homing.soTrava
+        ? this.lockId
+        : this.lockId ?? this.escolherAlvoDeEspecial(origem, dir, info);
     /* `duracaoDaPose` e não `windup + sustain`: o Kienzan, o Galick Gun e a
        Genki Dama SAEM da mão e voam sozinhos, e prender o corpo pela vida do
        projétil deixaria o lutador na pose de arremesso por até dez segundos

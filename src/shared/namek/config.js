@@ -394,6 +394,77 @@ export const NAMEK = {
       /** Potência para a conta da cratera. Ver `craterFor`. */
       power: 4.2,
       cor: 0x6fd8ff,
+
+      /* ELE FAZ CURVA — e é a mudança mais funda que este golpe já teve.
+       *
+       * O pedido: "hoje é só algo muito reto, mas ele deve, sim, ter uma
+       * curvatura para perseguir o player… porém a curva nunca deve ser muito
+       * brusca, é sempre uma curva suave e deve ter um limite".
+       *
+       * O feixe deixou de ser função pura de (origem, direção, tempo) e virou
+       * uma COBRA: uma cabeça que voa e gira, e um corpo que é o caminho por
+       * onde ela passou. `powers/beam.js` tem o mecanismo inteiro.
+       *
+       * -------------------------------------------------------- por que 85°/s
+       *
+       * Parece muito e não é: o que o olho lê numa curva é o RAIO, não a taxa.
+       * A 340 m/s, 85°/s (1,48 rad/s) fecham uma curva de `v/ω` = **229 m de
+       * raio** — a 55 m de quem atirou o feixe dobrou 14°, e ele só completa os
+       * 40° do teto depois de 160 m de voo. É um gancho longo, que é o que a
+       * referência mostra, e não uma cotovelada.
+       *
+       * ------------------------------------------------------------- e a fuga
+       *
+       * A régua do resto do modo (ver `flySpeed`) diz que quem arranca de lado a
+       * `v > ω·d` vence a velocidade angular do golpe, e com o boost a 64 m/s
+       * isso dá 43 m para este. Mas essa conta não é a história inteira aqui, e
+       * vale escrever o que foi MEDIDO contra este arquivo: um lutador que
+       * arranca de lado no instante do tiro escapa **em qualquer distância** —
+       * 0 s de exposição a 50, 100 e 200 m, e 0,02 s (1,2 de dano) a 400 m,
+       * contra os 2,3 a 2,7 s que mata quem fica no eixo.
+       *
+       * As duas metades da fuga são diferentes, e é por isso que ela vale em
+       * toda a escala: PERTO, o jogador ganha a corrida angular; LONGE, quem
+       * segura o feixe é o `arcMax` — ele gasta os 40° e para de corrigir. O
+       * teto não é só uma trava contra o bumerangue: é a metade da escapatória
+       * que a conta de velocidade angular não cobre.
+       *
+       * O que a curva compra, então, não é acertar quem foge: é acertar quem se
+       * mexe sem se comprometer — quem deriva, quem recua em linha reta, quem
+       * decide tarde — e punir quem fica no eixo. Que é a troca certa para um
+       * golpe que custa a barra inteira e 1,05 s de pose.
+       *
+       * ------------------------------------------------------------- e `arcMax`
+       *
+       * É o "deve ter um limite essa curva", virado em número, e é uma trava
+       * NOVA — a rajada, o Kienzan e o Galick Gun têm só teto de giro e prazo.
+       * Prazo não é limite de curva: 85°/s por 1,4 s dariam 119°, e um feixe que
+       * corrige 119° não persegue, ele CAÇA — volta por cima do ombro de quem
+       * atirou. Com o teto em 40° o desvio lateral que ele compra é
+       * `R·(1−cos40°)` = 54 m: sobra para pegar quem se mexeu, longe de um
+       * bumerangue.
+       *
+       * O teto é também o que dá ao servidor um cone honesto para conferir o
+       * acerto — ver `registrarQueimadura`, que sem ele cairia numa esfera de
+       * 620 m em torno de quem atirou. */
+      homing: {
+        /** graus/s — teto de giro. Raio de curva de 229 m a 340 m/s. */
+        turnRate: 85,
+        /** graus — teto da correção TOTAL na vida do feixe. O limite da curva. */
+        arcMax: 40,
+        /** s — depois disto ele segue reto, sempre. */
+        duration: 1.4,
+        /** graus — meio-ângulo do cone. Fora dele, não corrige. */
+        cone: 35,
+        /** m — alcance da escolha de alvo. Só vale se `soTrava` cair. */
+        acquire: 320,
+        /* SÓ COM A TRAVA. "Para fazer curva, ele só faz curva quando o player
+           está travado o foco no inimigo" — e é uma regra boa por si só: a
+           trava passa a ser o PREÇO da curvatura. Sem ela o Kamehameha é o
+           feixe reto de sempre, e quem quiser o gancho tem de se comprometer
+           com um alvo antes de gastar a barra. Ver `soltarEspecial`. */
+        soTrava: true,
+      },
     },
     /* O GALICK GUN É UMA BOLA, E NÃO UM SEGUNDO KAMEHAMEHA.
      *
@@ -524,6 +595,39 @@ export const NAMEK = {
          fica dele. */
       power: 26,
       cor: 0x9ff0ff,
+
+      /* ELA PASSOU A PERSEGUIR — e este bloco desmente, de propósito, um "nunca
+       * vai perseguir" que estava escrito em `orb.js` e aqui.
+       *
+       * O que mudou foi o pedido: "todos os poderes devem perseguir o player,
+       * alguns perseguem mais, outros menos". A Genki Dama era, com o
+       * Kamehameha, uma das duas retas puras do repertório.
+       *
+       * Ela é a que MENOS persegue de todas, e por larga margem — 20°/s contra
+       * os 26 da rajada, os 55 do Galick Gun e os 70 do Kienzan. O motivo é o
+       * mesmo que antes recomendava não perseguir nada: 96 de dano com 11 m de
+       * raio de morte é o golpe que apaga alguém, e uma perseguição de verdade
+       * o transformaria numa sentença.
+       *
+       * O que sobrou é a correção que perdoa movimento e nada além disso. A
+       * 46 m/s, 20°/s (0,349 rad/s) fecham uma curva de **132 m de raio**, e a
+       * conta da fuga (`v > ω·d`, ver `flySpeed`) diz que quem arranca de lado
+       * com o boost escapa dela a **até 183 m** — a maior distância de fuga do
+       * jogo inteiro. Contra os 43 m do Kamehameha, é outra categoria de golpe:
+       * ele te alcança, ela só te acompanha.
+       *
+       * Ela NÃO tem `soTrava`: 3,6 s parado carregando a bola já são
+       * comprometimento de sobra, e cobrar a trava por cima seria cobrar duas
+       * vezes pelo mesmo gesto. */
+      homing: {
+        turnRate: 20,
+        /** graus — teto da correção total. Ver `kamehameha.homing.arcMax`. */
+        arcMax: 50,
+        duration: 4,
+        /** graus — cone largo: a bola é enorme e vira devagar. */
+        cone: 45,
+        acquire: 300,
+      },
     },
   },
 

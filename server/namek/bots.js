@@ -494,7 +494,11 @@ export class NamekBotSquad {
       dano: 0,
       poder: 0,
       fantasma: true,
-      persegue: true,
+      /* O BLOCO DE PERSEGUIÇÃO DO PRÓPRIO GOLPE, e não um "sim/não" — ver
+         `passoDasBolas`, que antes aplicava os números da rajada a tudo o que
+         voava. Aqui é uma rajada de verdade, então é o da rajada mesmo. */
+      homing: NAMEK.blast.homing,
+      arco: 0,
     });
   }
 
@@ -506,11 +510,16 @@ export class NamekBotSquad {
    * do eixo. Um bot que atravessa um Kamehameha porque não o enxerga é o
    * defeito mais visível que este modo poderia ter.
    */
-  avisarEspecial({ owner, kind, o, d }) {
+  avisarEspecial({ owner, kind, o, d, target }) {
     const info = specialInfo(kind);
     if (!info || !Array.isArray(o) || !Array.isArray(d)) return;
     const n = normalizar(d[0], d[1], d[2]);
     if (!n) return;
+    /* O FANTASMA PERSEGUE IGUAL. Sem o alvo, o medo do bot era sempre a reta do
+       disparo — ele se afastava do eixo e o golpe ia atrás dele, o que é pior do
+       que não desviar: a esquiva o entregava. `target` é o mesmo id que viajou
+       no `NC2S.SPECIAL` e que o cliente usa para desenhar a curva. */
+    const alvo = Number.isFinite(target) ? target : null;
 
     /* NEM TODO ESPECIAL É UM FEIXE, e o medo tem de ter a forma certa.
      *
@@ -529,7 +538,7 @@ export class NamekBotSquad {
         dono: owner,
         x: o[0], y: o[1], z: o[2],
         dx: n.x, dy: n.y, dz: n.z,
-        alvo: null,
+        alvo,
         t: 0,
         /* A ESPERA é o `windup` do golpe: o humano ainda está na pose, e a bola
            só nasce quando ele a solta. Sem ela, o fantasma sairia no instante do
@@ -543,22 +552,70 @@ export class NamekBotSquad {
         dano: 0,
         poder: 0,
         fantasma: true,
-        persegue: false,
+        homing: info.homing ?? null,
+        arco: 0,
       });
       return;
     }
 
-    this.feixes.push({
-      dono: owner,
+    this.feixes.push(
+      this.novoFeixe({
+        dono: owner,
+        kind,
+        info,
+        o,
+        dir: n,
+        alvo,
+        espera: info.windup,
+        dur: info.windup + info.sustain,
+        fantasma: true,
+        // Fantasma não abre buraco: quem atirou é que reporta a cratera dele.
+        crateraFeita: true,
+      }),
+    );
+  }
+
+  /**
+   * Um feixe na lista, com o caminho já semeado.
+   *
+   * A fábrica existe porque os feixes nascem em dois lugares — o do bot, em
+   * `passoDoEspecial`, e o fantasma de um humano, em `avisarEspecial` — e
+   * porque o que eles guardam deixou de ser "uma origem e uma direção" quando o
+   * Kamehameha passou a fazer curva. Duplicar treze campos em dois lugares é
+   * duplicar o dia em que um deles ganha o décimo quarto.
+   */
+  novoFeixe({ dono, kind, info, o, dir, alvo, espera, dur, fantasma, crateraFeita }) {
+    return {
+      dono,
       kind,
       info,
       ox: o[0], oy: o[1], oz: o[2],
-      dx: n.x, dy: n.y, dz: n.z,
+      /* A direção do DISPARO, que é a que viajou na rede e contra a qual a sala
+         confere o acerto declarado por humanos. A que a curva move é `dx/dy/dz`
+         do móvel abaixo — ver `passoDosFeixes`. */
+      d0x: dir.x, d0y: dir.y, d0z: dir.z,
+      /* A CABEÇA: onde ela está, para onde aponta, e quanto arco de correção já
+         gastou. Os três nomes (`dx`, `dy`, `dz`, `arco`) são os que
+         `perseguirPonto` espera. */
+      hx: o[0], hy: o[1], hz: o[2],
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      arco: 0,
+      alvo,
+      /* O CAMINHO, em coordenadas soltas: o nó da origem e o nó VIVO, que é
+         reescrito a cada passo. Mesmo desenho do cliente (`gravar`, em
+         `powers/beam.js`), e pelo mesmo motivo: um feixe que curva não pode ser
+         testado como um segmento, ou o dano cobra pela reta que ele não seguiu. */
+      pts: [o[0], o[1], o[2], o[0], o[1], o[2]],
+      arcoNo: 0,
+      frente: 0,
+      alcance: info.range,
       t: 0,
-      dur: info.windup + info.sustain,
-      fantasma: true,
-      crateraFeita: true,
-    });
+      /** s — quanto o feixe ainda não saiu da mão. Ver `passoDosFeixes`. */
+      espera: espera ?? 0,
+      dur,
+      fantasma,
+      crateraFeita,
+    };
   }
 
   /* -------------------------------------------------------------- o passo -- */
@@ -926,19 +983,27 @@ export class NamekBotSquad {
     }
 
     /* O FEIXE. Não se desvia de um Kamehameha no último instante: ele já está
-       aceso e o que importa é a distância ao EIXO, não o tempo de chegada. */
+       aceso e o que importa é a distância ao CORPO dele, não o tempo de chegada.
+       São duas perguntas, e as duas mudaram junto com a curva: "estou dentro do
+       que ele já percorreu?" e "estou na frente de onde ele está indo?". A
+       segunda usa a CABEÇA e a direção viva — projetá-la da boca do golpe, como
+       se fazia, desenhava a reta que o feixe justamente deixou de seguir. */
     for (const f of this.feixes) {
       if (f.dono === bot.id) continue;
-      const alcance = f.info.range;
-      const d = distSeg(
-        bx, by, bz,
-        f.ox, f.oy, f.oz,
-        f.ox + f.dx * alcance, f.oy + f.dy * alcance, f.oz + f.dz * alcance,
-      );
-      if (d > f.info.hitRadius + 16) continue;
+      const perto = f.info.hitRadius + 16;
+      let d = this.distanciaAoFeixe(f, bx, by, bz, perto);
+      const resta = f.alcance - f.frente;
+      if (d > perto && resta > 0) {
+        d = distSeg(
+          bx, by, bz,
+          f.hx, f.hy, f.hz,
+          f.hx + f.dx * resta, f.hy + f.dy * resta, f.hz + f.dz * resta,
+        );
+      }
+      if (d > perto) continue;
       // Feixe é sempre grande: são 62 de dano por segundo.
       this.grande = true;
-      return direcaoDeEsquiva(f.dx, f.dy, f.dz, bx - f.ox, by - f.oy, bz - f.oz);
+      return direcaoDeEsquiva(f.dx, f.dy, f.dz, bx - f.hx, by - f.hy, bz - f.hz);
     }
 
     return null;
@@ -1380,7 +1445,8 @@ export class NamekBotSquad {
       dano: NAMEK.blast.damage,
       poder: NAMEK.blast.power,
       fantasma: false,
-      persegue: true,
+      homing: NAMEK.blast.homing,
+      arco: 0,
     };
     this.bolas.push(bola);
 
@@ -1482,6 +1548,9 @@ export class NamekBotSquad {
       info,
       dir,
       o: { x: ox, y: oy, z: oz },
+      /* Quem o golpe vai perseguir, travado AGORA. O bot não reavalia: um golpe
+         que troca de alvo no meio do voo lê como bug, aqui como em toda parte. */
+      alvo: alvo.id,
       t: 0,
       /* NÃO é `windup + sustain`: ver `duracaoDaPose`. O disco e a esfera saem
          da mão e voam sozinhos — prender o lutador pela vida do projétil o
@@ -1502,6 +1571,13 @@ export class NamekBotSquad {
       kind,
       o: [ox, oy, oz],
       d: [dir.x, dir.y, dir.z],
+      /* QUEM ELE PERSEGUE. O bot não tem a tecla R, mas tem `alvoId` — a pessoa
+         que ele decidiu atacar —, e ela é a trava dele. Sem este campo o
+         especial do bot chegava ao cliente sem alvo e voava reto na tela
+         enquanto o dele, no servidor, também voava reto: as duas metades
+         concordavam em estar erradas, e o golpe de um bot não era o mesmo golpe
+         que o de um humano. Ver o `case "especial"` da sala. */
+      alvo: alvo.id,
     });
     return true;
   }
@@ -1530,17 +1606,19 @@ export class NamekBotSquad {
     if (!e.saiu && e.t >= e.info.windup) {
       e.saiu = true;
       if (e.info.dps !== undefined) {
-        this.feixes.push({
-          dono: bot.id,
-          kind: e.kind,
-          info: e.info,
-          ox: e.o.x, oy: e.o.y, oz: e.o.z,
-          dx: e.dir.x, dy: e.dir.y, dz: e.dir.z,
-          t: 0,
-          dur: e.info.sustain,
-          fantasma: false,
-          crateraFeita: false,
-        });
+        this.feixes.push(
+          this.novoFeixe({
+            dono: bot.id,
+            kind: e.kind,
+            info: e.info,
+            o: [e.o.x, e.o.y, e.o.z],
+            dir: e.dir,
+            alvo: e.alvo,
+            dur: e.info.sustain,
+            fantasma: false,
+            crateraFeita: false,
+          }),
+        );
       } else {
         /* Disco e Genki Dama não sustentam: eles VOAM. Entram na mesma lista
            das bolas de ki, com raio, dano e potência próprios — um integrador
@@ -1550,7 +1628,10 @@ export class NamekBotSquad {
           dono: bot.id,
           x: e.o.x, y: e.o.y, z: e.o.z,
           dx: e.dir.x, dy: e.dir.y, dz: e.dir.z,
-          alvo: null,
+          /* O ALVO, que faltava — com `null` aqui e `persegue: false` logo
+             abaixo, o Kienzan de um bot era o único do jogo que não perseguia
+             ninguém. Ele mira em quem o bot decidiu atacar, que é a trava dele. */
+          alvo: e.alvo,
           t: 0,
           vida: e.info.sustain,
           velocidade: e.info.speed,
@@ -1558,7 +1639,8 @@ export class NamekBotSquad {
           dano: e.info.damage ?? 40,
           poder: e.info.power,
           fantasma: false,
-          persegue: false,
+          homing: e.info.homing ?? null,
+          arco: 0,
         });
       }
     }
@@ -1607,17 +1689,23 @@ export class NamekBotSquad {
   /* ------------------------------------------------------------- as bolas -- */
 
   /**
-   * Um passo de todas as bolas em voo.
+   * Um passo de tudo o que voa: bolas de ki, Kienzans, Galick Guns e Genki
+   * Damas.
    *
-   * A perseguição fraca é a do §6.1, letra por letra: gira no máximo
-   * `turnRate` graus por segundo, por no máximo `duration` segundos, e SÓ
-   * enquanto o alvo estiver dentro do cone. O alvo foi escolhido no disparo e
-   * nunca é reavaliado — bola que troca de alvo no meio do voo lê como bug.
+   * A perseguição é a do §6.1, letra por letra: gira no máximo `turnRate` graus
+   * por segundo, por no máximo `duration` segundos, e SÓ enquanto o alvo
+   * estiver dentro do cone. O alvo foi escolhido no disparo e nunca é
+   * reavaliado — bola que troca de alvo no meio do voo lê como bug.
+   *
+   * CADA PROJÉTIL COM O `homing` DO PRÓPRIO GOLPE, e isto era um defeito com
+   * duas metades. A primeira: os números da RAJADA (26°/s, 0,75 s, cone de 22°)
+   * eram aplicados a tudo o que estivesse nesta lista, inclusive a um Kienzan,
+   * que persegue a 70°/s por 4,5 s num cone de 75°. A segunda, que anulava a
+   * primeira: as bolas de especial nasciam com `persegue: false`, então nada
+   * disso chegava a acontecer — o disco de um bot voava RETO no servidor
+   * enquanto o mesmo disco contornava na tela de quem o via.
    */
   passoDasBolas(dt, ctx) {
-    const H = NAMEK.blast.homing;
-    const cosCone = Math.cos(H.cone * RAD);
-    const giroMax = H.turnRate * RAD * dt;
     const vivas = [];
 
     for (const b of this.bolas) {
@@ -1632,31 +1720,20 @@ export class NamekBotSquad {
       b.t += dt;
       if (b.t > b.vida) continue;
 
-      if (b.persegue && b.t < H.duration && b.alvo !== null) {
+      if (b.homing && b.alvo !== null && b.t < b.homing.duration) {
         const alvo = acharCorpo(ctx.corpos, b.alvo);
         if (alvo && alvo.alive) {
-          const ax = alvo.x - b.x;
-          const ay = alvo.y + NAMEK.fighter.chest - b.y;
-          const az = alvo.z - b.z;
-          const d = Math.hypot(ax, ay, az);
-          if (d > 1e-3) {
-            const ux = ax / d;
-            const uy = ay / d;
-            const uz = az / d;
-            const cos = ux * b.dx + uy * b.dy + uz * b.dz;
-            if (cos > cosCone) {
-              /* Gira o VERSOR em direção ao alvo, com teto no ângulo do passo.
-                 Interpolar e renormalizar dá exatamente isto para ângulos
-                 pequenos, e um passo de 50 ms nunca produz um ângulo grande. */
-              const ang = Math.min(Math.acos(clamp(cos, -1, 1)), giroMax);
-              const g = versor(ux - b.dx * cos, uy - b.dy * cos, uz - b.dz * cos);
-              const c = Math.cos(ang);
-              const s = Math.sin(ang);
-              b.dx = b.dx * c + g.x * s;
-              b.dy = b.dy * c + g.y * s;
-              b.dz = b.dz * c + g.z * s;
-            }
-          }
+          perseguirPonto(
+            b,
+            b.homing,
+            alvo.x,
+            alvo.y + NAMEK.fighter.chest,
+            alvo.z,
+            b.x,
+            b.y,
+            b.z,
+            dt,
+          );
         }
       }
 
@@ -1736,10 +1813,17 @@ export class NamekBotSquad {
   /**
    * Um passo dos feixes sustentados.
    *
-   * O feixe não é um projétil: ele é um SEGMENTO que existe por
-   * `info.sustain` segundos e cobra por tempo de exposição. A frente avança a
-   * `info.speed` até o alcance ou até o relevo — quem está atrás do ponto de
-   * impacto ainda não está sendo queimado, e essa diferença é visível a olho.
+   * O feixe não é um projétil: ele é um CAMINHO que existe por `info.sustain`
+   * segundos e cobra por tempo de exposição. A cabeça avança a `info.speed` até
+   * o alcance ou até o relevo — quem está atrás do ponto de impacto ainda não
+   * está sendo queimado, e essa diferença é visível a olho.
+   *
+   * ERA UM SEGMENTO, e virou um caminho quando o Kamehameha passou a fazer
+   * curva. Não era uma escolha: o cliente desenha o feixe pela trajetória
+   * (`powers/beam.js`) e, se o dano continuasse sendo cobrado pela reta do
+   * disparo, um feixe de bot queimaria quem ele visivelmente contornou e
+   * pouparia quem ele visivelmente atravessou. As duas contas têm de ser a
+   * mesma conta.
    */
   passoDosFeixes(dt, ctx) {
     const vivos = [];
@@ -1747,28 +1831,38 @@ export class NamekBotSquad {
       f.t += dt;
       if (f.t > f.dur) continue;
 
-      const frente = Math.min(f.info.range, f.info.speed * f.t);
-      const fim = this.pontaDoFeixe(f, frente, ctx.field);
+      /* A ESPERA é o `windup`, e vale para o feixe FANTASMA: o humano ainda está
+         na pose e o feixe dele ainda não saiu. É a mesma peça que o fantasma da
+         bola tem, e faltava aqui — sem ela a cabeça deste feixe já estava a
+         trezentos metros quando o de verdade ainda não tinha nascido, e o prazo
+         de perseguição dele acabava antes de o golgo real começar a curvar. */
+      const tv = f.t - f.espera;
+      if (tv <= 0) {
+        vivos.push(f);
+        continue;
+      }
+
+      const chao = this.avancarFeixe(f, tv, dt, ctx);
 
       if (!f.fantasma) {
-        if (!f.crateraFeita && fim.chao) {
+        if (!f.crateraFeita && chao) {
           f.crateraFeita = true;
-          ctx.emitir({ tipo: "chao", dono: f.dono, p: [fim.x, fim.y, fim.z], poder: f.info.power });
+          ctx.emitir({ tipo: "chao", dono: f.dono, p: [f.hx, f.hy, f.hz], poder: f.info.power });
         }
+        const alcance = f.info.hitRadius + NAMEK.fighter.radius;
         for (const c of ctx.corpos) {
           if (c.id === f.dono || !c.alive || c.invuln) continue;
-          const d = distSeg(
-            c.x, c.y + NAMEK.fighter.chest, c.z,
-            f.ox, f.oy, f.oz,
-            fim.x, fim.y, fim.z,
-          );
-          if (d > f.info.hitRadius + NAMEK.fighter.radius) continue;
+          if (this.distanciaAoFeixe(f, c.x, c.y + NAMEK.fighter.chest, c.z, alcance) > alcance) {
+            continue;
+          }
           ctx.emitir({
             tipo: "acerto",
             dono: f.dono,
             vitima: c.id,
             dano: f.info.dps * dt,
             p: [c.x, c.y + NAMEK.fighter.chest, c.z],
+            /* A direção do EMPURRÃO é a da cabeça, não a do disparo: quem toma
+               um feixe que contornou é jogado para onde ele estava indo. */
             d: [f.dx, f.dy, f.dz],
             kind: f.kind,
           });
@@ -1779,22 +1873,107 @@ export class NamekBotSquad {
     this.feixes = vivos;
   }
 
-  /** Onde o feixe termina: no alcance atual, ou no relevo, o que vier antes. */
-  pontaDoFeixe(f, frente, field) {
-    const N = 14;
-    for (let i = 1; i <= N; i++) {
-      const t = (frente * i) / N;
-      const x = f.ox + f.dx * t;
-      const y = f.oy + f.dy * t;
-      const z = f.oz + f.dz * t;
-      if (field.heightAt(x, z) >= y) return { x, y, z, chao: true };
+  /**
+   * A cabeça do feixe gira, anda e grava por onde passou.
+   *
+   * Gêmea de `avancar` + `gravar` do cliente, e as duas precisam concordar. A
+   * amostragem do relevo é mais grossa aqui de propósito: o passo da sala é bem
+   * maior que o quadro de um cliente, e refinar o ponto de impacto em meio metro
+   * serve para não enterrar a bola de fogo no morro — coisa que este lado não
+   * desenha.
+   *
+   * @returns {boolean} true no passo em que ela encostou no chão
+   */
+  avancarFeixe(f, tv, dt, ctx) {
+    if (f.frente >= f.alcance) return false;
+
+    const H = f.info.homing;
+    if (H && f.alvo !== null && tv < H.duration) {
+      const alvo = acharCorpo(ctx.corpos, f.alvo);
+      if (!alvo || !alvo.alive) {
+        f.alvo = null;
+      } else {
+        const tx = alvo.x;
+        const ty = alvo.y + NAMEK.fighter.chest;
+        const tz = alvo.z;
+        /* PASSOU: o alvo ficou para trás do plano da cabeça, e a perseguição
+           acabou para sempre. É a mesma trava definitiva do cliente — ver
+           `perseguir`, em `powers/beam.js`, que tem o porquê. */
+        if ((tx - f.hx) * f.dx + (ty - f.hy) * f.dy + (tz - f.hz) * f.dz <= 0) {
+          f.alvo = null;
+        } else {
+          perseguirPonto(f, H, tx, ty, tz, f.hx, f.hy, f.hz, dt);
+        }
+      }
     }
-    return {
-      x: f.ox + f.dx * frente,
-      y: f.oy + f.dy * frente,
-      z: f.oz + f.dz * frente,
-      chao: false,
-    };
+
+    const passo = Math.min(f.info.speed * dt, f.alcance - f.frente);
+    if (passo <= 0) return false;
+
+    /* Marcha em fatias de 4 m atrás do relevo. A 340 m/s um passo de 50 ms são
+       17 m, e uma crista estreita cabe inteira dentro dele. */
+    let bateu = false;
+    let andou = passo;
+    for (let s = 4; s <= passo; s += 4) {
+      const x = f.hx + f.dx * s;
+      const y = f.hy + f.dy * s;
+      const z = f.hz + f.dz * s;
+      if (y <= ctx.field.heightAt(x, z)) {
+        andou = s;
+        bateu = true;
+        break;
+      }
+    }
+    if (!bateu) {
+      const x = f.hx + f.dx * passo;
+      const y = f.hy + f.dy * passo;
+      const z = f.hz + f.dz * passo;
+      if (y <= ctx.field.heightAt(x, z)) bateu = true;
+    }
+
+    f.hx += f.dx * andou;
+    f.hy += f.dy * andou;
+    f.hz += f.dz * andou;
+    f.frente += andou;
+    if (bateu) f.alcance = f.frente;
+
+    // O nó VIVO é o último e é reescrito todo passo; de 14 em 14 m ele é
+    // promovido a nó fixo e um novo nasce por cima dele. Ver `gravar`, no
+    // cliente, que tem o desenho inteiro.
+    const n = f.pts.length;
+    f.pts[n - 3] = f.hx;
+    f.pts[n - 2] = f.hy;
+    f.pts[n - 1] = f.hz;
+    if (f.frente - f.arcoNo >= 14) {
+      f.arcoNo = f.frente;
+      f.pts.push(f.hx, f.hy, f.hz);
+    }
+    return bateu;
+  }
+
+  /**
+   * Distância de um ponto ao caminho já percorrido pelo feixe.
+   *
+   * Sem corte de cauda: o feixe do bot não dissipa por trás no servidor — ele
+   * simplesmente deixa de existir quando `dur` acaba —, e cobrar por um trecho
+   * que o cliente já apagou vale no máximo os 0,55 · sustain do fim do golpe,
+   * contra quem já estava dentro dele. A folga é a favor de quem apanha em
+   * menos de um segundo de exposição, e não vale um segundo acumulador.
+   */
+  distanciaAoFeixe(f, x, y, z, corte) {
+    let melhor = Infinity;
+    for (let i = 0; i + 5 < f.pts.length; i += 3) {
+      const d = distSeg(
+        x, y, z,
+        f.pts[i], f.pts[i + 1], f.pts[i + 2],
+        f.pts[i + 3], f.pts[i + 4], f.pts[i + 5],
+      );
+      if (d < melhor) {
+        melhor = d;
+        if (melhor <= corte) return melhor;
+      }
+    }
+    return melhor;
   }
 }
 
@@ -1838,6 +2017,63 @@ function dist2D(a, b) {
 function acharCorpo(corpos, id) {
   for (let i = 0; i < corpos.length; i++) if (corpos[i].id === id) return corpos[i];
   return null;
+}
+
+/**
+ * Gira uma direção EM DIREÇÃO a um ponto, com as travas do `homing` do golpe.
+ * O motor da perseguição do lado do servidor.
+ *
+ * É a gêmea de `perseguirPonto` + `passoDeGiro` (em `src/namek/powers/blast.js`),
+ * e ela é uma CÓPIA, não um `import`, por um motivo chato e real: aquele arquivo
+ * importa `three`, e a sala não tem — nem quer — o motor gráfico carregado. As
+ * duas precisam concordar no resultado, então a fórmula está escrita aqui do
+ * mesmo jeito: rotação no PLANO dos dois vetores, usando a componente do alvo
+ * ortogonal à direção como segundo eixo. O comentário longo, com a sutileza
+ * inteira, está do lado do cliente.
+ *
+ * As quatro travas são as do §6.1 do plano: teto de giro por segundo
+ * (`turnRate`), teto da correção TOTAL (`arcMax`, opcional), prazo (`duration`,
+ * conferido por quem chama) e um CONE fora do qual não há correção nenhuma.
+ *
+ * @param {{dx,dy,dz,arco}} m o móvel — a direção é mutada no lugar e `arco`
+ *   acumula os radianos já gastos do teto total
+ * @param {object} H o bloco `homing` do golpe
+ * @returns {number} radianos girados neste passo
+ */
+function perseguirPonto(m, H, tx, ty, tz, ox, oy, oz, dt) {
+  let maxRad = H.turnRate * RAD * dt;
+  if (H.arcMax !== undefined) {
+    const sobra = H.arcMax * RAD - m.arco;
+    if (sobra <= 0) return 0;
+    if (maxRad > sobra) maxRad = sobra;
+  }
+
+  let ax = tx - ox;
+  let ay = ty - oy;
+  let az = tz - oz;
+  const dist = Math.hypot(ax, ay, az);
+  if (dist < 1e-3) return 0;
+  ax /= dist;
+  ay /= dist;
+  az /= dist;
+
+  const cos = m.dx * ax + m.dy * ay + m.dz * az;
+  if (cos < Math.cos(H.cone * RAD)) return 0; // fora do cone: reta, e ponto
+  if (cos > 0.999999) return 0; // já apontando
+
+  const passo = Math.min(Math.acos(clamp(cos, -1, 1)), maxRad);
+  const g = versor(ax - m.dx * cos, ay - m.dy * cos, az - m.dz * cos);
+  const c = Math.cos(passo);
+  const s = Math.sin(passo);
+  const nx = m.dx * c + g.x * s;
+  const ny = m.dy * c + g.y * s;
+  const nz = m.dz * c + g.z * s;
+  const inv = 1 / (Math.hypot(nx, ny, nz) || 1);
+  m.dx = nx * inv;
+  m.dy = ny * inv;
+  m.dz = nz * inv;
+  m.arco += passo;
+  return passo;
 }
 
 function fora(x, y, z) {

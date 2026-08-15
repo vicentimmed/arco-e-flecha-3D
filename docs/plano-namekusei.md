@@ -152,26 +152,113 @@ anime e é também o momento em que você está vulnerável — é a troca.
 | Poder | Tecla | Custo | Comportamento |
 |---|---|---|---|
 | **Rajada de ki** | segurar botão esq. | 2 | Uma bola por mão, ALTERNANDO, a 6/s enquanto segura. Perseguição fraca (§6.1). |
-| **Kamehameha** | 1 | barra cheia | Feixe azul sustentado, 3 s, atravessa tudo menos o chão. Cratera grande. |
-| **Galick Gun** | 2 | barra cheia | Irmão roxo do Kamehameha, mais curto e mais grosso. |
-| **Destructo Disk** | 3 | barra cheia | Disco que voa reto, corta cenário e não explode. |
-| **Genki Dama** | 4 | barra cheia | Carga longa (4 s parado), esfera enorme, cratera máxima. |
+| **Kamehameha** | 1 | barra cheia | Feixe azul sustentado, atravessa tudo menos o chão. **Faz CURVA, com a trava** (§6.1). Cratera grande. |
+| **Galick Gun** | 2 | barra cheia | Esfera roxa densa, arrasta uma fita de energia. Persegue forte. |
+| **Destructo Disk** | 3 | barra cheia | Disco que corta cenário e não explode. Persegue forte. |
+| **Genki Dama** | 4 | barra cheia | Carga longa (3,6 s parado), esfera enorme, cratera máxima. Persegue de leve. |
 | **Explosão de ki** | espaço no ar | 25 | Onda esférica curta que empurra quem está perto. Defesa de pressão. |
 
-### 6.1 A perseguição fraca das bolas
+### 6.1 A perseguição — TODOS os poderes perseguem
 
-O pedido é explícito: *"elas devem seguir levemente o outro player"*. Levemente
-é a palavra que importa — uma bola que persegue de verdade tira o jogo do
-jogador e o dá ao software.
+O pedido original era sobre as bolas: *"elas devem seguir levemente o outro
+player"*. Levemente era a palavra que importava — uma bola que persegue de
+verdade tira o jogo do jogador e o dá ao software.
 
-A regra: a cada quadro, a bola gira sua direção em direção ao alvo com **teto de
-95°/s**, por no máximo **1,1 s** de vida, e **só enquanto o alvo estiver dentro
-de um cone de 35°** à frente dela. Fora do cone ela segue reta. Isso perdoa a
-mira em movimento — que é o ponto — e continua deixando desviar com um passo
-lateral, que é o que mantém o combate vivo.
+Depois ele foi estendido a tudo: *"todos os poderes devem perseguir o player,
+alguns perseguem mais, outros menos"*, com a régua de fuga junto: *"ele não é
+tão ágil quanto o player voando, e o player consegue desviar se estiver voando
+rápido"*.
 
-O alvo é escolhido **no disparo** (o mais próximo do centro da tela dentro de
-50 m), nunca reavaliado. Bola que troca de alvo no meio do voo lê como bug.
+**A regra, comum a todos.** A cada quadro, o golpe gira a direção em direção ao
+alvo com quatro travas:
+
+| Trava | O que é |
+|---|---|
+| `turnRate` | teto de giro por segundo |
+| `arcMax` | teto da correção TOTAL na vida do golpe — o *limite da curva* |
+| `duration` | prazo; depois dele, reta para sempre |
+| `cone` | meio-ângulo à frente. Fora dele não há correção nenhuma |
+
+O `cone` é o que faz o passo lateral funcionar, e o `arcMax` é o que impede um
+golpe de virar bumerangue. Nem todo golpe declara `arcMax`: o Kienzan e o Galick
+Gun não têm, porque contornar é o que eles fazem.
+
+**Quem persegue quanto.** O que o jogador sente não é o `turnRate` e sim o RAIO
+da curva (`v/ω`) e a distância em que dá para escapar de lado no boost
+(`v_jogador > ω·d`, com o arranque a 64 m/s):
+
+| Poder | Giro | Teto total | Raio da curva | Corrida angular perdida a menos de |
+|---|---|---|---|---|
+| Genki Dama | 20°/s | 50° | 132 m | **183 m** |
+| Rajada de ki | 26°/s | — (19,5° por prazo) | 172 m | 141 m |
+| Galick Gun | 55°/s | — | 99 m | 67 m |
+| Kienzan | 70°/s | — | 86 m | 52 m |
+| **Kamehameha** | **85°/s** | **40°** | **229 m** | **43 m** |
+
+O Kamehameha tem o giro mais alto e a curva mais MANSA da tabela ao mesmo
+tempo, e não há contradição: ele voa a 340 m/s, cinco vezes mais rápido que
+qualquer outro, então o mesmo giro produz um arco muito mais aberto. O que o olho
+lê é o raio.
+
+A última coluna é a conta `v > ω·d` — a distância abaixo da qual quem arranca de
+lado no boost vence a velocidade angular do golpe. Ela **não** é a história
+inteira para quem tem `arcMax`: medido contra o Kamehameha, um lutador que
+arranca de lado no instante do tiro escapa em qualquer distância (0 s de
+exposição a 50, 100 e 200 m; 0,02 s a 400 m), contra os 2,3 a 2,7 s — mais que
+os 100 de vida — que mata quem fica no eixo. Perto, o jogador ganha a corrida
+angular; longe, quem segura o feixe é o teto de correção. O que a curva compra
+não é acertar quem foge: é acertar quem se mexe **sem se comprometer**, e punir
+quem fica no eixo.
+
+**O alvo** é escolhido **no disparo** e nunca reavaliado — golpe que troca de
+alvo no meio do voo lê como bug. A trava manual (R) ganha de tudo; sem ela vale
+o mais alinhado com a mira dentro do alcance de aquisição do golpe. O id viaja
+na mensagem para que o golpe persiga a mesma pessoa em todas as telas.
+
+### 6.2 A curva do Kamehameha
+
+*"Hoje é só algo muito reto, mas ele deve, sim, ter uma curvatura para perseguir
+o player. Porém a curva nunca deve ser muito brusca — é sempre uma curva suave e
+deve ter um limite."*
+
+O feixe **era** função pura de (origem, direção, tempo): três cilindros
+esticados sobre um eixo fixo. Não havia onde pendurar uma curva. Agora ele é uma
+cobra, e as três peças são:
+
+```
+CABEÇA    um ponto que voa a 340 m/s e gira em direção ao alvo
+CAMINHO   a polilinha por onde ela passou (um nó a cada 14 m)
+CAUDA     uma distância ao longo desse caminho, que a persegue no fim
+```
+
+O corpo é o trecho entre cauda e cabeça, varrido como tubo e reamostrado a cada
+quadro — os 26 anéis são gastos no pedaço VISÍVEL, e é por isso que o mesmo
+número serve a um feixe de 620 m e aos últimos vinte metros dele.
+
+Três regras que são do pedido, e não do desenho:
+
+1. **Só com a trava.** *"Para fazer curva, ele só faz curva quando o player está
+   travado o foco no inimigo."* Sem a tecla R o Kamehameha sai sem alvo e é o
+   feixe reto de sempre. A trava vira o preço da curvatura.
+2. **Passou, acabou.** *"Se o Kamehameha passar o player… segue o trajeto reto,
+   sem tentar ficar fazendo curva mais."* Quando o alvo fica para trás do plano
+   da cabeça, a perseguição é desligada **para sempre** — não é o cone
+   expirando, que voltaria a valer se a vítima cruzasse na frente de novo.
+3. **A cauda fecha em bico.** *"Não sai do player um bloco redondo, e sim uma
+   cauda fina ao final do poder."* Os últimos 6 % do traço convergem para raio
+   zero. O cilindro de antes terminava num disco aberto, e dava para ver por
+   dentro do tubo quando a cauda desgrudava da mão.
+
+**O acerto mudou junto.** O dano é medido contra o CAMINHO, segmento por
+segmento — um feixe que contorna e cobra pela reta original erra nos dois
+sentidos: passa por cima de quem pegou e queima quem não encostou. O chão também
+deixou de ser resolvido de uma vez no disparo: com curva, o caminho não existe
+antes de ser percorrido.
+
+**No servidor**, o `arcMax` paga por si: como a posição do golpe é a integral de
+versores que nunca se afastam mais de `arcMax` da direção do disparo, o feixe
+inteiro cabe num cone de meia-abertura `arcMax` — e é com esse cone que o acerto
+declarado é conferido, em vez da esfera de 620 m que os golpes sem teto usam.
 
 ---
 

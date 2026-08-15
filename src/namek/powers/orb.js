@@ -68,10 +68,10 @@
 
    ---------------------------------------------------- o traço que CURVA
 
-   O Galick Gun persegue (55°/s por 3 s, ver `NAMEK.specials.galick.homing`) e a
-   Genki Dama não persegue e nunca vai perseguir — o cabeçalho de `perseguir`
-   explica por quê. Essa assimetria é mecânica, já estava paga, e não aparecia
-   em lugar nenhum na tela.
+   O Galick Gun persegue FORTE (55°/s por 3 s, ver `NAMEK.specials.galick.homing`)
+   e a Genki Dama persegue de leve (20°/s, com teto de 50° na correção total).
+   Essa assimetria é mecânica, já estava paga, e não aparecia em lugar nenhum na
+   tela.
 
    Agora aparece: o Galick Gun arrasta atrás de si uma FITA construída sobre as
    posições que ele REALMENTE ocupou — dezoito amostras a cada 42 ms, três
@@ -82,10 +82,14 @@
 
    É a única coisa deste arquivo que **não pode ser lida numa captura parada** e
    é justamente por isso que ela é a peça mais importante: em movimento, um
-   gancho roxo de sessenta metros riscando o céu não se confunde com nada. Uma
-   Genki Dama voa em linha reta por definição, então o mesmo recurso nela
-   desenharia um bastão — que é o que um feixe já é, e a razão pela qual ela não
-   ganha traço nenhum (`traco: 0` custa a malha inteira em `visible = false`).
+   gancho roxo de sessenta metros riscando o céu não se confunde com nada.
+
+   A Genki Dama continua SEM traço mesmo tendo passado a curvar, e agora por um
+   motivo de escala e não de trajetória: ela tem 22 m de diâmetro e voa a menos
+   da metade da velocidade do Galick Gun, de modo que a fita nasceria mais
+   estreita que a própria bola e ficaria escondida atrás dela. O caminho dela
+   quem desenha é o rastro de fagulhas, que já existe. (`traco: 0` custa a malha
+   inteira em `visible = false`.)
 
    A fita é uma CRUZ em corte — dois planos perpendiculares, não um só —, e isso
    não é enfeite: uma fita de plano único desaparece quando a câmera a olha de
@@ -166,6 +170,7 @@ import {
   distancia2AoAlvo,
   pegarVaga,
   alvoPorId,
+  passoDeGiro,
   perseguirPonto,
   PEITO,
   TETO_DO_RELEVO,
@@ -285,12 +290,12 @@ const ESTILO = {
     atraso: 0.8,
     /** Fração da velocidade da bola com que o rastro a persegue. */
     perseguicao: 0.35,
-    /* SEM ESPIRAL e SEM TRAÇO, e as duas ausências são a mesma decisão: ela voa
-       em LINHA RETA (não persegue, e não vai perseguir — ver `perseguir`). Uma
-       hélice em torno de um eixo que nunca muda é um cilindro, e uma fita sobre
-       uma reta é um bastão. As duas peças existem para mostrar CURVA; numa lua
-       elas não teriam o que mostrar, e custariam uma malha e o triplo de
-       emissões para desenhar nada. */
+    /* SEM ESPIRAL e SEM TRAÇO, e as duas ausências são a mesma decisão: o
+       TAMANHO dela. Uma hélice de fagulhas em torno de uma bola de 22 m de
+       diâmetro cabe dentro da bola, e uma fita mais estreita que ela some atrás
+       dela. As duas peças existem para mostrar CURVA — e ela hoje curva, de
+       leve (ver `perseguir`) —, mas numa lua elas mostrariam isso para
+       ninguém, custando uma malha e o triplo de emissões. */
     espiral: 0,
     giroEspiral: 0,
     traco: 0,
@@ -555,9 +560,12 @@ class Esfera {
     this._fag = 0;
     this._fase = 0;
     /* Travado no disparo e recebido pela rede — a mesma regra da bola de ki
-       (§6.1). Vale para o Galick Gun, que persegue; a Genki Dama não tem
-       `homing` e ignora este campo. */
+       (§6.1). Vale para as duas: desde que "todos os poderes devem perseguir",
+       a Genki Dama também tem `homing` — a mais mansa do jogo. Ver `perseguir`. */
     this.alvo = target;
+    /* Radianos já gastos do teto total (`arcMax`). Zera aqui, e não no
+       construtor, porque o mesmo slot do pool é reciclado a cada disparo. */
+    this.arco = 0;
 
     const inv = 1 / (Math.hypot(dir.x, dir.y, dir.z) || 1);
     this.dir.x = dir.x * inv;
@@ -690,21 +698,28 @@ class Esfera {
   /**
    * A esfera SEGUE o alvo — e dá para escapar dela.
    *
-   * Só quem tem `homing` em `NAMEK.specials` persegue: hoje o Galick Gun sim, a
-   * Genki Dama não. E a diferença não é esquecimento — é o desenho dos dois
-   * golpes. A Genki Dama já é uma parede de 11 m de raio viajando devagar: dar
-   * perseguição a ela seria dar um golpe de 96 de dano do qual não se escapa, e
-   * o cabeçalho deste arquivo diz por que isso não é um golpe, é um sorteio. O
-   * Galick Gun é metade do raio, o dobro da velocidade e dois terços do dano —
-   * ele PRECISA perseguir para valer a barra que custa.
+   * AS DUAS PERSEGUEM, e é uma mudança recente: "todos os poderes devem
+   * perseguir o player, alguns perseguem mais, outros menos". A Genki Dama era
+   * a exceção declarada deste arquivo, e a justificativa de então continua
+   * valendo como MEDIDA — ela é uma parede de 11 m viajando devagar, e uma
+   * perseguição de verdade nela seria um golpe de 96 de dano do qual não se
+   * escapa. Por isso ela persegue como a mais mansa de todas: 20°/s contra os
+   * 55 do Galick Gun.
    *
    * A conta que faz "dá para escapar" ser verdade é a mesma do Kienzan, e ela
-   * não é o raio da curva dele — é a comparação de velocidades ANGULARES: a
-   * `d` metros, quem foge de lado a `v` gira `v/d` rad/s em torno do
-   * projétil, e escapa se isso passar de `ω`. Com 55°/s e o arranque a 64 m/s,
-   * o corte fica em **66 m**: mais perto que isso, o passo lateral ganha; mais
-   * longe, ele não ganha, e a saída é a antecedência (ou a guarda). Recuar em
-   * linha reta nunca funciona — recuar mantém você no eixo.
+   * não é o raio da curva — é a comparação de velocidades ANGULARES: a `d`
+   * metros, quem foge de lado a `v` gira `v/d` rad/s em torno do projétil, e
+   * escapa se isso passar de `ω`. Com o arranque a 64 m/s o corte fica em
+   * **66 m** para o Galick Gun e em **183 m** para a Genki Dama — a maior
+   * distância de fuga do jogo, que é o que separa "ele te alcança" de "ela só
+   * te acompanha". Recuar em linha reta nunca funciona nos dois casos: recuar
+   * mantém você no eixo.
+   *
+   * O TETO TOTAL (`arcMax`) é a trava que a Genki Dama trouxe junto. Sem ele,
+   * 20°/s por 4 s dariam 80° de correção — a bola contornaria — e o prazo, que
+   * é a única trava que o Galick Gun tem, não sabe dizer isso. Quem declara
+   * `arcMax` acumula o giro aqui e para quando o gasta. Ver
+   * `NAMEK.specials.kamehameha.homing`, que tem o argumento inteiro.
    *
    * E é ESTA função que a fita desenha. O traço do §"o traço que CURVA" não é
    * um enfeite pendurado no golpe: ele é o registro gráfico de cada correção
@@ -719,7 +734,7 @@ class Esfera {
       this.alvo = null;
       return;
     }
-    perseguirPonto(
+    this.arco += perseguirPonto(
       this.dir,
       a.x,
       a.y + a.altura * PEITO,
@@ -728,7 +743,7 @@ class Esfera {
       this.y,
       this.z,
       Math.cos((H.cone * Math.PI) / 180),
-      ((H.turnRate * Math.PI) / 180) * dt,
+      passoDeGiro(H, dt, this.arco),
     );
   }
 

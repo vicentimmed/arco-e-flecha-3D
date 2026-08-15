@@ -482,6 +482,28 @@ class Game {
       }
     });
 
+    /* Acertei o chão do Sandbox: abre cratera ali, na hora.
+     *
+     * Só existe nesta fase — nas outras o terreno não tem `addCrater`, e é
+     * por isso que o primeiro `if` sai antes de chamar qualquer coisa. Fica
+     * só no seu lado: cada cliente esculpe a própria cópia do terreno a
+     * partir do próprio impacto, sem passar pela rede (ver o cabeçalho de
+     * `shared/sandboxField.js`) — o Sandbox é cenário de teste solo, não uma
+     * fase pensada para valer igual em todas as telas.
+     */
+    gameEvents.on(EventType.ARROW_IMPACT, (e) => {
+      if (e.ownerId !== this.player.entityId) return;
+      if (this.levels.id !== "sandbox") return;
+      if (e.targetKind !== "terrain" || e.targetId !== "sandbox") return;
+      const terrain = this.levels.current?.terrain;
+      if (!terrain?.addCrater) return;
+      const power = Math.hypot(e.velocity[0], e.velocity[1], e.velocity[2]);
+      const crater = terrain.addCrater(e.impact.x, e.impact.z, power);
+      terrain.rebuildCollider(this.physics);
+      // A grama que caiu dentro do buraco não flutua sobre ele: morre.
+      terrain.cullVegetation?.(crater);
+    });
+
     /* A morte causada por bot NÃO é tratada aqui.
      *
      * Ela era, enquanto o bot vivia nesta tela: o servidor recusa um

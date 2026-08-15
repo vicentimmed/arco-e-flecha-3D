@@ -47,6 +47,7 @@ import { DEFAULT_LEVEL, LEVEL_IDS, levelPhysics } from "../shared/levels.js";
 import { ValleyLevel } from "./valleyLevel.js";
 import { MoonLevel } from "./moonLevel.js";
 import { CastleLevel } from "./castleLevel.js";
+import { SandboxLevel } from "./sandboxLevel.js";
 
 /**
  * O registro das classes visuais. Uma linha por fase.
@@ -60,6 +61,7 @@ export const LEVELS = {
   [ValleyLevel.id]: ValleyLevel,
   [MoonLevel.id]: MoonLevel,
   [CastleLevel.id]: CastleLevel,
+  [SandboxLevel.id]: SandboxLevel,
 };
 
 export { DEFAULT_LEVEL };

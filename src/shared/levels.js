@@ -18,6 +18,7 @@ import { CONFIG } from "../config.js";
 import { TerrainField } from "./terrainField.js";
 import { MoonField } from "./moonField.js";
 import { CastleField } from "./castleField.js";
+import { SandboxField } from "./sandboxField.js";
 
 /** A fase que o jogo monta no arranque, e o destino de qualquer id inválido. */
 export const DEFAULT_LEVEL = "valley";
@@ -126,6 +127,19 @@ export const LEVEL_INFO = {
        Ver `CONFIG.levels.castle.spawnDrop`. */
     spawnDrop: CONFIG.levels.castle.spawnDrop,
     campo: () => new CastleField(),
+  },
+
+  sandbox: {
+    id: "sandbox",
+    nome: "Sandbox",
+    /* Só livre: é um cenário de TESTE, isolado das outras fases (ver o
+       cabeçalho de `shared/sandboxField.js`) — nenhum modo de caça, cerco ou
+       arena foi desenhado pensando nele. */
+    modos: ["free"],
+    duelInvites: false,
+    fauna: false,
+    fisica: {},
+    campo: () => new SandboxField(),
   },
 };
 

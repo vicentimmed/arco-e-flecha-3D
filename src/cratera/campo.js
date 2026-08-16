@@ -507,10 +507,32 @@ export class CampoCratera {
                  * **Somando e não `max`.** `max` FORÇA o ponto a ser sólido, e
                  * com altura de 0,35 R isso comeria metros de vão. Somar levanta
                  * a superfície pelo tanto do lábio, que é o que ejeção faz. */
+                /* O LÁBIO SÓ NA SUPERFÍCIE ORIGINAL DO TERRENO.
+                 *
+                 * A régua mudou, e a antiga produzia o pior defeito visual que
+                 * esta fase teve: LASCAS DE TERRENO FLUTUANDO entre as
+                 * explosões, e o túnel cheio de teias.
+                 *
+                 * Antes o lábio assentava onde a densidade ATUAL estivesse perto
+                 * de zero — ou seja, perto de qualquer fronteira, inclusive a
+                 * parede de uma cratera aberta um segundo antes. Duas explosões
+                 * vizinhas e a segunda depositava o próprio anel de ejeção DENTRO
+                 * do vão da primeira: uma casca fina, sem apoio nenhum,
+                 * pendurada no ar. Vinte tiros e o buraco vira uma teia.
+                 *
+                 * Ejeção assenta no CHÃO — no terreno como ele era antes de
+                 * qualquer coisa ser cavada. Medido contra a superfície original
+                 * (`alturaBase`, que é a fórmula e não sabe de crateras), o
+                 * material só pousa onde havia chão para pousar. Dentro de um
+                 * túnel, a quinze metros de profundidade, não há: o lábio
+                 * simplesmente não acontece lá, e a parede sai limpa.
+                 *
+                 * `alturaBase` por voxel parece caro e não é: o lábio só é
+                 * diferente de zero numa casca fina em volta da bacia. */
                 const l = par[1];
                 if (l > 0) {
-                  const a = antes / ESCALA;
-                  const dist = a < 0 ? -a : a;
+                  const prof = this.alturaBase(wx, wz) - wy;
+                  const dist = prof < 0 ? -prof : prof;
                   if (dist < LABIO_BANDA) {
                     const t = 1 - dist / LABIO_BANDA;
                     v += l * t * t * (3 - 2 * t);
@@ -525,12 +547,64 @@ export class CampoCratera {
               }
             }
           }
-          if (mexeu) this.onSujo?.(ccx, ccy, ccz);
+          if (mexeu) {
+            this.limparLascas(arr, lx0, lx1, ly0, ly1, lz0, lz1);
+            this.onSujo?.(ccx, ccy, ccz);
+          }
         }
       }
     }
 
     return c;
+  }
+
+  /**
+   * Tira as LASCAS: rocha que sobrou fina demais para se sustentar.
+   *
+   * Duas explosões que quase se tocam deixam entre elas uma membrana de um ou
+   * dois voxels. Vinte tiros num mesmo lugar deixam uma teia delas, e é isso que
+   * suja a cratera e o túnel — pedaços de terreno pendurados, que nenhuma
+   * explosão de verdade deixaria.
+   *
+   * A conta é a erosão morfológica de sempre, na versão mais barata que
+   * funciona: um voxel sólido cercado de ar nos SEIS lados vizinhos não é
+   * parede, é lasca — e vira ar. Só isso já derruba membranas de um voxel e
+   * espinhos, que são a esmagadora maioria do que aparece.
+   *
+   * Duas escolhas que valem registro:
+   *
+   * • **Seis vizinhos e não vinte e seis.** As diagonais custariam quatro vezes
+   *   mais para pegar quase os mesmos casos, e ainda comeriam quinas legítimas
+   *   de rocha, que é justamente o que dá caráter à parede.
+   * • **Uma passada só.** Erosão iterada afina a rocha de verdade — cada passada
+   *   come mais um voxel de tudo, e depois de três a montanha inteira estaria
+   *   arredondada. Uma passada tira o que não devia existir e não toca no resto.
+   *
+   * Roda sobre a caixa que ACABOU de mudar, e lê a versão já escrita: as lascas
+   * criadas por esta escavação são exatamente as que interessam.
+   */
+  limparLascas(arr, lx0, lx1, ly0, ly1, lz0, lz1) {
+    /* Lê de uma cópia da faixa? Não: a erosão em cima do próprio array propaga
+       um pouco na direção da varredura, e essa propagação é BEM-VINDA aqui —
+       ela é o que remove uma membrana de dois voxels, que a versão estrita
+       deixaria de pé. O preço é a assimetria, invisível numa parede de rocha. */
+    for (let ly = Math.max(1, ly0); ly <= Math.min(NC - 2, ly1); ly++) {
+      for (let lz = Math.max(1, lz0); lz <= Math.min(NC - 2, lz1); lz++) {
+        const linha = (ly * NC + lz) * NC;
+        for (let lx = Math.max(1, lx0); lx <= Math.min(NC - 2, lx1); lx++) {
+          const i = linha + lx;
+          if (arr[i] <= 0) continue;
+          let vizinhos = 0;
+          if (arr[i - 1] > 0) vizinhos++;
+          if (arr[i + 1] > 0) vizinhos++;
+          if (arr[i - NC] > 0) vizinhos++;
+          if (arr[i + NC] > 0) vizinhos++;
+          if (arr[i - NC * NC] > 0) vizinhos++;
+          if (arr[i + NC * NC] > 0) vizinhos++;
+          if (vizinhos <= 1) arr[i] = -1;
+        }
+      }
+    }
   }
 
   /**

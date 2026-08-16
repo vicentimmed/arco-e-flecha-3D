@@ -378,8 +378,12 @@ export const NAMEK = {
      * mais de duzentos metros — e brigar a duzentos metros é comum aqui —
      * evaporava no ar, na frente de quem atirou, sem tocar em nada. Cinco
      * segundos são 390 m: cobre qualquer troca de tiros real e ainda deixa a
-     * bola perdida morrer antes de virar tráfego. */
-    life: 5,
+     * bola perdida morrer antes de virar tráfego.
+     *
+     * Triplicado para 15 s (1 170 m): quem voa no ponto mais alto do cenário e
+     * atira para baixo, no chão, percorre uma distância bem maior que a de uma
+     * briga rasante, e a bola sumia no ar antes de chegar. */
+    life: 15,
     /** m — raio visual da bola. */
     radius: 0.42,
     /** m — raio de acerto (mais generoso que o visual, como todo jogo faz). */
@@ -400,11 +404,15 @@ export const NAMEK = {
      * AFUNDA em vez de gastar vaga. O último motivo para a rajada mal marcar o
      * chão caiu junto.
      *
-     * 0,45 abre 8,3 m — o buraco de uma pessoa. É o "as crateras dos poderes
+     * 0,45 abria 8,3 m — o buraco de uma pessoa. É o "as crateras dos poderes
      * pequenos devem ser bem maiores" literal, e é ele que faz a promessa da
      * ilha destruída: o especial sai uma vez por barra cheia, a rajada sai o
-     * tempo todo, e destruição acumulada é feita do que sai o tempo todo. */
-    power: 0.45,
+     * tempo todo, e destruição acumulada é feita do que sai o tempo todo.
+     *
+     * Reduzido pela metade: 0,0156 abre 4,1 m. `craterBase` (3,2 m) domina a
+     * conta com potências pequenas, então cortar o raio ao meio pede uma
+     * potência bem menor, não a metade dela. */
+    power: 0.0156,
 
     /* A PERSEGUIÇÃO FRACA. Ver §6.1 do plano — "levemente" é o requisito, e
        cada número aqui existe para segurar a palavra "levemente". */
@@ -451,8 +459,8 @@ export const NAMEK = {
       windup: 1.05,
       /** s — quanto o feixe sustenta. */
       sustain: 2.4,
-      /** m — alcance. */
-      range: 620,
+      /** m — alcance. Triplicado (era 620) para não sumir antes de chegar. */
+      range: 1860,
       /** m/s — velocidade da frente do feixe. */
       speed: 340,
       /* m — raio de morte em torno do eixo, e ele É a grossura do feixe: a
@@ -665,12 +673,12 @@ export const NAMEK = {
       nome: "Galick Gun",
       windup: 0.9,
       /** s — o VOO da bola, não uma sustentação: ela não fica na mão. */
-      sustain: 5,
-      /* Alcance honesto, pela mesma régua da Genki Dama: a vida do projétil é
-         `min(sustain, range / speed)`, e 5 s a 95 m/s são 475 m. Um número
-         maior aqui só mentiria para quem viesse balancear o golpe — e abriria
-         na sala uma janela de acerto que o projétil nunca alcança. */
-      range: 475,
+      sustain: 15,
+      /* Alcance triplicado (eram 5 s / 475 m): quem atira de cima, no chão,
+         longe, não pode ver o golpe sumir no meio do caminho. A vida do
+         projétil continua `min(sustain, range / speed)`, agora 15 s a 95 m/s
+         = 1 425 m. */
+      range: 1425,
       speed: 95,
       hitRadius: 6.5,
       /* Corta de uma vez, como o disco e a Genki Dama.
@@ -714,12 +722,11 @@ export const NAMEK = {
       nome: "Kienzan",
       windup: 0.7,
       /** O disco não sustenta: ele VOA. `sustain` é a vida dele. */
-      sustain: 6,
-      /* Honesto, pelo mesmo motivo da Genki Dama: 6 s a 105 m/s são 630 m, e o
-         520 que estava aqui nunca foi alcançado por disco nenhum. A vida subiu
-         de 3,2 s por causa do "os poderes não devem sumir" — ver `blast.life`,
-         que tem o argumento inteiro. */
-      range: 630,
+      sustain: 18,
+      /* Triplicado (eram 6 s / 630 m), pelo mesmo argumento de `blast.life`:
+         atirado de cima para o chão, longe, o disco sumia antes de chegar.
+         18 s a 105 m/s são 1 890 m. */
+      range: 1890,
       speed: 105,
       /* 3,4 e não 2,2. O disco de 2,2 m tinha **4,4 m de ponta a ponta contra
          um lutador de 1,78 m** — do tamanho de duas pessoas —, e a 105 m/s, a
@@ -790,14 +797,11 @@ export const NAMEK = {
        * o buffer deixaria o último segundo e meio em silêncio, que é justamente
        * o segundo e meio em que o jogador está mais exposto. */
       windup: 5.2,
-      sustain: 7,
-      /* ALCANCE HONESTO. Estava 700, e a vida do projétil é
-         `min(sustain, range / speed)`: com a sustentação de então (4,5 s) a
-         46 m/s ela nunca passava de **207 m**. O número grande não fazia nada
-         além de mentir para quem fosse balancear o golpe — e a sala usa `range`
-         para validar acerto, o que abria uma janela de 700 m para um golpe de
-         207. Agora são 7 s a 46 m/s = 322 m, e o número aqui é esse. */
-      range: 322,
+      sustain: 21,
+      /* Triplicado (eram 7 s / 322 m): quem atira de cima, mirando o chão bem
+         longe, via a bola sumir no meio do voo. Agora são 21 s a 46 m/s =
+         966 m, e a sala continua usando `range` para validar acerto. */
+      range: 966,
       speed: 46,
       /* 16 m de raio — trinta e dois de diâmetro, dezoito vezes a altura de um
        * lutador. *"Aumente mais o tamanho da Genki Dama."*

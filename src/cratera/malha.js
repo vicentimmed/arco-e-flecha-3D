@@ -180,6 +180,25 @@ export class MalhaCratera {
     while (this.fila.length > 0) this.passo(64);
   }
 
+  /**
+   * Constrói pelo tempo que couber no quadro, e nem um milissegundo a mais.
+   *
+   * Orçamento em TEMPO e não em contagem de pedaços, e a diferença aparece
+   * justamente quando importa: um pedaço vazio custa microssegundos e um atra-
+   * vessado por um túnel custa dez milissegundos. Contar pedaços faz o quadro
+   * engasgar exatamente no instante do tiro, que é o pior momento possível —
+   * o jogador leria a escavação como travamento.
+   */
+  passoTempo(ms = 7) {
+    if (this.fila.length === 0) return 0;
+    const fim = performance.now() + ms;
+    while (this.fila.length > 0) {
+      this.passo(1);
+      if (performance.now() >= fim) break;
+    }
+    return this.fila.length;
+  }
+
   /* ------------------------------------------------------------ construir -- */
 
   construir(p) {

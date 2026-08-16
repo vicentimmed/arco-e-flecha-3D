@@ -389,6 +389,28 @@ export class CampoCratera {
    */
   escavar(imp) {
     if (this.vistos.has(imp.id)) return null;
+
+    /* FORA DA ARENA NÃO SE CAVA.
+     *
+     * O relevo é uma FÓRMULA, e fórmula não tem borda: `alturaBase` responde em
+     * qualquer (x, z), inclusive a trezentos metros daqui, onde não há malha
+     * nenhuma. Sem esta guarda um feixe perfurante segue escavando terreno
+     * invisível até gastar o orçamento — medido: cinquenta e duas bacias, até
+     * z = −292, vinte e cinco segundos de malha para nada.
+     *
+     * Numa sala isto seria a sala recusando o impacto, pelo mesmo motivo que
+     * `NamekRoom` recusa cratera fora do raio da arena. Aqui é o campo, que é
+     * quem os dois lados compartilham. */
+    if (
+      imp.x < -METADE ||
+      imp.x > METADE ||
+      imp.z < -METADE ||
+      imp.z > METADE ||
+      imp.y < FUNDO ||
+      imp.y > TETO_MUNDO
+    ) {
+      return null;
+    }
     this.vistos.add(imp.id);
     this.impactos.push(imp);
 

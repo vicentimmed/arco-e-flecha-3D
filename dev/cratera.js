@@ -1,29 +1,43 @@
 /* ---------------------------------------------------------------------------
-   Bancada da FASE CRATERA — ferramenta de desenvolvimento, fora do jogo.
+   FASE CRATERA — a bancada jogável.
 
-   Existe pela mesma razão que `dev/voo.html` e `dev/cerco.html`: julgar a forma
-   de uma cratera exige abri-la vinte vezes seguidas mudando um número, e fazer
-   isso dentro de uma partida é lento demais para ser honesto. Aqui a montanha
-   está a um clique.
+   Ferramenta de desenvolvimento, fora do jogo: não encosta em `lobby.js` nem em
+   `main.js`, e é de propósito — é o que garante risco zero para quem está
+   trabalhando no jogo agora.
 
-   Ela não encosta em `lobby.js` nem em `main.js`, e é de propósito — é o que
-   garante risco zero para quem está trabalhando no jogo agora.
+   O que ela é: um lutador em primeira pessoa numa arena de 160 m, atirando
+   poderes que escavam o terreno em tempo real. Tudo o que acontece aqui — a
+   forma da bacia, o entulho, a rocha que cai, o teto que desaba — é o mesmo
+   código que uma fase de verdade rodaria. O que ela substitui é o que está em
+   volta: não há rede, não há inimigo, não há vida.
 
-   O tiro é um raio marchado contra o campo: onde ele encontra a primeira pedra,
-   nasce uma bacia. A sequência de bacias de uma rajada é o mesmo laço que um
-   feixe perfurante faria, com o espaçamento sorteado de `espacamentoApos`.
+   ------------------------------------------------------------- em tempo real
+
+   Três coisas precisam ser verdade ao mesmo tempo para isto não travar:
+
+   • **A malha é fatiada por TEMPO.** Um tiro suja vários pedaços de uma vez, e
+     um pedaço atravessado por túnel custa dez milissegundos. `passoTempo` gasta
+     o que couber no quadro e devolve o resto para o seguinte.
+   • **A escavação acontece no quadro do tiro.** A física do buraco não pode
+     esperar a malha: o jogador entra no furo antes de ele terminar de aparecer,
+     e isso é melhor do que o contrário.
+   • **O desabamento é avaliado no impacto**, nunca por quadro. Ele varre uma
+     grade de colunas, e isso é caro demais para acontecer sessenta vezes por
+     segundo — e desnecessário, porque nada muda entre dois tiros.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
 import { CampoCratera, VOXEL, NC, METADE, FUNDO, TETO_MUNDO } from "../src/cratera/campo.js";
 import { MalhaCratera } from "../src/cratera/malha.js";
-import { espacamentoApos, prepararImpacto } from "../src/cratera/escavar.js";
 import { Entulho } from "../src/cratera/entulho.js";
 import { Rochas } from "../src/cratera/rochas.js";
+import { Poderes } from "../src/cratera/poderes.js";
+import { Lutador, ALTURA } from "../src/cratera/lutador.js";
+import { avaliarDesabamento } from "../src/cratera/desabar.js";
 
 /* ------------------------------------------------------------------ cena -- */
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -32,17 +46,17 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color("#8fc4e8");
-scene.fog = new THREE.Fog("#8fc4e8", 180, 460);
+scene.fog = new THREE.Fog("#8fc4e8", 190, 480);
 
-const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.3, 1200);
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.2, 1200);
 
-scene.add(new THREE.HemisphereLight(0xcfe6f2, 0x4a4238, 1.15));
+scene.add(new THREE.HemisphereLight(0xcfe6f2, 0x4a4238, 1.1));
 const sol = new THREE.DirectionalLight(0xfff2d8, 2.1);
 sol.position.set(-90, 130, 70);
 scene.add(sol);
-/* Uma segunda luz fraca por baixo, só para a parede do túnel não virar breu
-   absoluto. Numa fase de verdade isso seria a própria luz do ki de quem atira. */
-const contra = new THREE.DirectionalLight(0x6a7c88, 0.5);
+/* Uma luz fraca por baixo, para a parede do túnel não virar breu absoluto.
+   Numa fase de verdade quem faria isso é o ki de quem está atirando. */
+const contra = new THREE.DirectionalLight(0x6a7c88, 0.45);
 contra.position.set(70, -40, -60);
 scene.add(contra);
 
@@ -62,7 +76,6 @@ campo.onSujo = (cx, cy, cz) => {
   }
 };
 
-/* A arena inteira, de uma vez: é pequena e isto é bancada. */
 const C0 = Math.floor(-METADE / (NC * VOXEL));
 const C1 = Math.floor(METADE / (NC * VOXEL));
 const CY0 = Math.floor(FUNDO / (NC * VOXEL));
@@ -72,185 +85,199 @@ console.time("malha inicial");
 malha.tudo();
 console.timeEnd("malha inicial");
 
-/* O entulho e as pedras. Nascem depois da malha porque a distribuição das
-   pedras consulta o relevo, e o entulho colide contra ele. */
 const entulho = new Entulho(raiz, campo);
 const rochas = new Rochas(raiz, campo, entulho);
 
-/* ------------------------------------------------------------- o tiro ----- */
+/* ------------------------------------------------------------- escavar ---- */
 let proxId = 1;
-
-/** Marcha um raio até a primeira pedra. Devolve o ponto, ou null. */
-function primeiraPedra(ox, oy, oz, dx, dy, dz, alcance = 400, passo = VOXEL * 0.8) {
-  for (let d = 0; d < alcance; d += passo) {
-    const x = ox + dx * d;
-    const y = oy + dy * d;
-    const z = oz + dz * d;
-    if (y < FUNDO - 4 || y > TETO_MUNDO + 40) continue;
-    if (campo.solidoEm(x, y, z)) return { x, y, z, d };
-  }
-  return null;
-}
+let desabamentos = 0;
 
 /**
- * Um disparo: acha a pedra e abre `n` bacias entrando por ela.
+ * O caminho ÚNICO por onde toda escavação passa — tiro, desabamento, tudo.
  *
- * É o mesmo laço que um feixe perfurante roda — a primeira bacia é a BOCA (bem
- * maior) e as seguintes andam pelo espaçamento sorteado. A cabeça enxerga o
- * terreno como ele estava quando o tiro saiu, e não os próprios buracos: sem
- * isso ela se encontraria dentro da bacia recém-aberta e concluiria que saiu da
- * rocha. Aqui isso é de graça, porque a marcha já foi resolvida antes de cavar.
+ * Ter um só é o que mantém a lista de impactos íntegra: é ela que viaja na rede
+ * (§11 do plano), e uma escavação que entrasse por fora dela seria um pedaço de
+ * terreno que existe numa máquina e não na outra.
  */
-function atirar(ox, oy, oz, dx, dy, dz, raio = 5, n = 1) {
-  const m = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-  dx /= m;
-  dy /= m;
-  dz /= m;
-  const bate = primeiraPedra(ox, oy, oz, dx, dy, dz);
-  if (!bate) return 0;
+function escavar(imp) {
+  const c = campo.escavar({ id: proxId++, ...imp });
+  if (!c) return null;
 
-  let x = bate.x;
-  let y = bate.y;
-  let z = bate.z;
-  let feitos = 0;
-  for (let i = 0; i < n; i++) {
-    const id = proxId++;
-    const c = campo.escavar({ id, x, y, z, dx, dy, dz, raio, boca: i === 0 });
-    feitos++;
-    if (c) {
-      /* A ordem importa: as pedras primeiro (algumas viram entulho), depois o
-         estouro da própria cratera, depois sacudir o entulho que já estava
-         pousado e acabou de perder o chão. */
-      rochas.aplicar(c);
-      entulho.estourar(c, Math.round(14 + c.R * 2.4));
-      entulho.sacudir(c.cx, c.cy, c.cz, c.alcance + 6);
-    }
-    const passo = espacamentoApos(id, raio);
-    x += dx * passo;
-    y += dy * passo;
-    z += dz * passo;
-    if (y < FUNDO || Math.abs(x) > METADE || Math.abs(z) > METADE) break;
+  /* A ordem importa: as pedras primeiro (algumas viram entulho), depois o
+     estouro da própria cratera, depois sacudir o entulho que já estava pousado
+     e acabou de perder o chão. */
+  rochas.aplicar(c);
+  entulho.estourar(c, Math.round(10 + c.R * 2));
+  entulho.sacudir(c.cx, c.cy, c.cz, c.alcance + 6);
+
+  /* O DESABAMENTO fica PENDENTE, e é avaliado no quadro — nunca aqui.
+   *
+   * Dois motivos, e o primeiro custou uma página travada. Um feixe dispara vinte
+   * e oito escavações no mesmo instante, e avaliar apoio vinte e oito vezes é
+   * varrer a mesma montanha vinte e oito vezes para chegar à mesma conclusão. O
+   * segundo: o desabamento tem de olhar o túnel PRONTO. Avaliado na primeira
+   * bacia, ele julgaria uma montanha que ainda não foi furada.
+   *
+   * E só para escavação de GOLPE: um desabamento que avaliasse desabamento se
+   * alimentaria em cascata até a montanha inteira sumir. */
+  if (!imp.desabamento) pendente = c;
+  return c;
+}
+
+/** A última escavação de golpe, esperando avaliação de apoio. */
+let pendente = null;
+let esperaDesabar = 0;
+
+/** Avalia o apoio, no máximo uma vez a cada meio segundo. */
+function talvezDesabar(dt) {
+  esperaDesabar -= dt;
+  if (!pendente || esperaDesabar > 0) return;
+  const c = pendente;
+  pendente = null;
+  esperaDesabar = 0.5;
+
+  const quedas = avaliarDesabamento(campo, c, () => proxId++);
+  if (quedas.length === 0) return;
+  desabamentos++;
+  for (const q of quedas) {
+    const cq = campo.escavar(q);
+    if (!cq) continue;
+    rochas.aplicar(cq);
+    /* Desabamento solta MUITO entulho: é a leitura inteira do evento. */
+    entulho.estourar(cq, Math.round(24 + cq.R * 3));
+    entulho.sacudir(cq.cx, cq.cy, cq.cz, cq.alcance + 10);
   }
-  malha.tudo();
-  medir();
-  return feitos;
 }
 
-/* ---------------------------------------------------------------- câmera -- */
-const alvo = new THREE.Vector3(0, 6, 0);
-let raioOrb = 150;
-let yaw = 0.9;
-let pitch = 0.42;
-let livre = false;
+const poderes = new Poderes(raiz, campo, escavar);
 
-function posicionar() {
-  if (livre) return;
-  camera.position.set(
-    alvo.x + Math.cos(yaw) * Math.cos(pitch) * raioOrb,
-    alvo.y + Math.sin(pitch) * raioOrb,
-    alvo.z + Math.sin(yaw) * Math.cos(pitch) * raioOrb,
-  );
-  camera.lookAt(alvo);
+/* ---------------------------------------------------------------- jogador -- */
+const eu = new Lutador(campo);
+eu.position.x = 0;
+eu.position.z = 46;
+eu.position.y = campo.alturaBase(0, 46) + 24;
+eu.yaw = Math.PI;
+
+const acao = { frente: 0, lado: 0, cima: 0, correr: false, pular: false, voar: false };
+const teclas = new Set();
+
+addEventListener("keydown", (e) => {
+  teclas.add(e.code);
+  if (e.code === "KeyF") eu.voando = !eu.voando;
+  if (e.code === "KeyR") reiniciar();
+  if (e.code === "Space") e.preventDefault();
+});
+addEventListener("keyup", (e) => teclas.delete(e.code));
+
+function lerTeclas() {
+  acao.frente = (teclas.has("KeyW") ? 1 : 0) - (teclas.has("KeyS") ? 1 : 0);
+  acao.lado = (teclas.has("KeyD") ? 1 : 0) - (teclas.has("KeyA") ? 1 : 0);
+  acao.cima = (teclas.has("Space") ? 1 : 0) - (teclas.has("ControlLeft") ? 1 : 0);
+  acao.correr = teclas.has("ShiftLeft");
+  acao.pular = teclas.has("Space");
+  acao.voar = false;
 }
-posicionar();
 
-let arrastou = false;
-let apertado = false;
-renderer.domElement.addEventListener("pointerdown", () => {
-  apertado = true;
-  arrastou = false;
+/* A mira por PONTEIRO TRAVADO: é o que faz isto ser jogar em vez de arrastar. */
+renderer.domElement.addEventListener("click", () => {
+  if (document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock();
+  }
 });
-addEventListener("pointermove", (e) => {
-  if (!apertado) return;
-  if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) arrastou = true;
-  yaw -= e.movementX * 0.005;
-  pitch = Math.max(-1.35, Math.min(1.35, pitch + e.movementY * 0.005));
-  posicionar();
+addEventListener("mousemove", (e) => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  eu.yaw -= e.movementX * 0.0022;
+  eu.pitch = Math.max(-1.5, Math.min(1.5, eu.pitch - e.movementY * 0.0022));
 });
-addEventListener("pointerup", (e) => {
-  apertado = false;
-  /* Clique sem arrastar = tiro, na direção do cursor. */
-  if (arrastou || e.target !== renderer.domElement) return;
-  const ndc = new THREE.Vector2(
-    (e.clientX / innerWidth) * 2 - 1,
-    -(e.clientY / innerHeight) * 2 + 1,
-  );
-  const rc = new THREE.Raycaster();
-  rc.setFromCamera(ndc, camera);
-  const d = rc.ray.direction;
-  const o = rc.ray.origin;
-  atirar(o.x, o.y, o.z, d.x, d.y, d.z, 5, 1);
+
+let recarga = 0;
+addEventListener("mousedown", (e) => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  if (recarga > 0) return;
+  const o = eu.olhos();
+  const d = eu.mira();
+  /* Nasce um pouco à frente do rosto: nascer no olho faria o primeiro passo
+     acontecer dentro da própria cabeça quando se atira encostado na parede. */
+  const ox = o.x + d.x * 1.2;
+  const oy = o.y + d.y * 1.2;
+  const oz = o.z + d.z * 1.2;
+  if (e.button === 0) {
+    poderes.disparar("bola", ox, oy, oz, d.x, d.y, d.z);
+    recarga = 0.16;
+  } else if (e.button === 2) {
+    poderes.disparar("feixe", ox, oy, oz, d.x, d.y, d.z);
+    recarga = 0.75;
+  }
 });
-addEventListener(
-  "wheel",
-  (e) => {
-    raioOrb = Math.max(8, Math.min(500, raioOrb * (1 + Math.sign(e.deltaY) * 0.1)));
-    posicionar();
-  },
-  { passive: true },
-);
+addEventListener("contextmenu", (e) => e.preventDefault());
+
+function reiniciar() {
+  eu.position.x = 0;
+  eu.position.z = 46;
+  eu.position.y = campo.alturaBase(0, 46) + 24;
+  eu.velocity.x = eu.velocity.y = eu.velocity.z = 0;
+  eu.voando = true;
+}
+
+/* ------------------------------------------------------------------- hud -- */
+const hud = document.getElementById("hud");
+const medidas = document.getElementById("medidas");
+let fps = 60;
+
+function medir() {
+  const p = eu.position;
+  medidas.textContent =
+    `fps ${fps.toFixed(0)}   fila de malha ${malha.fila.length}\n` +
+    `impactos ${campo.impactos.length}   desabamentos ${desabamentos}\n` +
+    `triângulos ${Math.round(malha.triangulos).toLocaleString("pt-BR")}\n` +
+    `entulho ${entulho.n}   rochas ${rochas.vivas()}/${rochas.n}\n` +
+    `você (${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}) ${eu.voando ? "voando" : eu.noChao ? "no chão" : "caindo"}`;
+}
+
+/* ---------------------------------------------------------------- quadro --- */
+let tAnt = performance.now();
+let acumFps = 0;
+let quadros = 0;
+
+renderer.setAnimationLoop(() => {
+  const agora = performance.now();
+  const dt = Math.min(0.05, (agora - tAnt) / 1000);
+  tAnt = agora;
+  if (recarga > 0) recarga -= dt;
+
+  lerTeclas();
+  eu.update(dt, acao);
+  poderes.update(dt);
+  entulho.update(dt);
+  rochas.update(dt);
+  talvezDesabar(dt);
+  /* A malha por último e por TEMPO: o que não couber neste quadro vai para o
+     próximo. É isto que impede o tiro de engasgar a imagem. */
+  malha.passoTempo(7);
+
+  const o = eu.olhos();
+  camera.position.set(o.x, o.y, o.z);
+  const d = eu.mira();
+  camera.lookAt(o.x + d.x, o.y + d.y, o.z + d.z);
+
+  renderer.render(scene, camera);
+
+  acumFps += 1 / Math.max(0.001, dt);
+  if (++quadros >= 20) {
+    fps = acumFps / quadros;
+    acumFps = 0;
+    quadros = 0;
+    medir();
+  }
+});
+
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
-/* ---------------------------------------------------------------- botões -- */
-const medidas = document.getElementById("medidas");
-function medir() {
-  medidas.textContent =
-    `impactos: ${campo.impactos.length}   chunks: ${campo.chunks.size}\n` +
-    `triângulos: ${Math.round(malha.triangulos).toLocaleString("pt-BR")}\n` +
-    `entulho: ${entulho.n}   rochas de pé: ${rochas.vivas()}/${rochas.n}`;
-}
-
-let ultimoTunel = null;
-
-document.getElementById("hud").addEventListener("click", (e) => {
-  const a = e.target.dataset?.a;
-  if (!a) return;
-  if (a === "cima") {
-    atirar(10, 90, 12, 0, -1, 0, 6, 8);
-  } else if (a === "lado") {
-    const y = campo.alturaBase(0, -66) - 16;
-    atirar(0, y, 10, 0, 0, -1, 6, 14);
-    ultimoTunel = { x: 0, y, z: -30 };
-  } else if (a === "morro") {
-    const y = campo.alturaBase(-38, -30) - 18;
-    atirar(-95, y, -30, 1, 0, 0, 5, 16);
-    ultimoTunel = { x: -60, y, z: -30 };
-  } else if (a === "rajada") {
-    for (let k = 0; k < 10; k++) {
-      atirar(-30 + k * 7, 80, 30 - k * 3, 0.1, -1, -0.15, 4.5, 1);
-    }
-  } else if (a === "dentro") {
-    if (!ultimoTunel) return;
-    livre = true;
-    camera.position.set(ultimoTunel.x, ultimoTunel.y, ultimoTunel.z + 34);
-    camera.lookAt(ultimoTunel.x, ultimoTunel.y, ultimoTunel.z - 40);
-  } else if (a === "orbita") {
-    livre = false;
-    posicionar();
-  } else if (a === "limpar") {
-    location.reload();
-  }
-  medir();
-});
-
-/* ----------------------------------------------------------------- quadro -- */
-let tAnt = performance.now();
-renderer.setAnimationLoop(() => {
-  const agora = performance.now();
-  const dt = Math.min(0.05, (agora - tAnt) / 1000);
-  tAnt = agora;
-  malha.passo(2);
-  entulho.update(dt);
-  rochas.update(dt);
-  renderer.render(scene, camera);
-});
-
-/* Aberto ao console: é bancada, e mexer nos números daqui é o ponto dela.
-   `passos` existe porque nem todo painel de inspeção roda `requestAnimationFrame`. */
+/* Aberto ao console: é bancada. */
 globalThis.__cratera = {
   scene,
   camera,
@@ -259,28 +286,52 @@ globalThis.__cratera = {
   malha,
   entulho,
   rochas,
-  atirar,
+  poderes,
+  eu,
+  escavar,
   medir,
-  olhar(px, py, pz, ax, ay, az) {
-    livre = true;
-    camera.position.set(px, py, pz);
-    camera.lookAt(ax, ay, az);
+  /** Põe o jogador em algum lugar, olhando para algum lugar. */
+  por(px, py, pz, yaw = eu.yaw, pitch = eu.pitch) {
+    eu.position.x = px;
+    eu.position.y = py;
+    eu.position.z = pz;
+    eu.velocity.x = eu.velocity.y = eu.velocity.z = 0;
+    eu.yaw = yaw;
+    eu.pitch = pitch;
+    eu.voando = true;
   },
-  quadro(segundos = 0) {
-    malha.tudo();
-    /* Adianta a física do entulho, para a foto sair com a pedra já pousada. */
-    for (let i = 0; i < Math.round(segundos * 60); i++) {
+  /** Adianta `segundos` de simulação e desenha. Para inspeção sem rAF. */
+  correr(segundos = 1) {
+    const passos = Math.round(segundos * 60);
+    for (let i = 0; i < passos; i++) {
+      lerTeclas();
+      eu.update(1 / 60, acao);
+      poderes.update(1 / 60);
       entulho.update(1 / 60);
       rochas.update(1 / 60);
+      talvezDesabar(1 / 60);
     }
+    malha.tudo();
+    const o = eu.olhos();
+    camera.position.set(o.x, o.y, o.z);
+    const d = eu.mira();
+    camera.lookAt(o.x + d.x, o.y + d.y, o.z + d.z);
     renderer.render(scene, camera);
     medir();
     return {
       tris: Math.round(malha.triangulos),
       impactos: campo.impactos.length,
+      desabamentos,
       entulho: entulho.n,
       rochas: rochas.vivas() + "/" + rochas.n,
+      pos: [eu.position.x.toFixed(1), eu.position.y.toFixed(1), eu.position.z.toFixed(1)],
     };
+  },
+  /** Atira daqui, na direção da mira. */
+  atirar(tipo = "bola") {
+    const o = eu.olhos();
+    const d = eu.mira();
+    poderes.disparar(tipo, o.x + d.x * 1.2, o.y + d.y * 1.2, o.z + d.z * 1.2, d.x, d.y, d.z);
   },
 };
 

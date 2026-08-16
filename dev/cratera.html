@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fase Cratera — bancada</title>
+    <title>Fase Cratera — bancada jogável</title>
     <style>
       html,
       body {
@@ -13,62 +13,110 @@
         background: #0a1016;
         font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
         color: #dfe7e2;
+        cursor: crosshair;
       }
       #hud {
         position: fixed;
         left: 12px;
         top: 12px;
         z-index: 10;
-        background: rgba(8, 16, 22, 0.86);
+        background: rgba(8, 16, 22, 0.82);
         border: 1px solid #2b4a52;
         border-radius: 9px;
         padding: 11px 13px;
-        max-width: 380px;
+        max-width: 330px;
+        pointer-events: none;
       }
       #hud b {
         color: #8fd6c4;
       }
-      #hud .dica {
-        color: #7f9b95;
-        margin: 4px 0 8px;
+      #hud table {
+        border-collapse: collapse;
+        margin: 6px 0 2px;
       }
-      button {
-        font: inherit;
-        margin: 3px 4px 0 0;
-        padding: 4px 9px;
-        background: #133039;
-        color: #dfe7e2;
-        border: 1px solid #2f6b74;
-        border-radius: 5px;
-        cursor: pointer;
+      #hud td {
+        padding: 1px 10px 1px 0;
+        color: #a7c4bd;
       }
-      button:hover {
-        background: #1b4653;
+      #hud td:first-child {
+        color: #e8f0ec;
+        white-space: nowrap;
       }
       #medidas {
         margin-top: 9px;
         white-space: pre;
-        color: #9fd0c4;
+        color: #86c9b8;
+        border-top: 1px solid #23424a;
+        padding-top: 7px;
+      }
+      /* A mira. Duas barras finas, porque um ponto some contra terra clara. */
+      #mira {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: 18px;
+        height: 18px;
+        margin: -9px 0 0 -9px;
+        pointer-events: none;
+        z-index: 9;
+      }
+      #mira::before,
+      #mira::after {
+        content: "";
+        position: absolute;
+        background: rgba(255, 255, 255, 0.85);
+        box-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+      }
+      #mira::before {
+        left: 8px;
+        top: 0;
+        width: 2px;
+        height: 18px;
+      }
+      #mira::after {
+        top: 8px;
+        left: 0;
+        height: 2px;
+        width: 18px;
+      }
+      #entrar {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(6, 12, 18, 0.72);
+        z-index: 20;
+        font-size: 17px;
+        color: #cfeade;
+        letter-spacing: 0.03em;
       }
     </style>
   </head>
   <body>
+    <div id="mira"></div>
     <div id="hud">
-      <b>fase cratera — bancada</b>
-      <div class="dica">
-        arrastar = orbitar · roda = zoom<br />
-        <b>clique = atirar</b> no ponto sob o cursor
-      </div>
-      <button data-a="cima">poço de cima</button>
-      <button data-a="lado">túnel no paredão</button>
-      <button data-a="morro">furar o morro</button>
-      <button data-a="rajada">rajada (10 tiros)</button>
-      <br />
-      <button data-a="dentro">entrar no túnel</button>
-      <button data-a="orbita">voltar à órbita</button>
-      <button data-a="limpar">limpar</button>
+      <b>fase cratera</b>
+      <table>
+        <tr><td>W A S D</td><td>andar / voar</td></tr>
+        <tr><td>mouse</td><td>olhar</td></tr>
+        <tr><td>botão esq.</td><td>bola de ki — uma cratera</td></tr>
+        <tr><td>botão dir.</td><td>feixe — atravessa a montanha</td></tr>
+        <tr><td>espaço</td><td>pular / subir</td></tr>
+        <tr><td>ctrl</td><td>descer</td></tr>
+        <tr><td>shift</td><td>turbo</td></tr>
+        <tr><td>F</td><td>voar / pousar</td></tr>
+        <tr><td>R</td><td>voltar ao início</td></tr>
+      </table>
       <div id="medidas"></div>
     </div>
+    <div id="entrar">clique para jogar</div>
     <script type="module" src="./cratera.js"></script>
+    <script type="module">
+      const aviso = document.getElementById("entrar");
+      document.addEventListener("pointerlockchange", () => {
+        aviso.style.display = document.pointerLockElement ? "none" : "flex";
+      });
+    </script>
   </body>
 </html>

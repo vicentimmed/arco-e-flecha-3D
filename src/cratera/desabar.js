@@ -61,14 +61,30 @@ const VAO_MIN = 2;
 const FRACAO_FRAGIL = 0.55;
 /** m — teto mais fino que isto é frágil de qualquer jeito. */
 const TETO_FINO = 4;
-/** m — carga mínima por cima para valer a pena desabar. Sem isto, cava-se um vão
- *  raso na clareira e o "desabamento" seria o chão afundando meio metro. */
-const CARGA_MIN = 6;
+/* m — vão mínimo para o desabamento valer a pena.
+ *
+ * Substituiu uma condição de "carga" que NÃO MEDIA NADA. Ela era
+ * `topo − solidoDesde`, com `solidoDesde` sendo o primeiro sólido encontrado
+ * descendo — ou seja, a própria superfície. O resultado era sempre a folga de
+ * dois metros com que a sondagem começa, nunca passava do mínimo, e **nenhum
+ * desabamento acontecia jamais**. Medido numa caverna de 35 m de largura com
+ * teto de 7 m sob um morro de 48: zero.
+ *
+ * O que aquela condição queria evitar era desabar um arranhão raso na clareira,
+ * e quem responde por isso é o TAMANHO DO VÃO: buraco raso não tem vão de doze
+ * metros. */
+const VAO_GRANDE = 9;
 /** Quantas colunas frágeis juntas derrubam. É o número que impede um golpe só de
  *  desabar a montanha — ver a calibragem dura, no cabeçalho. */
 const MIN_FRAGEIS = 14;
-/** m — o quanto o alcance da sondagem passa do alcance da escavação. */
-const FOLGA = 10;
+/* m — o quanto o alcance da sondagem passa do alcance da escavação.
+ *
+ * Generoso, e por medição: a sondagem é centrada na ÚLTIMA bacia escavada, que
+ * quase sempre está na BEIRA da cavidade — o feixe entra por um lado e sai pelo
+ * outro. Com folga curta ela enxergava meia caverna, não juntava as catorze
+ * colunas frágeis do gatilho, e o desabamento nunca acontecia. Um desabamento é
+ * um evento de vinte metros; a sondagem tem de enxergar vinte metros. */
+const FOLGA = 26;
 
 /**
  * Sonda uma coluna. Devolve `null` se ela não é frágil.
@@ -105,9 +121,11 @@ function sondar(campo, x, z) {
         /* Achou o fundo do vão: fecha a conta. */
         if (vao >= VAO_MIN) {
           const espessura = solidoDesde - teto;
-          const carga = topo - solidoDesde;
-          if ((espessura < vao * FRACAO_FRAGIL || espessura < TETO_FINO) && carga > CARGA_MIN) {
-            return { teto, vao, espessura, carga };
+          /* Teto de verdade: se ele tem menos de meio metro, não é teto — é a
+             borda da boca do buraco, vista de cima. */
+          const fino = espessura < vao * FRACAO_FRAGIL || espessura < TETO_FINO;
+          if (espessura > 0.5 && vao >= VAO_GRANDE && fino) {
+            return { teto, vao, espessura };
           }
         }
         teto = -1;

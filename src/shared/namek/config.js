@@ -1169,12 +1169,17 @@ export const NAMEK = {
      * carimbou 176 crateras e o campo guardava 96 — buracos apagando na frente
      * do jogador enquanto ele olhava para eles.
      *
-     * O corte caiu para 0,1 quando a fila deixou de existir: a rajada (0,12)
-     * passou a marcar, e insistir no mesmo ponto AFUNDA o buraco em vez de
-     * gastar vaga (ver `NamekField.addCrater`). O corte continua aqui só para
-     * um golpe de potência zero não pedir cratera nenhuma.
-     */
-    craterMinPower: 0.1,
+     * O corte caiu para 0,1 quando a fila deixou de existir, e insistir no
+     * mesmo ponto AFUNDA o buraco em vez de gastar vaga (ver
+     * `NamekField.addCrater`). O corte continua aqui só para um golpe de
+     * potência zero não pedir cratera nenhuma.
+     *
+     * Precisa ficar ABAIXO de `blast.power` (0,0156). Quando a rajada foi
+     * reduzida pela metade para abrir uma cratera menor (8,3 m → 4,1 m), 0,1
+     * ficou acima dela — e o corte, que devia só filtrar potência zero,
+     * passou a filtrar a rajada inteira: nenhum tiro rápido abria cratera
+     * nenhuma, grande ou pequena. */
+    craterMinPower: 0.01,
     /** m — queda a partir da qual o pouso abre cratera e levanta poeira. */
     slamSpeed: 26,
     /* Potência de uma queda, por (m/s) acima do limite.

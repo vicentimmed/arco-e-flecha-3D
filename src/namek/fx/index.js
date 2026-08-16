@@ -518,14 +518,14 @@ export class NamekFx {
     );
     pedrasDeImpacto(this.detrito, x, y, z, raio, f, this._tamFator);
 
-    /* O NACO. Só numa encosta de verdade e só a partir de um buraco de 7 m —
-     * ou seja, a partir de potência 0,8, bem acima do `craterMinPower` de 0,5.
+    /* O NACO. Só numa encosta de verdade e só a partir de um buraco de 7 m.
      *
      * O corte por raio é o que mantém a promessa do §7 do plano e o que o
-     * usuário pediu por escrito: bola de ki CHAMUSCA (potência 0,12, raio 4,1 m —
-     * não chega aqui e não abre cratera nenhuma), especial ARRANCA. Sem ele, uma
-     * rajada básica numa ladeira cuspiria blocos de pedra do tamanho de um
-     * lutador seis vezes por segundo, e a montanha inteira viraria confete.
+     * usuário pediu por escrito: bola de ki CHAMUSCA (potência 0,0156, raio
+     * 4,1 m — não chega aqui, mas ainda abre cratera, só que pequena),
+     * especial ARRANCA. Sem ele, uma rajada básica numa ladeira cuspiria
+     * blocos de pedra do tamanho de um lutador seis vezes por segundo, e a
+     * montanha inteira viraria confete.
      */
     if (enc > 0.15 && raio > 7) {
       nacoDeEncosta(

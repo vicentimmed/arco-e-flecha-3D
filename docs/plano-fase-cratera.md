@@ -115,12 +115,18 @@ buraco. Em campo de densidade isso é uma casca fina de rocha ADICIONADA logo
 fora da bacia:
 
 ```
-labio(p) = A · exp( −((|v| − raio(dir)) / w)² )   , só onde |v| > raio(dir)
-densidade = max(densidade, labio)                  , só onde já havia rocha perto
+t         = (|v| − raio(dir)) / w              , só onde 0 < t < 1
+labio(p)  = A · t · (1 − t) · 4                 ← parábola, zero nas duas pontas
+densidade = max(densidade, labio)               , só onde já havia rocha perto
 ```
 
-com `A ≈ 0,35·R` e `w ≈ 0,25·R`. O "só onde já havia rocha perto" impede lábio
+com `A ≈ 0,35·R` e `w ≈ 0,55·R`. O "só onde já havia rocha perto" impede lábio
 flutuando no ar no meio de um túnel.
+
+**Parábola e não gaussiana**, e o motivo é o §11: `exp` é uma das funções que
+não têm resultado idêntico garantido entre motores de JavaScript, e este arquivo
+inteiro precisa dar o mesmo número em toda máquina para o modo poder virar
+multijogador. A parábola usa só `+ − × ÷`, que o IEEE 754 obriga a serem exatas.
 
 ### 3.4 A boca é MAIOR que a broca
 
@@ -238,6 +244,46 @@ queixa.
 
 ---
 
+## 7.1 As rochas e o que está por perto
+
+> *"se tiver rochas ou outros objetos quando a cratera for aberta, eles explodem
+> ou desabam, não devem ficar flutuando. Se o poder pegar direto numa rocha ela é
+> destruída e o poder continua e abre a cratera. Se pegar no chão mas a cratera
+> for grande o suficiente para pegar na rocha que está ao lado, a rocha é
+> destruída."*
+
+Três regras, e elas se resolvem no mesmo lugar: **a peça não é obstáculo do
+golpe, é vítima do raio da cratera.**
+
+**1. O poder não para na rocha.** Só o terreno o detém. Um golpe que encosta numa
+pedra a destrói e **segue** — a cratera nasce onde ele bateu no chão, não onde
+raspou o cascalho. Isto é uma linha: peças não entram no teste de colisão do
+projétil, entram no de área da explosão.
+
+**2. Quem estiver dentro do raio morre junto.** Depois de cada escavação, toda
+peça cuja esfera toque a bacia é destruída — critério `distância < raio da
+cratera + raio da peça`, e não "o centro dela caiu dentro". Uma pedra grande
+encostada na borda é atingida, que é o que uma explosão faz.
+
+**3. Quem ficou sem chão CAI.** É a parte que o pedido chama de "não devem ficar
+flutuando", e é a que exige trabalho de verdade: uma peça pode estar fora do raio
+e mesmo assim ter perdido o apoio, porque a cratera comeu o chão debaixo dela.
+
+Então, depois de cada escavação, as peças da vizinhança passam por um
+**reassentamento**: mede-se a densidade logo abaixo da base; se não há sólido, a
+peça vira corpo em queda contra o campo até encontrar chão — o que costuma ser o
+fundo da própria cratera. Se a queda for maior que a altura dela, ela **se
+espatifa** em vez de pousar, que é a leitura certa de um pedregulho despencando
+vinte metros.
+
+**A destruição é DERIVADA, não transmitida.** Uma peça morre porque uma escavação
+a alcançou, e a lista de escavações já viaja (§11): todo mundo chega à mesma
+lista de peças mortas sem um byte a mais de rede. A queda e o estilhaço são
+enfeite local — se dois clientes desenharem a pedra caindo com um quadro de
+diferença, ninguém perde uma luta por isso.
+
+---
+
 ## 8. Arquivos e escopo
 
 Tudo novo, tudo isolado:
@@ -286,9 +332,9 @@ seguir.
 - **Não é o motor de Namekusei.** Não há troca, importação nem ponte. Se um dia
   o resultado agradar, a conversa sobre migrar é outra, e começa por decidir se
   Namekusei vira uma fase volumétrica ou continua campo de altura.
-- **Não é multijogador.** A bancada é local. A escavação é determinística e
-  semeada por id justamente para que a rede seja possível depois, mas nada de
-  rede entra agora.
+- **Não é multijogador AGORA.** A bancada é local e nenhuma linha de rede entra.
+  Mas o §11 é obrigatório desde a primeira linha de código — ele é a diferença
+  entre "dá para ligar na rede depois" e "teria de reescrever a escavação".
 - **Não tem orçamento de 90 draw calls.** É bancada de teste; o custo é medido e
   anotado, não perseguido. Perseguir orçamento antes de a aparência estar certa é
   a ordem errada.

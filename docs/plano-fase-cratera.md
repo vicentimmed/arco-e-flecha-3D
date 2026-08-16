@@ -292,3 +292,94 @@ seguir.
 - **Não tem orçamento de 90 draw calls.** É bancada de teste; o custo é medido e
   anotado, não perseguido. Perseguir orçamento antes de a aparência estar certa é
   a ordem errada.
+
+---
+
+## 11. O contrato de multijogador — obrigatório desde a primeira linha
+
+> *"só faça o trabalho se for possível deixar isso multiplayer depois, vários
+> players atirando no mesmo buraco e todos vendo os buracos de todos."*
+
+**Sim, é possível** — e a resposta honesta é que isso *não* sai de graça depois:
+depende de cinco regras que precisam valer desde já. Retrofitar qualquer uma
+delas significa jogar a escavação fora e reescrevê-la.
+
+### 11.1 O que viaja é a LISTA DE IMPACTOS, nunca o terreno
+
+Um impacto são nove números:
+
+```
+{ id, x, y, z, dx, dy, dz, raio, semente }
+```
+
+Uns 40 bytes. O terreno em si — os chunks de voxels — **nunca sai da máquina**:
+seriam centenas de KB por túnel. Cada cliente recebe a lista e a reproduz pela
+mesma função de escavação, chegando ao mesmo chão.
+
+É o mesmo desenho que Namekusei já usa para crateras, e ele já provou funcionar
+naquela escala. A diferença é que aqui a função de escavação é bem mais rica, e
+é por isso que as quatro regras abaixo existem.
+
+### 11.2 A ORDEM é o contrato
+
+Escavar é `min` (tira rocha) e o lábio é `max` (põe rocha). **Misturar `min` e
+`max` não é comutativo**: cavar A e depois levantar o lábio de B dá um chão
+diferente de levantar o lábio de B e depois cavar A.
+
+Portanto:
+
+- cada impacto aplica a sua bacia **e** o seu lábio **juntos, atomicamente**;
+- os impactos são aplicados na **ordem do id carimbado**, que é total e igual em
+  toda máquina;
+- quem chega no meio da partida reproduz a lista **na ordem recebida**.
+
+Este parágrafo é a coisa mais fácil de esquecer e a mais cara de descobrir
+depois: o sintoma seria dois jogadores com chões silenciosamente diferentes, e
+ele só apareceria quando um caísse num buraco que o outro não vê.
+
+### 11.3 Nada de `Math.random` — e nada de transcendentais
+
+- **Aleatoriedade**: toda variação (raio, desvio lateral, espaçamento, fase do
+  ruído) sai de um **hash do id**, nunca de `Math.random()`. É o mesmo
+  `embaralhar` que `NamekField` já usa, pelo mesmo motivo: ids consecutivos têm
+  bits baixos consecutivos, e sem embaralhar as crateras vizinhas saem gêmeas.
+- **Ruído**: o `ValueNoise` do próprio repositório, com semente fixa. Ele é
+  aritmética inteira mais interpolação — determinístico por construção.
+- **Transcendentais**: `Math.sin`, `cos`, `exp`, `pow` e `log` **não têm
+  resultado idêntico garantido** entre motores e plataformas (o IEEE 754 só
+  obriga exatidão em `+ − × ÷ √`). Um bit de diferença numa borda de voxel vira
+  uma célula sólida num cliente e vazia no outro.
+  **A função de escavação usa apenas `+ − × ÷ √` e comparações.** É por isso que
+  o lábio da §3.3 é uma parábola e não uma gaussiana, e é uma regra a conferir em
+  revisão, não uma intenção.
+
+### 11.4 O campo é PURO — roda em Node sem navegador
+
+`src/cratera/campo.js` e `src/cratera/escavar.js` **não importam Three.js**, nem
+DOM, nem nada de cliente. É a mesma disciplina de `shared/namek/field.js`, e a
+razão é a mesma: um dia a sala precisa do mesmo chão para mover bot, cobrar
+queda e validar acerto. Um campo que só existe no navegador não vira
+multijogador — vira dois jogos.
+
+A malha (`malha.js`), o entulho e o desabamento visual ficam do lado do cliente.
+
+### 11.5 O que ainda falta decidir, e pode esperar
+
+- **Quem carimba o id.** Numa sala, o servidor — como `NamekRoom` faz. Na bancada
+  é um contador local. A troca é de uma linha porque o resto só depende de o id
+  existir e ser ordenado.
+- **Cota de escavação.** Quinze jogadores atirando abrem muitos impactos por
+  segundo; vai precisar de um balde, como Namekusei precisou. É balanceamento, e
+  balanceamento depende de ver o jogo rodando.
+- **Retardatário com partida longa.** Reproduzir dez mil impactos é barato no
+  campo (é só escrever voxel) e caro na malha — mas a malha já é preguiçosa e só
+  constrói o que está à vista. Se um dia doer, a saída é mandar os chunks
+  gravados em vez da lista; o formato já é um `Int8Array` compactável.
+
+### 11.6 Como isso será verificado
+
+Um teste que roda em Node, sem navegador: dois campos independentes, a mesma
+lista de impactos aplicada em ordem, e uma varredura comparando a densidade
+**voxel a voxel**. Diferença esperada: **zero**, não "pequena". Este teste entra
+junto com a etapa 2 e roda a cada mudança na função de escavação — é o único
+jeito de a promessa de multijogador não virar uma intenção.

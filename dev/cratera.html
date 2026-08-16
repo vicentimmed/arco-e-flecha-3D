@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fase Cratera — bancada</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0a1016;
+        font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #dfe7e2;
+      }
+      #hud {
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        z-index: 10;
+        background: rgba(8, 16, 22, 0.86);
+        border: 1px solid #2b4a52;
+        border-radius: 9px;
+        padding: 11px 13px;
+        max-width: 380px;
+      }
+      #hud b {
+        color: #8fd6c4;
+      }
+      #hud .dica {
+        color: #7f9b95;
+        margin: 4px 0 8px;
+      }
+      button {
+        font: inherit;
+        margin: 3px 4px 0 0;
+        padding: 4px 9px;
+        background: #133039;
+        color: #dfe7e2;
+        border: 1px solid #2f6b74;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1b4653;
+      }
+      #medidas {
+        margin-top: 9px;
+        white-space: pre;
+        color: #9fd0c4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <b>fase cratera — bancada</b>
+      <div class="dica">
+        arrastar = orbitar · roda = zoom<br />
+        <b>clique = atirar</b> no ponto sob o cursor
+      </div>
+      <button data-a="cima">poço de cima</button>
+      <button data-a="lado">túnel no paredão</button>
+      <button data-a="morro">furar o morro</button>
+      <button data-a="rajada">rajada (10 tiros)</button>
+      <br />
+      <button data-a="dentro">entrar no túnel</button>
+      <button data-a="orbita">voltar à órbita</button>
+      <button data-a="limpar">limpar</button>
+      <div id="medidas"></div>
+    </div>
+    <script type="module" src="./cratera.js"></script>
+  </body>
+</html>

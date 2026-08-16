@@ -120,14 +120,29 @@ export class CampoCratera {
    *    piso onde parar.
    */
   baseDensidade(x, y, z) {
-    const h = this.alturaBase(x, z);
+    return this.densidadeComAltura(x, y, z, this.alturaBase(x, z));
+  }
+
+  /**
+   * A mesma conta, com a cota da superfície JÁ SABIDA.
+   *
+   * Existe porque `alturaBase` não depende de `y`: as 34 amostras de uma coluna
+   * de chunk compartilham a mesma altura, e recalculá-la para cada uma custou
+   * 26 segundos na montagem da arena — medidos. Ver `amostrarBloco`.
+   */
+  densidadeComAltura(x, y, z, h) {
     let d = h - y;
 
     /* A rugosidade entra por uma janela: começa 1,5 m abaixo da superfície e
        chega ao cheio uns 8 m adentro. A janela é polinomial (nada de `exp`, §11)
-       e é o que impede a encosta de ganhar buracos. */
+       e é o que impede a encosta de ganhar buracos.
+
+       E ela para de ser calculada abaixo de 12 m: lá `h − y` já passou do teto
+       de quantização (±8,5 m), então a rugosidade (±3,4 m) não tem como mudar o
+       SINAL — só gastaria 24 consultas de hash para produzir um número que vai
+       ser aparado do mesmo jeito. */
     const prof = h - y;
-    if (prof > 1.5) {
+    if (prof > 1.5 && prof < 12) {
       let t = (prof - 1.5) / 6.5;
       if (t > 1) t = 1;
       const janela = t * t * (3 - 2 * t);
@@ -141,6 +156,58 @@ export class CampoCratera {
     if (y < FUNDO) d += (FUNDO - y) * 4;
 
     return d;
+  }
+
+  /**
+   * Preenche um bloco de amostras `n³` a partir do nó `(ox, oy, oz)`.
+   *
+   * É o caminho que a malha usa, e ele existe por uma razão só: cachear
+   * `alturaBase` por COLUNA. São n² consultas em vez de n³ — trinta e quatro
+   * vezes menos numa grade de 34 —, e foi a diferença entre a arena montar em
+   * vinte e seis segundos e montar em dois.
+   *
+   * O nó que cai num chunk já escavado lê o array; o resto sai da fórmula. Essa
+   * decisão é por AMOSTRA e não por bloco, porque um bloco pode ter os dois.
+   */
+  amostrarBloco(ox, oy, oz, n, saida) {
+    const alt = this._altCache && this._altCache.length >= n * n ? this._altCache : (this._altCache = new Float32Array(n * n));
+    for (let iz = 0; iz < n; iz++) {
+      const wz = (oz + iz) * VOXEL;
+      for (let ix = 0; ix < n; ix++) {
+        alt[iz * n + ix] = this.alturaBase((ox + ix) * VOXEL, wz);
+      }
+    }
+
+    for (let iy = 0; iy < n; iy++) {
+      const gy = oy + iy;
+      const wy = gy * VOXEL;
+      const cy = Math.floor(gy / NC);
+      for (let iz = 0; iz < n; iz++) {
+        const gz = oz + iz;
+        const wz = gz * VOXEL;
+        const cz = Math.floor(gz / NC);
+        const linha = (iy * n + iz) * n;
+        const alinha = iz * n;
+        for (let ix = 0; ix < n; ix++) {
+          const gx = ox + ix;
+          const cx = Math.floor(gx / NC);
+          const arr = this.chunks.get(this.chaveChunk(cx, cy, cz));
+          if (arr === undefined) {
+            saida[linha + ix] = this.densidadeComAltura(
+              gx * VOXEL,
+              wy,
+              wz,
+              alt[alinha + ix],
+            );
+          } else {
+            const lx = gx - cx * NC;
+            const ly = gy - cy * NC;
+            const lz = gz - cz * NC;
+            saida[linha + ix] = arr[(ly * NC + lz) * NC + lx] / ESCALA;
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -275,13 +342,22 @@ export class CampoCratera {
     const ox = cx * NC;
     const oy = cy * NC;
     const oz = cz * NC;
+    /* Também por coluna, pelo mesmo motivo de `amostrarBloco`. */
+    const alt = new Float32Array(NC * NC);
+    for (let lz = 0; lz < NC; lz++) {
+      const wz = (oz + lz) * VOXEL;
+      for (let lx = 0; lx < NC; lx++) alt[lz * NC + lx] = this.alturaBase((ox + lx) * VOXEL, wz);
+    }
     for (let ly = 0; ly < NC; ly++) {
       const wy = (oy + ly) * VOXEL;
       for (let lz = 0; lz < NC; lz++) {
         const wz = (oz + lz) * VOXEL;
         const linha = (ly * NC + lz) * NC;
+        const alinha = lz * NC;
         for (let lx = 0; lx < NC; lx++) {
-          arr[linha + lx] = this.quantizar(this.baseDensidade((ox + lx) * VOXEL, wy, wz));
+          arr[linha + lx] = this.quantizar(
+            this.densidadeComAltura((ox + lx) * VOXEL, wy, wz, alt[alinha + lx]),
+          );
         }
       }
     }

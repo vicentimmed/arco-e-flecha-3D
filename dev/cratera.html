@@ -90,6 +90,12 @@
         font-size: 17px;
         color: #cfeade;
         letter-spacing: 0.03em;
+        /* O AVISO NÃO PODE RECEBER O CLIQUE.
+         *
+         * Ele cobre a tela inteira (`inset: 0`), e sem isto ele engole o clique
+         * antes do canvas: `requestPointerLock` nunca é chamado e o aviso fica
+         * para sempre, pedindo um clique que ele próprio impede. */
+        pointer-events: none;
       }
     </style>
   </head>

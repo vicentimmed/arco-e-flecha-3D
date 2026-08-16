@@ -178,12 +178,20 @@ function lerTeclas() {
   acao.voar = false;
 }
 
-/* A mira por PONTEIRO TRAVADO: é o que faz isto ser jogar em vez de arrastar. */
-renderer.domElement.addEventListener("click", () => {
-  if (document.pointerLockElement !== renderer.domElement) {
-    renderer.domElement.requestPointerLock();
-  }
-});
+/* A mira por PONTEIRO TRAVADO: é o que faz isto ser jogar em vez de arrastar.
+ *
+ * O ouvinte fica no DOCUMENTO e não no canvas: qualquer coisa que venha a cobrir
+ * a tela — um aviso, um painel — passaria a engolir o clique, e o sintoma seria
+ * um "clique para jogar" que não responde ao clique. Foi o que aconteceu. */
+function travarPonteiro() {
+  if (document.pointerLockElement === renderer.domElement) return;
+  const r = renderer.domElement.requestPointerLock();
+  /* Em navegador novo isto devolve promessa, e ela REJEITA se o pedido vier
+     rápido demais depois de uma saída — engolir a rejeição evita um erro
+     vermelho no console que não diz nada ao jogador. */
+  if (r && typeof r.catch === "function") r.catch(() => {});
+}
+document.addEventListener("click", travarPonteiro);
 addEventListener("mousemove", (e) => {
   if (document.pointerLockElement !== renderer.domElement) return;
   eu.yaw -= e.movementX * 0.0022;

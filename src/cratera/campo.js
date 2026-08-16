@@ -52,10 +52,17 @@ import { prepararImpacto, bacieELabio } from "./escavar.js";
 
 /* --------------------------------------------------------------- a grade --- */
 
-/** m — aresta do voxel. Meio metro dá 24 amostras no vão de um golpe de 6 m. */
-export const VOXEL = 0.5;
-/** m — aresta do chunk. */
-export const CHUNK = 16;
+/* m — aresta do voxel.
+ *
+ * Era meio metro, e subiu depois da queixa de peso. O voxel é o parafuso mais
+ * caro da fase inteira: os triângulos crescem com o QUADRADO dele e o custo de
+ * escavar com o CUBO. De 0,50 para 0,60 são 31 % menos triângulo e 42 % menos
+ * tempo por bacia — e a forma não muda, porque o que decide se a borda lascada
+ * aparece é quantas amostras cabem no vão do golpe: um tiro de raio 5 tem 17
+ * delas, e a lasca mais fina do ruído mede uns 3 m. Sobra resolução. */
+export const VOXEL = 0.6;
+/** m — aresta do chunk. 15 / 0,6 dá 25 células redondas. */
+export const CHUNK = 15;
 /** Células por lado de um chunk. */
 export const NC = Math.round(CHUNK / VOXEL);
 

@@ -81,9 +81,18 @@ const C1 = Math.floor(METADE / (NC * VOXEL));
 const CY0 = Math.floor(FUNDO / (NC * VOXEL));
 const CY1 = Math.floor(TETO_MUNDO / (NC * VOXEL));
 malha.sujarCaixa(C0, CY0, C0, C1, CY1, C1);
+/* A ARENA MONTA ENQUANTO SE JOGA, e não antes.
+ *
+ * `malha.tudo()` aqui travava a página por cinco segundos com a tela branca — e
+ * travava por nada: a física do terreno é o CAMPO, que é uma fórmula e já está
+ * pronta. Só o desenho falta. Então o laço começa imediatamente, o jogador nasce
+ * no ar sobre um mundo que ainda está aparecendo, e os pedaços chegam por ordem
+ * de fila enquanto ele cai.
+ *
+ * O primeiro segundo ganha um orçamento gordo (o jogador ainda está caindo e
+ * não repara em trepidação); depois ele cai para o de regime. */
+const tInicio = performance.now();
 console.time("malha inicial");
-malha.tudo();
-console.timeEnd("malha inicial");
 
 const entulho = new Entulho(raiz, campo);
 const rochas = new Rochas(raiz, campo, entulho);
@@ -235,6 +244,7 @@ let fps = 60;
 function medir() {
   const p = eu.position;
   medidas.textContent =
+    (montando ? `MONTANDO A ARENA — ${malha.fila.length} pedaços\n` : "") +
     `fps ${fps.toFixed(0)}   fila de malha ${malha.fila.length}\n` +
     `impactos ${campo.impactos.length}   desabamentos ${desabamentos}\n` +
     `triângulos ${Math.round(malha.triangulos).toLocaleString("pt-BR")}\n` +
@@ -246,6 +256,8 @@ function medir() {
 let tAnt = performance.now();
 let acumFps = 0;
 let quadros = 0;
+/** Enquanto a arena está aparecendo, a malha ganha orçamento gordo. */
+let montando = true;
 
 renderer.setAnimationLoop(() => {
   const agora = performance.now();
@@ -261,7 +273,11 @@ renderer.setAnimationLoop(() => {
   talvezDesabar(dt);
   /* A malha por último e por TEMPO: o que não couber neste quadro vai para o
      próximo. É isto que impede o tiro de engasgar a imagem. */
-  malha.passoTempo(7);
+  malha.passoTempo(montando ? 24 : 7);
+  if (montando && malha.fila.length === 0) {
+    montando = false;
+    console.timeEnd("malha inicial");
+  }
 
   const o = eu.olhos();
   camera.position.set(o.x, o.y, o.z);
@@ -310,6 +326,7 @@ globalThis.__cratera = {
   },
   /** Adianta `segundos` de simulação e desenha. Para inspeção sem rAF. */
   correr(segundos = 1) {
+    montando = false;
     const passos = Math.round(segundos * 60);
     for (let i = 0; i < passos; i++) {
       lerTeclas();

@@ -210,22 +210,39 @@ export function prepararImpacto(imp) {
  *
  * @param {number} ux versor da direção do ponto em relação ao centro
  */
-function raioNaDirecao(c, ux, uy, uz) {
+function raioNaDirecao(c, ux, uy, uz, d) {
   /* Estica no eixo do tiro. Ao quadrado para valer nos DOIS sentidos: uma
      cratera de impacto é alongada ao longo da trajetória, para a frente e para
      trás, e não uma gota apontando num sentido só. */
   const proj = ux * c.dx + uy * c.dy + uz * c.dz;
-  const alonga = 1 + ALONGA * proj * proj;
+  const base = c.R * (1 + ALONGA * proj * proj);
 
   const grande = ruido3(ux * FREQ_GRANDE, uy * FREQ_GRANDE, uz * FREQ_GRANDE, c.semente);
+  const rGrosso = base * (1 + LASCA_GRANDE * grande);
+
+  /* A LASCA FINA SÓ ONDE ELA PODE MUDAR ALGUMA COISA.
+   *
+   * Ela vale no máximo `LASCA_FINA · base` — uns sessenta centímetros num golpe
+   * de raio 5. Fora dessa casca em torno do raio grosso, somá-la não muda o
+   * sinal do resultado nem a cor de um pixel: só gasta oito consultas de hash.
+   *
+   * E ela é gasta em quase todo voxel da caixa, que tem cento e vinte e cinco
+   * mil deles. Medido: metade do custo de escavar estava aqui, produzindo um
+   * número que era descartado. `d` chega de fora justamente para isto — quem
+   * chama já pagou a raiz quadrada. */
+  if (d !== undefined) {
+    const folga = base * LASCA_FINA + 0.05;
+    const dif = d - rGrosso;
+    if (dif > folga || dif < -folga) return rGrosso;
+  }
+
   const fina = ruido3(
     ux * FREQ_FINA,
     uy * FREQ_FINA,
     uz * FREQ_FINA,
     (c.semente ^ 0x5bf03635) | 0,
   );
-
-  return c.R * alonga * (1 + LASCA_GRANDE * grande + LASCA_FINA * fina);
+  return rGrosso + base * LASCA_FINA * fina;
 }
 
 /**
@@ -279,7 +296,7 @@ export function bacieELabio(c, x, y, z, saida) {
   }
 
   const inv = 1 / d;
-  const r = raioNaDirecao(c, vx * inv, vy * inv, vz * inv);
+  const r = raioNaDirecao(c, vx * inv, vy * inv, vz * inv, d);
   saida[0] = d - r;
 
   /* 1 — o lábio reaproveita a MESMA casca. */

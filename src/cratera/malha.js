@@ -105,10 +105,15 @@ export class MalhaCratera {
     this.raiz = raiz;
     this.campo = campo;
 
-    this.material = new THREE.MeshStandardMaterial({
+    /* LAMBERT e não Standard.
+     *
+     * O terreno ocupa a tela inteira, então o custo por FRAGMENTO dele é o custo
+     * do quadro. O Standard paga BRDF completa — especular, rugosidade,
+     * Fresnel — e este chão é terra fosca: `roughness` 0,94 e `metalness` zero
+     * jogavam quase todo esse trabalho fora antes de virar pixel. O Lambert dá a
+     * mesma leitura por uma fração do preço. */
+    this.material = new THREE.MeshLambertMaterial({
       vertexColors: true,
-      roughness: 0.94,
-      metalness: 0,
       /* UMA FACE.
        *
        * Era `DoubleSide`, posto como rede de segurança enquanto a mão dos quads

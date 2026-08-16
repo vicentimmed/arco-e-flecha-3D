@@ -17,7 +17,9 @@
 import * as THREE from "three";
 import { CampoCratera, VOXEL, NC, METADE, FUNDO, TETO_MUNDO } from "../src/cratera/campo.js";
 import { MalhaCratera } from "../src/cratera/malha.js";
-import { espacamentoApos } from "../src/cratera/escavar.js";
+import { espacamentoApos, prepararImpacto } from "../src/cratera/escavar.js";
+import { Entulho } from "../src/cratera/entulho.js";
+import { Rochas } from "../src/cratera/rochas.js";
 
 /* ------------------------------------------------------------------ cena -- */
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -70,6 +72,11 @@ console.time("malha inicial");
 malha.tudo();
 console.timeEnd("malha inicial");
 
+/* O entulho e as pedras. Nascem depois da malha porque a distribuição das
+   pedras consulta o relevo, e o entulho colide contra ele. */
+const entulho = new Entulho(raiz, campo);
+const rochas = new Rochas(raiz, campo, entulho);
+
 /* ------------------------------------------------------------- o tiro ----- */
 let proxId = 1;
 
@@ -108,8 +115,16 @@ function atirar(ox, oy, oz, dx, dy, dz, raio = 5, n = 1) {
   let feitos = 0;
   for (let i = 0; i < n; i++) {
     const id = proxId++;
-    campo.escavar({ id, x, y, z, dx, dy, dz, raio, boca: i === 0 });
+    const c = campo.escavar({ id, x, y, z, dx, dy, dz, raio, boca: i === 0 });
     feitos++;
+    if (c) {
+      /* A ordem importa: as pedras primeiro (algumas viram entulho), depois o
+         estouro da própria cratera, depois sacudir o entulho que já estava
+         pousado e acabou de perder o chão. */
+      rochas.aplicar(c);
+      entulho.estourar(c, Math.round(14 + c.R * 2.4));
+      entulho.sacudir(c.cx, c.cy, c.cz, c.alcance + 6);
+    }
     const passo = espacamentoApos(id, raio);
     x += dx * passo;
     y += dy * passo;
@@ -186,7 +201,7 @@ function medir() {
   medidas.textContent =
     `impactos: ${campo.impactos.length}   chunks: ${campo.chunks.size}\n` +
     `triângulos: ${Math.round(malha.triangulos).toLocaleString("pt-BR")}\n` +
-    `pedaços com malha: ${[...malha.pedacos.values()].filter((p) => p.mesh).length}`;
+    `entulho: ${entulho.n}   rochas de pé: ${rochas.vivas()}/${rochas.n}`;
 }
 
 let ultimoTunel = null;
@@ -223,8 +238,14 @@ document.getElementById("hud").addEventListener("click", (e) => {
 });
 
 /* ----------------------------------------------------------------- quadro -- */
+let tAnt = performance.now();
 renderer.setAnimationLoop(() => {
+  const agora = performance.now();
+  const dt = Math.min(0.05, (agora - tAnt) / 1000);
+  tAnt = agora;
   malha.passo(2);
+  entulho.update(dt);
+  rochas.update(dt);
   renderer.render(scene, camera);
 });
 
@@ -236,6 +257,8 @@ globalThis.__cratera = {
   renderer,
   campo,
   malha,
+  entulho,
+  rochas,
   atirar,
   medir,
   olhar(px, py, pz, ax, ay, az) {
@@ -243,11 +266,21 @@ globalThis.__cratera = {
     camera.position.set(px, py, pz);
     camera.lookAt(ax, ay, az);
   },
-  quadro() {
+  quadro(segundos = 0) {
     malha.tudo();
+    /* Adianta a física do entulho, para a foto sair com a pedra já pousada. */
+    for (let i = 0; i < Math.round(segundos * 60); i++) {
+      entulho.update(1 / 60);
+      rochas.update(1 / 60);
+    }
     renderer.render(scene, camera);
     medir();
-    return { tris: Math.round(malha.triangulos), impactos: campo.impactos.length };
+    return {
+      tris: Math.round(malha.triangulos),
+      impactos: campo.impactos.length,
+      entulho: entulho.n,
+      rochas: rochas.vivas() + "/" + rochas.n,
+    };
   },
 };
 

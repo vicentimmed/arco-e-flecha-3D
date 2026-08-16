@@ -174,6 +174,17 @@ addEventListener("keydown", (e) => {
   teclas.add(e.code);
   if (e.code === "KeyF") eu.voando = !eu.voando;
   if (e.code === "KeyR") reiniciar();
+  /* E — o entulho. Existe para medir: com ele desligado, o que sobra no quadro é
+     o preço do terreno e da escavação, sem as pedras por cima. */
+  if (e.code === "KeyE") {
+    entulho.ligar(!entulho.ativo);
+    medir();
+  }
+  /* T — as rochas de cenário, pelo mesmo motivo. */
+  if (e.code === "KeyT") {
+    rochas.mesh.visible = !rochas.mesh.visible;
+    medir();
+  }
   if (e.code === "Space") e.preventDefault();
 });
 addEventListener("keyup", (e) => teclas.delete(e.code));
@@ -248,7 +259,7 @@ function medir() {
     `fps ${fps.toFixed(0)}   fila de malha ${malha.fila.length}\n` +
     `impactos ${campo.impactos.length}   desabamentos ${desabamentos}\n` +
     `triângulos ${Math.round(malha.triangulos).toLocaleString("pt-BR")}\n` +
-    `entulho ${entulho.n}   rochas ${rochas.vivas()}/${rochas.n}\n` +
+    `entulho ${entulho.ativo ? entulho.n : "DESLIGADO"}   rochas ${rochas.mesh.visible ? rochas.vivas() + "/" + rochas.n : "OCULTAS"}\n` +
     `você (${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}) ${eu.voando ? "voando" : eu.noChao ? "no chão" : "caindo"}`;
 }
 

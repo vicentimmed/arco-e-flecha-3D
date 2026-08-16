@@ -109,6 +109,24 @@ export class Entulho {
     this.esc = new Float32Array(MAX * 3);
     this.t = new Float32Array(MAX);
     this.voando = new Uint8Array(MAX);
+
+    /* O INTERRUPTOR. Desligado, o entulho não nasce, não é integrado e não é
+       desenhado — é o que permite medir quanto dele custa, separando o preço
+       das pedras do preço do terreno. Ligar de novo começa do zero: o que já
+       tinha caído não volta, e não deveria — voltar seria material aparecendo
+       do nada no meio da partida. */
+    this.ativo = true;
+  }
+
+  /** Liga ou desliga. Ao desligar, o que estava em cena some. */
+  ligar(v) {
+    this.ativo = !!v;
+    this.mesh.visible = this.ativo;
+    if (!this.ativo) {
+      this.n = 0;
+      this.prox = 0;
+      this.mesh.count = 0;
+    }
   }
 
   /**
@@ -123,6 +141,7 @@ export class Entulho {
    * @param {number} quantos
    */
   estourar(c, quantos = 26) {
+    if (!this.ativo) return;
     for (let k = 0; k < quantos; k++) {
       const i = this.vaga();
       const s1 = sorteio(c.id, 40 + k * 3);
@@ -204,7 +223,7 @@ export class Entulho {
    * de atravessá-la: ela não sabe o que é túnel, sabe o que é sólido.
    */
   update(dt) {
-    if (this.n === 0) return;
+    if (!this.ativo || this.n === 0) return;
     const campo = this.campo;
     const h = dt > 0.05 ? 0.05 : dt;
     let mexeu = false;
@@ -283,6 +302,7 @@ export class Entulho {
    * seguinte volta a cair.
    */
   sacudir(cx, cy, cz, raio) {
+    if (!this.ativo) return;
     const r2 = raio * raio;
     for (let i = 0; i < this.n; i++) {
       if (this.voando[i]) continue;

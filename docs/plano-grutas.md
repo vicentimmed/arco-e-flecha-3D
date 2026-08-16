@@ -1,3 +1,13 @@
+> **ABANDONADO — 16/08/2026.** Isto foi implementado por inteiro (volume,
+> física por intervalos, malha por surface nets, perfuração, rede) e **revertido
+> a pedido**: o resultado não ficou bom em jogo. O terreno de Namekusei voltou a
+> ser o campo de altura de sempre.
+>
+> O documento fica como registro do que foi tentado e do que se aprendeu. A
+> implementação está no branch `terreno-volumetrico` e na tag
+> `namekusei-volume-v1`; o terreno que está valendo é o da tag
+> `namekusei-superficie-v1`.
+
 # Grutas — o terreno deixa de ser uma superfície e passa a ser um volume
 
 > Complementa `plano-namekusei.md`. O §4 (física sem Rapier) e o §7 (destruição)

@@ -944,10 +944,20 @@ export const NAMEK = {
        * um) e apertado o bastante para nunca haver dúvida sobre em quem o tiro
        * vai — a esta distância só cabe um corpo. */
       raioTela: 0.26,
-      /** m — além disto o cursor em cima de alguém não vale assistência. Menor
-       *  que o alcance da trava (420 m) de propósito: a trava é para perseguir
-       *  quem fugiu, a assistência é para a briga. */
-      alcance: 260,
+      /* NÃO HÁ ALCANCE MÁXIMO AQUI, e a ausência é o conserto de uma queixa:
+       * *"estou lá no teto, no céu, no ponto mais alto, e os jogadores estão
+       * todos no chão — esse efeito não funciona."* Havia um teto de 260 m, e o
+       * teto de voo são 520: do alto a assistência simplesmente não existia.
+       *
+       * Não virou um número maior porque um número maior é a mesma queixa
+       * adiada. Quem limita a zona é `raioTela`, e ele já é um critério ANGULAR
+       * — uma fração da abertura da lente, não metros de mundo. Ele se sente
+       * idêntico a 20 m e a 800 m (levar o retículo para o lado solta o foco
+       * exatamente no mesmo ângulo) e responde sozinho à única pergunta que a
+       * mira assistida faz: *o cursor está em cima de alguém?* A distância a
+       * esse alguém nunca fez parte da pergunta — quem cobra distância é o
+       * PROJÉTIL, que tem alcance próprio (`blast.life`, `range` de cada
+       * especial) e morre no caminho quando o tiro foi longe demais. */
       /** graus — meio-ângulo de segurança. A zona de tela já exclui quem está
        *  atrás, MENOS no caso degenerado de um alvo quase no plano da lente, em
        *  que a projeção explode. Este cone é a guarda contra esse caso. */
@@ -955,9 +965,20 @@ export const NAMEK = {
     },
 
     /* ----------------------------------------------------- seleção de alvo */
-    /** m — alcance máximo. Além disto a trava fica INSTÁVEL (ver `perda`) e
-     *  eventualmente cai. É bem maior que a distância de briga (55 m) porque
-     *  perseguir alguém que fugiu é justamente quando a trava mais serve. */
+    /* m — a RÉGUA da distância, e ela deixou de ser uma parede.
+     *
+     * Era o alcance máximo: além de 420 m não se travava, e o que já estivesse
+     * travado caía. Isso pôs um teto na trava mais baixo que o teto de voo (520
+     * m), então subir ao céu para procurar quem estava no chão desligava
+     * justamente o sistema que serve para achar quem está longe. Hoje não existe
+     * distância que impeça de travar nem distância que solte a trava — quem
+     * solta é o alvo sair do quadro (ver `perda`), que é uma condição que o
+     * jogador controla e entende.
+     *
+     * O número continua aqui porque duas contas precisam de uma escala: a nota
+     * de `proximidade` na hora de escolher entre dois candidatos (`_melhor`), e
+     * o `avisoEm` que faz o anel piscar. Nas duas ele diz "a partir daqui é
+     * longe", e em nenhuma ele diz "a partir daqui não vale". */
     alcance: 420,
     /** graus — meio-ângulo do cone de aquisição. Generoso, mas não "atrás de
      *  mim": travar em quem está às costas seria travar por engano. */
@@ -979,7 +1000,8 @@ export const NAMEK = {
        montanha e voltar; o que derruba a trava é ele ficar inalcançável por
        tempo suficiente. */
     perda: {
-      /** s fora do quadro (ou fora de alcance) antes de a trava cair. */
+      /** s fora do quadro antes de a trava cair. É a ÚNICA perda por relógio que
+       *  existe: a distância saiu da conta junto com a parede de `alcance`. */
       tempo: 2.5,
       /** Fração de NDC além da qual o alvo conta como "fora do quadro". Maior
        *  que 1 de propósito: uma margem além da borda da tela, para quem está

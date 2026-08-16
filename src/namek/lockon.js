@@ -40,8 +40,15 @@
 
    *"Não quero que o lock seja perdido simplesmente porque o inimigo saiu por
    alguns frames da tela."* Por isso a perda é um RELÓGIO: `foraDe` acumula
-   enquanto o alvo estiver fora do quadro ou fora de alcance, e zera assim que
-   ele volta. Só quando ele passa de `perda.tempo` a trava cai.
+   enquanto o alvo estiver fora do quadro, e zera assim que ele volta. Só quando
+   ele passa de `perda.tempo` a trava cai.
+
+   E DISTÂNCIA NÃO É PERDA, nem impedimento de travar. Era: um teto de 420 m
+   valia tanto para adquirir quanto para segurar, e ele ficava abaixo do teto de
+   voo (520 m) — subir ao céu para achar quem estava no chão desligava o sistema
+   feito para achar quem está longe. Hoje o único critério é angular, em todas as
+   distâncias, e é ele quem sustenta a promessa que o jogador ouve: o retículo em
+   cima de alguém marca esse alguém, esteja ele colado ou do outro lado da ilha.
 
    As perdas INSTANTÂNEAS são outra coisa, e são só as que não têm volta: o alvo
    morreu, o alvo saiu da sala, o jogador soltou. Essas não esperam relógio
@@ -68,8 +75,8 @@ export class LockOn {
 
     /** m — separação atual. A câmera a usa para o enquadramento dinâmico. */
     this.separacao = 0;
-    /** s acumulados com o alvo fora do quadro ou fora de alcance. Ver a seção
-     *  "a perda" no cabeçalho. */
+    /** s acumulados com o alvo fora do quadro. Ver a seção "a perda" no
+     *  cabeçalho. */
     this.foraDe = 0;
     /** O alvo está longe o bastante para o HUD avisar? */
     this.distante = false;
@@ -231,7 +238,11 @@ export class LockOn {
       const dy = p.y + NAMEK.fighter.chest - origem.y;
       const dz = p.z - origem.z;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (d < 0.001 || d > L.alcance) continue;
+      /* Nenhuma eliminatória por DISTÂNCIA: quem elimina é o cone, e cone é
+         ângulo. Havia um teto de 420 m aqui, mais baixo que o teto de voo — do
+         alto do céu não se travava em ninguém que estivesse no chão, que é
+         justamente a situação em que se sobe ao céu. Ver `NAMEK.lock.alcance`. */
+      if (d < 0.001) continue;
 
       const cos = (dx * mira.x + dy * mira.y + dz * mira.z) / d;
       if (cos < cosCone) continue;
@@ -239,9 +250,12 @@ export class LockOn {
       /* Duas notas em [0, 1]. `alinhamento` cresce do limite do cone (0) ao
          eixo exato (1) — normalizado pelo cone, e não pelo cosseno cru, senão
          um cone largo espremeria todos os candidatos na mesma nota alta.
-         `proximidade` cresce do alcance máximo (0) para o colo (1). */
+         `proximidade` cresce da RÉGUA (0) para o colo (1) — e o piso em zero é o
+         que a mantém dentro de [0, 1] agora que existe candidato ALÉM da régua:
+         passado o limite todos empatam no pior caso e quem decide é a mira, que
+         é a ordem certa quando a briga inteira está longe. */
       const alinhamento = (cos - cosCone) / (1 - cosCone);
-      const proximidade = 1 - d / L.alcance;
+      const proximidade = Math.max(0, 1 - d / L.alcance);
       const nota = L.viesDaMira * alinhamento + (1 - L.viesDaMira) * proximidade;
       if (nota > melhorNota) {
         melhorNota = nota;
@@ -307,8 +321,12 @@ export class LockOn {
     this.foraDoQuadro =
       this._ndc.atras || Math.abs(this._ndc.x) > margem || Math.abs(this._ndc.y) > margem;
 
-    const inalcancavel = d > L.alcance || this.foraDoQuadro;
-    if (inalcancavel) {
+    /* SÓ O QUADRO derruba a trava. A distância saiu desta conta pelo mesmo
+       motivo que saiu da aquisição: perseguir quem fugiu é exatamente para o que
+       a trava serve, e ela morria em pleno serviço assim que a fuga passava dos
+       420 m. O que sobra é uma perda que o jogador causa e enxerga — deixar o
+       adversário sair do quadro e não trazê-lo de volta a tempo. */
+    if (this.foraDoQuadro) {
       this.foraDe += dt;
       if (this.foraDe >= L.perda.tempo) {
         this.soltar();
@@ -443,7 +461,11 @@ export class LockOn {
         !this._ndc.atras && Math.abs(this._ndc.x) <= 1.05 && Math.abs(this._ndc.y) <= 1.05;
       lista.push(m);
 
-      if (this._ndc.atras || d > M.alcance) continue;
+      /* Sem teste de distância nesta guarda, e é o ponto todo: a zona é medida
+         na TELA, e zona de tela já é critério angular — vale igual a 20 m e a
+         800 m. O teto em metros que existia aqui apagava a assistência inteira
+         de quem subisse ao teto de voo com os adversários no chão. */
+      if (this._ndc.atras) continue;
       /* O cone é a guarda contra o caso degenerado (alvo quase no plano da
          lente, em que a projeção explode). A zona de tela faz o resto. */
       if ((dx * this._eixoDaLente(camera, 0) +

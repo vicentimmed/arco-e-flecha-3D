@@ -33,8 +33,12 @@
 import * as THREE from "three";
 import { sorteio } from "./ruido.js";
 
-/** Teto de pedaços em cena. Passou disso, o mais velho é reciclado. */
-const MAX = 1400;
+/* Teto de pedaços em cena. Passou disso, o mais velho é reciclado.
+ *
+ * Caiu de 1400 para 700 depois da queixa de peso. O que se vê num monte de
+ * entulho é a SILHUETA dele, e a silhueta satura muito antes do número de
+ * pedras — dobrar a contagem não dobra a leitura, dobra o custo. */
+const MAX = 700;
 /** m/s² — gravidade. Mais forte que a real: pedra de jogo cai com peso. */
 const G = -26;
 /** Perda de energia ao bater. Pedra não quica muito; ela raspa e para. */
@@ -207,7 +211,15 @@ export class Entulho {
 
     for (let i = 0; i < this.n; i++) {
       const i3 = i * 3;
-      if (this.voando[i]) {
+      /* SÓ QUEM SE MEXEU escreve matriz.
+       *
+       * A primeira versão tinha um `mexeu` só, ligado pela primeira peça voando —
+       * e daí em diante TODA peça do pool recompunha a própria matriz a cada
+       * quadro, mesmo as centenas já paradas no chão. Com o pool cheio eram mil e
+       * quatrocentas composições de matriz por quadro para redesenhar pedras que
+       * não saem do lugar desde o primeiro minuto. */
+      if (!this.voando[i]) continue;
+      {
         this.t[i] += h;
         this.v[i3 + 1] += G * h;
 
@@ -250,7 +262,7 @@ export class Entulho {
         mexeu = true;
       }
 
-      if (mexeu) {
+      {
         _p.set(this.p[i3], this.p[i3 + 1], this.p[i3 + 2]);
         _e.set(this.rot[i3], this.rot[i3 + 1], this.rot[i3 + 2]);
         _q.setFromEuler(_e);

@@ -190,6 +190,12 @@ export function prepararImpacto(imp) {
        de ser generosa: uma lasca cortada pela caixa vira uma parede reta no meio
        da borda mordida, que é o oposto do que este arquivo existe para fazer. */
     alcance: R * (1 + ALONGA) * (1 + LASCA_GRANDE + LASCA_FINA) + R * LABIO_LARGURA,
+    /* Ao quadrado, para a rejeição radial de `bacieELabio` dispensar a raiz. */
+    alcance2:
+      (R * (1 + ALONGA) * (1 + LASCA_GRANDE + LASCA_FINA) + R * LABIO_LARGURA) ** 2,
+    /* O MENOR raio que a casca pode ter em qualquer direção. Abaixo dele o ponto
+       está no vão com certeza, e o ruído não precisa ser consultado. */
+    rSeguro: R * (1 - LASCA_GRANDE - LASCA_FINA),
     semente: (imp.id * 0x9e3779b9) | 0,
   };
 }
@@ -220,6 +226,65 @@ function raioNaDirecao(c, ux, uy, uz) {
   );
 
   return c.R * alonga * (1 + LASCA_GRANDE * grande + LASCA_FINA * fina);
+}
+
+/**
+ * A BACIA E O LÁBIO DE UMA VEZ — o caminho que a escavação de verdade usa.
+ *
+ * Existe por medição, e a medição foi a queixa de que o tiro CONGELA. Uma bacia
+ * varre a caixa dela em voxels de meio metro: para um golpe de raio 6 são umas
+ * trezentas e setenta mil células, e cada uma pagava `raioNaDirecao` DUAS vezes
+ * — uma pela bacia e outra pelo lábio — a dezesseis consultas de hash cada.
+ * Doze milhões de hashes por bacia, uns trezentos milissegundos: o quadro
+ * parava, e o que se via era a bola do poder pendurada no ar.
+ *
+ * Três cortes, e todos aqui:
+ *
+ * 1. **Um `raioNaDirecao` por voxel**, não dois. A bacia e o lábio são medidos
+ *    contra a MESMA casca; calculá-la duas vezes era trabalho repetido.
+ * 2. **Rejeição radial antes do ruído.** Fora do alcance não há o que decidir, e
+ *    o canto de um cubo está fora da esfera quase metade das vezes.
+ * 3. **Dentro do fundo, sem ruído.** A amplitude da lasca é limitada, então
+ *    abaixo de um raio seguro o ponto está no vão com certeza — e o valor exato
+ *    ali não muda nada, porque a quantização o apara de qualquer jeito.
+ *
+ * @param {Float64Array} saida `[bacia, labio]`, reaproveitado por quem chama
+ */
+export function bacieELabio(c, x, y, z, saida) {
+  const vx = x - c.cx;
+  const vy = y - c.cy;
+  const vz = z - c.cz;
+  const d2 = vx * vx + vy * vy + vz * vz;
+
+  /* 2 — fora do alcance: nada acontece, e nem o ruído é consultado. */
+  if (d2 >= c.alcance2) {
+    saida[0] = Infinity;
+    saida[1] = 0;
+    return;
+  }
+
+  const d = Math.sqrt(d2);
+  if (d < 1e-6) {
+    saida[0] = -c.R;
+    saida[1] = 0;
+    return;
+  }
+
+  /* 3 — bem dentro do vão. `rSeguro` é o menor raio que a casca pode ter em
+     QUALQUER direção; abaixo dele o ponto está no buraco com certeza. */
+  if (d < c.rSeguro) {
+    saida[0] = d - c.rSeguro;
+    saida[1] = 0;
+    return;
+  }
+
+  const inv = 1 / d;
+  const r = raioNaDirecao(c, vx * inv, vy * inv, vz * inv);
+  saida[0] = d - r;
+
+  /* 1 — o lábio reaproveita a MESMA casca. */
+  const t = (d - r) / (c.R * LABIO_LARGURA);
+  saida[1] = t <= 0 || t >= 1 ? 0 : c.R * LABIO_ALTURA * 4 * t * (1 - t);
 }
 
 /**

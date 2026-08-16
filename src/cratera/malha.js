@@ -109,10 +109,19 @@ export class MalhaCratera {
       vertexColors: true,
       roughness: 0.94,
       metalness: 0,
-      /* DUAS FACES. A parede de uma caverna é vista POR DENTRO, e com uma face
-         só o que se enxerga ao entrar depende de qual lado do vão o quad ficou.
-         O custo é fill rate; o benefício é o buraco existir. */
-      side: THREE.DoubleSide,
+      /* UMA FACE.
+       *
+       * Era `DoubleSide`, posto como rede de segurança enquanto a mão dos quads
+       * ainda não era confiável. Ela passou a ser (ver a lição 2 no cabeçalho: a
+       * volta em torno da aresta sai da regra `(e+1)%3, (e+2)%3` e não de três
+       * ordens escritas à mão), e aí a rede de segurança virou só custo: duas
+       * faces dobram o trabalho de fragmento de TODO o terreno, e o terreno é o
+       * que ocupa a tela inteira.
+       *
+       * A parede de caverna continua visível por dentro porque a normal dela
+       * aponta para o vão — é a fronteira do sólido, e o lado de fora do sólido
+       * é justamente onde está quem olha. */
+      side: THREE.FrontSide,
       dithering: true,
     });
 

@@ -75,7 +75,12 @@ export class Poderes {
       dy: dy / m,
       dz: dz / m,
       vel: bola ? 120 : 190,
-      raio: bola ? 4.5 : 6,
+      /* O CUSTO DE ESCAVAR CRESCE COM O CUBO DO RAIO, e é ele que decide se o
+         quadro engasga: a caixa de voxels varrida é (2·alcance/voxel)³. Medido,
+         com o caminho já otimizado: raio 6 custa 31 ms e raio 5 custa 18 —
+         quase dois quadros de diferença por bacia, e o feixe abre uma por
+         quadro. A perda de tamanho é pequena e o ganho é o tiro não travar. */
+      raio: bola ? 4 : 5,
       visual: bola ? 1.5 : 2.4,
       vida: 3.4,
       /* O feixe PERFURA: continua dentro da rocha por um orçamento de metros,

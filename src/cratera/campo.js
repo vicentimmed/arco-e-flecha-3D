@@ -48,7 +48,7 @@
    --------------------------------------------------------------------------- */
 
 import { ruido3, fbm3 } from "./ruido.js";
-import { prepararImpacto, bacia, labio } from "./escavar.js";
+import { prepararImpacto, bacieELabio } from "./escavar.js";
 
 /* --------------------------------------------------------------- a grade --- */
 
@@ -416,6 +416,9 @@ export class CampoCratera {
 
     const c = prepararImpacto(imp);
     const A = c.alcance;
+    /* Rascunho de duas casas, reaproveitado por voxel. Alocar dentro do laço
+       seria lixo por célula, e são centenas de milhares delas. */
+    const par = this._par ?? (this._par = new Float64Array(2));
 
     /* A caixa de voxels tocada, em índices globais. */
     const ix0 = Math.floor((c.cx - A) / VOXEL);
@@ -461,8 +464,11 @@ export class CampoCratera {
                 const antes = arr[i];
                 let v = antes / ESCALA;
 
-                /* 1. A BACIA tira rocha. */
-                const b = bacia(c, wx, wy, wz);
+                /* A bacia e o lábio saem da MESMA consulta — ver `bacieELabio`,
+                   que é onde mora a razão (o tiro congelava). */
+                bacieELabio(c, wx, wy, wz, par);
+                const b = par[0];
+                if (b === Infinity) continue; // fora do alcance
                 if (b < v) v = b;
 
                 /* 2. O LÁBIO põe rocha — mas SÓ NA FRONTEIRA, e SOMANDO.
@@ -482,7 +488,7 @@ export class CampoCratera {
                  * **Somando e não `max`.** `max` FORÇA o ponto a ser sólido, e
                  * com altura de 0,35 R isso comeria metros de vão. Somar levanta
                  * a superfície pelo tanto do lábio, que é o que ejeção faz. */
-                const l = labio(c, wx, wy, wz);
+                const l = par[1];
                 if (l > 0) {
                   const a = antes / ESCALA;
                   const dist = a < 0 ? -a : a;

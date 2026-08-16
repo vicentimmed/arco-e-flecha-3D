@@ -65,6 +65,23 @@ const _a = new THREE.Color();
 const _b = new THREE.Color();
 
 function corPorProfundidade(prof, out) {
+  /* PROFUNDIDADE NEGATIVA É EJEÇÃO, e ejeção é TERRA.
+   *
+   * Um ponto acima da superfície original só pode estar ali porque o lábio da
+   * cratera o levantou — e o que o lábio levanta é o material que saiu de
+   * dentro do buraco. Sem esta linha ele herdava a primeira camada da tabela, o
+   * capim, e o anel em volta da cratera nascia GRAMADO: um monte de terra
+   * revirada com relva por cima, no instante seguinte à explosão.
+   *
+   * A transição é curta (meio metro) de propósito: manto de ejeção tem borda
+   * definida. Um degradê longo leria como o capim escorrendo para dentro do
+   * buraco. */
+  if (prof < 0) {
+    const t = prof < -0.5 ? 1 : -prof / 0.5;
+    _a.copy(CAMADAS[0].cor);
+    _b.copy(CAMADAS[1].cor);
+    return out.copy(_a).lerp(_b, t * t * (3 - 2 * t));
+  }
   if (prof <= CAMADAS[0].p) return out.copy(CAMADAS[0].cor);
   for (let i = 1; i < CAMADAS.length; i++) {
     if (prof < CAMADAS[i].p) {

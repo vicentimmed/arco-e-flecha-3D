@@ -87,6 +87,9 @@ const LABIO_BANDA = 2;
 
 /* ------------------------------------------------------------- o relevo --- */
 
+/** m — maior raio de impacto aceito. Ver a rede de segurança em `escavar`. */
+const RAIO_MAX_IMPACTO = 14;
+
 /* m — meia-extensão da arena. Pequena de propósito: é fase de teste. */
 export const METADE = 80;
 /* m — o fundo. Abaixo disto é rocha maciça e ninguém cava. */
@@ -418,6 +421,15 @@ export class CampoCratera {
     ) {
       return null;
     }
+
+    /* TETO DE RAIO, como rede de segurança.
+     *
+     * O custo de escavar cresce com o CUBO do alcance: raio 5 varre 32 mil
+     * voxels e raio 33 varre 8,7 milhões. Um número grande vindo de um cálculo
+     * errado — ou, um dia, da rede — não pode travar o jogo por segundos. Numa
+     * sala isto seria a sala recusando; aqui é o campo, que é quem os dois lados
+     * compartilham. */
+    if (!(imp.raio > 0) || imp.raio > RAIO_MAX_IMPACTO) return null;
     this.vistos.add(imp.id);
     this.impactos.push(imp);
 

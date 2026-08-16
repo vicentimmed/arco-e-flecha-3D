@@ -148,12 +148,30 @@ function talvezDesabar(dt) {
   const quedas = avaliarDesabamento(campo, c, () => proxId++);
   if (quedas.length === 0) return;
   desabamentos++;
-  for (const q of quedas) {
-    const cq = campo.escavar(q);
+  /* AS BACIAS DO DESABAMENTO ENTRAM EM FILA, uma ou duas por quadro.
+   *
+   * Cada uma custa o de um tiro, e são até quatorze. Aplicá-las de uma vez
+   * seria um quarto de segundo de imagem parada exatamente no momento mais
+   * dramático do modo — que é quando o jogador MAIS repara. Espalhadas, o teto
+   * cede ao longo de uns poucos décimos de segundo, e isso não é só mais barato:
+   * é melhor. Desabamento instantâneo lê como corte de edição; desabamento que
+   * progride lê como desabamento. */
+  for (const q of quedas) filaQueda.push(q);
+}
+
+/** As bacias de desabamento esperando a vez. Ver `talvezDesabar`. */
+const filaQueda = [];
+
+/** Aplica uma ou duas bacias de queda por quadro. */
+function escoarQueda() {
+  let feitas = 0;
+  while (filaQueda.length > 0 && feitas < 2) {
+    const cq = campo.escavar(filaQueda.shift());
+    feitas++;
     if (!cq) continue;
     rochas.aplicar(cq);
     /* Desabamento solta MUITO entulho: é a leitura inteira do evento. */
-    entulho.estourar(cq, Math.round(24 + cq.R * 3));
+    entulho.estourar(cq, Math.round(18 + cq.R * 2.5));
     entulho.sacudir(cq.cx, cq.cy, cq.cz, cq.alcance + 10);
   }
 }
@@ -257,7 +275,8 @@ function medir() {
   medidas.textContent =
     (montando ? `MONTANDO A ARENA — ${malha.fila.length} pedaços\n` : "") +
     `fps ${fps.toFixed(0)}   fila de malha ${malha.fila.length}\n` +
-    `impactos ${campo.impactos.length}   desabamentos ${desabamentos}\n` +
+    `impactos ${campo.impactos.length}   desabamentos ${desabamentos}` +
+    (filaQueda.length ? `   DESABANDO (${filaQueda.length})` : "") + "\n" +
     `triângulos ${Math.round(malha.triangulos).toLocaleString("pt-BR")}\n` +
     `entulho ${entulho.ativo ? entulho.n : "DESLIGADO"}   rochas ${rochas.mesh.visible ? rochas.vivas() + "/" + rochas.n : "OCULTAS"}\n` +
     `você (${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}) ${eu.voando ? "voando" : eu.noChao ? "no chão" : "caindo"}`;
@@ -281,6 +300,7 @@ renderer.setAnimationLoop(() => {
   poderes.update(dt);
   entulho.update(dt);
   rochas.update(dt);
+  escoarQueda();
   talvezDesabar(dt);
   /* A malha por último e por TEMPO: o que não couber neste quadro vai para o
      próximo. É isto que impede o tiro de engasgar a imagem. */
@@ -345,6 +365,7 @@ globalThis.__cratera = {
       poderes.update(1 / 60);
       entulho.update(1 / 60);
       rochas.update(1 / 60);
+      escoarQueda();
       talvezDesabar(1 / 60);
     }
     malha.tudo();

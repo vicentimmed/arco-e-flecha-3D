@@ -44,7 +44,7 @@
    insistir, e `MIN_FRAGEIS` é o número que separa as duas coisas.
    --------------------------------------------------------------------------- */
 
-import { VOXEL } from "./campo.js";
+import { VOXEL, NC } from "./campo.js";
 
 /* m — passo da grade de sondagem.
  *
@@ -74,9 +74,18 @@ const TETO_FINO = 4;
  * e quem responde por isso é o TAMANHO DO VÃO: buraco raso não tem vão de doze
  * metros. */
 const VAO_GRANDE = 9;
-/** Quantas colunas frágeis juntas derrubam. É o número que impede um golpe só de
- *  desabar a montanha — ver a calibragem dura, no cabeçalho. */
-const MIN_FRAGEIS = 14;
+/* Quantas colunas frágeis juntas derrubam.
+ *
+ * Baixou de 14 para 10 quando o voxel passou de 0,50 para 0,60 m: a sondagem
+ * passou a ter menos amostras por coluna e a contagem escorregou junto — uma
+ * caverna que dava catorze passou a dar doze, e o desabamento parou de
+ * acontecer. É um número de CALIBRAGEM, e ele acompanha a resolução.
+ *
+ * A garantia de que um golpe sozinho nunca desaba não depende dele, e é bom que
+ * não dependa: uma cratera de superfície não tem TETO — ela é aberta para o céu
+ * —, então  não acha vão coberto nenhum e devolve zero coluna frágil,
+ * qualquer que seja o limiar. Este número separa túnel pequeno de caverna. */
+const MIN_FRAGEIS = 10;
 /* m — o quanto o alcance da sondagem passa do alcance da escavação.
  *
  * Generoso, e por medição: a sondagem é centrada na ÚLTIMA bacia escavada, que
@@ -86,6 +95,19 @@ const MIN_FRAGEIS = 14;
  * um evento de vinte metros; a sondagem tem de enxergar vinte metros. */
 const FOLGA = 26;
 
+/* Teto de bacias que um desabamento emite.
+ *
+ * O tamanho do evento vem da QUANTIDADE delas, não do raio de cada uma — e essa
+ * é a diferença entre um desabamento e um congelamento. O custo de escavar
+ * cresce com o CUBO do alcance: uma bacia de raio 5 varre 32 mil voxels e uma de
+ * raio 33 varre 8,7 MILHÕES, duzentas e setenta vezes mais. A primeira versão
+ * tirava o raio do ESPALHAMENTO das colunas frágeis, que num desabamento de
+ * verdade passa de trinta metros, e emitia de três a cinco delas — era
+ * exatamente o travamento relatado. */
+const MAX_BACIAS = 14;
+/** m — raio máximo de uma bacia de desabamento. */
+const RAIO_MAX = 9;
+
 /**
  * Sonda uma coluna. Devolve `null` se ela não é frágil.
  *
@@ -93,7 +115,31 @@ const FOLGA = 26;
  * grosso que isso pula um teto fino, que é justamente o que se está caçando.
  */
 function sondar(campo, x, z) {
-  const topo = campo.alturaBase(x, z) + 2;
+  /* CHUNK INTOCADO NÃO TEM CAVIDADE — e esta linha é quase toda a economia.
+   *
+   * O terreno virgem é a fórmula do relevo: sólido abaixo da superfície, ar
+   * acima, sem vão nenhum por construção. Se nenhum chunk desta coluna foi
+   * escavado, não há o que sondar.
+   *
+   * Sem ela, `amostra` caía na fórmula em cada uma das setenta e sete amostras
+   * de cada uma das setecentas colunas — e a fórmula é FBM mais o laço dos
+   * morros. Medido: 168 ms só de sondagem, um congelamento de dez quadros que
+   * acontecia a cada meio segundo depois de qualquer tiro, tivesse ou não
+   * desabamento. Era metade do travamento relatado.
+   *
+   * Com ela, só as colunas sobre o que de fato foi cavado custam alguma coisa. */
+  const cx = Math.floor(Math.round(x / VOXEL) / NC);
+  const cz = Math.floor(Math.round(z / VOXEL) / NC);
+  let algumEscavado = false;
+  const topoBase = campo.alturaBase(x, z);
+  const cyAlto = Math.floor(Math.round((topoBase + 2) / VOXEL) / NC);
+  const cyBaixo = Math.floor(Math.round((topoBase - FUNDO_SONDA) / VOXEL) / NC);
+  for (let cy = cyBaixo; cy <= cyAlto && !algumEscavado; cy++) {
+    if (campo.chunks.has(campo.chaveChunk(cx, cy, cz))) algumEscavado = true;
+  }
+  if (!algumEscavado) return null;
+
+  const topo = topoBase + 2;
   const fundo = topo - FUNDO_SONDA;
   /* Passo de um voxel inteiro, e leitura no NÓ da grade em vez de trilinear.
      `densidadeEm` custa oito leituras por consulta e existe para a física, que
@@ -162,51 +208,52 @@ export function avaliarDesabamento(campo, c, proxId) {
 
   if (fragil.length < MIN_FRAGEIS) return [];
 
-  /* O CENTRO DE MASSA das colunas frágeis, e o raio que as cobre. É onde o
-     desabamento acontece — não no ponto do tiro, que pode estar na beira. */
-  let sx = 0;
-  let sz = 0;
-  let sy = 0;
-  for (const f of fragil) {
-    sx += f.x;
-    sz += f.z;
-    sy += f.teto;
-  }
-  const n = fragil.length;
-  const cx = sx / n;
-  const cz = sz / n;
-  const cy = sy / n;
+  /* ------------------------------------------------------- como o teto cai --
 
-  let r2 = 0;
-  for (const f of fragil) {
-    const d2 = (f.x - cx) * (f.x - cx) + (f.z - cz) * (f.z - cz);
-    if (d2 > r2) r2 = d2;
-  }
-  const raio = Math.max(6, Math.sqrt(r2));
+     MUITAS bacias PEQUENAS, postas sobre as próprias colunas frágeis — e não
+     poucas bacias grandes centradas na média delas.
 
-  /* O TETO CAI, e cai de baixo para cima: uma sequência de bacias subindo do
-     teto até perto da superfície. Uma bacia só, gigante, deixaria uma abóbada
-     perfeita — e abóbada perfeita é a assinatura de software, o oposto do que
-     este trabalho inteiro persegue. Três a cinco bacias empilhadas comem o teto
-     de forma irregular, que é como um desabamento come.
+     A primeira versão fazia o contrário, e o custo era catastrófico. O raio saía
+     do ESPALHAMENTO das colunas frágeis, que passa de trinta metros num
+     desabamento de verdade; e o custo de escavar cresce com o CUBO do alcance.
+     Medido: uma bacia de raio 5 varre 32 mil voxels e uma de raio 33 varre 8,7
+     MILHÕES — duzentas e setenta vezes mais —, e o desabamento emitia de três a
+     cinco delas. Era exatamente o travamento relatado.
 
-     E elas saem pelo mesmo `escavar` de todo mundo, com id de verdade: é o que
-     mantém o desabamento dentro da lista que viaja na rede. */
+     Bacias pequenas sobre as colunas custam uma fração disso e, de quebra, dão
+     um resultado melhor: o teto cede em pedaços irregulares, sobre os pontos que
+     de fato estavam sem apoio, em vez de abrir uma abóbada lisa no meio da
+     montanha. Abóbada perfeita é assinatura de software, e este trabalho inteiro
+     existe para evitá-la. */
+
+  /* Ordena por FRAGILIDADE — o teto mais fino sobre o maior vão cede primeiro —
+     e pega as mais frágeis até o teto de bacias. Ordenar é barato: são algumas
+     centenas de entradas, uma vez por desabamento. */
+  fragil.sort((a, b) => a.espessura / a.vao - b.espessura / b.vao);
+
   const impactos = [];
-  const altura = Math.min(28, Math.max(8, cy + 0 - (cy - 0)) + 18);
-  const passos = 3 + Math.min(2, Math.floor(n / 40));
-  for (let i = 0; i < passos; i++) {
-    const t = i / (passos - 1 || 1);
+  const quantas = Math.min(MAX_BACIAS, Math.max(4, Math.round(fragil.length / 6)));
+  /* Passo pela lista para as bacias se espalharem pela área em vez de se
+     amontoarem todas na coluna mais fraca. */
+  const salto = Math.max(1, Math.floor(fragil.length / quantas));
+
+  for (let k = 0; k < quantas; k++) {
+    const f = fragil[Math.min(fragil.length - 1, k * salto)];
+    /* O centro fica DENTRO do teto, não no vão: é o teto que some. */
+    const y = f.teto + f.espessura * 0.5;
     impactos.push({
       id: proxId(),
-      x: cx + (t - 0.5) * raio * 0.5,
-      y: cy + t * altura * 0.55,
-      z: cz + (0.5 - t) * raio * 0.35,
+      x: f.x,
+      y,
+      z: f.z,
       /* Para CIMA: o material desaba, então a escavação sobe. */
       dx: 0,
       dy: 1,
       dz: 0,
-      raio: raio * (0.55 + t * 0.28),
+      /* Raio modesto e limitado. O tamanho do desabamento vem da QUANTIDADE de
+         bacias, não do tamanho de cada uma — que é o que mantém o custo linear
+         na área em vez de cúbico no raio. */
+      raio: Math.min(RAIO_MAX, Math.max(4, f.espessura * 1.3 + 3)),
       desabamento: true,
     });
   }

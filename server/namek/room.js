@@ -56,6 +56,22 @@ import {
 } from "../../src/shared/namek/protocol.js";
 import { NamekField } from "../../src/shared/namek/field.js";
 import { NamekBotSquad, melhorNascimento, PALETA } from "./bots.js";
+/* O SUPER SAIYAJIN mora fora deste arquivo — um estado por lutador, quatro
+   perguntas de economia e dois anúncios —, e os ganchos aqui são os menores
+   possíveis: um `case` na rota, uma linha no funil de dano, três no preço do ki
+   e uma varredura por quadro. Ver o cabeçalho de `./ssj.js`, que explica também
+   por que ele lê o Freeza sempre com `?.`. */
+import * as SSJ from "./ssj.js";
+import { NamekFreeza } from "./freeza.js";
+import { NamekPeixeSim } from "./peixe.js";
+/* Os DOIS PLANETAS e a chuva que sai deles. Mesmo contrato do `bots.js`: um
+   módulo que a sala hospeda, aciona uma vez por quadro e alimenta com três
+   funções (cratera, dano, envio). Ele não conhece a sala; ela não conhece a
+   chuva. */
+import { NamekPlanetas } from "./planetas.js";
+/* O FIM DO PLANETA — a máquina de estados inteira mora lá, e a sala só a
+   alimenta. Ver `server/namek/fim.js`: Freeza, contagem, explosão e espaço. */
+import { NamekFim } from "./fim.js";
 
 export { NAMEK_LEVEL };
 
@@ -191,6 +207,20 @@ export class NamekRoom {
     /** @type {Map<object, object>} conexão → lutador */
     this.players = new Map();
     this.bots = new NamekBotSquad();
+    /* O BOSS. Ele nasce DESLIGADO — `entrar()` é que o põe em campo, e quem a
+       chama é quem orquestra a partida. Ver o §2 de `server/namek/freeza.js`
+       para o contrato inteiro (`entrar`, `sair`, `vivo`, `aoMorrer`). */
+    this.freeza = new NamekFreeza(this);
+    /* Os dois corpos celestes e a chuva de meteoros. Nascem com a sala e
+       voltam ao começo quando ela esvazia — ver `handleClose`. */
+    this.planetas = new NamekPlanetas();
+
+    /* O FIM DO PLANETA. Ele nasce com a sala e vive nela inteira — a fase
+       `calmo` não custa nada e não faz nada, e é o que permite o resto do
+       arquivo perguntar `this.fim.noEspaco` sem um `if` de existência antes.
+       O `this.freeza` que ele procura é de outro módulo e pode não existir:
+       `fim.js` trata os dois casos. */
+    this.fim = new NamekFim(this);
 
     /* As cores livres. Mesma ideia do `ColorPool` do arqueiro, em oito linhas
        em vez de importada — importar `server/colors.js` seria acoplar os dois
@@ -209,10 +239,32 @@ export class NamekRoom {
     this.climaLivreEm = 0;
     this.proximoRaio = 0;
 
+    /* O PEIXE GIGANTE do mar. A sala é dona dele pelo mesmo motivo que é dona da
+       vida dos lutadores: quinze telas têm de ver o mesmo bicho no mesmo lugar.
+       Ver `server/namek/peixe.js`. */
+    this.peixe = new NamekPeixeSim();
+
     /** Peças de cenário já derrubadas, para não anunciar duas vezes. */
     this.propsCaidos = new Set();
     /** Quantas crateras a sala já carimbou. O campo só guarda as 96 últimas. */
     this.crateras = 0;
+
+    /* OS EMBATES RECENTES — um anel de oito, para o desempate do
+       `NC2S.POWER_CLASH`. Ver `registrarEmbate`: qualquer cliente que veja dois
+       poderes se encostarem avisa, e numa sala de quinze isso são até quinze
+       avisos do mesmo encontro em poucos milissegundos. O primeiro vira o
+       acontecimento; os outros morrem aqui.
+       Pré-alocado com registros nulos porque o anel é escrito por índice — um
+       array que cresce e encolhe faria lixo num caminho que é raro mas que
+       acontece no quadro mais carregado que o modo tem. */
+    this.embatesRecentes = new Array(8).fill(null).map(() => ({
+      a: null,
+      ka: null,
+      b: null,
+      kb: null,
+      w: -1e9,
+    }));
+    this.embateProx = 0;
 
     /** Corpos uniformes do quadro em curso. Ver `montarCorpos`. */
     this.corpos = [];
@@ -277,10 +329,21 @@ export class NamekRoom {
 
     const t = this.now();
     this.relogioDaQueda(t);
+    /* O FREEZA CAIU, A TRANSFORMAÇÃO ACABA. É a única regra do Super Saiyajin
+       sem gatilho próprio — não existe uma mensagem de "o chefe morreu,
+       desligue" —, então ela é observada por quadro, como a carência da queda
+       logo acima. Sem chefe em campo é uma comparação e um `return`. */
+    SSJ.manutencao(this);
     this.economiaDeKi(dt, t);
     this.queimarNaLava(dt, t);
     this.afogarNoMar(dt, t);
     this.montarCorpos(t);
+    /* O BOSS anda ANTES dos bots e DEPOIS de `montarCorpos`, e a ordem é a
+       mesma do peixe e do relâmpago: ele lê a lista uniforme deste quadro para
+       escolher alvo, e acrescenta o próprio corpo a ela no fim do passo dele —
+       o que faz os bots o enxergarem onde ele ESTÁ e não onde estava. A 118 m/s
+       um quadro são quase seis metros. */
+    this.freeza.passo(dt, t);
     this.bots.tick(dt, {
       field: this.field,
       corpos: this.corpos,
@@ -288,8 +351,39 @@ export class NamekRoom {
       gastar: (f, custo) => this.gastar(f, custo),
       emitir: (ev) => this.doBot(ev, t),
     });
+    /* A CHUVA DE METEOROS, depois de `montarCorpos` pelo mesmo motivo do peixe e
+       do relâmpago: quase metade das rochas é mirada perto de alguém, e "alguém"
+       é a lista uniforme deste quadro. As três funções que ela recebe são a
+       fronteira dela com a sala — cratera pelo caminho de sempre, dano pelo funil
+       de sempre, e a morte direta pelo mesmo `matar` do mar e da lava. */
+    this.planetas.tick(dt, {
+      field: this.field,
+      corpos: this.corpos,
+      agora: t,
+      cratera: (x, z, power) => this.cratera(x, z, power),
+      dano: (c, dano, p, d) =>
+        this.aplicarDano(c.ref, dano, { kind: "meteoro", p, d }),
+      /* Sem culpado, como a lava, o mar e a queda: não há a quem dar o abate. A
+         chuva é uma catástrofe, não um golpe — e premiar quem explodiu o planeta
+         por cada corpo que uma pedra encontrar seria premiar o acaso. */
+      matar: (c, p, d) => this.matar(c.ref, null, "meteoro", p, d, t),
+      enviar: (msg) => this.broadcastAll(msg),
+    });
     this.renascimentos(t);
     this.tempo(dt, t);
+    /* O peixe DEPOIS de `montarCorpos`, porque é da lista uniforme que ele tira
+       para que lado saltar — o salto sai na direção de alguém em campo dois
+       terços das vezes, pela mesma razão que o relâmpago cai perto (ver
+       `NAMEK.peixe.perto`). Um salto anunciado é retransmitido inteiro num
+       pacote só e nada mais viaja depois dele. */
+    const salto = this.peixe.tick(dt, t, this.corpos);
+    if (salto) this.broadcastAll({ t: NS2C.FISH, ...salto });
+    /* O FIM, depois de tudo e antes das poses saírem: ele mede a fuga na lista
+       uniforme que `montarCorpos` acabou de montar, e quando alguém escapa ele
+       reescreve a posição daquele corpo — que é justamente a que o
+       `broadcastStates` da linha seguinte vai mandar. Rodar antes deixaria o
+       escapado viajando uma última vez do lugar de onde ele saiu. */
+    this.fim.passo(dt, t);
 
     this.broadcastStates(t);
     this.quadro++;
@@ -374,6 +468,10 @@ export class NamekRoom {
    * há culpado, e inventar um seria premiar quem por acaso cavou ali antes.
    */
   queimarNaLava(dt, agora) {
+    /* NO ESPAÇO NÃO HÁ LAVA — nem chão embaixo dela. Sem esta linha, a poça que
+       ficou registrada no campo continuaria queimando quem passasse pelas mesmas
+       coordenadas (x, z) a dois quilômetros de altura. Ver `server/namek/fim.js`. */
+    if (this.fim.noEspaco) return;
     if (!this.field.lavaPools.length) return;
     const L = NAMEK.destruction.lava;
     for (const f of this.todos()) {
@@ -423,6 +521,10 @@ export class NamekRoom {
    * `contarGolpe`, com um contador só.
    */
   afogarNoMar(dt) {
+    /* E NO ESPAÇO NÃO HÁ MAR. Mesmo motivo da lava logo acima: a fronteira é
+       função de (x, z) e continuaria valendo sobre a bolha, que fica em cima do
+       antigo oceano. Quem escapou não pode se afogar a dois mil metros. */
+    if (this.fim.noEspaco) return;
     const A = NAMEK.world.afogar;
     const linha = NAMEK.world.seaLevel - A.fundura;
     for (const f of this.todos()) {
@@ -462,9 +564,16 @@ export class NamekRoom {
          que impede a barra do HUD de descer enquanto a barra que vale fica
          parada. Vale para o bot pelo mesmo caminho: ele não paga arranque com o
          especial no topo, que é justamente quando ele está caçando alguém. */
-      const deGraca = f.ki >= K.max * K.freeFlightAt - 1e-6;
+      /* Em Super Saiyajin o limiar do voo de graça acompanha o do especial (um
+         terço da barra em vez dela inteira), senão a regra morreria no primeiro
+         golpe — ver `NAMEK.ssj.voaDeGracaEm`. O cliente lê o mesmo campo em
+         `KiMeter.voaDeGraca`, pelo motivo escrito acima. */
+      const deGraca = f.ki >= K.max * SSJ.voaDeGracaEm(f) - 1e-6;
       if (bo > 0.05 && !deGraca) {
-        const custo = K.boostDrain * bo * dt;
+        /* E o arranque que ele PAGA custa 40 % — é o "seu ki demora mais para
+           gastar" (`NAMEK.ssj.kiDreno`), aplicado ao dreno contínuo aqui e no
+           `KiMeter.drenar` do outro lado. */
+        const custo = SSJ.custo(f, K.boostDrain) * bo * dt;
         if (custo > 0) {
           f.ki = Math.max(0, f.ki - custo);
           f.ultimoGasto = agora;
@@ -475,7 +584,7 @@ export class NamekRoom {
          barra vazia é uma guarda que não apara mais nada (ver `defendendo`).
          Vem da pose pelo mesmo motivo que o arranque vem — ver o cabeçalho. */
       if (this.defendendo(f)) {
-        f.ki = Math.max(0, f.ki - NAMEK.guard.drain * dt);
+        f.ki = Math.max(0, f.ki - SSJ.custo(f, NAMEK.guard.drain) * dt);
         f.ultimoGasto = agora;
       }
 
@@ -588,6 +697,15 @@ export class NamekRoom {
     this.proximoRaio = NAMEK.weather.fade * 0.7;
     this.broadcastAll({ t: NS2C.WEATHER, id, w: agora });
     this.log(`namek — clima: ${id}`);
+
+    /* E O CLIMA É O GATILHO DO FIM. `tempestade` já era, por escrito, "o planeta
+       indo embora… é a batalha contra Freeza nos cinco minutos finais" (§1 do
+       plano) — pendurar o Freeza nela é o que faz o botão que já existe
+       significar o que ele sempre disse. `dia` desfaz. Ver `server/namek/fim.js`.
+       Aqui embaixo, e não antes das travas: só o clima que de fato MUDOU (a
+       carência de `weather.fade` já filtrou o clique repetido) pode ligar ou
+       desligar uma máquina de estados. */
+    this.fim.clima(id, agora);
   }
 
   /* ================================================================ dano == */
@@ -610,7 +728,36 @@ export class NamekRoom {
     if (!vitima?.alive) return 0;
     const agora = this.now();
     if (agora < vitima.invulnUntil) return 0;
+    /* **"ELE FICA INVENCÍVEL ENQUANTO ESTÁ SE TRANSFORMANDO."** Os três segundos
+       do Super Saiyajin, no mesmo funil da invulnerabilidade de nascimento e uma
+       linha abaixo dela, porque as duas dizem exatamente a mesma coisa: nada
+       acerta este corpo agora. Ver `server/namek/ssj.js: invencivel`. */
+    if (SSJ.invencivel(vitima, agora)) return 0;
     if (!(dano > 0)) return 0;
+
+    /* ===================================================== O FOGO AMIGO =====
+     *
+     * *"No modo de batalha contra o Freeza os players podem atacar outros
+     * players se eles quiserem."*
+     *
+     * **Ele já é assim, e nunca deixou de ser** — este parágrafo existe porque a
+     * ausência de uma regra é invisível, e alguém vai voltar aqui procurando por
+     * ela. As únicas saídas antecipadas deste funil são as quatro logo acima:
+     * vítima morta, vítima invulnerável (o piscar do nascimento), vítima no meio
+     * da própria transformação, e dano não positivo. Nenhuma delas olha para
+     * QUEM bateu, e não existe em lugar nenhum deste arquivo um conceito de
+     * time, aliado ou trégua — `registrarAcerto` e `registrarQueimadura` só
+     * recusam a vítima que é o próprio atirador (`vitima === player`), que é
+     * outra coisa: é não deixar ninguém acertar a si mesmo.
+     *
+     * E a entrada do Freeza não muda nada disso: o boss não passa por este
+     * método (ele tem `NamekFreeza.levarDano`), não entra em `todos()` e não é
+     * consultado aqui. Com ele em campo, duas pessoas continuam podendo brigar
+     * exatamente como brigavam antes — que é o pedido.
+     *
+     * NÃO PROCURE AQUI, também, o multiplicador do Super Saiyajin contra o
+     * chefe: contra outro JOGADOR ele é 1 de propósito (ver o parágrafo final de
+     * `NAMEK.ssj.danoNoFreeza`), e contra o boss ele entra no funil de lá. */
 
     /* A GUARDA APARA AQUI, no funil, e não em cada fonte de dano.
      *
@@ -858,7 +1005,19 @@ export class NamekRoom {
     vitima.golpeAte = 0;
     vitima.tontoAte = 0;
     vitima.tontoLivreEm = 0;
+    /* Não há nada do FIM a zerar aqui, e vale dizer por quê: havia um
+       `this.fim.morreu(vitima)` limpando o relógio de subida daquele lutador.
+       A fuga virou altitude pura (ver `NAMEK.fim.fuga`) — não há relógio pessoal
+       para uma morte apagar, e quem morre já é levado para longe do portal pelo
+       renascimento. */
     if (vitima.isBot) vitima.cair();
+    /* MORRER DESLIGA O SUPER SAIYAJIN — ver o §"quando ela ACABA" em
+       `NAMEK.ssj`. **Calado**, e é de propósito: o `DEATH` já sai neste mesmo
+       quadro e o `nascer` devolve vida cheia logo atrás, então um `SSJ_OFF` no
+       meio contaria uma terceira versão da mesma vida para o HUD — que
+       apareceria como a barra caindo, subindo e caindo de novo. O cliente
+       desliga sozinho no `morrer`, pelo mesmo raciocínio. */
+    SSJ.apagar(this, vitima, true);
     const corpo = this.corpoPorId.get(vitima.id);
     /* O corpo do QUADRO EM CURSO morre junto. Sem isto, uma segunda bola que
        chegasse no mesmo passo ainda encontraria a vítima "viva" na lista
@@ -869,25 +1028,30 @@ export class NamekRoom {
       por.score.kills++;
       if (por.isBot) por.tDecisao = 0; // procura o próximo na hora
 
-      /* DERRUBOU, ENCHEU. **No instante do tombo, e por inteiro.**
+      /* MATAR NÃO ENCHE A BARRA — e isto é uma linha REMOVIDA de propósito.
        *
-       * É o pedido literal ("assim que ele começar a cair a barra já deve
-       * encher instantaneamente"), e ele fecha o laço que o modo não tinha:
-       * abate → barra cheia → aura acesa → voo de graça → chegar no próximo. Sem
-       * ele, quem acabou de ganhar uma briga era exatamente quem tinha menos ki
-       * na arena, e o prêmio por vencer era ter de parar para carregar à vista
-       * de todo mundo.
+       * Havia aqui um `por.ki = NAMEK.ki.max`: quem matava alguém recebia a
+       * barra cheia no instante do abate, do mesmo jeito que quem DERRUBA
+       * alguém recebe em `derrubar`. O pedido desfez metade disso: *"ao matar um
+       * player o ki não deve se regenerar — somente quando o player derruba, que
+       * já é hoje."*
        *
-       * Aqui, e não num tratador de mensagem, porque `matar` é o caminho ÚNICO
-       * de toda morte — rajada, feixe, disco, onda. Era isso o "às vezes não
-       * acontece": qualquer regra escrita só no caminho da rajada deixaria de
-       * fora metade das mortes do jogo.
+       * E o pedido tem razão, porque os dois prêmios não pagam a mesma coisa. O
+       * de `derrubar` compra uma JANELA: a vítima fica 2,4 s no chão e a barra
+       * cheia é o que permite gastar essa janela num especial, que é a razão de
+       * o atordoamento existir (ver `NAMEK.fighter.stagger`). Já o do abate não
+       * comprava nada — o adversário sumiu do mapa por cinco segundos, não há
+       * janela para aproveitar —, e ele empilhava: quase toda morte deste modo
+       * chega logo depois de uma queda, então quem matava recebia a barra cheia
+       * DUAS vezes seguidas pelo mesmo combate.
        *
-       * `ultimoGasto` volta para trás junto: sem isso a regeneração passiva
-       * ficaria `idleDelay` segundos travada por um gasto que o prêmio já pagou.
-       */
-      por.ki = NAMEK.ki.max;
-      por.ultimoGasto = -Infinity;
+       * O que sobra é o ciclo certo: derrubar paga o golpe grande, e o golpe
+       * grande é que mata. Quem mata sem derrubar volta a carregar como todo
+       * mundo.
+       *
+       * **Só o prêmio saiu.** O resto da economia continua igual: a vítima
+       * renasce com a barra cheia (`nascer`), e a regeneração passiva continua
+       * existindo para ninguém ficar preso em zero (`economiaDeKi`). */
     }
 
     const ponto = p ?? this.pontoDe(vitima);
@@ -964,7 +1128,12 @@ export class NamekRoom {
       const p = this.pontoDe(c);
       if (c.alive) ocupados.push(p);
     }
-    const p = melhorNascimento(this.field, ocupados);
+    /* DEPOIS QUE O PLANETA ACABA, nasce-se no ESPAÇO — é a última frase do
+       pedido ("depois eles reaparecem no espaço"). `fim.nascimento()` devolve
+       null enquanto houver chão, e aí o caminho é o de sempre: um ponto plano
+       longe de todo mundo. Um `??` no lugar de um `if` porque é exatamente isso
+       que ele diz — o espaço quando existe, o planeta quando não. */
+    const p = this.fim.nascimento() ?? melhorNascimento(this.field, ocupados);
     const invulnUntil = agora + NAMEK.respawn.invuln * 1000;
 
     f.alive = true;
@@ -979,6 +1148,11 @@ export class NamekRoom {
     f.golpeAte = 0;
     f.tontoAte = 0;
     f.tontoLivreEm = 0;
+    /* O corpo que nasce é um corpo NOVO: teto de vida base, barra sem desconto,
+       cabelo preto. Aqui e não só em `matar` porque `nascer` é o caminho único
+       da entrada E de todo renascimento — e é ele que também dá os campos a quem
+       está entrando pela primeira vez, humano ou bot. */
+    SSJ.limpar(f);
     if (f.isBot) f.renascer(p.x, p.y, p.z, invulnUntil);
 
     /* Encara o meio da arena. Mesma razão do bot: nascer de costas para a
@@ -1012,6 +1186,11 @@ export class NamekRoom {
    *   um segundo limite para manter em dia.
    */
   cratera(x, z, power, dono = null, fundo = 1) {
+    /* SEM PLANETA NÃO HÁ BURACO. Um Kamehameha disparado para baixo lá do
+       espaço ainda alcança as coordenadas do antigo chão (1 860 m de alcance
+       contra 2 250 m de altura, mas basta mergulhar um pouco), e o cliente
+       relataria o toque no relevo que o campo continua sabendo calcular. */
+    if (this.fim.noEspaco) return null;
     if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(power)) return null;
     if (x * x + z * z > NAMEK.world.radius ** 2) return null;
     const p = clamp(power, 0, 64);
@@ -1191,6 +1370,14 @@ export class NamekRoom {
         break;
 
       case "acerto": {
+        /* O BOSS não é um lutador (`lutadorPor` não o acha, de propósito — ver
+           o §1 de `freeza.js`), então o acerto de um bot nele precisa desta
+           linha para não se perder em silêncio. É a metade "inclusive os bots"
+           do pedido chegando à barra de vida. */
+        if (this.freeza.ehAlvo(ev.vitima)) {
+          this.freeza.acertoDeBot(ev, dono);
+          break;
+        }
         const vitima = this.lutadorPor(ev.vitima);
         if (!vitima) break;
         this.aplicarDano(vitima, ev.dano, {
@@ -1266,6 +1453,15 @@ export class NamekRoom {
 
   /** Põe um lutador de CPU em campo, visível para a sala inteira. */
   addBot() {
+    /* BOT É CRIATURA DO PLANETA. A física dele (`server/namek/bots.js`) é
+       integrada contra o campo de altura e contra `NAMEK.world.ceiling`, sem
+       passar pelo `regime` que a fuga reescreve — um bot posto no espaço voaria
+       contra um chão que já não existe e cairia dois quilômetros até ele. Eles
+       vão embora com o planeta (ver `NamekFim.explodir`) e voltam quando ele
+       volta. `semChao` e não `noEspaco`: durante os seis segundos da explosão o
+       chão já acabou, e um bot posto ali nasceria em cima de um planeta que
+       está afundando. */
+    if (this.fim.semChao) return null;
     if (this.lotacao >= NAMEK.net.maxPlayers) return null;
     const ocupados = [];
     for (const c of this.todos()) ocupados.push(this.pontoDe(c));
@@ -1391,6 +1587,15 @@ export class NamekRoom {
       dorPor: null,
       dorKind: "blast",
       crateraAte: 0,
+      /** Último aviso de acerto no peixe. Ver `registrarPeixe`. */
+      peixeEm: -Infinity,
+      /* O SUPER SAIYAJIN: o estado e o fim da invencibilidade dos três segundos.
+         Os dois são reescritos por `SSJ.limpar` em todo renascimento; estão aqui
+         porque o objeto do jogador é o contrato de campos da sala, e um campo
+         que só nasce numa função é um campo que `packFighter` lê como
+         `undefined` no primeiro quadro. Ver `server/namek/ssj.js`. */
+      ssj: false,
+      ssjAte: 0,
       /* O atordoamento. `golpes` é a contagem corrente e `golpeAte` é o fim da
          janela deslizante; `tontoAte` é o instante em que ele se levanta e
          `tontoLivreEm` o instante a partir do qual pode ser derrubado de novo.
@@ -1430,6 +1635,23 @@ export class NamekRoom {
          batendo nelas com o projétil enquanto os outros atiravam através do
          lugar vazio. `propsCaidos` já guarda tudo, só não viajava. */
       props: [...this.propsCaidos],
+      /* E QUAIS PLANETAS JÁ CAÍRAM. Mesmo motivo da lista de crateras e da de
+         peças derrubadas: quem entra no meio precisa do ESTADO, não do
+         acontecimento. Sem isto, o retardatário veria os dois corpos inteiros no
+         céu enquanto todo mundo já os viu explodir — e uma chuva de meteoros
+         caindo de um planeta que, na tela dele, continua lá. */
+      planetas: this.planetas.caidos(),
+      /* E EM QUE PÉ ESTÁ O FIM DO PLANETA. Mesmo argumento das crateras e das
+         peças caídas, com uma consequência maior: sem este campo, quem entrasse
+         durante a contagem veria céu de dia, teto de 520 m e nenhum portal — e
+         morreria sem nunca ter sabido que havia um relógio correndo. */
+      fim: this.fim.resumo(),
+      /* O SALTO DO PEIXE EM CURSO, quando há um. Mesmo argumento das crateras:
+         quem entra no meio de um mergulho tem de ver o mesmo bicho que os
+         outros, e não um mar liso onde catorze pessoas estão olhando um peixe.
+         `null` entre um salto e outro — nesse caso o próximo `NS2C.FISH` chega
+         pelo caminho normal. */
+      fish: this.peixe.view(agora),
       scores: this.scores(),
     });
 
@@ -1438,6 +1660,13 @@ export class NamekRoom {
        remoto de si mesmo. */
     this.broadcast({ t: NS2C.JOIN, fighter: view(player) }, player.id);
     this.nascer(player, agora);
+    /* O BOSS, para quem chegou no meio: a mensagem de entrada dele outra vez,
+       só nesta conexão — mesma ideia da lista de crateras do `welcome`. E a
+       vida máxima é recontada, porque ela é função de quanta gente há em campo
+       (ver `vidaDoFreeza`); a FRAÇÃO é preservada, então a barra de quem já
+       estava lutando não se mexe. */
+    this.freeza.recontar();
+    this.freeza.apresentar(conn);
     this.broadcastScores();
     this.log(`namek — entrou: ${player.name} (#${player.id}) — ${this.lotacao} em campo`);
   }
@@ -1457,6 +1686,10 @@ export class NamekRoom {
     if (!player) return;
     this.players.delete(conn);
     this.devolverCor(player.color);
+    /* Sai da conta do fim junto com a vaga: um id no conjunto de escapados
+       depois de a pessoa ter ido embora é um lutador invisível no espaço, e ele
+       sairia no `FIM_ESTADO` seguinte para todo mundo. */
+    this.fim.saiu(player);
     this.broadcastAll({ t: NS2C.LEAVE, id: player.id, name: player.name });
     this.broadcastScores();
     this.log(`namek — saiu: ${player.name} (#${player.id}) — ${this.lotacao} em campo`);
@@ -1468,7 +1701,15 @@ export class NamekRoom {
      * sessão, e sem esta limpeza quem recarregasse a página cairia num planeta
      * cheio de crateras de uma partida que acabou, com quinze bots brigando
      * sozinhos e consumindo CPU para ninguém. */
+    /* A vida do boss é função da lotação: quem sai leva um pedaço dela junto.
+       A fração é preservada (ver `recontar`), então a barra não salta — o que
+       muda é quanto tempo ele ainda aguenta. */
+    this.freeza.recontar();
     if (this.players.size === 0) {
+      /* Sala sem gente, boss fora: ele é uma luta, e não há luta sem ninguém.
+         `sair()` e não morte — ver o comentário lá para a diferença, que é o
+         `aoMorrer` de quem estava contando não disparar por uma aba fechada. */
+      this.freeza.sair();
       this.clearBots();
       this.field = new NamekField();
       this.weather = NAMEK.weather.padrao;
@@ -1480,6 +1721,21 @@ export class NamekRoom {
       this.corpos.length = 0;
       this.corpoPorId.clear();
       this.propsCaidos.clear();
+      /* E o céu volta com os dois planetas. Mesmo argumento do campo de altura
+         logo acima: quem recarrega a página não pode cair num sistema solar
+         destruído por uma partida que já acabou — nem herdar uma chuva de
+         meteoros pela metade caindo sobre um terreno recém-zerado. */
+      this.planetas.reiniciar();
+      /* E o peixe volta inteiro. Um bicho pela metade da vida — ou um relógio de
+         renascimento correndo — é estado da partida que acabou, exatamente como
+         as crateras: quem chega numa sala vazia não herda nem uma coisa nem a
+         outra. */
+      this.peixe.reset();
+      /* O FIM ZERA JUNTO — o planeta voltou inteiro, então a contagem, o Freeza
+         e a lista de quem estava no espaço não descrevem mais nada. Sem esta
+         linha, quem recarregasse a página cairia numa sala em fase `espaco` sem
+         planeta nenhum tendo explodido para ele. */
+      this.fim.zerar();
       this.log("namek — sala vazia: planeta zerado");
     }
 
@@ -1506,6 +1762,14 @@ export class NamekRoom {
 
   route(player, msg) {
     switch (msg.t) {
+      /* O PEDIDO DE TRANSFORMAÇÃO. Sem corpo e sem validação de mensagem: tudo o
+         que a decisão precisa (vida, chefe em campo, estado) a sala já tem, e é
+         `SSJ.podeAcender` quem responde. Recusa em silêncio, como a do especial
+         — ver `NC2S.SSJ` no protocolo. */
+      case NC2S.SSJ:
+        SSJ.pedir(this, player);
+        break;
+
       case NC2S.PING:
         send(player.conn, { t: NS2C.PONG, c: msg.c, s: this.now() });
         if (typeof msg.rtt === "number") player.ping = Math.round(msg.rtt);
@@ -1531,6 +1795,10 @@ export class NamekRoom {
         this.registrarQueimadura(player, msg);
         break;
 
+      case NC2S.POWER_CLASH:
+        this.registrarEmbate(player, msg);
+        break;
+
       case NC2S.BURST:
         this.registrarOnda(player, msg);
         break;
@@ -1543,6 +1811,10 @@ export class NamekRoom {
         this.registrarProp(player, msg);
         break;
 
+      case NC2S.FISH_HIT:
+        this.registrarPeixe(player, msg);
+        break;
+
       case NC2S.SLAM:
         this.registrarQueda(player, msg);
         break;
@@ -1552,8 +1824,24 @@ export class NamekRoom {
         break;
 
       case NC2S.BOT:
-        if (msg.remove) this.removeBot();
+        /* `{ boss: "<dificuldade>" }` chama o FREEZA, e ele entra pela mensagem
+           que já existe em vez de uma nova. Não é economia de protocolo: pôr e
+           tirar adversário de CPU é exatamente o que esta mensagem faz, e o boss
+           é o adversário de CPU maior — quem monta o menu ganha o caminho pronto
+           sem nenhum cliente antigo precisar aprender uma palavra nova. Quem
+           quiser chamá-lo por dentro usa a API: `sala.freeza.entrar(nivel)`. */
+        /* `{ boss: "matar" }` é a BANCADA — ver `NamekFreeza.matarPorTeste`. Ele
+           entra pela mesma mensagem em vez de um tipo novo de protocolo, e mata
+           pelo caminho de morte de verdade, para o `aoMorrer` disparar e a fuga
+           de Namekusei começar. */
+        if (msg.boss === "matar") this.freeza.matarPorTeste();
+        else if (msg.boss) this.freeza.entrar(String(msg.boss));
+        else if (msg.remove) this.removeBot();
         else this.addBot();
+        break;
+
+      case NC2S.FREEZA_HIT:
+        this.freeza.acertoDeclarado(player, msg);
         break;
 
       case NC2S.WEATHER:
@@ -1562,6 +1850,14 @@ export class NamekRoom {
 
       case NC2S.DIFFICULTY:
         this.pedirDificuldade(msg.id);
+        break;
+
+      /* "O meu Kamehameha está apontado para aquele planeta." A conferência
+         inteira mora em `NamekPlanetas.pedido` — inclusive a de que o especial
+         existe, que é feita sobre o `player.especial` que `registrarEspecial`
+         acabou de criar. Recusa em silêncio, como todo o resto. */
+      case NC2S.PLANET_HIT:
+        this.planetas.pedido(player, msg, this.now());
         break;
 
       default:
@@ -1592,7 +1888,12 @@ export class NamekRoom {
     if (!Number.isFinite(s.v[0]) || !Number.isFinite(s.v[1]) || !Number.isFinite(s.v[2])) return;
     const W = NAMEK.world;
     if (x * x + z * z > (W.radius + 200) ** 2) return;
-    if (y > W.ceiling + 200 || y < W.seaLevel - 200) return;
+    /* O TETO DA VALIDAÇÃO SEGUE O TETO DE VOO, e não a constante do mundo.
+       Durante a fuga o limite sobe para 2 000 m e no espaço para quase 2 900:
+       lendo `W.ceiling` aqui, a PRIMEIRA pose de quem subisse atrás do portal
+       seria descartada em silêncio, o corpo dele congelaria no céu de todos os
+       outros, e o cliente continuaria subindo sozinho. Ver `NamekFim.tetoDePose`. */
+    if (y > this.fim.tetoDePose() + 200 || y < W.seaLevel - 200) return;
     /* E TODO CANAL TEM DE SER NÚMERO. A pose é a única coisa que a sala
        retransmite sem reescrever, então ela é também a única porta por onde um
        cliente poderia mandar `"y": "olá"` e travar o desenho de todos os
@@ -1631,8 +1932,16 @@ export class NamekRoom {
      * inteiro deixaria de existir. Vale para o especial, para a onda e para a
      * cratera pelo mesmo motivo. */
     if (this.atordoado(player)) return;
+    /* E QUEM ESTÁ SE TRANSFORMANDO TAMPOUCO — mesma razão da linha acima, com o
+       peso maior: os três segundos são INVENCÍVEIS, e atirar de dentro deles
+       seria machucar sem poder ser machucado. Vale para o especial e para a onda
+       pelo mesmo motivo. */
+    if (SSJ.invencivel(player, this.now())) return;
     if (!vetorOk(msg.o) || !vetorOk(msg.d)) return;
-    if (!this.gastar(player, NAMEK.ki.blastCost)) return;
+    /* O ki da rajada custa 40 % em Super Saiyajin (`NAMEK.ssj.kiDreno`) — o
+       mesmo desconto que o `KiMeter.gastar` aplica do lado do cliente, para as
+       duas barras descerem juntas. */
+    if (!this.gastar(player, SSJ.custo(player, NAMEK.ki.blastCost))) return;
 
     const alvo = Number.isFinite(msg.target) ? msg.target : null;
     this.broadcastAll({
@@ -1704,11 +2013,17 @@ export class NamekRoom {
   registrarEspecial(player, msg) {
     if (!player.alive) return;
     if (this.atordoado(player)) return; // ver `registrarRajada`
+    if (SSJ.invencivel(player, this.now())) return; // idem: não se atira do grito
     const info = specialInfo(msg.kind);
     if (!info) return;
     if (!vetorOk(msg.o) || !vetorOk(msg.d)) return;
-    if (player.ki < NAMEK.ki.max * NAMEK.ki.specialThreshold) return;
-    if (!this.gastar(player, NAMEK.ki.max)) return;
+    /* **TRÊS ESPECIAIS COM UMA BARRA** em Super Saiyajin: o limiar cai de 1 para
+       um terço e o custo cai junto (`NAMEK.ssj.limiar` e `especialCusto`), e a
+       conta fecha em cima — 100 → 67 → 34 → 1. Os dois números vêm do mesmo
+       módulo que o cliente lê em `KiMeter`, senão a barra do HUD aceitaria um
+       golpe que esta linha recusaria. */
+    if (player.ki < NAMEK.ki.max * SSJ.limiarEspecial(player)) return;
+    if (!this.gastar(player, SSJ.custoEspecial(player))) return;
 
     const agora = this.now();
     /* A JANELA DO GOLPE, e ela é o que dá dentes ao `SPECIAL_HIT`: sem este
@@ -1895,9 +2210,105 @@ export class NamekRoom {
     });
   }
 
+  /**
+   * "DOIS PODERES SE ENCOSTARAM." A sala confirma UM aviso e descarta os ecos.
+   *
+   * ------------------------------------------------------------ o problema
+   *
+   * Cada cliente simula os próprios projéteis e reconstrói os alheios a partir
+   * do disparo que esta sala retransmitiu. As catorze reconstruções do mesmo
+   * Galick Gun estão a alguns metros umas das outras — e "alguns metros" é
+   * exatamente a margem que decide se ele encostou ou não no Kamehameha que
+   * vinha de frente. Sem ninguém no meio, um jogador veria o golpe sumir e o
+   * outro o veria acertar, que é o único desacordo que este modo não tolera,
+   * porque ele decide quem morre.
+   *
+   * ------------------------------------------------------------- o critério
+   *
+   * **Qualquer cliente que enxergue o choque avisa; a sala guarda o primeiro e
+   * descarta os repetidos.** O critério óbvio seria "quem é dono do projétil de
+   * menor id arbitra", e ele quebra por um motivo concreto deste jogo: metade
+   * dos golpes é de BOT, e bot não tem cliente. Todo embate cujo número menor
+   * coubesse a um bot não aconteceria em tela nenhuma — numa sala de quinze
+   * bots, quase todos. Deixando qualquer um avisar e centralizando o desempate
+   * aqui, o mesmo mecanismo cobre humano×humano, humano×bot e bot×bot.
+   *
+   * A sala NÃO recalcula o desfecho, e isso é deliberado: quem morre e que
+   * estouro sai são função pura dos dois tipos (`NAMEK.embate.classe`, mais o
+   * bit `c` da bola de carga), e cada cliente a aplica com a mesma tabela. O que
+   * é conferido aqui são as INVARIANTES dessa tabela — que os tipos existem,
+   * que a rajada de ki não passa por aqui (ela é resolvida em cada tela, sem
+   * rede) e que a explosão de carga só é pedida entre dois Kamehamehas. É a
+   * mesma régua do resto desta sala: conferir para o jogo não se contradizer,
+   * não para impedir trapaça.
+   *
+   * **`player` não é usado, e a ausência é a mensagem.** Todo outro `registrar*`
+   * daqui trata do que AQUELE jogador fez — o tiro dele, o acerto dele, a
+   * cratera dele — e por isso começa conferindo se ele está vivo e de pé. Este
+   * fala de dois projéteis que quase nunca são dele: quem avisa é qualquer um
+   * que ENXERGOU o choque, inclusive um espectador dos dois lados, e é
+   * justamente por isso que o remetente não tem autoridade nenhuma sobre o
+   * conteúdo. O parâmetro fica na assinatura porque `route` chama todos igual.
+   */
+  registrarEmbate(player, msg) {
+    if (!vetorOk(msg.p)) return;
+    const ka = String(msg.ka ?? "");
+    const kb = String(msg.kb ?? "");
+    const ca = NAMEK.embate.classe[ka];
+    const cb = NAMEK.embate.classe[kb];
+    /* Tipo desconhecido, ou rajada de ki num dos lados: a bolinha nunca sobe
+       (ver `NC2S.POWER_CLASH`), então um aviso com ela é lixo. Recusar em vez de
+       adivinhar também é o que impede a sala de virar amplificador — o que sai
+       daqui é a CHAVE que passou pela tabela, nunca a string que chegou. */
+    if (ca !== "grande" || cb !== "grande") return;
+    const carga = msg.c === 1 || msg.c === true;
+    if (carga && (ka !== "kamehameha" || kb !== "kamehameha")) return;
+
+    const a = Number(msg.a);
+    const b = Number(msg.b);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return;
+
+    const agora = this.now();
+    /* A JANELA. Numa sala de quinze, o mesmo encontro chega em até quinze
+       pacotes em poucos milissegundos, cada um com o ponto de contato da
+       reconstrução daquela tela. O primeiro vira o acontecimento; os outros são
+       o mesmo acontecimento contado de novo.
+       O par é comparado sem ordem: quem avisou pode ter posto o Kamehameha em
+       `a` e o Kienzan em `b`, e o vizinho o contrário. */
+    for (let i = 0; i < this.embatesRecentes.length; i++) {
+      const e = this.embatesRecentes[i];
+      if (agora - e.w > NAMEK.embate.janelaSala * 1000) continue;
+      const mesmo =
+        (e.a === a && e.ka === ka && e.b === b && e.kb === kb) ||
+        (e.a === b && e.ka === kb && e.b === a && e.kb === ka);
+      if (mesmo) return;
+    }
+    /* Anel de oito. Guardar mais seria guardar história que a janela já jogou
+       fora; guardar menos deixaria dois embates simultâneos empurrarem um ao
+       outro para fora do registro. */
+    const reg = this.embatesRecentes[this.embateProx];
+    reg.a = a;
+    reg.ka = ka;
+    reg.b = b;
+    reg.kb = kb;
+    reg.w = agora;
+    this.embateProx = (this.embateProx + 1) % this.embatesRecentes.length;
+
+    this.broadcastAll({
+      t: NS2C.POWER_CLASH,
+      a,
+      ka,
+      b,
+      kb,
+      p: vec(msg.p),
+      c: carga ? 1 : 0,
+    });
+  }
+
   registrarOnda(player, msg) {
     if (!player.alive) return;
     if (this.atordoado(player)) return; // ver `registrarRajada`
+    if (SSJ.invencivel(player, this.now())) return; // idem: não se atira do grito
     if (!vetorOk(msg.p)) return;
     /* A onda sai de QUEM a soltou, então o ponto declarado tem de ser o corpo
        dele. Oito metros de folga cobrem o atraso da pose; o que a checagem
@@ -1905,7 +2316,7 @@ export class NamekRoom {
        mapa. */
     const eu = this.pontoDe(player);
     if (Math.hypot(msg.p[0] - eu.x, msg.p[1] - eu.y, msg.p[2] - eu.z) > 8 + TOLERANCIA) return;
-    if (!this.gastar(player, NAMEK.ki.burstCost)) return;
+    if (!this.gastar(player, SSJ.custo(player, NAMEK.ki.burstCost))) return;
     this.onda(player, { x: msg.p[0], y: msg.p[1], z: msg.p[2] });
   }
 
@@ -1958,6 +2369,48 @@ export class NamekRoom {
     if (this.propsCaidos.has(chave)) return;
     this.propsCaidos.add(chave);
     this.broadcastAll({ t: NS2C.PROP_DOWN, kind: msg.kind, i: msg.i, by: player.id });
+  }
+
+  /**
+   * "O meu poder acertou o PEIXE GIGANTE."
+   *
+   * Mesmo contrato do `registrarAcerto` e do `registrarQueimadura`: quem atira é
+   * a autoridade sobre o próprio acerto, a sala é a autoridade sobre a vida. As
+   * conferências que importam moram em `NamekPeixeSim.acerto` — o peixe existe, é
+   * o mesmo peixe, ele está fora d'água agora, e quem relata está a uma distância
+   * plausível dele.
+   *
+   * A única coisa que fica AQUI é a carência por jogador, e ela é de sala e não
+   * de peixe: o que ela protege não é a vida do bicho (o dano de cada golpe já é
+   * o dano de verdade, e matar o peixe mais rápido não dá vantagem nenhuma a
+   * ninguém), é o CPU de um cliente defeituoso avisando sessenta vezes por
+   * segundo. Setenta milissegundos são mais curtos que a cadência real da rajada
+   * (167 ms), então nenhum acerto legítimo é engolido.
+   */
+  registrarPeixe(player, msg) {
+    if (!player.alive) return;
+    if (!Number.isFinite(msg?.i)) return;
+
+    const agora = this.now();
+    const carencia = NAMEK.peixe.avisoCarencia * 1000;
+    if (agora - (player.peixeEm ?? -Infinity) < carencia) return;
+    player.peixeEm = agora;
+
+    const r = this.peixe.acerto(msg, this.pontoDe(player), agora);
+    if (!r || !r.morreu) return;
+
+    /* MORREU. Um anúncio só, com o ponto onde o corpo estava — o cliente estoura
+       ali, vira o bicho de barriga para cima e o afunda. A morte NÃO entra no
+       placar: abate é de lutador, e premiar quem matou um peixe com a mesma
+       moeda de quem matou uma pessoa desequilibraria a única coisa que o modo
+       conta. O próximo bicho vem sozinho, `NAMEK.peixe.respawn` segundos depois. */
+    this.broadcastAll({
+      t: NS2C.FISH_DOWN,
+      i: msg.i,
+      p: [round(r.p.x), round(r.p.y), round(r.p.z)],
+      by: player.id,
+    });
+    this.log(`namek — o peixe gigante caiu (por ${player.name})`);
   }
 
   /**
@@ -2097,6 +2550,7 @@ export class NamekRoom {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.stepTimer = null;
     this.sweepTimer = null;
+    this.freeza.sair();
     this.bots.clear();
     this.players.clear();
     this.corpos.length = 0;

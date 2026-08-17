@@ -912,6 +912,25 @@ export class NamekBotSquad {
    * que qualquer jogador faz.
    */
   escolherAlvo(bot, ctx) {
+    /* O BOSS GANHA DE TODO MUNDO. "Quando ele entra no cenário todos os players
+     * tentam matar ele, inclusive os bots" — e a forma mais barata e mais
+     * reversível de dizer isso é aqui, antes de qualquer outra conta: enquanto
+     * houver um corpo marcado `boss` na lista, ele É o alvo.
+     *
+     * Ele entra na lista uniforme como qualquer outro corpo (ver
+     * `NamekFreeza.corpoNaLista`), então TODO o resto — mirar, liderar o alvo,
+     * atirar, colidir a bola — continua funcionando sem uma linha a mais. O que
+     * esta função precisava decidir era só a preferência.
+     *
+     * A fidelidade ao alvo atual (as quatro linhas abaixo, que existem para o
+     * bot não girar sem atirar) cede a ele de propósito: um bot que continua
+     * caçando um humano com um boss em campo é um bot que não entendeu a
+     * partida. Fora o boss, nada muda — sem ele em campo, este laço não acha
+     * nada e a função é exatamente a de antes. */
+    for (const c of ctx.corpos) {
+      if (c.boss && c.alive && !c.invuln) return c;
+    }
+
     const atual = bot.alvoId === null ? null : acharCorpo(ctx.corpos, bot.alvoId);
     if (atual && atual.alive && !atual.invuln) {
       const d = Math.hypot(atual.x - bot.position.x, atual.y - bot.position.y, atual.z - bot.position.z);
@@ -1714,9 +1733,9 @@ export class NamekBotSquad {
    * reavaliado — bola que troca de alvo no meio do voo lê como bug.
    *
    * CADA PROJÉTIL COM O `homing` DO PRÓPRIO GOLPE, e isto era um defeito com
-   * duas metades. A primeira: os números da RAJADA (26°/s, 0,75 s, cone de 22°)
+   * duas metades. A primeira: os números da RAJADA (52°/s, 0,75 s, cone de 44°)
    * eram aplicados a tudo o que estivesse nesta lista, inclusive a um Kienzan,
-   * que persegue a 70°/s por 4,5 s num cone de 75°. A segunda, que anulava a
+   * que persegue a 114°/s por 4,5 s num cone de 75°. A segunda, que anulava a
    * primeira: as bolas de especial nasciam com `persegue: false`, então nada
    * disso chegava a acontecer — o disco de um bot voava RETO no servidor
    * enquanto o mesmo disco contornava na tela de quem o via.

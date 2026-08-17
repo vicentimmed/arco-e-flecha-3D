@@ -96,13 +96,68 @@ const DESL_HALF = 480;
 const DESL_N = Math.floor((DESL_HALF * 2) / DESL_RES) + 1;
 /* m — o quanto o chão pode afundar e a borda pode subir, ACUMULADO.
    Sem os limites, insistir no mesmo ponto abriria um poço sem fundo — as
-   crateras se somam, e nada as impediria de somar para sempre. */
-const DESL_MIN = -80;
+   crateras se somam, e nada as impediria de somar para sempre.
+
+   -------------------------------------------------- por que −110 e não −80
+
+   Este teto não é um número redondo escolhido por gosto: ele é o CHÃO DO
+   PLANETA, e quem manda nele é a lava. `NAMEK.destruction.lava.gatilho` diz a
+   que cota o fundo de um buraco precisa chegar para a poça acender, e furar a
+   crosta é portanto cavar `relevo − gatilho` metros. O relevo da clareira NÃO é
+   um número só: medido sobre o raio de nascimento (150 m), `baseHeight` vai de
+   −0,5 a **+38 m**, com média +3,0 — a ondulação do piso é pequena, mas a saia
+   de duas montanhas soltas entra na clareira, e 13 % dela está acima de +6 m.
+
+   Com o gatilho em −32, cavar 35 m bastava em quase toda parte e o teto de 80
+   nunca aparecia. Quando a lava dobrou de fundura (gatilho −64), a conta virou
+   **67 m no ponto médio e 102 m nos pontos altos** — e aí os dois tetos
+   passaram a decidir o jogo:
+
+   • `FUNDURA_MAX` era 70, ou seja, insistir no mesmo ponto parava de afundar em
+     70 m. De qualquer relevo acima de **+6 m** o buraco jamais alcançaria −64,
+     e são 13 % da clareira. A lava viraria uma coisa que às vezes acende,
+     dependendo de onde no chão você mirou — o pior tipo de mecânica, a que
+     falha em silêncio;
+   • `DESL_MIN` era −80, e ele apara a SOMA na grade: nem empilhando crateras
+     vizinhas se passaria de −80, o que deixava 16 m de margem sobre o gatilho
+     no ponto médio e margem NEGATIVA nos pontos altos.
+
+   Com −110 e `FUNDURA_MAX` 96, a varredura da clareira inteira (317 pontos numa
+   grade de 15 m) fura em 4 Kamehamehas em 68 % dela e em 5 no resto, sem um
+   único ponto resistente. É esse "sem um único ponto" que estes dois números
+   compram.
+
+   O CUSTO é honesto e vale escrever, porque ele é real:
+
+   • o buraco pode ficar 30 m mais fundo do que ficava. Uma cratera saturada na
+     clareira vai da cota −80 para a cota −110, e cair lá dentro é uma queda de
+     mais de cem metros — bem acima do `fallSafe` (34 m/s, ~51 m de queda
+     livre), então quem entrar de cima se machuca. É a leitura certa de um poço,
+     não um defeito;
+   • a malha do terreno esculpe vértices 30 m mais para baixo, e as camadas de
+     cor por profundidade (`corDeCratera`, em `world/terrain.js`) precisam
+     cobrir a escala nova — elas NÃO se ajustam sozinhas, e foram reescaladas
+     junto com esta linha;
+   • **memória: zero.** A grade é a mesma `Float32Array` de 231 mil células; o
+     que mudou é o valor que cabe em cada uma. Não há um byte a mais.
+
+   `DESL_MAX` não acompanha: a borda levantada é a ejeção da cratera, não o
+   buraco, e ela cresce com o RAIO (um quinto da fundura, só no terço externo —
+   ver `craterDelta`). Vinte e cinco metros de anel já são altos para qualquer
+   cratera que este jogo abre. */
+const DESL_MIN = -110;
 const DESL_MAX = 25;
 /* m — teto da fundura de UMA cratera que foi sendo aprofundada. Abaixo disto o
    `DESL_MIN` da grade já estaria aparando de qualquer jeito; o limite aqui
-   existe para o registro não guardar números que a grade nunca vai honrar. */
-const FUNDURA_MAX = 70;
+   existe para o registro não guardar números que a grade nunca vai honrar.
+
+   Sobe COM o `DESL_MIN`, e tem de subir: ele é o teto de UMA cratera e aquele é
+   o teto da soma. Deixá-lo em 70 com a grade indo a 110 traria de volta o
+   defeito que ele existe para evitar, só que ao contrário — o registro pararia
+   de aprofundar em 70 m enquanto a grade ainda tinha 40 m de espaço, e o quinto
+   Kamehameha no mesmo ponto não faria nada. Guarda a mesma proporção de antes
+   (70/80 = 96/110): perto do teto da grade, sem encostar nele. */
+const FUNDURA_MAX = 96;
 /* m — célula do índice usado só para achar cratera a fundir. Grande porque a
    busca varre 3×3 células e as crateras candidatas são poucas. */
 const FUSAO_CELL = 32;

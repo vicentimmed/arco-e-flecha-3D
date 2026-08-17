@@ -61,6 +61,7 @@
 import * as THREE from "three";
 import { NAMEK } from "../../shared/namek/config.js";
 import { gameEvents, EventType } from "../../core/events.js";
+import { TINTA_SSJ } from "../character/ssj.js";
 
 /* Teto de bolas simultâneas. Custo: ~13 KB de `Float32Array`.
    Ele deixou de ser o pior caso aritmético quando a vida da bola dobrou — ver
@@ -269,7 +270,7 @@ export class BlastPool {
    * @param {boolean} [o.local]       é o meu tiro
    * @returns {number} o índice ocupado
    */
-  spawn({ id, owner, origem, dir, hand = 0, target = null, local = false }) {
+  spawn({ id, owner, origem, dir, hand = 0, target = null, local = false, ssj = false }) {
     let i;
     if (this.live < this.cap) {
       i = this.live++;
@@ -306,7 +307,13 @@ export class BlastPool {
     /* Alvo do próprio dono não existe: a bola voaria de volta para a mão. */
     this.alvo[i] = target === owner ? null : (target ?? null);
 
-    const t = local ? TINTA_MINHA : TINTA_ALHEIA;
+    /* A RAJADA DE QUEM ESTÁ TRANSFORMADO É DOURADA — "todos os poderes que ele
+       solta ficam amarelos", e a bolinha é o poder que ele solta o tempo todo.
+       O ouro ganha da distinção meu/alheio de propósito: quem atirou já sabe de
+       quem é o próprio tiro pela direção, e o que a cor precisa dizer aqui é
+       algo que ninguém mais consegue dizer — que aquele adversário mudou de
+       patamar. Ver `TINTA_SSJ`, que sai da mesma cor do cabelo e da aura. */
+    const t = ssj ? TINTA_SSJ : local ? TINTA_MINHA : TINTA_ALHEIA;
     this.pintar(i, t[0], t[1], t[2]);
     return i;
   }
@@ -446,10 +453,14 @@ export class BlastPool {
             e.p.y = y;
             e.p.z = z;
             e.power = B.power;
-            /* Bacia de sempre. Escrito mesmo valendo 1: o registro da fila e
-               REAPROVEITADO, e um `fundo` deixado pelo Kamehameha do quadro
-               anterior viraria um poco aqui. */
-            e.fundo = 1;
+            /* A RAJADA CAVA, e não amassa. `craterDeep` (1,7) multiplica só a
+               PROFUNDIDADE do buraco — ver `NAMEK.blast.craterDeep`, que tem a
+               conta: 5,8 m de boca por 6,1 m de fundo, em vez dos 3,6 m que a
+               fundura sairia do raio sozinha.
+               Escrito sempre, e nunca deixado de fora: o registro da fila é
+               REAPROVEITADO, e um `fundo` do Kamehameha do quadro anterior
+               viraria um poço aqui. */
+            e.fundo = B.craterDeep;
             /* A rajada tem som PRÓPRIO no impacto — o estalo curto de
                `estaloDeTerra`. Ver `NamekAudio.estouroNoChao`: sem a
                identidade, ela caía na faixa de potência e soava igual a
@@ -492,10 +503,11 @@ export class BlastPool {
                 e.p.y = y;
                 e.p.z = z;
                 e.power = B.power;
-                /* Bacia de sempre. Escrito mesmo valendo 1: o registro da fila e
-                   REAPROVEITADO, e um `fundo` deixado pelo Kamehameha do quadro
-                   anterior viraria um poco aqui. */
-                e.fundo = 1;
+                /* O MESMO `craterDeep` do caminho do chão, e ele tem de ser o
+                   mesmo: uma bola que morre numa pedra e outra que morre no
+                   barro dois metros adiante não podem deixar buracos de fundura
+                   diferente. Ver `NAMEK.blast.craterDeep`. */
+                e.fundo = B.craterDeep;
             /* A rajada tem som PRÓPRIO no impacto — o estalo curto de
                `estaloDeTerra`. Ver `NamekAudio.estouroNoChao`: sem a
                identidade, ela caía na faixa de potência e soava igual a
@@ -629,6 +641,55 @@ export class BlastPool {
       const dz = this.pos[i3 + 2] - z;
       if (dx * dx + dy * dy + dz * dz > r2) continue;
       this.estourar(this.pos[i3], this.pos[i3 + 1], this.pos[i3 + 2], false);
+      this.swapRemove(i);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * As bolas ALHEIAS que encostaram num poder grande. **Elas morrem; ele não
+   * sente nada.**
+   *
+   * É a regra 1 do embate (`NAMEK.embate`, e o cabeçalho de `colisao.js`), e o
+   * pedido é literal: *"os poderes grandes não podem explodir se colidirem com
+   * poderes pequenos — um Galick Gun não pode ser explodido por um poder
+   * rápido."* Daí esta função só ter um lado: ela apaga bolas e não devolve
+   * nada que o poder grande possa usar para desviar, encolher ou morrer.
+   *
+   * **As do próprio dono sobrevivem.** Não é cortesia com quem atirou: quem
+   * solta um Kamehameha depois de uma rajada atira na MESMA direção, e sem esta
+   * recusa o feixe passaria a vida engolindo as próprias bolas de ki — o
+   * jogador veria o próprio fogo de cobertura desaparecer no instante em que
+   * pagasse a barra inteira. É a mesma linha, e o mesmo motivo, do `varrer` da
+   * onda de empurrão aqui em cima.
+   *
+   * O TESTE É DELEGADO ao árbitro (`colisor.distanciaAoPoder`) em vez de ser
+   * uma distância a um ponto, e essa indireção compra a única coisa que
+   * importa: o feixe não é uma esfera. Ele é uma cobra de até 620 m, e medir da
+   * bola até a CABEÇA dele diria que uma rajada atravessando o meio do tubo não
+   * encostou em nada. Passando o `reg` de volta, cada tipo de poder responde com
+   * a conta dele — e este arquivo continua sem saber o que é um feixe.
+   *
+   * @param {object} reg o registro do poder grande, em `colisao.js`
+   * @param {number} alcance raio somado, já com a folga
+   * @param {import("./colisao.js").ColisorDePoderes} colisor
+   * @returns {number} quantas morreram
+   */
+  varrerEmbate(reg, alcance, colisor) {
+    let n = 0;
+    for (let i = this.live - 1; i >= 0; i--) {
+      if (this.dono[i] === reg.owner) continue;
+      const i3 = i * 3;
+      const x = this.pos[i3];
+      const y = this.pos[i3 + 1];
+      const z = this.pos[i3 + 2];
+      if (colisor.distanciaAoPoder(reg, x, y, z, alcance) > alcance) continue;
+      /* O CLARÃO PEQUENO do pedido é o estouro de sempre, sem terra: é o mesmo
+         que ela faria ao bater num corpo, e ela de fato bateu em alguma coisa.
+         Um efeito próprio aqui seria uma terceira variante do mesmo sopro de
+         sete fagulhas para dizer a mesma coisa. */
+      this.estourar(x, y, z, false);
       this.swapRemove(i);
       n++;
     }

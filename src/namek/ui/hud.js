@@ -56,9 +56,12 @@ import { NamekScoreboard, NamekKillFeed, corHex } from "./scoreboard.js";
    chão e detona quando se está no ar é a fonte de erro que este HUD não teria
    como explicar em uma linha.
 
-   A trava de alvo está no `R` e NÃO no `Tab`: o Tab é a tecla de navegação da
-   página e levava o foco do jogo embora. Quem quiser o "por quê" inteiro
-   encontra a seção "o TAB, que saiu do mapa" no cabeçalho de `../input.js`.
+   NÃO HÁ TECLA DE TRAVA nesta tabela, e a ausência é o pedido: *"pode remover o
+   atalho que dá lock-in no teclado (R)."* Quem designa alvo hoje é o cursor —
+   basta passar o retículo perto de alguém e o círculo dele acende. Isso não vira
+   uma linha aqui porque não é atalho: é a mira funcionando. Quem quiser o "por
+   quê" inteiro encontra a seção "a TRAVA DE ALVO, que saiu do mapa" no cabeçalho
+   de `../input.js`.
 
    E a guarda está no `E`, escrita aqui com o "segure:" na frente igual ao `C`,
    porque o que ela tem de mais fácil de errar não é onde fica — é que ela vale
@@ -88,15 +91,24 @@ export const CONTROLES = [
       [["E"], "segure: defender — o dano quase todo aparado"],
       [["1", "2", "3", "4"], "armar o especial"],
       [["Q"], "onda de choque"],
-      /* Uma tecla, três coisas — e é por isso que a linha diz as três. Ver
-         `LockOn.alternar`: o mapa deste modo é fechado a pedido ("só o menu
-         geral"), então a troca de alvo não podia ganhar tecla nova. */
-      [["R"], "travar o alvo · de novo: trocar · no fim: soltar"],
+      /* A tecla da transformação. A linha diz a CONDIÇÃO junto com a tecla, e
+         não só o nome do golpe, porque ela é a única do painel que não funciona
+         quando se aperta: quem tentar com a vida cheia ou sem o Freeza em campo
+         precisa saber por que não aconteceu nada. O alerta na tela existe
+         justamente para o momento em que ela passa a valer. */
+      [["R"], "Super Saiyajin — vida baixa, e só contra o Freeza"],
     ],
   },
   {
     titulo: "Sala",
-    itens: [[["Esc"], "menu geral"]],
+    itens: [
+      [["Esc"], "menu geral"],
+      /* A BANCADA, marcada como tal — o painel de atalhos é lido por quem está
+         jogando, e uma linha que mata o boss precisa dizer em voz alta que não é
+         jogo. O `(teste)` é a mesma convenção que o repositório já usa nos
+         outros comandos de bancada. */
+      [["Alt", "K"], "matar o Freeza (teste) — começa a fuga"],
+    ],
   },
 ];
 
@@ -117,6 +129,9 @@ const MARCAS = 8;
 const SEM_MARCAS = Object.freeze([]);
 /** s — vida de um aviso de canto. */
 const AVISO_VIDA = 2.4;
+/** s — o esmaecimento da placa do alvo ao sair. Do config: quem decide quanto a
+ *  placa dura é `LockOn`, e o tempo de sumir é do mesmo par de números. */
+const FADE_ALVO = NAMEK.lock.painel.fade;
 /** 1/s — velocidade com que o clarão vermelho apaga. */
 const FLASH_DECAI = 2.4;
 
@@ -201,6 +216,30 @@ class BarraDeVida {
     this._hueEscrito = -1;
     this._numEscrito = -1;
     this._criticoEscrito = null;
+    /** **A barra de vida fica AMARELA** — o pedido literal. Ver `setOuro`. */
+    this._ouro = false;
+  }
+
+  /**
+   * Pinta a barra de OURO (Super Saiyajin) ou devolve o giro de matiz normal.
+   *
+   * A barra já é pintada por MATIZ (`--nk-hue`, ver `ui/style.js`), então o
+   * amarelo dela não é uma cor nova nem uma classe nova: é um número travado no
+   * lugar do que a vida calcularia. Isso preserva de graça tudo o que a barra
+   * já sabe fazer — o fantasma, o verniz, a régua, a inclinação —, e o dia em
+   * que alguém mexer no visual dela o Super Saiyajin acompanha sem saber.
+   *
+   * `_hueEscrito` é invalidado na virada porque a comparação de "já está na
+   * tela" é sobre o NÚMERO, e o número pode coincidir: um lutador com 44 % de
+   * vida já está em 48° de matiz por acidente, e sem esta linha ele viraria
+   * Super Saiyajin sem a barra mudar de cor — e, pior, VOLTARIA ao normal sem
+   * ela mudar de volta.
+   */
+  setOuro(v) {
+    const ouro = v === true;
+    if (ouro === this._ouro) return;
+    this._ouro = ouro;
+    this._hueEscrito = -1;
   }
 
   /**
@@ -238,7 +277,11 @@ class BarraDeVida {
      * e meia de distância da morte. A curva puxa o vermelho para cima: metade
      * da barra já é âmbar, um terço já é vermelho, e a cor passa a dizer o que
      * o número diz. */
-    const hue = Math.round(112 * Math.pow(f, 1.5));
+    /* Em Super Saiyajin o giro para de girar: a barra fica no OURO de
+       `NAMEK.ssj.hue`, cheia ou quase vazia. É de propósito que ela deixe de
+       avisar da vida por cor — o que ela passa a anunciar é o PATAMAR, e o
+       número ao lado continua dizendo quanto falta. Ver `setOuro`. */
+    const hue = this._ouro ? NAMEK.ssj.hue : Math.round(112 * Math.pow(f, 1.5));
     if (hue !== this._hueEscrito) {
       this._hueEscrito = hue;
       this.fillEl.style.setProperty("--nk-hue", String(hue));
@@ -343,7 +386,30 @@ export class NamekHud {
     this.especiaisEl = this._montarEspeciais();
     this.placaEu.append(corpoEu, this.especiaisEl);
 
-    /* ----------------------------------------------------- a placa do alvo */
+    /* ----------------------------------------------------- a placa do alvo
+     *
+     * UM WIDGET, DUAS RAZÕES DE APARECER — e as duas são pedidos literais:
+     *
+     *   *"Quando o player acerta o outro deve aparecer a vida do player que ele
+     *   acertou na tela dele diminuindo, independente se tiver lock-in ou não."*
+     *   *"No lock-in que acontece quando o mouse fica perto, a vida do player
+     *   inimigo deve aparecer… vida dinâmica, e diminui conforme o player perde
+     *   vida seja para ele ou outros players."*
+     *
+     * Esta placa já existia para o alvo TRAVADO (a tecla `R`, que saiu). Ela não
+     * foi duplicada para atender aos dois pedidos porque eles mostram exatamente
+     * a mesma coisa — retrato, nome e barra de vida do mesmo adversário, na mesma
+     * quina da tela — e porque na briga são a MESMA pessoa quase sempre: duas
+     * placas iguais uma sobre a outra.
+     *
+     * Quem escolhe QUEM aparece e por quanto tempo é `LockOn` (ver `_painel` lá,
+     * e `NAMEK.lock.painel` para a precedência entre as duas razões); aqui só se
+     * desenha o que o laço entregou em `setTarget`.
+     *
+     * A BARRA JÁ SABIA FAZER O RESTO: o fantasma de `BarraDeVida` é o que faz a
+     * vida "diminuir animando" em vez de saltar, e ele é o mesmo da sua própria
+     * barra. O único acréscimo é o número do dano — quanto você tirou —, que é a
+     * pergunta que o primeiro pedido faz e que uma barra sozinha não responde. */
     this.placaAlvo = document.createElement("div");
     this.placaAlvo.className = "nk-placa nk-placa--alvo";
     this.placaAlvo.hidden = true;
@@ -357,9 +423,16 @@ export class NamekHud {
     this.nomeAlvo = document.createElement("div");
     this.nomeAlvo.className = "nk-nome nk-contorno";
     this.vidaAlvo = new BarraDeVida(true);
+    /* O NÚMERO DO DANO fica na MESMA linha da barra, do lado de fora dela — ao
+       lado do número da vida, e não por cima da barra. Por cima ele disputaria
+       espaço com o fantasma, que é justamente a outra metade da mesma notícia:
+       um diz "tirei 34", o outro mostra os 34 escoando. */
+    this.danoAlvo = document.createElement("div");
+    this.danoAlvo.className = "nk-dano nk-contorno";
+    this.danoAlvo.hidden = true;
     const linhaVidaAlvo = document.createElement("div");
     linhaVidaAlvo.className = "nk-linha";
-    linhaVidaAlvo.append(this.vidaAlvo.el, this.vidaAlvo.numEl);
+    linhaVidaAlvo.append(this.vidaAlvo.el, this.vidaAlvo.numEl, this.danoAlvo);
     medidoresAlvo.append(this.nomeAlvo, linhaVidaAlvo);
 
     corpoAlvo.append(this.retratoAlvo, medidoresAlvo);
@@ -406,9 +479,11 @@ export class NamekHud {
      *   de conseguir enxergar o corpo. */
     this.bussolaEl = document.createElement("div");
     this.bussolaEl.className = "nk-bussola";
-    /** Pool fixo, um por adversário possível. Ver o teto da sala. */
+    /** Pool fixo: um por adversário possível (o teto da sala menos você) MAIS
+     *  um para o CHEFE, que também entra na bússola e não pode ser o pino que
+     *  sobra quando a arena está cheia. */
     this._pinos = [];
-    for (let i = 0; i < NAMEK.net.maxPlayers - 1; i++) {
+    for (let i = 0; i < NAMEK.net.maxPlayers; i++) {
       const el = document.createElement("div");
       el.className = "nk-pino";
       // Esqueleto FIXO, sem uma única interpolação — ver o cabeçalho.
@@ -437,34 +512,19 @@ export class NamekHud {
       <i class="nk-h nk-h1"></i><i class="nk-h nk-h2"></i>
       <i class="nk-ponto"></i>`;
 
-    /* O ANEL DA TRAVA — o retículo do pedido, e ele NÃO é o `nk-mira` acima.
+    /* O ANEL VERMELHO DA TRAVA saiu daqui, e não sobrou nada dele.
      *
-     * *"O modo de travar a mira não está muito bom. Primeiro o retículo não deve
-     * ser aquele. Deve ser um círculo vermelho em volta do player."*
+     * Ele era o círculo com cantoneiras em volta do adversário TRAVADO — o
+     * retículo que o pedido de então descrevia ("deve ser um círculo vermelho em
+     * volta do player"). Com a remoção da tecla `R` não existe mais adversário
+     * travado: nada no jogo pode acendê-lo, e um marcador que não pode acender é
+     * um nó a mais no documento e um `setLockRing(null)` por quadro.
      *
-     * A queixa é precisa e o defeito era estrutural: a mira travada era o mesmo
-     * retículo do centro da tela, pintado de vermelho e com os traços puxados
-     * para dentro. Só que com a trava o tiro NÃO vai para o centro da tela — ele
-     * vai para o alvo (é a razão de existir da trava, e o cabeçalho de
-     * `camera.js` já dizia que `aimPoint` deixa de ser o eixo óptico). Um
-     * retículo parado no meio da tela enquanto o tiro sai em outra direção é uma
-     * mira que MENTE, e era isso que estava acontecendo.
-     *
-     * Este anel é ancorado no CORPO do adversário: ele acompanha a projeção do
-     * peito dele, cresce e encolhe com a distância, e some junto com a trava.
-     * Quatro cantoneiras por fora dele são o que faz um círculo vermelho ler
-     * como "alvo" e não como "botão".
-     *
-     * Ele é posicionado por `transform` e nada mais — nem `left`, nem `top` —
-     * porque isso é o único caminho que o navegador resolve na composição, sem
-     * recalcular layout. Ele se move em TODO quadro, e é a coisa mais quente do
-     * HUD inteiro. */
-    this.anelEl = document.createElement("div");
-    this.anelEl.className = "nk-alvo-anel";
-    this.anelEl.hidden = true;
-    this.anelEl.innerHTML = `
-      <i class="nk-c nk-c1"></i><i class="nk-c nk-c2"></i>
-      <i class="nk-c nk-c3"></i><i class="nk-c nk-c4"></i>`;
+     * O que ficou no lugar não é menos: os círculos de TODO MUNDO, logo abaixo,
+     * com o de quem está sob o cursor aceso. Eles marcam a mesma coisa que
+     * importava (para onde o tiro vai) sem pedir compromisso nenhum ao jogador —
+     * e o pedido da mira assistida é literal em não querer "a parte vermelha nem
+     * nada". Ver `NAMEK.lock` para a decisão inteira. */
 
     /* OS CÍRCULOS DE TODO MUNDO — e o aceso é para onde o tiro vai.
      *
@@ -484,7 +544,27 @@ export class NamekHud {
      * para marcar onde as pessoas estão; quem informa é o aceso.
      *
      * Pool fixo, como os pinos da bússola e pelo mesmo motivo: um nó por
-     * lutador possível, criado uma vez, escondido quando sobra. */
+     * lutador possível, criado uma vez, escondido quando sobra.
+     *
+     * ------------------------------------------------------------ e o CHEFE
+     *
+     * O Freeza usa um destes anéis, e não um marcador à parte — mas ele **não
+     * pode ser mais um círculo igual**: *"deve ficar claro quem é o Freeza dos
+     * outros jogadores à distância."* A separação é feita por três coisas ao
+     * mesmo tempo, e são três porque nenhuma sozinha sobrevive ao céu de
+     * Namekusei:
+     *
+     * • **cor** — o magenta dele (`NAMEK.freeza.cor`), que não existe na roda de
+     *   cores dos jogadores. É o que se lê primeiro, antes de qualquer forma;
+     * • **peso e tamanho** — traço grosso, com um segundo anel por fora. Um
+     *   corpo a 400 m tem seis pixels, e a diferença de cor sozinha some nesse
+     *   tamanho; o piso do raio dele é maior pelo mesmo motivo;
+     * • **o NOME escrito** — "FREEZA" por cima do anel. É a única das três que
+     *   não depende de o jogador ter aprendido convenção nenhuma, e é ela que
+     *   responde à segunda metade do pedido ("saber QUEM é o Freeza").
+     *
+     * Cada anel ganha por isso um rótulo próprio, escondido em quem não é o
+     * chefe. Um nó a mais por lutador é o preço de não ter um segundo pool. */
     this.aneisEl = document.createElement("div");
     this.aneisEl.className = "nk-aneis";
     this._aneis = [];
@@ -492,8 +572,15 @@ export class NamekHud {
       const el = document.createElement("div");
       el.className = "nk-lutador-anel";
       el.hidden = true;
+      // Esqueleto FIXO: o texto entra por `textContent`, nunca por `innerHTML`.
+      el.innerHTML = `<span class="nk-anel-nome nk-contorno"></span>`;
       this.aneisEl.appendChild(el);
-      this._aneis.push({ el, x: null, y: null, r: null, sob: null, visivel: false });
+      this._aneis.push({
+        el,
+        nomeEl: el.firstElementChild,
+        x: null, y: null, r: null, sob: null, visivel: false,
+        chefe: null, nome: null,
+      });
     }
 
     this.faixaEl = document.createElement("div");
@@ -502,6 +589,8 @@ export class NamekHud {
 
     this.avisosEl = document.createElement("div");
     this.avisosEl.className = "nk-avisos";
+
+    this.ssjAvisoEl = this._montarAvisoSSJ();
 
     this.morteEl = this._montarMorte();
     this.ajudaEl = this._montarAjuda();
@@ -518,14 +607,16 @@ export class NamekHud {
          primeiro plano (para onde o tiro vai). */
       this.aneisEl,
       this.miraEl,
-      /* O anel entra DEPOIS da mira: quando os dois coincidem na tela (o alvo
-         bem no eixo), quem tem de ficar por cima é o anel — ele é a informação
-         nova, e a mira do centro é a de sempre. */
-      this.anelEl,
       this.placaEu,
       this.placaAlvo,
       this.faixaEl,
       this.avisosEl,
+      /* O alerta do Super Saiyajin entra DEPOIS da faixa e dos avisos, e antes
+         da tela de morte: ele é a coisa mais urgente que a tela pode dizer
+         enquanto o jogador está vivo, e a única que ele NÃO pode perder atrás de
+         um aviso de canto. A tela de morte ganha dele porque quem morreu já não
+         tem o que transformar. */
+      this.ssjAvisoEl,
       this.morteEl,
       this.ajudaEl,
     );
@@ -548,17 +639,24 @@ export class NamekHud {
     this._alvoId = null;
     this._alvoNomeEscrito = null;
     this._alvoCor = null;
+    /** O número do dano que está escrito na placa do alvo. */
+    this._danoEscrito = -1;
+    /** s restantes do esmaecimento da placa do alvo; 0 = ela não está saindo. */
+    this._alvoSaindo = 0;
+    /** A opacidade que está escrita na placa do alvo. */
+    this._alvoOp = 1;
     this._armado = -1;
     /** O que o laço declarou em `setSpecials`; `null` = ainda não se pronunciou. */
     this._prontoDeclarado = null;
     this._prontoEscrito = false;
     this._mira = null;
-    /** O que está escrito no anel da trava, para não reescrever o que não mudou. */
-    this._anel = null;
     this._flash = 0;
     this._flashEscrito = -1;
     this._faixaT = 0;
     this._avisos = [];
+    /** O alerta do Super Saiyajin está na tela? E ele já está transformado? */
+    this._ssjAviso = false;
+    this._ssjAceso = false;
     this._morteNum = null;
     this._ajudaVisivel = false;
 
@@ -597,6 +695,132 @@ export class NamekHud {
     });
 
     return fileira;
+  }
+
+  /* ------------------------------------------------- o alerta do SUPER SAIYAJIN
+   *
+   * *"Se o player estiver com vida de 30 % ou menos aparece um alerta que ele
+   * pode se transformar."*
+   *
+   * Ele fica logo ACIMA do meio da tela e não num canto, e essa é a decisão
+   * inteira: é a única coisa que este HUD diz que muda o que a pessoa vai fazer
+   * no segundo seguinte, e ela aparece exatamente quando o jogador está com a
+   * tela cheia de vermelho e olhando para o adversário, não para o canto. Um
+   * `toast` teria sido três linhas em vez de trinta e teria sido a resposta
+   * errada: os avisos de canto são para o que se lê quando sobra tempo.
+   *
+   * ---------------------------------------------------- por que estilo em linha
+   *
+   * O resto do HUD tem folha própria (`ui/style.js`), e este bloco não entra
+   * nela de propósito: são nove propriedades que só este nó usa, e a folha é
+   * lida e editada por gente que não trabalha nesta feature. O que ele NÃO faz é
+   * inventar cor: o ouro sai de `NAMEK.ssj.cor`, o mesmo do cabelo, da aura e
+   * dos poderes. Um amarelo escrito à mão aqui seria a segunda verdade sobre o
+   * que é ouro neste jogo — e o §"as cores" do config existe para não haver uma.
+   *
+   * A animação de pulso mora numa `@keyframes` própria, injetada uma vez: um
+   * alerta parado no meio da tela é um adesivo, e o que se quer é uma coisa que
+   * PEDE para ser apertada. */
+  _montarAvisoSSJ() {
+    const ouro = corHex(NAMEK.ssj.cor, "#ffd23a");
+    if (!document.getElementById("nk-ssj-anim")) {
+      const folha = document.createElement("style");
+      folha.id = "nk-ssj-anim";
+      folha.textContent =
+        "@keyframes nk-ssj-pulso{0%,100%{opacity:.82;transform:translate(-50%,0) scale(1)}" +
+        "50%{opacity:1;transform:translate(-50%,0) scale(1.045)}}";
+      document.head.appendChild(folha);
+    }
+
+    const el = document.createElement("div");
+    el.hidden = true;
+    /* `pointer-events: none` como todo o resto do HUD: nada aqui pode roubar o
+       clique que engata a mira. */
+    el.style.cssText = [
+      "position:absolute",
+      "left:50%",
+      "top:26%",
+      "transform:translate(-50%,0)",
+      "padding:9px 20px",
+      "border-radius:6px",
+      "pointer-events:none",
+      "white-space:nowrap",
+      "font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif",
+      "font-size:clamp(14px,1.9vw,22px)",
+      "font-weight:800",
+      "letter-spacing:1.2px",
+      "text-transform:uppercase",
+      `color:${ouro}`,
+      "background:rgba(6,10,4,0.62)",
+      `border:2px solid ${ouro}`,
+      `box-shadow:0 0 26px -4px ${ouro}, inset 0 0 18px -8px ${ouro}`,
+      "text-shadow:0 2px 0 rgba(0,0,0,0.85), 0 0 14px rgba(255,210,58,0.6)",
+      "animation:nk-ssj-pulso 1.05s ease-in-out infinite",
+    ].join(";");
+    /* A TECLA vem por `textContent` e não por interpolação de marcação, como
+       todo texto deste arquivo — e aqui ela é constante, mas a regra vale igual:
+       o dia em que a tecla for configurável, o caminho já é o seguro. */
+    el.textContent = "";
+    return el;
+  }
+
+  /**
+   * O ALERTA: "você pode virar Super Saiyajin".
+   *
+   * Ele aparece com vida ≤ `NAMEK.ssj.gatilho` durante a batalha contra o
+   * Freeza e some por qualquer um dos três caminhos do pedido: o jogador se
+   * transformou, a vida subiu acima do gatilho, ou a batalha acabou. Quem
+   * decide os três é o laço (`NamekGame.step`), que é quem sabe da vida, do
+   * chefe e do estado — este método só desenha.
+   *
+   * @param {boolean} visivel
+   * @param {string} [tecla] o rótulo da tecla, para o texto não repetir o mapa
+   */
+  setAvisoSSJ(visivel, tecla = "R") {
+    const v = visivel === true;
+    if (v === this._ssjAviso) return;
+    this._ssjAviso = v;
+    if (v) this.ssjAvisoEl.textContent = `${tecla} — virar Super Saiyajin`;
+    this.ssjAvisoEl.hidden = !v;
+  }
+
+  /**
+   * O ESTADO: transformado ou não. **É o "fica amarelo" do pedido.**
+   *
+   * Três peças, e cada uma é um pedaço da mesma frase ("sua aura, seu ki, sua
+   * barra de vida fica amarelo"):
+   *
+   * • a barra de VIDA trava o giro de matiz no ouro (`BarraDeVida.setOuro`);
+   * • a barra de KI troca o degradê azul pelo dourado. Estilo em linha, e é o
+   *   caminho certo aqui: a regra da folha que pinta a barra cheia
+   *   (`.nk-ki.nk-cheio .nk-ki-fill`) tem dois seletores de classe, e vencê-la
+   *   pela folha exigiria um terceiro seletor mais específico para um estado
+   *   que dura uma briga. Estilo em linha ganha das duas sem `!important` e
+   *   volta atrás com uma string vazia;
+   * • os TIJOLOS dos especiais 1–4 ganham a cor do golpe que vai sair — que é o
+   *   ouro, porque "todos os seus poderes ficam amarelos". Sem isto, o HUD
+   *   continuaria prometendo um Kamehameha azul e sairia um dourado.
+   */
+  setSSJ(aceso) {
+    const v = aceso === true;
+    if (v === this._ssjAceso) return;
+    this._ssjAceso = v;
+
+    this.vida.setOuro(v);
+    this.kiFill.style.background = v
+      ? "linear-gradient(180deg,#fffbe0,#ffd23a 46%,#e09a06 78%,#8a5a00)"
+      : "";
+    const ouro = corHex(NAMEK.ssj.cor, "#ffd23a");
+    for (let i = 0; i < this._espTiles.length; i++) {
+      const kind = NAMEK.specialOrder[i];
+      const cor = v ? ouro : corHex(NAMEK.specials[kind]?.cor, "#6fd8ff");
+      this._espTiles[i].style.setProperty("--nk-esp-cor", cor);
+    }
+    /* E o alerta sai de cena junto: quem já se transformou não tem o que
+       transformar. Vale como rede de segurança — o laço também o esconde —,
+       porque um alerta preso na tela pedindo uma tecla que não faz mais nada é a
+       pior coisa que este HUD poderia mostrar. */
+    if (v) this.setAvisoSSJ(false);
   }
 
   _montarMorte() {
@@ -662,7 +886,14 @@ export class NamekHud {
       "Só o Esc é atalho geral — todas as outras teclas valem dentro de Namekusei. " +
       "O especial só sai com a barra de ki cheia: segure C para carregar. " +
       `Segure E para defender: passa só ${passa} % do dano, e a barra de ki ` +
-      "escoa enquanto os braços estiverem cruzados.";
+      "escoa enquanto os braços estiverem cruzados. " +
+      /* A MIRA NÃO É UMA TECLA, e é por isso que ela é explicada aqui embaixo em
+         vez de virar uma linha da tabela. Sem esta frase o jogador não tem onde
+         descobrir que passar o retículo perto de alguém é o que manda os poderes
+         nele — antes existia um `R` para travar, e a tabela o listava. */
+      "Não há tecla de mira: leve o retículo para perto de um adversário e o " +
+      "círculo dele acende — é nele que os poderes vão, e é a vida dele que " +
+      "aparece no canto direito da tela.";
 
     el.append(titulo, grades, rodape);
     return el;
@@ -700,7 +931,14 @@ export class NamekHud {
      *
      * O limiar sai do config (`ki.specialThreshold`) e não é 1 escrito à mão —
      * o dia em que o especial custar 80 % da barra, o HUD acompanha sozinho. */
-    const cheio = f >= NAMEK.ki.specialThreshold - 0.0005;
+    /* O limiar CAI em Super Saiyajin (um terço da barra, `NAMEK.ssj.limiar`), e
+       o selo tem de cair com ele: a barra "estoura" quando o especial destrava,
+       não quando ela chega a 100 %. Sem esta linha, quem se transforma passaria
+       a partida com a barra apagada entre um golpe e outro enquanto os
+       especiais, logo abaixo, estariam acesos — a tela discordando de si mesma
+       sobre a única regra que ela existe para ensinar. */
+    const limiar = this._ssjAceso ? NAMEK.ssj.limiar : NAMEK.ki.specialThreshold;
+    const cheio = f >= limiar - 0.0005;
     if (cheio !== this._kiCheio) {
       this._kiCheio = cheio;
       this.kiEl.classList.toggle("nk-cheio", cheio);
@@ -749,17 +987,32 @@ export class NamekHud {
   }
 
   /**
-   * O alvo travado (lock-on), ou `null`.
+   * O ADVERSÁRIO DO MOMENTO — quem você acertou, ou quem está sob a mira.
    *
-   * @param {{id, nome, cor, vida, vidaMax}|null} alvo
+   * Chamado UMA VEZ POR QUADRO com o que `LockOn.noPainel` escolheu (ver o
+   * comentário longo na construção da placa e `NAMEK.lock.painel`): este método
+   * não decide nada, só desenha. `null` esconde — mas desbotando, não de estalo.
+   *
+   * @param {{id, nome, cor, vida, vidaMax, dano}|null} alvo
+   *   `dano` é o total que VOCÊ tirou dele na sequência corrente; 0 ou ausente
+   *   quando a placa está no ar por causa da mira e não de um golpe seu.
    */
   setTarget(alvo) {
     if (!alvo) {
-      if (!this.placaAlvo.hidden) {
-        this.placaAlvo.hidden = true;
-        this._alvoId = null;
+      /* SAI DESBOTANDO. A placa aparece e some várias vezes por minuto (é o
+         ritmo da briga), e um `hidden` seco no meio de uma troca de alvo pisca.
+         O relógio corre em `update`; aqui só se arma. Quem já está saindo não
+         reinicia o esmaecimento — senão a placa nunca terminaria de sair. */
+      if (!this.placaAlvo.hidden && this._alvoSaindo <= 0) {
+        this._alvoSaindo = FADE_ALVO;
       }
       return;
+    }
+    /* Voltou (ou nunca saiu): cancela o esmaecimento e devolve a opacidade. */
+    if (this._alvoSaindo > 0 || this._alvoOp !== 1) {
+      this._alvoSaindo = 0;
+      this._alvoOp = 1;
+      this.placaAlvo.style.opacity = "";
     }
     this.placaAlvo.hidden = false;
 
@@ -775,15 +1028,39 @@ export class NamekHud {
       this._pintarCor(this.retratoAlvo, cor);
     }
 
-    /* TROCAR DE ALVO ZERA O FANTASMA. Sem isto, travar em alguém com 30 de vida
-       logo depois de ter travado em alguém com 100 desenharia uma faixa quente
-       de 70 % que ninguém causou — o HUD anunciaria uma pancada que não houve. */
+    /* TROCAR DE ALVO ZERA O FANTASMA. Sem isto, a placa passar de alguém com 100
+       de vida para alguém com 30 desenharia uma faixa quente de 70 % que ninguém
+       causou — o HUD anunciaria uma pancada que não houve. E com a mira assistida
+       isso deixou de ser raro: basta varrer o cursor por dois adversários. */
     if (alvo.id != null && alvo.id !== this._alvoId) {
       this._alvoId = alvo.id;
       this.vidaAlvo.reiniciar();
     }
 
+    /* A VIDA. Vem de `RemoteFighters`, que o `NS2C.VITALS` (10 Hz) e todo
+       `NS2C.HURT` mantêm em dia — é por isso que a barra desce também quando
+       quem acerta o seu alvo é um TERCEIRO, que é metade do segundo pedido. O
+       fantasma da `BarraDeVida` faz o resto: ela anima de onde estava para onde
+       ficou, em vez de saltar. */
     this.vidaAlvo.set(alvo.vida ?? 0, alvo.vidaMax ?? NAMEK.fighter.maxHealth);
+
+    /* QUANTO VOCÊ TIROU. Só aparece quando o golpe foi SEU — a placa da mira não
+       inventa número nenhum. O `-` é o menos tipográfico (U+2212) e não o hífen:
+       ao lado de um número de 30 px o hífen lê como travessão fino. */
+    const dano = Math.max(0, Math.round(alvo.dano ?? 0));
+    if (dano !== this._danoEscrito) {
+      this._danoEscrito = dano;
+      this.danoAlvo.hidden = dano <= 0;
+      if (dano > 0) {
+        this.danoAlvo.textContent = `−${dano}`;
+        /* Repõe a animação de pulo a cada golpe novo — sem isto o número cresce
+           calado e a segunda bola de uma rajada não se anuncia. Mesmo truque do
+           `_acenderKi`, e pelo mesmo motivo. */
+        this.danoAlvo.classList.remove("nk-bateu");
+        void this.danoAlvo.offsetWidth;
+        this.danoAlvo.classList.add("nk-bateu");
+      }
+    }
   }
 
   /**
@@ -942,25 +1219,45 @@ export class NamekHud {
    * quem monta a lista (`NamekGame.bussola`), por distância.
    *
    * @param {{angulo:number|null, x:number, y:number, dist:number, cor:number,
-   *          travado:boolean, forca:number}[]} lista
+   *          travado:boolean, forca:number, boss:boolean, nome:string}[]} lista
    *   `angulo` não-nulo = está FORA da tela, e o valor é o rumo em radianos;
    *   nulo = está na tela, e `x`/`y` são as coordenadas normalizadas (−1..1).
    *   `forca` é 0..1 e é a opacidade — é ela que faz o pino nascer e morrer
    *   desbotando em vez de aparecer de um estalo.
+   *   `boss` marca o pino do CHEFE: ele fica maior, na cor dele, e o rótulo
+   *   passa a dizer o NOME junto da distância — ver `setAneis` para o argumento
+   *   dos três sinais somados.
    */
   setMarcas(lista) {
     const marcas = lista ?? SEM_MARCAS;
     for (let i = 0; i < this._pinos.length; i++) {
       const p = this._pinos[i];
       const d = marcas[i];
+      /* MOSTRAR E ESCONDER OLHAM PARA O ELEMENTO, e não para a opacidade — e
+       * isto é um bug pago, encontrado na bancada com o pino do chefe.
+       *
+       * A regra era `if (p.op !== 0) esconder` / `if (p.op === 0) mostrar`, ou
+       * seja, a opacidade fazia as vezes de "está na tela". Só que o pool nasce
+       * com `op: -1` e o nó nasce `hidden`: um pino que recebesse uma marca na
+       * PRIMEIRA vez em que fosse usado nunca entrava em `op === 0` e ficava
+       * escondido para sempre, com a opacidade certa escrita e ninguém vendo
+       * nada. No jogo isso se consertava por acidente — os primeiros quadros de
+       * uma partida não têm ninguém a mais de 90 m, então todo slot passava pelo
+       * ramo vazio antes do primeiro uso —, e "funciona por acidente" é
+       * exatamente o que se paga caro no dia em que o acidente não acontece: o
+       * pino do chefe é o slot 0 e pode ser o primeiro a ser usado.
+       *
+       * Perguntar ao próprio nó não tem esse buraco, e `hidden` é uma
+       * propriedade booleana: escrevê-la com o mesmo valor não custa layout. */
       if (!d) {
-        if (p.op !== 0) {
-          p.op = 0;
+        if (!p.el.hidden) {
           p.el.hidden = true;
+          /* Força a reescrita da opacidade na próxima aparição. */
+          p.op = -1;
         }
         continue;
       }
-      if (p.op === 0) p.el.hidden = false;
+      if (p.el.hidden) p.el.hidden = false;
 
       const fora = d.angulo != null;
       if (fora !== p.fora) {
@@ -970,6 +1267,16 @@ export class NamekHud {
       if (d.travado !== p.travado) {
         p.travado = d.travado;
         p.el.classList.toggle("travado", d.travado === true);
+      }
+      /* O PINO DO CHEFE. A classe faz o resto (tamanho, traço, halo) na folha de
+         estilo; aqui só se diz que ele é o chefe, e só quando muda. */
+      const chefe = d.boss === true;
+      if (chefe !== p.chefe) {
+        p.chefe = chefe;
+        p.el.classList.toggle("chefe", chefe);
+        /* Força a reescrita do rótulo: ele muda de formato ("240 m" ↔ "FREEZA
+           240 m") e a comparação abaixo é só sobre o número. */
+        p.dist = -1;
       }
       if (d.cor !== p.cor) {
         p.cor = d.cor;
@@ -1005,76 +1312,35 @@ export class NamekHud {
       const dist = d.dist;
       if (dist !== p.dist) {
         p.dist = dist;
-        p.dEl.textContent = `${dist} m`;
+        /* O NOME vai junto da distância no pino do chefe, e é a peça que faz o
+           marcador dele funcionar quando ele está FORA da tela — ali não há
+           corpo para o anel circular nem cor de gi para reconhecer, e uma seta
+           roxa a mais no meio de catorze setas não diz quem é. `textContent`
+           como sempre: o nome sai do config, mas a regra do arquivo é que texto
+           não passa por `innerHTML`. */
+        p.dEl.textContent = chefe
+          ? `${(d.nome || "chefe").toUpperCase()} · ${dist} m`
+          : `${dist} m`;
       }
     }
   }
 
-  /** @param {"livre"|"travado"|"carregando"} estado */
+  /**
+   * O retículo do centro da tela.
+   *
+   * O `"travado"` sobrevive na assinatura e na folha de estilo, mas o JOGO não o
+   * pede mais: ele era o retículo do alvo preso pela tecla `R`, que saiu. Ficou
+   * porque a bancada (`dev/namek-hud.html`) exercita os três estados e porque um
+   * `if` a menos aqui não paga arrancar uma classe de CSS que já está escrita —
+   * mas quem procurar por onde ele acende em jogo não vai achar, e não é bug.
+   *
+   * @param {"livre"|"travado"|"carregando"} estado
+   */
   setCrosshair(estado) {
     if (estado === this._mira) return;
     this._mira = estado;
     this.miraEl.classList.toggle("nk-travado", estado === "travado");
     this.miraEl.classList.toggle("nk-carregando", estado === "carregando");
-  }
-
-  /**
-   * O ANEL VERMELHO em volta do adversário travado.
-   *
-   * @param {object|null} a `null` esconde. Com trava:
-   *   `x`, `y`   posição em NDC (−1 a 1), como `project` devolve
-   *   `raio`     raio em PIXELS — quem o calcula é o laço, que é quem conhece a
-   *              ótica da câmera. Ver `NamekGame.anelDaTrava`.
-   *   `distante` o alvo está perto do limite do alcance? (pisca)
-   *   `perdendo` o alvo está fora do quadro e o relógio da perda está correndo?
-   *   `dist`     metros, só para o rótulo
-   *
-   * Tudo aqui é comparado antes de ser escrito. O anel se move em todo quadro e
-   * um `style` escrito por quadro para cada uma das cinco propriedades é a
-   * receita de o HUD custar mais que a cena — a mesma disciplina dos pinos da
-   * bússola, e pelo mesmo motivo.
-   */
-  setLockRing(a) {
-    if (!a) {
-      if (!this.anelEl.hidden) {
-        this.anelEl.hidden = true;
-        this._anel = null;
-      }
-      return;
-    }
-    if (this.anelEl.hidden) this.anelEl.hidden = false;
-
-    const e = this._anel ?? (this._anel = { x: null, y: null, r: null, d: null, p: null });
-
-    /* De NDC para pixels da camada. O `y` inverte: em NDC ele cresce para cima,
-       e em CSS para baixo. */
-    const px = Math.round(((a.x + 1) / 2) * this.el.clientWidth);
-    const py = Math.round(((1 - a.y) / 2) * this.el.clientHeight);
-    /* Meio pixel de resolução no raio: escrevê-lo cru manda um estilo novo a
-       cada centímetro que o adversário se move, e ninguém enxerga a diferença. */
-    const r = Math.max(14, Math.round(a.raio * 2) / 2);
-
-    if (px !== e.x || py !== e.y || r !== e.r) {
-      e.x = px;
-      e.y = py;
-      e.r = r;
-      /* `translate(-50%, -50%)` DEPOIS do deslocamento: a ordem importa, e
-         invertida ela desloca metade do tamanho do anel em vez de centralizá-lo. */
-      this.anelEl.style.transform = `translate(${px}px, ${py}px) translate(-50%, -50%)`;
-      this.anelEl.style.width = `${r * 2}px`;
-      this.anelEl.style.height = `${r * 2}px`;
-    }
-
-    const distante = a.distante === true;
-    if (distante !== e.d) {
-      e.d = distante;
-      this.anelEl.classList.toggle("nk-longe", distante);
-    }
-    const perdendo = a.perdendo === true;
-    if (perdendo !== e.p) {
-      e.p = perdendo;
-      this.anelEl.classList.toggle("nk-perdendo", perdendo);
-    }
   }
 
   /**
@@ -1084,13 +1350,12 @@ export class NamekHud {
    * é toda por comparação: quinze anéis reposicionados a 60 Hz são novecentas
    * escritas de estilo por segundo se ninguém verificar antes se o valor mudou.
    *
-   * @param {Array<{id,x,y,dist,visivel,sob,cor}>} lista o que `LockOn.naTelaTodos`
-   *   publica — a MESMA projeção que escolheu o alvo da assistência, e é isso que
-   *   garante que o anel aceso e o alvo do tiro nunca discordem.
-   * @param {number|null} travadoId quem está com a trava dura, para não ganhar
-   *   dois marcadores em cima do mesmo corpo.
+   * @param {Array<{id,x,y,dist,raio,visivel,sob,cor,boss,nome}>} lista o que
+   *   `LockOn.naTelaTodos` publica — a MESMA projeção que escolheu o alvo da
+   *   assistência, e é isso que garante que o anel aceso e o alvo do tiro nunca
+   *   discordem. O CHEFE vem nela como mais um registro, com `boss: true`.
    */
-  setAneis(lista, travadoId = null) {
+  setAneis(lista) {
     const marcas = lista ?? SEM_MARCAS;
     const h = this.el.clientHeight;
     const w = this.el.clientWidth;
@@ -1099,10 +1364,10 @@ export class NamekHud {
       const a = this._aneis[i];
       const d = marcas[i];
 
-      /* O anel do alvo TRAVADO não sai aqui: ele já tem o círculo vermelho com
-         cantoneiras (`setLockRing`), e dois marcadores no mesmo corpo é a tela
-         dizendo duas vezes a mesma coisa por cima de si mesma. */
-      const mostrar = !!d && d.visivel && d.id !== travadoId;
+      /* Todo lutador visível ganha o seu, sem exceção — o segundo marcador que
+         existia (o anel vermelho da trava) saiu junto com a tecla `R`, e com ele
+         saiu a única razão de pular alguém desta lista. */
+      const mostrar = !!d && d.visivel;
       if (!mostrar) {
         if (a.visivel) {
           a.visivel = false;
@@ -1115,14 +1380,33 @@ export class NamekHud {
         a.el.hidden = false;
       }
 
+      /* O CHEFE, antes da geometria: é ele que muda o piso do raio. */
+      const chefe = d.boss === true;
+      if (chefe !== a.chefe) {
+        a.chefe = chefe;
+        a.el.classList.toggle("nk-chefe", chefe);
+      }
+      if (chefe) {
+        const nome = (d.nome || "").toUpperCase();
+        if (nome !== a.nome) {
+          a.nome = nome;
+          a.nomeEl.textContent = nome; // sempre textContent, nunca innerHTML
+        }
+        a.el.style.setProperty("--nk-anel-cor", corHex(d.cor, "#c21ad8"));
+      }
+
       const px = Math.round(((d.x + 1) / 2) * w);
       const py = Math.round(((1 - d.y) / 2) * h);
       /* `d.raio` já vem em frações da MEIA-ALTURA da tela, resolvido pela ótica
-         viva da câmera em `LockOn._sobAMira` — inclusive o campo de visão, que
+         viva da câmera em `LockOn._marcar` — inclusive o campo de visão, que
          abre com a arrancada. Aqui só se converte para pixels. O piso de 10 px é
          o que mantém o marcador visível quando o adversário é um ponto: um
-         círculo de três pixels não marca nada. */
-      const r = Math.max(10, Math.round(d.raio * h * 0.5));
+         círculo de três pixels não marca nada.
+         O piso do CHEFE é maior (22 px) e não é enfeite: a 500 m o corpo dele
+         tem quatro pixels, e um marcador do tamanho do de um lutador o poria
+         exatamente na categoria de que ele precisa se distinguir. Ele é o
+         objetivo da partida — à distância, tem de ser o maior sinal da tela. */
+      const r = Math.max(chefe ? 22 : 10, Math.round(d.raio * h * 0.5));
 
       if (px !== a.x || py !== a.y || r !== a.r) {
         a.x = px;
@@ -1172,7 +1456,39 @@ export class NamekHud {
     const d = Math.min(Math.max(dt || 0, 0), 0.1);
 
     this.vida.update(d);
-    if (!this.placaAlvo.hidden) this.vidaAlvo.update(d);
+    if (!this.placaAlvo.hidden) {
+      this.vidaAlvo.update(d);
+      /* O ESMAECIMENTO DA PLACA DO ALVO. Ele corre aqui, e não numa transição de
+         CSS, pelo mesmo motivo que tudo neste arquivo tem relógio próprio: um
+         `transition` não pausa quando o jogo pausa, e `[hidden]` é `display:
+         none` — que cancela transição em vez de animá-la.
+
+         Em degraus de 5 %, como os pinos da bússola: o valor é contínuo e
+         escrevê-lo cru mandaria um estilo novo ao DOM em cada um dos vinte
+         quadros da saída. */
+      if (this._alvoSaindo > 0) {
+        this._alvoSaindo -= d;
+        if (this._alvoSaindo <= 0) {
+          this._alvoSaindo = 0;
+          this._alvoOp = 1;
+          this.placaAlvo.hidden = true;
+          this.placaAlvo.style.opacity = "";
+          /* A placa volta do zero na próxima vez: sem isto, reaparecer com o
+             mesmo adversário pularia o `reiniciar()` do fantasma e a barra
+             desenharia como pancada a vida que ele perdeu enquanto ela estava
+             fora da tela. */
+          this._alvoId = null;
+          this._danoEscrito = -1;
+          this.danoAlvo.hidden = true;
+        } else {
+          const op = Math.round((this._alvoSaindo / FADE_ALVO) * 20) / 20;
+          if (op !== this._alvoOp) {
+            this._alvoOp = op;
+            this.placaAlvo.style.opacity = String(op);
+          }
+        }
+      }
+    }
     this.feed.update(d);
 
     if (this._flash > 0) {

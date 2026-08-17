@@ -26,8 +26,30 @@
  * 3 — a guarda (bit 8) e a DIFICULDADE dos bots (`NC2S`/`NS2C.DIFFICULTY`, mais
  *     o campo no `welcome`). Um cliente antigo não teria o botão e ficaria
  *     mostrando um nível que não é o da sala.
+ * 4 — o planeta ganhou tudo o que faltava para ele acabar: o EMBATE entre
+ *     poderes (`POWER_CLASH`), os dois PLANETAS e a chuva de meteoros
+ *     (`PLANET_HIT`/`PLANET_DOWN`/`METEOR`/`METEOR_HIT`), o PEIXE gigante
+ *     (`FISH_HIT`/`FISH`/`FISH_DOWN`), o BOSS Freeza (`FREEZA_*`), o FIM de
+ *     Namekusei com a fuga para o espaço (`FIM_*`) e o SUPER SAIYAJIN (`SSJ`,
+ *     `SSJ_ON`/`SSJ_OFF`, mais o bit 16 da pose).
+ *
+ *     Uma versão só para os seis, e não seis versões, porque a régua desta
+ *     constante é o FORMATO e não a data: quem tem a 3 não entende nenhum dos
+ *     seis, e recusá-lo uma vez é a mesma recusa que recusá-lo seis. Subir de
+ *     um em um só faria sentido se as adições tivessem sido publicadas
+ *     separadamente, e elas não foram.
+ *
+ *     Cada um deles, sozinho, já justificaria a subida — e por um motivo mais
+ *     duro do que "tem mensagem nova". A regra que vale aqui é a mesma da
+ *     versão 2: o perigo não é o cliente antigo QUEBRAR, é ele IGNORAR EM
+ *     SILÊNCIO e desenhar um mundo que não existe. Um cliente da versão 3 numa
+ *     sala destas veria o chão intacto onde caiu um meteoro, não veria o Freeza
+ *     que está matando todo mundo, ficaria no planeta enquanto ele explode sem
+ *     nunca saber que havia um relógio, e desenharia de cabelo preto quem já é
+ *     Super Saiyajin. Nenhuma dessas divergências dá erro em lugar nenhum — que
+ *     é exatamente por isso que ela tem de ser recusada na porta.
  */
-export const NAMEK_PROTOCOL_VERSION = 3;
+export const NAMEK_PROTOCOL_VERSION = 4;
 
 /** O que o `hello` precisa carregar para cair NESTA sala e não na do arqueiro. */
 export const NAMEK_LEVEL = "namek";
@@ -108,6 +130,131 @@ export const NC2S = {
 
   /** Sincronismo de relógio: `{ c: clientClock }`. */
   PING: "ping",
+
+  /** "O meu poder acertou o peixe gigante": `{ i, kind, dt }`.
+   *
+   *  Mesmo contrato do `BLAST_HIT` e do `SPECIAL_HIT` — quem atira é a autoridade
+   *  sobre o próprio acerto, a sala é a autoridade sobre a vida —, e por isso ele
+   *  é uma mensagem à parte em vez de um `BLAST_HIT` com a vítima "peixe": lá a
+   *  sala procura um LUTADOR pelo id, e um id que não é de ninguém seria recusado
+   *  em silêncio.
+   *
+   *  `i` é o id do peixe. Ele existe para o caso que acontece o tempo todo numa
+   *  rede real: a bola já estava no ar quando o bicho morreu, e o aviso chega
+   *  depois do `FISH_DOWN`. Com o id, esse acerto atrasado morre no id velho em
+   *  vez de arrancar vida do peixe seguinte.
+   *
+   *  `kind` é `"blast"` ou uma chave de `NAMEK.specials`; `dt` são os segundos de
+   *  exposição desde o último aviso e só valem para os feixes, exatamente como no
+   *  `SPECIAL_HIT`. */
+  FISH_HIT: "fishHit",
+
+  /**
+   * "DOIS PODERES SE ENCOSTARAM": `{ a, ka, b, kb, p:[x,y,z], c }`.
+   *
+   * `a`/`ka` e `b`/`kb` são dono e tipo de cada um dos dois golpes; `p` é o
+   * ponto de contato; `c` é 1 quando os dois eram a BOLA DE CARGA de um
+   * Kamehameha (a regra 4 de `NAMEK.embate`, que tem explosão própria).
+   *
+   * ------------------------------------------------------------ por que existe
+   *
+   * Porque sem ela o embate seria a única coisa deste modo que duas telas não
+   * conseguiriam concordar. Cada cliente simula os próprios projéteis e
+   * reconstrói os alheios a partir do disparo retransmitido; as duas cópias do
+   * mesmo Galick Gun estão a alguns metros uma da outra, e "a alguns metros" é
+   * exatamente a margem que decide se ele encostou ou não no Kamehameha que
+   * vinha de frente. Deixado a cada tela, um jogador veria o golpe sumir e o
+   * outro o veria acertar — e esse é o único desacordo que o modo não tolera,
+   * porque ele decide quem morre.
+   *
+   * -------------------------------------------------------- por que não tem id
+   *
+   * Um especial nunca teve id no protocolo (`NC2S.SPECIAL` manda tipo, origem,
+   * direção e alvo, e mais nada), e inventar um obrigaria a mexer no formato
+   * que os dois lados já falam. Dono + tipo + ponto identificam o projétil sem
+   * ambiguidade prática: é preciso a MESMA pessoa ter DOIS golpes do MESMO tipo
+   * vivos a menos de `NAMEK.embate.busca` metros um do outro para o casamento
+   * errar — e mesmo então os dois são idênticos.
+   *
+   * ---------------------------------------------------- o que ela NÃO carrega
+   *
+   * O RESULTADO. Quem morre, quem sobrevive e que estouro sai não viajam: são
+   * recalculados por cada cliente a partir de `ka`, `kb` e `c` pela mesma
+   * tabela pura (`NAMEK.embate.classe` + `resolverEmbate`, em
+   * `powers/colisao.js`). Mandar o desfecho pronto seria a mesma regra
+   * existindo em dois lugares, e no dia em que as duas divergissem o jogo
+   * mostraria uma Genki Dama sumindo na tela de quem tem a tabela velha.
+   *
+   * A rajada de ki NÃO passa por aqui: bola pequena morrendo contra poder
+   * grande é resolvido localmente em cada tela, sem mensagem nenhuma. É a mesma
+   * tolerância que a onda de empurrão já assume ao varrer bolas alheias (ver
+   * `PowerSystem.spawnBurst`) e pelo mesmo motivo — se ela sobreviver na tela
+   * de quem atirou e acertar, o acerto vale, porque é ele quem julga. Fazê-la
+   * subir seria uma mensagem por bola varrida, dezenas por segundo num
+   * tiroteio, para sincronizar dois pontos de dano.
+   */
+  POWER_CLASH: "powerClash",
+
+  /**
+   * "O meu Kamehameha está apontado para o planeta": `{ id }`.
+   *
+   * `id` é um dos `NAMEK.planetas.corpos[].id` — `"kuraia"` ou `"rubel"`.
+   *
+   * Mesmo contrato do `GROUND_HIT` e do `BLAST_HIT`, e é ele que responde à
+   * pergunta óbvia ("por que o cliente decide?"): quem sabe para onde o feixe
+   * está apontado é quem o disparou, e a conta é uma interseção raio-esfera
+   * contra um corpo que ACOMPANHA O OLHO daquele jogador. A sala não tem olho e
+   * não poderia refazê-la; o que ela faz é conferir o que dá para conferir do
+   * lado dela, e é bastante: o especial declarado existe, é um Kamehameha, está
+   * dentro da janela de tempo dele, custou a barra cheia, e a direção travada no
+   * disparo aponta para aquele planeta dentro do cone que a curva do golpe
+   * permite. Ver `NamekPlanetas.pedido`.
+   *
+   * A mensagem sai UMA vez por disparo, no instante em que o especial é
+   * declarado — não por quadro. O planeta cai `NAMEK.planetas.viagem` segundos
+   * depois, e quem conta é a sala.
+   */
+  PLANET_HIT: "planetHit",
+
+  /**
+   * "O meu golpe acertou o FREEZA": `{ kind, dt, p:[x,y,z] }`.
+   *
+   * Mesmo contrato do `BLAST_HIT`/`SPECIAL_HIT` — quem atira é a autoridade
+   * sobre o próprio acerto, a sala é a autoridade sobre a vida —, numa mensagem
+   * só e **sem `victim`**, porque o boss é UM: não há vítima a declarar, e é
+   * justamente essa ausência que barateia a conferência do outro lado (não há
+   * como escolher a vítima errada quando só existe uma).
+   *
+   * Ela é separada do `BLAST_HIT` pela mesma razão que o `FISH_HIT`: lá a sala
+   * procura um LUTADOR pelo id, e o Freeza não é um — ele não entra em
+   * `todos()`, não ocupa vaga, não renasce e não vai ao placar. Um id que não é
+   * de ninguém seria recusado em silêncio.
+   *
+   * `kind` é `"blast"` ou uma chave de `NAMEK.specials`, e é ele que escolhe a
+   * linha de `NAMEK.freeza.dano` — a tabela de quanto cada poder do jogador suga
+   * do boss. `dt` são os segundos de exposição desde o último aviso e só valem
+   * para o Kamehameha, o único golpe que cobra por tempo; os outros mandam 0.
+   * `p` é onde bateu: a sala confere que o ponto é perto do corpo dele, que é a
+   * mesma checagem de plausibilidade que o `BLAST_HIT` já faz.
+   */
+  FREEZA_HIT: "freezaHit",
+
+  /**
+   * "Quero virar Super Saiyajin." **Sem corpo — não há nada a declarar.**
+   *
+   * É a mensagem mais magra deste protocolo, de propósito: todas as condições
+   * da transformação (vida ≤ `NAMEK.ssj.gatilho`, Freeza em campo, vivo, não
+   * caído, ainda não transformado) são coisas que a SALA sabe melhor que o
+   * cliente — ela é a autoridade sobre vida desde sempre e é ela quem tem o
+   * `sala.freeza`. Qualquer campo aqui seria oferecer ao cliente a chance de
+   * mentir sobre um estado que ele nem precisa declarar.
+   *
+   * A recusa é SILENCIOSA, como a do especial (ver `registrarEspecial`): o
+   * cliente já começou a animação — ele prevê tudo — e a cancela sozinho se o
+   * `NS2C.SSJ_ON` não chegar até o fim dos três segundos. Uma mensagem de
+   * recusa só existiria para dizer o que a ausência da confirmação já diz.
+   */
+  SSJ: "ssj",
 };
 
 /* --------------------------------------------------------- servidor → cliente */
@@ -211,6 +358,335 @@ export const NS2C = {
 
   /** Resposta do sincronismo: `{ c, s }`. */
   PONG: "pong",
+
+  /**
+   * O PEIXE GIGANTE vai saltar: `{ i, w, p:[x,z], rumo, alcance, alto, dur,
+   * curva, giro }`.
+   *
+   * **O salto inteiro num pacote só, mandado com `NAMEK.peixe.aviso` segundos de
+   * antecedência.** `w` é o instante (relógio da sala) em que o corpo ROMPE a
+   * superfície; antes dele o cliente desenha o vulto subindo, depois integra a
+   * parábola. Nada mais viaja: nem posição por quadro, nem pose, nem o instante
+   * do mergulho — tudo isso é função fechada destes nove números, e é por isso
+   * que quinze telas veem o mesmo peixe no mesmo lugar sem custar um byte por
+   * quadro. É o mesmo princípio do `packFighter`: manda-se o relógio, não o osso.
+   *
+   * `p` tem DOIS componentes e não três de propósito — a altura da saída é a
+   * linha d'água, que os dois lados já conhecem por `NAMEK.world.seaLevel`.
+   *
+   * `rumo` é o azimute do arco em radianos; `alcance` o avanço horizontal em
+   * metros; `alto` o ápice acima da água; `dur` o tempo de voo em segundos;
+   * `curva` o desvio lateral no ápice como fração de `alcance`; `giro` a rolagem
+   * acumulada em radianos (com sinal — ele parafusa para um lado ou para o
+   * outro).
+   *
+   * Vem também no `welcome`, no campo `fish`, quando há um salto em curso: quem
+   * entra no meio de um mergulho tem de ver o mesmo peixe que os outros, pelo
+   * mesmo motivo que recebe a lista de crateras.
+   */
+  FISH: "fish",
+
+  /**
+   * O peixe morreu: `{ i, p:[x,y,z], by }`.
+   *
+   * A vida dele é da SALA, como a de todo mundo (§8): o cliente relata o acerto
+   * (`NC2S.FISH_HIT`) e é esta mensagem que confirma. `p` é onde o corpo estava
+   * no instante da morte — o estouro nasce lá — e `by` é quem o matou, para o
+   * aviso na tela. Depois dela o cliente vira o bicho de barriga para cima e o
+   * afunda; o próximo peixe chega num `FISH` novo, `NAMEK.peixe.respawn`
+   * segundos mais tarde.
+   */
+  FISH_DOWN: "fishDown",
+
+  /* ===================================================================== fim
+     O FIM DE NAMEKUSEI — o Freeza, a contagem, a explosão e o espaço.
+
+     As quatro mensagens abaixo respondem à mesma pergunta em escalas de tempo
+     diferentes, e é por isso que são quatro e não uma: `FIM_ESTADO` troca de fase
+     (raro), `FIM_CONTAGEM` bate o relógio (1 Hz), `FIM_ESCAPOU` e `FIM_EXPLODIU`
+     são os dois instantes em que alguém deixa de estar onde estava.
+
+     **Nada disto sobe do cliente.** A fuga é medida na pose que ele já manda 20
+     vezes por segundo — a sala é a autoridade sobre quem escapa e quem morre
+     (§8) —, e uma mensagem "estou subindo" seria a mesma informação uma segunda
+     vez, com a diferença de que a segunda dá para mentir. */
+
+  /**
+   * A fase do fim, sempre que ela muda — e no `welcome`, para quem chega no meio.
+   *
+   * `{ fase, w, restante, portal:[x,y,z], teto, escapados:[id] }`
+   *
+   * `fase` é `"calmo" | "freeza" | "contagem" | "explodindo" | "espaco"`.
+   * `restante` são os MILISSEGUNDOS que faltam no relógio da fase (a contagem
+   * regressiva, ou o que sobra do espetáculo da explosão); 0 quando a fase não
+   * tem relógio. `portal` é a boca da escapatória e `teto` é o limite de voo que
+   * passa a valer — os dois viajam em vez de serem lidos do config porque quem
+   * decide QUANDO eles valem é a sala, e um cliente que os deduzisse sozinho
+   * abriria o céu antes da hora.
+   *
+   * `escapados` é a lista de quem já está no espaço: sem ela, quem entra no meio
+   * desenharia no chão gente que está a dois quilômetros de altura.
+   */
+  FIM_ESTADO: "fimEstado",
+
+  /**
+   * O relógio do planeta, uma vez por segundo e para todos: `{ restante }`.
+   *
+   * `restante` são os segundos que faltam para a explosão. É um número só porque
+   * sobrou um relógio só: a fuga é ALTITUDE (chegar à boca do portal antes do
+   * zero), não mais trinta segundos de subida acumulados por jogador. Enquanto
+   * aquele relógio pessoal existia, esta mensagem era diferente para cada
+   * destinatário e saía quinze vezes por segundo; hoje é a mesma para as quinze
+   * telas.
+   *
+   * O cliente conta sozinho entre dois tiques (`EstadoDoFim.passo`) e é corrigido
+   * aqui. Um segundo de deriva num cronômetro de sessenta é invisível; um
+   * cronômetro que só o cliente conta é o caminho para duas telas discordarem
+   * sobre quem estava dentro quando o planeta foi.
+   */
+  FIM_CONTAGEM: "fimContagem",
+
+  /** O planeta explodiu: `{ w, mortos:[id], escapados:[id] }`.
+   *
+   *  Os `mortos` já receberam o `DEATH` de sempre (com `kind: "planeta"`) — esta
+   *  lista existe para o CENÁRIO e não para a vida: é ela que diz ao cliente, num
+   *  pacote só, que a explosão foi geral e que o chão deixou de existir, em vez
+   *  de quinze mensagens de morte chegando em ordem qualquer. */
+  FIM_EXPLODIU: "fimExplodiu",
+
+  /** Alguém saiu do planeta: `{ id, p:[x,y,z], w }`.
+   *
+   *  Vai para TODOS e não só para quem escapou: o corpo dele é teleportado para a
+   *  bolha do espaço, e sem este aviso os outros continuariam interpolando um
+   *  lutador que sumiu do céu deles sem explicação. Quem escapou também usa a
+   *  posição — é a SALA que decide onde a bolha começa, não o cliente. */
+  FIM_ESCAPOU: "fimEscapou",
+
+  /**
+   * O EMBATE CONFIRMADO, para todos: `{ a, ka, b, kb, p:[x,y,z], c }`.
+   *
+   * Os mesmos campos do `NC2S.POWER_CLASH` (ver o comentário longo lá), com uma
+   * diferença que é a razão de a mensagem existir: **ela é a versão canônica.**
+   *
+   * Qualquer cliente que enxergue o choque avisa a sala; a sala guarda o
+   * primeiro aviso de cada par e DESCARTA os repetidos que chegarem dentro de
+   * `NAMEK.embate.janelaSala` segundos, retransmitindo um só. Não é economia de
+   * banda: é o que impede que quinze telas, cada uma com a sua reconstrução do
+   * mesmo Galick Gun, produzam quinze embates ligeiramente diferentes do mesmo
+   * encontro.
+   *
+   * Por que "qualquer cliente" e não "o dono do projétil de menor id", que
+   * seria o critério óbvio: porque metade dos golpes deste modo é de BOT, e bot
+   * não tem cliente. Com o critério do menor id, todo embate em que o número
+   * menor coubesse a um bot simplesmente não aconteceria em tela nenhuma — e
+   * numa sala de quinze bots isso é quase todo embate. Deixando qualquer um
+   * avisar e centralizando o desempate na SALA, o mesmo mecanismo cobre humano
+   * contra humano, humano contra bot e bot contra bot, sem um caso especial.
+   *
+   * Quem avisou já aplicou o embate localmente antes de mandar — é predição,
+   * como tudo o mais neste jogo — e a volta é INÓCUA para ele: os projéteis já
+   * morreram e a busca por dono+tipo não acha mais nada. A mensagem é
+   * idempotente por construção, e é isso que permite retransmiti-la a todos sem
+   * excluir o remetente.
+   */
+  POWER_CLASH: "powerClash",
+
+  /* ====================================================== planetas e chuva ==
+     As três mensagens do pedido: o planeta morre, as rochas caem, as rochas
+     estouram. Todas descem, nenhuma sobe — a única coisa que o cliente declara
+     neste assunto é a mira (`NC2S.PLANET_HIT`).                                */
+
+  /**
+   * O planeta se partiu: `{ id, by, w }`.
+   *
+   * `w` é o instante (relógio da sala) em que a sequência COMEÇA, e é ele que
+   * faz quinze telas verem o mesmo planeta rachar no mesmo segundo. O cliente
+   * não recebe mais nada porque não precisa: rachadura, clarão e cacos são
+   * função fechada de `(w, NAMEK.planetas.rachar/clarao/cacos)` e o desenho
+   * inteiro cabe nessa conta — o mesmo princípio do `packFighter` e do salto do
+   * peixe, manda-se o relógio e não o quadro.
+   *
+   * `by` é quem o destruiu, para o aviso na tela. Não muda nada no desenho.
+   *
+   * Quem entra no meio recebe a lista dos que já caíram no campo `planetas` do
+   * `welcome`, e os apaga do céu SEM sequência — pelo mesmo motivo que ele
+   * recebe a lista de crateras e a de peças derrubadas.
+   */
+  PLANET_DOWN: "planetDown",
+
+  /**
+   * Uma rocha entrou no céu: `{ i, o:[x,y,z], p:[x,y,z], r, dur, w }`.
+   *
+   * `i` é o id da rocha (contador da sala), `o` de onde ela vem, `p` onde ela
+   * VAI bater, `r` o raio dela em metros, `dur` os segundos de queda e `w` o
+   * instante da largada. A duração NÃO se chama `t` porque `t` é o tipo da
+   * mensagem em todo este protocolo — ver o cabeçalho.
+   *
+   * **A trajetória inteira num pacote só**, como o salto do peixe e pela mesma
+   * razão: a posição é `o + (p − o) · (agora − w)/t`, uma reta e um relógio.
+   * Vinte rochas no ar custariam 400 números por quadro se a sala mandasse
+   * posição; assim custam seis números uma vez cada.
+   *
+   * E é a mesma conta dos dois lados — a sala integra a mesma reta para saber em
+   * quem a rocha encostou —, então o que o jogador vê passando por cima dele é
+   * exatamente o que cobra os 50 % de vida.
+   *
+   * `dur` viaja em vez de ser derivada da velocidade da classe porque quem
+   * escolhe a classe é a sala: derivá-la aqui obrigaria o cliente a descobrir de
+   * que classe era a rocha a partir do raio, que é a informação certa dita do
+   * jeito errado.
+   */
+  METEOR: "meteor",
+
+  /**
+   * A rocha estourou: `{ i, p:[x,y,z], r, power }`.
+   *
+   * O instante do impacto já era calculável (`w + dur` da `METEOR`), e mesmo assim
+   * esta mensagem existe — porque o que ela carrega não é o QUANDO, é o
+   * ACONTECIMENTO: é ela que autoriza o clarão, a poeira, o tranco de câmera e o
+   * som, no quadro em que a sala de fato cobrou o dano. Sem ela, cada tela
+   * escolheria o próprio quadro a partir do próprio relógio, e a explosão
+   * aconteceria antes da morte em umas e depois em outras.
+   *
+   * **A CRATERA NÃO VEM AQUI.** Ela desce pelo `NS2C.CRATER` de sempre, carimbada
+   * pelo mesmo `NamekRoom.cratera` que atende bola de ki, Genki Dama e baque de
+   * queda — é o que garante que o buraco do meteoro seja o mesmo buraco em todas
+   * as telas, que ele apareça na lista do `welcome` de quem chegar depois e que
+   * ele funda a lava como qualquer outro. É também de onde sai o SOM do estouro:
+   * `NamekAudio.estouroNoChao` escolhe a receita pela potência, e as três classes
+   * de rocha caem em três degraus diferentes dela (2,4 → médio, 6 → grande,
+   * 20 → colossal). Um som próprio aqui seria o mesmo estouro tocado duas vezes.
+   */
+  METEOR_HIT: "meteorHit",
+
+  /* ======================================================== o BOSS: Freeza ==
+     Cinco mensagens, e a divisão entre elas é a mesma que o modo já usa para um
+     lutador: IDENTIDADE uma vez (`FREEZA_IN`), POSE muitas vezes por segundo
+     (`FREEZA_STATE`), ACONTECIMENTO por evento (`FREEZA_POWER`, `FREEZA_HURT`,
+     `FREEZA_DOWN`). Nada aqui reaproveita `JOIN`/`STATES`/`HURT`/`DEATH`, e a
+     razão é uma só: aquelas mensagens fazem o cliente criar um `Fighter` — o
+     corpo humano de 1,78 m, com gi, cabelo e as treze poses. O Freeza tem outro
+     corpo, outra escala e outra máquina de estados; entrar por ali seria pedir
+     ao `RemoteFighters` que soubesse desenhar duas coisas diferentes. */
+
+  /**
+   * O boss ENTROU: `{ id, nome, dificuldade, vida, vidaMax, p:[x,y,z], w }`.
+   *
+   * É o `JOIN` dele, e sai para todos — inclusive, sozinha, para quem entra na
+   * sala com a luta já em curso (a sala a reenvia logo depois do `welcome`,
+   * exatamente como faz com a lista de crateras).
+   *
+   * `vidaMax` viaja mesmo sendo derivável por `vidaDoFreeza(n, dificuldade)`:
+   * quem acabou de entrar ainda não sabe quantos lutadores há em campo, e a
+   * barra do topo da tela não pode aparecer errada por um quadro. E ela MUDA
+   * durante a luta (alguém entra, alguém sai), o que faz do número mandado a
+   * única fonte honesta.
+   */
+  FREEZA_IN: "freezaIn",
+
+  /**
+   * A pose do boss, 20 Hz: `{ p:[x,y,z], v:[x,y,z], y, i, r, a, k, s, u, tp, w }`.
+   *
+   * Chaves curtas pelo mesmo motivo do `packFighter`: ela sai vinte vezes por
+   * segundo para todo mundo. `y`/`i`/`r` são guinada, arfagem e rolagem; `a` é a
+   * aura (0…1); `k` é a fração da barra de ki dele (a barra do HUD mostra as
+   * duas); `s` é a fração da POSE em curso e `u` é qual pose (0 = parado,
+   * 1 = investida, 2 = rajada, 3 = Death Beam, 4 = Death Ball, 5 = onda,
+   * 6 = dor); `tp` é 1 no quadro de um TELEPORTE — é o sinal para o cliente
+   * cortar a interpolação em vez de arrastar o corpo pelo mapa inteiro.
+   *
+   * A pose é do SERVIDOR, e aqui não vale a divisão do §8 (a posição de um
+   * humano é dele): o boss não tem cliente, então não há com quem dividir a
+   * autoridade. Isso o torna o único corpo do modo cuja posição é inteiramente
+   * autoritativa — e é o que permite ao servidor cobrar o dano dos golpes DELE
+   * sem esperar ninguém declarar acerto.
+   */
+  FREEZA_STATE: "freezaState",
+
+  /**
+   * O boss soltou alguma coisa: `{ kind, o:[x,y,z], d:[x,y,z], id, hand, w }`.
+   *
+   * `kind` é `"rajada"` ou uma chave de `NAMEK.freeza.poderes`. O cliente só
+   * DESENHA — o dano já foi resolvido no servidor, que é dono do corpo dele e da
+   * vida de todo mundo. Por isso os projéteis dele nascem com `local: false` nos
+   * pools de `src/namek/powers/`: eles voam, colidem, morrem e abrem cratera na
+   * tela, e não reportam nada a ninguém.
+   *
+   * `id` só importa para a rajada (mantém os ids do pool distintos entre
+   * surtos); `hand` é a mão que atirou, para o braço certo se estender.
+   */
+  FREEZA_POWER: "freezaPower",
+
+  /**
+   * O boss levou dano: `{ vida, vidaMax, dano, by, kind }`.
+   *
+   * Só sai quando há dano acumulado a despejar — a sala junta e manda a 8 Hz,
+   * como o `HURT` contínuo já faz. É o que faz a barra do topo "descer ao vivo"
+   * sem transformar uma rajada de nove bolas por segundo em nove mensagens para
+   * quinze clientes.
+   *
+   * `by` é quem bateu por último no acúmulo e `kind` é o golpe, para o número
+   * que sobe ter a cor certa.
+   */
+  FREEZA_HURT: "freezaHurt",
+
+  /**
+   * O boss CAIU: `{ by, p:[x,y,z], w }`.
+   *
+   * `by` é quem deu o último golpe. Não há `killer` no sentido do placar: matar
+   * o Freeza não é um abate (ele não entra em `scores`), é o fim de uma luta —
+   * quem quiser premiar quem o derrubou faz isso lendo esta mensagem.
+   */
+  FREEZA_DOWN: "freezaDown",
+
+  /* ================================================== o SUPER SAIYAJIN ==
+     Duas mensagens e um bit, e a divisão entre eles é a mesma que o
+     atordoamento já usa (ver `STAGGER`): **a mensagem é o GATILHO, o bit é o
+     ESTADO.**
+
+     O bit 16 da pose (`packFighter`) diz "este lutador está em Super Saiyajin"
+     vinte vezes por segundo, e é ele que sustenta o cabelo amarelo, a aura de
+     ouro e a cor dos poderes na tela de todo mundo — inclusive na de quem
+     entrou na sala depois da transformação alheia e nunca recebeu o `SSJ_ON`.
+
+     As mensagens existem porque o bit não sabe QUANDO. Os três segundos de
+     animação precisam começar no mesmo instante em todas as telas, e um bit que
+     acende não diz se ele acendeu agora ou há dois segundos e meio.            */
+
+  /**
+   * A transformação COMEÇOU: `{ id, w, maxHealth, health }`.
+   *
+   * `w` é o instante do começo, no relógio da sala — é dele que sai a fração da
+   * animação em cada tela, e mandá-lo em vez de deixar cada cliente marcar a
+   * chegada do pacote é o que impede o grito de um lutador de estar no meio na
+   * tela dele e no fim na tela do vizinho.
+   *
+   * `maxHealth` e `health` vêm juntos porque a transformação MEXE NOS DOIS no
+   * mesmo quadro (`NAMEK.ssj.vidaBonus` entra na vida atual e no teto — ver o
+   * §"a vida no INSTANTE da virada" no config), e o `VITALS` seguinte só carrega
+   * a vida. Sem o teto aqui, o HUD de quem se transformou desenharia 90 numa
+   * barra de 100 durante os 100 ms até o próximo `VITALS`: a barra apareceria
+   * cheia e o número diria noventa.
+   *
+   * Ela vai para TODOS, e não só para o dono: quem está do outro lado da arena
+   * precisa do começo do relógio para ver a mesma animação, e a barra de vida do
+   * alvo travado (`NamekHud.setTarget`) precisa do teto novo pelo mesmo motivo
+   * que o dono precisa.
+   */
+  SSJ_ON: "ssjOn",
+
+  /**
+   * A transformação ACABOU: `{ id, maxHealth, health }`.
+   *
+   * Ela sai em dois casos e só nesses dois — ver o §"quando ela ACABA" em
+   * `NAMEK.ssj`: o lutador morreu, ou o Freeza caiu. **Não há relógio**, e por
+   * isso não há campo de tempo aqui.
+   *
+   * `health` vem porque o fim APARA a vida ao teto base (quem estava com 140 de
+   * 160 fica com 100 de 100), e essa poda tem de chegar junto com o motivo — e
+   * não como um número que despenca sozinho no `VITALS` seguinte.
+   */
+  SSJ_OFF: "ssjOff",
 };
 
 export const NamekReject = {
@@ -259,7 +735,8 @@ export function packFighter(f) {
     /** mão que atirou por último e há quanto tempo: alimenta o braço estendido */
     ha: f.lastHand ?? 0,
     hp: r3(f.handPose ?? 0),
-    /* bits: 1 = morto, 2 = invulnerável (piscando), 4 = ATORDOADO, 8 = DEFENDENDO.
+    /* bits: 1 = morto, 2 = invulnerável (piscando), 4 = ATORDOADO, 8 = DEFENDENDO,
+     *       16 = SUPER SAIYAJIN.
      *
      * O 4 é um bit e não um canal contínuo porque estar caído é um estado, não
      * uma grandeza — e porque ele já viaja de graça no byte que os outros dois
@@ -274,7 +751,22 @@ export function packFighter(f) {
      * `NamekRoom.economiaDeKi`: a pose é reenviada 20 vezes por segundo, então
      * um pacote perdido se conserta sozinho no seguinte, enquanto um "parei"
      * perdido deixaria alguém defendendo (e drenando) para sempre. */
-    b: (f.down ? 1 : 0) | (f.invuln ? 2 : 0) | (f.tonto ? 4 : 0) | (f.defendendo ? 8 : 0),
+    /* O 16 é o SUPER SAIYAJIN, e ele é o primeiro bit livre — 1, 2, 4 e 8 já
+     * tinham dono. Ele é o ESTADO da transformação, não o gatilho dela: quem
+     * anuncia o começo é `NS2C.SSJ_ON`, com o instante, porque três segundos de
+     * animação precisam do mesmo relógio em todas as telas (ver lá).
+     *
+     * Aqui ele vale como bit e não como canal contínuo pela mesma razão do 4 e
+     * do 8: estar transformado é um estado, não uma grandeza, e ele viaja de
+     * graça no byte que os outros quatro já ocupavam. E ele é o que faz o
+     * cabelo, a aura e a cor dos poderes de um adversário estarem certos na sua
+     * tela mesmo que você tenha entrado na sala depois do grito dele. */
+    b:
+      (f.down ? 1 : 0) |
+      (f.invuln ? 2 : 0) |
+      (f.tonto ? 4 : 0) |
+      (f.defendendo ? 8 : 0) |
+      (f.ssj ? 16 : 0),
   };
 }
 
@@ -316,6 +808,8 @@ export function unpackFighter(s, out) {
   out.invuln = (b & 2) === 2;
   out.tonto = (b & 4) === 4;
   out.defendendo = (b & 8) === 8;
+  /** Super Saiyajin — o bit 16. Ver `packFighter`. */
+  out.ssj = (b & 16) === 16;
   return out;
 }
 

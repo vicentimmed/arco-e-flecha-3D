@@ -57,14 +57,16 @@
 
    ---------------------------------------------------------------- a cauda
 
-   Ela é a única coisa aqui que guarda estado de trajetória: trinta amostras da
-   posição do peito, uma a cada `PASSO_CAUDA`, num anel de `Float32Array`. Três
-   decisões que valem a leitura:
+   Ela é a única coisa aqui que guarda estado de trajetória: `AMOSTRAS` amostras
+   da posição do peito, uma a cada `PASSO_CAUDA`, num anel de `Float32Array`.
+   Três decisões que valem a leitura:
 
-   1. **Passo de TEMPO, não de distância.** A cauda cobre sempre os mesmos 0,85 s
-      de voo, então ela cresce sozinha com a velocidade: ~29 m no voo de cruzeiro
-      e o teto de 72 m no arranque. Uma amostragem por distância daria uma cauda
-      de comprimento constante, que é o contrário do que o olho espera.
+   1. **Passo de TEMPO, não de distância.** A cauda cobre sempre os mesmos
+      `VIDA_CAUDA` segundos de voo, então ela cresce sozinha com a velocidade:
+      ~33 m no voo de cruzeiro e ~82 m no arranque. Uma amostragem por distância
+      daria uma cauda de comprimento constante, que é o contrário do que o olho
+      espera. Os números do tamanho estão em `NAMEK.aura.rastro`, e o comentário
+      de lá é quem explica por que a cauda é 50 % mais comprida do que já foi.
    2. **Ela vive em espaço de MUNDO.** O grupo `trilha` carrega o quaternion
       INVERSO do corpo, o que anula a rotação do lutador e deixa os vértices
       serem escritos em coordenadas de mundo (menos a origem do corpo). Sem isso,
@@ -145,18 +147,23 @@ const FAISCAS = 14;
 /** m — distância em que a coluna de faíscas se repete. */
 const PASSO_FAISCA = 2.6;
 
-/* ------------------------------------------------------------------- cauda --- */
+/* ------------------------------------------------------------------- cauda ---
+ *
+ * O TAMANHO da cauda mora no config (`NAMEK.aura.rastro`) e não aqui: ele é
+ * `velocidade × vida`, e a velocidade é uma constante de jogo. O comentário de
+ * lá explica por que os três números crescem juntos — e por que eles são hoje
+ * 50 % maiores do que já foram. */
 /** Quantas amostras de trajetória a cauda guarda. */
-const AMOSTRAS = 30;
+const AMOSTRAS = NAMEK.aura.rastro.amostras;
 /** Pontos do espinhaço: as amostras mais o peito de AGORA, que fecha o vão
  *  entre o corpo e a primeira amostra. */
 const PONTOS = AMOSTRAS + 1;
-/** s — quanto tempo de voo cabe na cauda. Com 30 amostras, uma a cada 28 ms. */
-const VIDA_CAUDA = 0.85;
+/** s — quanto tempo de voo cabe na cauda. Com 45 amostras, uma a cada 28 ms. */
+const VIDA_CAUDA = NAMEK.aura.rastro.vida;
 const PASSO_CAUDA = VIDA_CAUDA / AMOSTRAS;
-/** m — teto de comprimento. A 96 m/s, 0,85 s dariam 81 m; passa disto e a cauda
- *  deixa de ler como rastro e vira uma faixa atravessando a arena. */
-const COMP_MAX = 72;
+/** m — teto de comprimento. Passa disto e a cauda deixa de ler como rastro e
+ *  vira uma faixa atravessando a arena. */
+const COMP_MAX = NAMEK.aura.rastro.compMax;
 /** m — vão entre duas amostras que só pode ser renascimento ou teletransporte.
  *  A 96 m/s com o dt já limitado a 0,1 s, o maior salto legítimo é ~9,6 m. */
 const SALTO_MAX = 22;
@@ -181,6 +188,22 @@ const PERTO_1 = 6.5;
  *  da COROA: a cauda tem de sair de dentro da aura, e uma fita mais fina que o
  *  casulo lê como cabo saindo das costas em vez de esteira do próprio ki. */
 const LARG_CAUDA = 2.4;
+/* 1/m — quanto a largura e a abertura dos fios crescem por metro de rastro.
+ *
+ * "Uma cauda de setenta metros com a largura de uma de vinte é um fio": a
+ * espessura acompanha o comprimento, como acompanha em qualquer cometa, e
+ * espalhar um metro de mecha numa cauda de setenta não se vê.
+ *
+ * Os dois eram 0,013 e 0,055, dimensionados para a cauda antiga. **Foram
+ * divididos por 1,5 — exatamente o fator que alongou o rastro** (ver
+ * `NAMEK.aura.rastro`), e é isso que segura a outra metade do pedido: o que se
+ * quer é uma cauda mais COMPRIDA, não mais grossa. Como `comp` cresce 1,5× e o
+ * coeficiente encolhe 1,5×, o produto não muda — a mesma velocidade de voo
+ * produz uma fita com a mesma espessura de sempre, só que mais longa. Sem esta
+ * divisão, o arranque passaria a bater no teto de largura (1,65) e a cauda
+ * engrossaria 16 % de brinde. */
+const LARG_POR_METRO = 0.013 / 1.5;
+const ESPALHA_POR_METRO = 0.055 / 1.5;
 /** Vértices por ponto de cada fio: borda, miolo, borda. Ver `criarFita`. */
 const LADOS = 3;
 /** Peso da cor em cada um deles — a rampa que apaga a aresta. */
@@ -419,6 +442,23 @@ export class Aura {
     this._opacidade = 1;
     /** 0 chama para cima … 1 chama deitada no vento. */
     this._deita = 0;
+    /**
+     * **SUPER SAIYAJIN** — 0 a 1, escrito pelo `Fighter` a cada quadro.
+     *
+     * "A aura dele fica amarela e mais intensa." A COR já chega pelo caminho de
+     * sempre (`setColor`); este canal é a segunda metade — o que faz a chama
+     * ficar mais GROSSA, e não só mais forte.
+     *
+     * São duas coisas diferentes e a distinção é o que salva o efeito: subir só
+     * a intensidade (`ctx.intensidade`) satura a mistura aditiva e o casulo vira
+     * um borrão branco — a cor que se acabou de trocar deixa de aparecer, que é
+     * o oposto do pedido. Aumentando a opacidade E o tamanho juntos, a aura
+     * cresce em volta do corpo e continua amarela.
+     *
+     * `NAMEK.ssj.auraGanho` (+85 %) é o teto dos dois. Ver o comentário lá para
+     * por que não é o dobro.
+     */
+    this.ssj = 0;
     /** Direção do sopro, em espaço de MUNDO — amortecida aqui e convertida para
      *  o corpo só na hora de desenhar. Amortecer no espaço do corpo faria uma
      *  rolagem rápida arrastar a chama junto, que é meio caminho do defeito
@@ -558,15 +598,37 @@ export class Aura {
     /* A chama é ki TINGIDO, não a cor do jogador em estado puro. Com a cor
        cheia, o laranja do gi virava uma coroa de palha sobre o céu verde e a
        leitura deixava de ser "energia". Um terço de branco devolve o calor sem
-       apagar de quem é a aura. */
-    this.matChama.color.copy(_cor.copy(this._cor).lerp(BRANCO, 0.32));
-    this.matNucleo.color.copy(_cor.copy(this._cor).lerp(BRANCO, 0.72));
-    this.matFaisca.color.copy(_cor.copy(this._cor).lerp(BRANCO, 0.45));
+       apagar de quem é a aura.
+
+       **E O SUPER SAIYAJIN ENCOLHE ESSE BRANCO.** É aqui que morava a queixa
+       "o ki em volta do jogador não fica dourado": o núcleo puxava 72 % para o
+       branco, então o ouro (255, 200, 30) chegava à tela como (255, 240, 192)
+       — creme, não ouro. `NAMEK.ssj.auraTinta` é a fração do branqueamento que
+       sobra (0,42), e o comentário lá explica por que ela não é zero: o miolo do
+       casulo é a parte mais quente do ki, e fogo quente clareia no centro. */
+    const tinta = 1 - clamp(this.ssj, 0, 1) * (1 - NAMEK.ssj.auraTinta);
+    this.matChama.color.copy(_cor.copy(this._cor).lerp(BRANCO, 0.32 * tinta));
+    this.matNucleo.color.copy(_cor.copy(this._cor).lerp(BRANCO, 0.72 * tinta));
+    this.matFaisca.color.copy(_cor.copy(this._cor).lerp(BRANCO, 0.45 * tinta));
 
     /* Duas frequências incomensuráveis (11,3 e 17,9): o pulso da aura não pode
        ter período audível, ou vira lâmpada de discoteca. */
     const pulso = 1 + Math.sin(t * 11.3) * 0.07 + Math.sin(t * 17.9) * 0.04;
-    const largo = 0.6 + 0.5 * i;
+    /* O GANHO DO SUPER SAIYAJIN, em DOIS fatores e não em um — e a separação é
+       o segundo pedaço do conserto de "o ki não fica dourado".
+     *
+     * `ouro` é o TAMANHO e `brilho` é a OPACIDADE, e eles divergem porque a
+     * mistura é aditiva: opacidade alta empurra qualquer matiz para o branco no
+     * compositor, então o mesmo número que fazia a aura parecer "mais intensa"
+     * estava apagando a cor que ela tinha acabado de receber. Medido a 1,85× de
+     * opacidade, o casulo dourado chega à tela branco.
+     *
+     * Os dois valem 1 fora da transformação, e aí todas as contas abaixo são
+     * exatamente as de sempre. */
+    const s = clamp(this.ssj, 0, 1);
+    const ouro = 1 + s * NAMEK.ssj.auraGanho;
+    const brilho = 1 + s * NAMEK.ssj.auraBrilho;
+    const largo = (0.6 + 0.5 * i) * ouro;
 
     /* O CASULO não estica nunca. Ele é o "em volta do player" do pedido, e
        qualquer alongamento aqui é o começo do foguete de novo. */
@@ -575,7 +637,7 @@ export class Aura {
        quanto mais forte ele fica mais aparece o contorno dele — e um contorno
        nítido em volta do corpo lê como casulo de gelatina, não como brilho. Com
        a coroa agora densa, o núcleo só precisa preencher o vão entre as penas. */
-    this.matNucleo.opacity = 0.13 * i * this._opacidade;
+    this.matNucleo.opacity = 0.13 * i * this._opacidade * brilho;
 
     /* O eixo do sopro, trazido do mundo para o corpo. É esta linha que conserta
        o rastro que apontava para o lado errado: o alvo é sempre a direção real
@@ -590,14 +652,14 @@ export class Aura {
        eixo e 0,88× no raio, contra os 3,4× × 0,65× que faziam o foguete. O que
        dá comprimento ao efeito é a cauda, não a coroa; esticar mais devolve as
        agulhas de estrela que a primeira tentativa tinha. */
-    const estica = (0.72 + 0.72 * i) * (1 + 0.55 * this._deita) * pulso;
+    const estica = (0.72 + 0.72 * i) * (1 + 0.55 * this._deita) * pulso * ouro;
     const aberto = largo * (1 - 0.12 * this._deita) * pulso;
     this.giro.scale.set(aberto, estica, aberto);
     /* 0,42 → 0,26. Aditivo sobre um céu já claro satura em branco muito antes
        de a cor do lutador aparecer, e era isso que fazia a aura ler como vidro
        em vez de fogo: a matiz existia no material e nunca chegava à tela. Mais
        fraca, ela SOMA em vez de substituir — e a cor volta. */
-    this.matChama.opacity = 0.26 * i * this._opacidade;
+    this.matChama.opacity = 0.26 * i * this._opacidade * brilho;
 
     /* As faíscas correm ao longo do eixo e voltam pelo começo. O módulo é o
        truque inteiro: uma coluna que se repete a cada `PASSO_FAISCA` metros
@@ -606,10 +668,10 @@ export class Aura {
     this._faisca = (this._faisca + dt * (1.6 + 2.2 * i + 6 * this._deita)) % PASSO_FAISCA;
     this.faiscas.position.y = this._faisca;
     this.faiscas.rotation.y = -t * 1.3;
-    this.faiscas.scale.setScalar(0.7 + 0.6 * i);
+    this.faiscas.scale.setScalar((0.7 + 0.6 * i) * ouro);
     // Pelo mesmo motivo da chama: faísca branca cheia em aditivo é um recorte de
     // papel, não uma fagulha.
-    this.matFaisca.opacity = 0.34 * i * this._opacidade;
+    this.matFaisca.opacity = 0.34 * i * this._opacidade * brilho;
   }
 
   /* ---------------------------------------------------------------- cauda -- */
@@ -710,15 +772,21 @@ export class Aura {
     const pos = geo.attributes.position.array;
     const cores = geo.attributes.color.array;
     const t = this._t;
-    /* Uma cauda de setenta metros com a largura de uma de vinte é um fio; a
-       espessura acompanha o comprimento, como acompanha em qualquer cometa. */
-    const escalaLarg = clamp(0.72 + comp * 0.013, 0.72, 1.65);
-    /* E o quanto os fios se abrem também: espalhar 1 m numa cauda de 70 m não
-       se vê. */
-    const espalha = clamp(comp * 0.055, 0.5, 3.6);
+    /* A espessura acompanha o comprimento, e a abertura dos fios também — ver
+       `LARG_POR_METRO`, que é onde está escrito por que os dois coeficientes
+       encolheram na mesma proporção em que a cauda esticou. */
+    const escalaLarg = clamp(0.72 + comp * LARG_POR_METRO, 0.72, 1.65);
+    const espalha = clamp(comp * ESPALHA_POR_METRO, 0.5, 3.6);
     const cr = this._cor.r;
     const cg = this._cor.g;
     const cb = this._cor.b;
+    /* O PISO DE COR do Super Saiyajin — quanto da cor do ki a fita já tem no
+       ponto colado no corpo. Resolvido AQUI, uma vez por quadro, e não dentro do
+       laço: são `PONTOS` × 4 fios de iterações, e uma multiplicação a mais lá
+       dentro é trabalho por vértice para um número que não muda. Ver o
+       comentário da cor, no laço. */
+    const ssjCauda = clamp(this.ssj, 0, 1);
+    const uc0 = ssjCauda * NAMEK.ssj.auraCauda;
 
     _tanAnt.set(0, 0, 1);
     _ladoAnt.set(1, 0, 0);
@@ -781,10 +849,23 @@ export class Aura {
          quadrado e deixaria a cauda do voo lento (7 a 25 m/s) quase invisível
          justamente na faixa em que ela está aparecendo. */
       const brilho = BRILHO_CAUDA * fz[s] * nascer * q * q * Math.sqrt(q) * perto;
-      // Branca no nascimento, cor do lutador ao longe: o ki esfria com a idade.
-      const mr = (1 - u) + cr * u;
-      const mg = (1 - u) + cg * u;
-      const mb = (1 - u) + cb * u;
+      /* Branca no nascimento, cor do lutador ao longe: o ki esfria com a idade.
+       *
+       * **E O SUPER SAIYAJIN ANTECIPA A COR.** A regra acima é boa e continua
+       * valendo, mas o trecho da cauda que se vê de um lutador voando é
+       * justamente o colado no corpo — e ali `u` é quase zero, ou seja, ela
+       * entregava uma fita BRANCA saindo de um corpo dourado. Era metade da
+       * queixa "o ki em volta do jogador não fica dourado": a outra metade era o
+       * branqueamento do casulo, lá em cima.
+       *
+       * `auraCauda` (0,72) é o piso do quanto de cor já existe no nascimento, e
+       * o `u` continua mandando no resto: a fita sai de ouro do peito e só o
+       * último quarto lava para o branco. A leitura de dissipação fica; a
+       * mentira sobre a cor de quem voa, não. */
+      const uc = ssjCauda > 0 ? uc0 + (1 - uc0) * u : u;
+      const mr = (1 - uc) + cr * uc;
+      const mg = (1 - uc) + cg * uc;
+      const mb = (1 - uc) + cb * uc;
 
       for (let k = 0; k < FIOS.length; k++) {
         const fio = FIOS[k];

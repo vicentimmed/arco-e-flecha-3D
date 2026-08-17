@@ -14,6 +14,8 @@
    Toda grandeza está em SI — metro, segundo, m/s — como no resto do projeto.
    --------------------------------------------------------------------------- */
 
+import { FREEZA } from "./ajustes-freeza.js";
+
 export const NAMEK = {
   /* ------------------------------------------------------------------ mundo */
   world: {
@@ -120,6 +122,246 @@ export const NAMEK = {
     },
   },
 
+  /* ===================================================================== fim
+     O FIM DE NAMEKUSEI — o planeta explode, e quem não subir a tempo morre com
+     ele.
+
+     O pedido inteiro, em ordem: *"quando entrar no modo que namecusei vai
+     explodir, o Freeza deve entrar. Depois de matar o Freeza entra uma contagem
+     de 1 minuto para o planeta explodir. Se o planeta explodir com eles dentro
+     todos os players morrem. Mas se eles voarem em direção ao céu… eles saem do
+     planeta e entram no espaço… Uma vez no espaço eles podem continuar lutando
+     ali."*
+
+     E o ajuste que veio depois, que é o que decide a régua da fuga: *"em vez de
+     ter que voar X minutos, a fuga é baseada somente em metros mesmo. Ele tem
+     que sair do planeta antes que ele exploda."* Existe UM relógio no fim — o do
+     planeta — e a fuga é geometria. Ver `fuga`.
+
+     ------------------------------------------------------------ a máquina toda
+
+       calmo ──(clima = tempestade)──▶ freeza ──(Freeza morre)──▶ contagem
+         ▲                              │                            │
+         │                              │(clima = dia)               │(0 s)
+         └──────────────────────────────┴──────────────────┐         ▼
+                                                           │    explodindo
+                                        (clima = dia)      │         │(6 s)
+                                                           └──── espaco
+
+     Quem manda é a SALA (`server/namek/fim.js`). O cliente desenha o portal,
+     conta os metros que faltam e mostra o relógio — e não decide nada.
+
+     -------------------------------------------------- por que o gatilho é o clima
+
+     `tempestade` já era, por escrito, *"o planeta indo embora… é a batalha contra
+     Freeza nos cinco minutos finais"* (§1 do plano). Pendurar a entrada do Freeza
+     nela não é reaproveitamento preguiçoso: é a única forma de o botão que já
+     existe no menu significar o que ele sempre disse que significava. Voltar para
+     `dia` desfaz tudo — o Freeza sai, o relógio para, o planeta continua. */
+  fim: {
+    /* ------------------------------------------------------------- o Freeza --
+     *
+     * Quem o constrói NÃO é este módulo (ver `server/namek/fim.js`, que fala com
+     * ele por `entrar()`, `sair()`, `vivo` e `aoMorrer`). O que mora aqui são as
+     * duas decisões que são de JOGO e não dele. */
+    freeza: {
+      /** s — espera entre o céu virar e ele aparecer. O `weather.fade` são 8 s;
+       *  chegar antes de o céu terminar de fechar é chegar num cenário que ainda
+       *  está sendo pintado. */
+      entrada: 6,
+      /**
+       * s — o PLANO B, e ele existe por causa da ordem em que este modo foi
+       * escrito: o Freeza é de outro arquivo, e enquanto ele não existir a
+       * tempestade levaria a lugar nenhum — sem inimigo para matar, a contagem
+       * nunca começaria e o fim do planeta seria código morto.
+       *
+       * Passado este tempo SEM um `sala.freeza` em pé, a contagem começa
+       * sozinha. Com o Freeza instalado a linha nunca dispara, porque o objeto
+       * existe desde o primeiro quadro da tempestade.
+       */
+      esperaMax: 24,
+    },
+
+    /* s — A CONTAGEM, e ela é o ÚNICO relógio do fim. O pedido é literal: "uma
+     * contagem de 1 minuto para o planeta explodir".
+     *
+     * Sessenta segundos são o número do pedido, e desde que a fuga passou a ser
+     * só altitude (ver `fuga`) eles são também a régua inteira do desafio: a
+     * pergunta que o jogador se faz deixou de ser "consigo sustentar subida?" e
+     * passou a ser **"este minuto chega para eu vencer esta altura?"**. Toda a
+     * dificuldade está na conta que `fuga.altitude` documenta — mexer aqui é
+     * mexer nela. */
+    contagem: 60,
+
+    /* ------------------------------------------------------------ a explosão */
+    explosao: {
+      /** s — quanto o clarão, a onda de choque e o planeta se desfazendo duram
+       *  antes de a sala declarar o espaço. É o tempo do ESPETÁCULO: curto
+       *  demais e a morte de um planeta vira um corte de cena. */
+      duracao: 6,
+      /** m/s — velocidade da onda de choque saindo do centro da arena. A 900 m/s
+       *  ela varre os 760 m do raio de passeio em 0,85 s, que é o que faz dela
+       *  uma onda e não um anel crescendo. */
+      onda: 900,
+      /** m — até onde a onda vai antes de sumir. Maior que `flyRadius` de
+       *  propósito: ela tem de passar POR fora de quem está na borda. */
+      alcance: 2600,
+      /** s — quanto o clarão branco leva para tomar a tela, e quanto ele leva
+       *  para sair. Entra num piscar; sai devagar, porque é a retina. */
+      clarao: [0.12, 3.2],
+      /** m/s² — tremor de câmera no instante zero. Três vezes o pior raio da
+       *  tempestade: nada neste modo sacode mais que isto. */
+      tremor: 1.8,
+    },
+
+    /* =================================================================== fuga
+       **A FUGA É SÓ ALTITUDE.** O pedido, na segunda versão dele: *"a fuga é
+       baseada somente em metros mesmo. Ele tem que sair do planeta antes que ele
+       exploda."*
+
+       --------------------------------------------------- o que isto substituiu
+
+       Havia aqui um relógio pessoal: trinta segundos de subida sustentada, com
+       uma faixa de tolerância para o desvio e um recuo ao dobro para quem
+       descia. Ele media ESFORÇO, e medir esforço num jogo de voo livre é dizer
+       ao jogador que existe um jeito certo de segurar a tecla — a fuga virava
+       um exercício de manter `vy` acima de um limiar, e não uma corrida.
+
+       Agora existe UM relógio só, o do planeta (`contagem`), e a fuga é
+       geometria pura: **chegar à boca do portal antes de a contagem zerar.**
+       Duas consequências que valem escrever, porque são o motivo da troca:
+
+       • O desafio virou uma pergunta de recurso, não de técnica: *dá tempo?* E a
+         resposta depende de coisas que o jogador já entende — a que altura ele
+         estava, quanto ki ele tem, e se ele parou para brigar no caminho.
+       • Desviar de um golpe deixou de custar progresso. Só custa TEMPO, que é a
+         mesma moeda de todo o resto do minuto final.
+
+       O portal continua sendo um LUGAR, e não uma cota: é ele o "indicativo no
+       céu para o lugar que eles têm que voar" do pedido original. */
+    fuga: {
+      /* m — A BOCA DO PORTAL, e ela é o desafio inteiro.
+       *
+       * Fica sobre o CENTRO da arena (x = 0, z = 0) e não sobre um canto: é o
+       * único ponto do mapa igualmente longe de todo mundo, e o único de que
+       * ninguém pode reclamar por ter nascido do lado errado.
+       *
+       * ------------------------------------------------------------- a conta
+       *
+       * 2 400 m foram MEDIDOS contra a física de `movement.js`, não estimados —
+       * a velocidade de subida do lutador não é uma constante do config, ela sai
+       * de `climbSpeed`, `boostSpeed`, `flySpeed` e da economia de ki.
+       *
+       * A medida é até a BOCA (2 400 − `raio` = 2 180 m, que é onde a esfera
+       * começa e onde a fuga de fato dispara), partindo de 200 m — uma altura de
+       * briga comum — e com o teto de fuga em 2 650:
+       *
+       *   nariz para cima + arranque, barra CHEIA .... 63,5 m/s → 31,3 s
+       *   só ESPAÇO + arranque, barra cheia .......... 49,2 m/s → 40,3 s
+       *   arranque PAGO (barra não cheia) ............ 25,8 m/s → 66,0 s
+       *   sem arranque nenhum ........................ 20,0 m/s → 99,1 s
+       *
+       * Contra os 60 s da contagem, isso desenha exatamente a régua pedida:
+       *
+       * • Quem sobe DIRETO chega com **19,7 s de folga** na técnica natural
+       *   (segurar espaço com o arranque) e **28,7 s** na ótima (apontar o nariz
+       *   para cima). Os 700 m de deslocamento horizontal até o eixo do portal
+       *   quase não cobram: subindo na diagonal, a componente vertical só cai
+       *   para 60,5 m/s, um segundo e meio a mais.
+       * • Quem NÃO chega é quem não tem a barra cheia — 66 s contra 60. E a
+       *   barra só fica cheia para quem não atirou (`ki.freeFlightAt`), ou seja:
+       *   **a fuga cobra parar de brigar.** É a trava que o relógio de subida
+       *   tentava impor por fora e que a economia de ki já impunha sozinha, sem
+       *   precisar de um segundo cronômetro.
+       * • E quem começa de mais baixo paga: do chão são 34,4 s; do teto normal
+       *   de 520 m, 26,2 s. A briga do minuto final passa a ter uma altitude
+       *   preferida, que é uma decisão a mais e não uma regra a mais.
+       *
+       * Mexer neste número sem refazer a medida é mexer na dificuldade inteira
+       * do modo. O método: integrar o `FighterController` de verdade a 60 Hz com
+       * `regime.teto` alto e um `ki` que responda `voaDeGraca()` — é a economia
+       * de ki, e não a velocidade de voo, que decide quem escapa. */
+      altitude: 2400,
+      /** m — raio da boca. Uma esfera de 440 m de diâmetro no céu: grande o
+       *  bastante para se entrar nela voando a 64 m/s sem mira fina, pequena o
+       *  bastante para a seta da borda da tela ter serventia. */
+      raio: 220,
+
+      /* m — O TETO DE VOO DURANTE A FUGA, e ele é o `NAMEK.world.ceiling` de
+       * 520 m substituído — não editado.
+       *
+       * O pedido: *"no momento que os players estão fugindo do planeta o limite
+       * de altura de voo do céu deve ser maior para eles conseguirem chegar no
+       * espaço sem morrer."* A constante do mundo continua valendo no dia a dia
+       * (um teto de 2 km em partida normal esvaziaria a arena para cima); o que
+       * muda é que ela deixou de ser lida direto e passou por
+       * `FighterController.regime`, que a fase do fim reescreve. Ver
+       * `src/namek/movement.js`.
+       *
+       * 2 650 e não 2 400: 250 m de folga acima da boca do portal, para quem
+       * passar direto não bater num teto invisível exatamente onde devia escapar.
+       * (E é contra ESTE teto que a conta de `altitude` foi medida — a faixa de
+       * amortecimento da subida, `FAIXA_TETO` em `movement.js`, começa 45 m
+       * abaixo dele, ou seja bem acima da boca.) */
+      teto: 2650,
+
+      /* ---------------------------------------------- e o freio da borda ----
+       * `world.softEdge` é a barreira macia que puxa de volta quem se afasta do
+       * centro. Ela existe para o mapa não vazar pelos lados — e a 1 500 m de
+       * altura ela não protege nada: só briga com quem está subindo em espiral,
+       * empurrando para dentro justamente quem está correndo contra o relógio
+       * para chegar ao alto.
+       *
+       * Durante a fuga ela AFROUXA com a altitude: inteira até `freioSolta`,
+       * nenhuma a partir de `freioMorre`. O puxão para quem está FORA do limite
+       * continua valendo em qualquer altura — ele é o que impede alguém de ficar
+       * pendurado no vazio, e isso não tem nada a ver com fugir. */
+      freioSolta: 420,
+      freioMorre: 760,
+    },
+
+    /* ================================================================= espaço
+       "Uma vez no espaço eles podem continuar lutando ali se quiserem."
+
+       O espaço NÃO é outra arena com outro código: é a mesma física com o chão
+       desligado. Ver o `regime` de `movement.js` — a lista do que cai fora é
+       curta e literal: campo de altura, afogamento, lava, gravidade, cratera e o
+       `flyRadius` do planeta, que vira uma BOLHA esférica.
+
+       Ela é esférica porque no espaço não há "para baixo": um limite cilíndrico
+       como o do planeta deixaria a fuga vertical aberta para sempre. */
+    espaco: {
+      /** m — a cota do centro da bolha. Acima da boca do portal (2 400): quem
+       *  escapa é cuspido PARA CIMA, e o planeta fica embaixo, inteiro na tela. */
+      altura: 2900,
+      /* m — raio da bolha. 560 dão 1 120 m de ponta a ponta, ou 17,5 s de
+       * travessia no arranque: menos que a arena do planeta, que é o certo para
+       * um lugar sem cenário nenhum onde se esconder.
+       *
+       * O teto da bolha (2 900 + 560 = 3 460 m) é escolhido contra o `far` da
+       * câmera, que são 3 600: do ponto mais alto do espaço a ilha ainda cabe
+       * no tronco de visão (3 542 m até a borda dela), e é isso que permite
+       * assistir ao planeta explodir de fora em vez de vê-lo sumir no plano de
+       * recorte. Ver `NAMEK_CAMERA_FAR` em `world/sky.js`. */
+      raio: 560,
+      /** Fração do raio em que o freio começa. Ver `world.softEdge`, mesma
+       *  mecânica em três dimensões. */
+      freioInicio: 0.82,
+      /** m — o quanto se espalha o nascimento de quem morreu e voltou no espaço.
+       *  Menor que o raio: renascer colado na parede da bolha seria renascer
+       *  sendo empurrado. */
+      nascimento: 380,
+    },
+
+    /* NÃO HÁ FUNÇÃO NENHUMA AQUI, e a ausência é o resumo da mudança.
+     *
+     * Havia um `relogioDaSubida(relogio, vy, dt)` — a regra do acúmulo, escrita
+     * uma vez para os dois lados da rede rodarem a mesma frase. Ela saiu junto
+     * com o relógio pessoal: a fuga virou geometria, e geometria não precisa de
+     * regra compartilhada. Os dois lados comparam a mesma distância aos mesmos
+     * `altitude` e `raio`, e não há mais estado por jogador para divergir. */
+  },
+
   /* ---------------------------------------------------------------- lutador */
   fighter: {
     /** m — altura da cápsula, do pé ao topo da cabeça. */
@@ -160,11 +402,35 @@ export const NAMEK = {
      * Com 26 e 64 a travessia passa a 28 s e — o que importa mais — a
      * perseguição dos golpes volta a morder. A conta é a mesma dos `homing`: um
      * projétil que gira `ω` só é desviado por quem consegue uma velocidade
-     * angular maior que a dele, e a `d` metros isso pede `v > ω·d`. Com o
-     * arranque a 64 m/s, o Kienzan (70°/s) é perdido a menos de 52 m e o Galick
-     * Gun (55°/s) a menos de 66 m — ou seja, escapar de lado continua sendo
-     * possível e passou a exigir estar PERTO, que é a troca certa: quem está
-     * longe se defende com antecedência, não com reflexo.
+     * angular maior que a dele, e a `d` metros isso pede `v > ω·d`. Ou seja: a
+     * DISTÂNCIA DE FUGA de cada golpe é `v/ω`, e abaixo dela quem arranca de
+     * lado ganha a corrida.
+     *
+     * Com o arranque a 64 m/s, e depois de a perseguição do repertório inteiro
+     * dobrar (ver `blast.homing` e os `homing` de cada especial):
+     *
+     *     Genki Dama    40°/s   →  92 m      o mais fácil de desviar
+     *     rajada de ki  52°/s   →  70 m      (e `acquire` são 50: sempre)
+     *     Kienzan      114°/s   →  32 m      medido: 55 m — ver abaixo
+     *     Galick Gun   110°/s   →  33 m
+     *     Kamehameha   170°/s   →  22 m      quem o segura é o `arcMax`
+     *
+     * **ESTA COLUNA É UM PISO, NÃO O NÚMERO.** `v/ω` é um critério de regime
+     * permanente — ele pergunta se o golpe consegue manter o nariz no alvo para
+     * sempre. O que decide um acerto é outra coisa: se o golpe passa a menos de
+     * um `hitRadius` UMA vez, em menos de um segundo de voo. Como
+     * `perseguirPonto` é perseguição pura (mira a posição atual, não antecipa),
+     * ele desperdiça giro na curva e erra em distâncias que a fórmula dava como
+     * acerto. Medido no Kienzan: a fuga real é **1,7 vez** a calculada (55 m
+     * contra os 32 da tabela).
+     *
+     * Use a coluna para ORDENAR os golpes — para isso ela é exata e barata. Não
+     * a use para calibrar um golpe contra uma distância específica: é para isso
+     * que existe o banco de medição descrito em `specials.disk.homing`, e é por
+     * isso que o Kienzan é o único `turnRate` do arquivo que não saiu daqui.
+     *
+     * Escapar de lado, portanto, continua possível e exige estar PERTO, que é a
+     * troca certa: quem está longe se defende com antecedência, não com reflexo.
      *
      * A aceleração NÃO caiu junto, e isso é deliberado. O pedido original do
      * modo — "não deve ser travado e lento" — é sobre RESPOSTA, não sobre
@@ -229,10 +495,15 @@ export const NAMEK = {
      *   `dano / blast.damage`, então cinco bolas de ki (6 cada) fecham a conta
      *   em 30 de dano. A vantagem de contar dano em vez de acertos é que a
      *   segunda metade do pedido — "um poder grande derruba sozinho" — cai da
-     *   mesma linha: o Kienzan (48), o Galick Gun (62) e a Genki Dama (96)
-     *   passam de 30 num impacto só, e o Kamehameha, que cobra por segundo,
-     *   fecha a conta em meio segundo de feixe em cima de alguém. Ver
+     *   mesma linha: o Kienzan (40), o Galick Gun (60) e a Genki Dama (100)
+     *   passam de 30 num impacto só, e o Kamehameha, que cobra por segundo
+     *   (29,2/s), fecha a conta em 1,03 s de feixe em cima de alguém. Ver
      *   `NamekRoom.contarGolpe`.
+     *
+     *   A escada de dano mudou (era 50 · 50 · 100 e 21/s; ver `galick.damage`),
+     *   e o limiar de 30 não mudou junto de propósito: ele é medido em BOLAS DE
+     *   KI, e a bola de ki continua valendo 6. Nenhum dos quatro especiais
+     *   chegou perto de deixar de derrubar sozinho — o menor deles tira 40.
      * • `window: 2.6` — os golpes precisam ser SEGUIDOS. A janela desliza a
      *   cada acerto; parou de apanhar por 2,6 s, a contagem morre. Sem isso, um
      *   lutador cairia por causa de cinco tiros espalhados em dois minutos.
@@ -340,8 +611,10 @@ export const NAMEK = {
 
      • `damage: 0.22` — passa 22 % do dano. Não é imunidade de propósito: uma
        guarda que zera o dano transforma toda briga em quem cansa primeiro, e um
-       Kamehameha (62/s) ainda tira 13,6/s de quem está defendendo, o que
-       significa que ficar parado atrás dos braços continua sendo perder.
+       Kamehameha (29,2/s) ainda tira 6,4/s de quem está defendendo — 15,4 na
+       sustentação inteira, contra os 70 que ele tira de quem não defendeu.
+       Ficar parado atrás dos braços continua sendo perder, só que devagar; e a
+       barra (4,8 s de guarda) acaba antes de dois feixes.
      • `drain: 21` — a barra cheia dá 4,8 s de guarda. É mais que o
        atordoamento (2,4 s) e menos que a carga (5,3 s): dá para aguentar uma
        investida inteira, e não dá para viver defendendo.
@@ -361,6 +634,405 @@ export const NAMEK = {
     push: 0.3,
     /** Fração da velocidade que sobra ao defender. Guarda não é corrida. */
     speed: 0.3,
+  },
+
+  /* ==================================================== o SUPER SAIYAJIN ====
+     A virada de mesa da batalha contra o Freeza, e ela é uma peça de RITMO
+     antes de ser uma peça de números.
+
+     O pedido é literal: *"se o player estiver com vida de 30 % ou menos aparece
+     um alerta que ele pode se transformar… sua aura, seu ki, sua barra de vida
+     fica amarelo… todos os seus poderes que ele solta ficam amarelos, tiram
+     mais life do freeza e seu ki demora mais para gastar e ele ganha mais vida.
+     Com uma barra de ki ele consegue soltar 3 poderes especiais sem precisar
+     recarregar."*
+
+     Tudo aqui obedece a uma regra que não está escrita no pedido e que é o que
+     impede isto de virar um botão de "ganhar": **o gatilho é o pior momento
+     possível.** Ele só existe com 30 % de vida ou menos, e só enquanto o Freeza
+     está em campo. Quem se transforma já perdeu 70 da barra e está a uma bola de
+     ki e meia da morte — o poder que ele recebe é o troco de um risco que ele
+     já correu, não um prêmio por apertar uma tecla.
+
+     ------------------------------------------------------- quando ela ACABA
+
+     **Até morrer, ou até o Freeza cair — e NÃO há relógio.** É a decisão mais
+     importante deste bloco e a que mais parece arbitrária, então ela fica
+     escrita:
+
+     • Um relógio criaria o pior instante do jogo. `vidaBonus` sobe o teto de
+       vida de 100 para 160; quando o relógio vencesse, alguém com 140 de vida
+       teria de ser aparado para 100 — quarenta pontos evaporando sem golpe
+       nenhum, no meio de uma briga, sem nada na tela que explicasse. Qualquer
+       transformação com prazo precisa dessa poda, e toda poda lê como dano
+       vindo do nada.
+     • E ele puniria justamente quem usou bem. O gatilho pede ≤ 30 % de vida:
+       se a transformação vencesse enquanto o jogador está com 120 de 160, ele
+       ficaria sem poder e SEM PODER SE TRANSFORMAR DE NOVO, porque já não está
+       machucado o bastante. O jogador seria castigado por ter sobrevivido.
+     • O fim pelo Freeza é o beat da referência e é de graça: a batalha acabou,
+       ninguém está atirando, e a barra volta ao normal num momento em que a
+       volta não custa nada. Quem continuar brigando com os outros jogadores
+       (ver o §fogo amigo em `NamekRoom.aplicarDano` — o dano entre jogadores
+       nunca foi desligado) volta a lutar em igualdade.
+     • Morrer desliga porque morrer já reinicia tudo: `NamekRoom.nascer` devolve
+       vida e ki cheios, e carregar o estado através da morte daria a quem
+       acabou de renascer com 100 de vida um teto de 160 e três especiais por
+       barra sem nunca mais precisar do gatilho.
+
+     ------------------------------------------- a vida no INSTANTE da virada
+
+     `vidaBonus` entra na vida ATUAL, não só no teto. Das três opções, é a única
+     que não mente na tela:
+
+     • só no teto: quem tinha 30 passaria a ter 30 de 160 — a barra ENCOLHE de
+       30 % para 19 % no quadro em que o jogador ficou mais forte;
+     • guardando a fração: 30 % de 160 são 48, um ganho de 18 que ninguém vê;
+     • somando o bônus inteiro: 30 viram 90 de 160 (56 %). A barra sobe, o
+       estouro de poder tem consequência, e ainda assim NÃO é cura — ele
+       continua com 70 pontos de estrago acumulado, e a metade de cima da barra
+       nova é a que ele nunca teve.
+
+     Ver `SuperSaiyajin.acender` (cliente) e `server/namek/ssj.js: acender`
+     (a autoridade, que é quem manda). */
+  ssj: {
+    /* Fração de `maxHealth` (o teto BASE, 100) em que o alerta aparece e a
+     * transformação passa a ser aceita. É o "30 % ou menos" literal. */
+    gatilho: 0.3,
+
+    /* Só durante a batalha contra o Freeza — o pedido é explícito sobre o
+     * contexto, e sem esta trava o Super Saiyajin viraria uma segunda economia
+     * permanente por cima do mata-mata comum: quem estivesse com pouca vida
+     * jamais brigaria sem ele.
+     *
+     * Fica como CHAVE e não como `if` escrito no código para o dia em que se
+     * quiser um modo livre com transformação: é uma linha aqui, e nenhuma lá.
+     * Quem lê o estado do chefe o faz sempre com `?.` (o Freeza é de outro
+     * arquivo e pode não existir ainda), então com a chave ligada e sem chefe
+     * em campo a transformação simplesmente não acontece. */
+    exigeFreeza: true,
+
+    /** s — a animação inteira, e o pedido é literal: "a transformação deve
+     *  demorar 3 segundos e ele fica invencível enquanto está se transformando".
+     *  A invencibilidade cobre os três segundos, do primeiro quadro ao último —
+     *  ver `NamekRoom.aplicarDano`, que devolve zero durante a janela. */
+    duracao: 3,
+
+    /* Marcos da animação, em FRAÇÃO da duração — a coreografia do pedido:
+     * "o boneco faz a animação clássica com os braços cruzados na cabeça depois
+     * ele coloca esses braços na cintura e a aura dele fica amarela e mais
+     * intensa e tem uma explosão de poder ali momentânea".
+     *
+     * `cruzar` é quanto dura a subida dos braços; de lá até `baixar` eles
+     * descem para a cintura, punhos cerrados; de `baixar` em diante é o grito,
+     * com o corpo arqueando e o tremor no talo; e em 1,0 vem o estouro.
+     *
+     * Estão aqui, e não escritos dentro da pose, porque a AURA e a explosão
+     * precisam dos mesmos instantes — três cópias do mesmo 0,42 em três
+     * arquivos seria a primeira coisa a sair de sincronia ao afinar o gesto. */
+    cruzar: 0.42,
+    baixar: 0.74,
+
+    /* **+120 de vida: o teto passa de 100 para 220.** Ver "a vida no INSTANTE
+     * da virada", acima, para o que acontece com a vida atual — o bônus entra
+     * nas DUAS (30 de 100 viram 150 de 220), e é essa regra que impede a barra
+     * de encolher no quadro em que ele ficou mais forte.
+     *
+     * Eram 60, e o pedido foi explícito em querer mais ("virando super saiadin
+     * o player deve ter mais vida"). O número novo é medido contra os golpes que
+     * existem, e a tabela fica escrita porque é ela que justifica os 120 — quem
+     * mexer nos danos deve refazer esta conta:
+     *
+     *   NO GATILHO (30 de 100), qualquer coisa mata:
+     *     Kienzan 40 ✗ · Galick Gun 60 ✗ · Kamehameha cheio 70 ✗ · 5 bolas 30 ✗
+     *
+     *   RECÉM-TRANSFORMADO (150 de 220), ele aguenta qualquer golpe único:
+     *     Kienzan 40 → 110 · Galick Gun 60 → 90
+     *     Kamehameha cheio 70 → 80 · Genki Dama 100 → 50
+     *
+     * ------------------------------- o que isto tira da GENKI DAMA, e por quê
+     *
+     * Ela deixa de matar de um golpe. `genki.damage` é 100 porque ele é
+     * exatamente `maxHealth` — "a Genki Dama deve tirar a vida inteira" —, e um
+     * teto maior desfaz essa igualdade por construção. É consequência do pedido
+     * e não descuido, e a troca é aceitável: contra um Super Saiyajin ela ainda
+     * arranca 45 % da barra dele num impacto, que continua sendo, de longe, o
+     * maior golpe único do jogo. Contra todo mundo que não se transformou — que
+     * é quase todo mundo, quase o tempo todo — ela continua matando.
+     *
+     * E é a favor do modo: o único jeito de sobreviver à Genki Dama passa a ser
+     * ter pagado o preço da transformação, que só existe a 30 % de vida e só
+     * durante a batalha do chefe. */
+    vidaBonus: 120,
+
+    /* "Seu ki demora mais para gastar": todo gasto CONTÍNUO ou de repetição sai
+     * por 40 % do preço. As três contas, com a barra de 100:
+     *
+     * • arranque (`ki.boostDrain` 14/s → 5,6/s): a barra cheia dá 17,9 s de
+     *   voo em arranque contra os 7,1 s de sempre;
+     * • rajada (`ki.blastCost` 2 → 0,8): 125 bolas por barra contra 50;
+     * • guarda (`guard.drain` 21/s → 8,4/s): 11,9 s de braços cruzados contra
+     *   4,8 s. Continua sendo menos que a carga inteira (5,3 s para encher só
+     *   metade do que a guarda gastou), então defender ainda não é viver.
+     *
+     * O ESPECIAL NÃO PASSA POR AQUI. O desconto dele é `especialCusto`, e
+     * aplicar os dois seria cobrar 13 % da barra por um Kamehameha — sete
+     * especiais por carga, que é outro jogo. Ver `KiMeter.gastarEspecial` e
+     * `server/namek/ssj.js: custoEspecial`. */
+    kiDreno: 0.4,
+
+    /* **Três especiais com uma barra**, e o pedido é literal.
+     *
+     * Hoje o especial exige a barra CHEIA e consome tudo (`ki.specialThreshold`
+     * = 1). Em Super Saiyajin ele custa 33 e exige 33, e a conta fecha em cima:
+     * 100 → 67 → 34 → 1. Três golpes, e o quarto é recusado por um ponto.
+     *
+     * 0,33 e não 1/3 exatamente é de propósito: com 0,3333… a soma de três
+     * gastos dá 99,999… e o resto flutuante decide se o terceiro sai — o mesmo
+     * tipo de bug que a margem de `KiMeter.cheia` já documenta, com o sinal
+     * trocado. Com 0,33 sobra um ponto inteiro de folga e o terceiro golpe é
+     * garantido em qualquer aritmética, nos dois lados da rede.
+     *
+     * O LIMIAR CAI JUNTO, e tem de cair: com o custo em 33 e o limiar em 1, a
+     * barra ficaria em 67 depois do primeiro golpe e o segundo seria recusado
+     * — o jogador teria pago mais barato para atirar menos. */
+    especialCusto: 0.33,
+    limiar: 0.33,
+
+    /* E O VOO DE GRAÇA ACOMPANHA O LIMIAR, em vez de continuar exigindo a barra
+     * cheia (`ki.freeFlightAt` = 1).
+     *
+     * Sem isto a regra do voo de graça morreria em Super Saiyajin: o primeiro
+     * especial tira a barra de 100 para 67 e, com o limiar antigo, o arranque
+     * voltaria a cobrar pelo resto da transformação inteira. O sentido da regra
+     * — "a barra é MUNIÇÃO, gasta por quem atira e não por quem se desloca"
+     * (ver `ki.freeFlightAt`) — vale igual aqui; o que muda é o que conta como
+     * estar municiado, e municiado agora é ter pelo menos um especial guardado.
+     *
+     * É o MESMO número de `limiar`, e é repetido como campo próprio para o dia
+     * em que alguém quiser separá-los: hoje as duas perguntas ("dá para soltar
+     * o golpe?" e "o voo sai de graça?") têm a mesma resposta, e amanhã podem
+     * não ter. Os dois lados da rede leem este campo — o cliente em
+     * `KiMeter.voaDeGraca`, a sala em `economiaDeKi` —, como já faziam com o
+     * original, porque uma barra que o HUD desenha descendo e a sala não cobra
+     * é a pior discordância que este modo consegue produzir. */
+    voaDeGracaEm: 0.33,
+
+    /* "Tiram mais life do freeza": multiplicador sobre a tabela de dano do
+     * chefe (`NAMEK.freeza.dano`, de outro arquivo — lido sempre com `?.`, e
+     * com o dano contra jogador como padrão quando ela ainda não existe; ver
+     * `danoNoFreeza` em `server/namek/ssj.js`).
+     *
+     * 1,75 e não 2 porque o dobro apagaria a fase: a transformação já
+     * multiplica o número de golpes por barra (três especiais em vez de um) e
+     * já paga o arranque, ou seja, o dano POR MINUTO contra o chefe sobe muito
+     * mais que 1,75× — três Kamehamehas onde antes cabia um, cada um valendo
+     * 1,75. Somando, é da ordem de cinco vezes o estrago. Um multiplicador de 2
+     * por cima disso transformaria o Freeza num alvo de treino no instante em
+     * que o primeiro jogador se transformasse.
+     *
+     * Contra JOGADORES o multiplicador é 1 de propósito, e por isso ele não
+     * existe como campo: quem se transforma já ganhou fôlego, vida e cadência,
+     * e somar dano a isso faria da queixa óbvia ("virou Super Saiyajin, acabou
+     * a partida") uma queixa correta. A transformação é uma resposta ao CHEFE,
+     * e é contra ele que ela morde. */
+    danoNoFreeza: 1.75,
+
+    /* **"Os ataques do Freeza tiram bem menos life do player."**
+     *
+     * O espelho exato da linha de cima, na direção contrária: o Super Saiyajin
+     * bate mais forte NELE e apanha menos DELE. Os dois campos ficam colados de
+     * propósito — a troca inteira da transformação contra o chefe se lê num
+     * lugar só, e quem for reequilibrar um dos lados vê o outro sem procurar.
+     *
+     * 0,45 é "bem menos" sem ser imunidade: ele passa a levar 45 % do golpe. A
+     * conta com a RAJADA do boss (o ataque que ele repete o tempo todo), nas
+     * três dificuldades, contando quantos tiros o jogador aguenta — e note que
+     * ela é feita com a tabela LIDA EM TEMPO DE EXECUÇÃO (`NAMEK.freeza.rajada`
+     * vezes `dificuldades[x].dano`), nunca com números copiados para cá, porque
+     * o dono do boss recalibra e a conta tem de acompanhar sozinha:
+     *
+     *              antes (100 de vida)      em SSJ (220 de vida, 45 % do dano)
+     *   Tirano           23 tiros                     112 tiros
+     *   Imperador        14 tiros                      69 tiros
+     *   Imp. do Mal      10 tiros                      51 tiros
+     *
+     * E com o RAIO DA MORTE, que é o golpe que de fato mata (ele cobra por
+     * segundo): no Imperador são 1,6 s de exposição para morrer, contra 7,9 s
+     * em Super Saiyajin. Continua sendo o golpe que não se pode encarar — só
+     * deixou de ser o golpe que apaga alguém antes de ele reagir.
+     *
+     * ------------------------------------------- e quando ele TAMBÉM defende
+     *
+     * A guarda (`NAMEK.guard.damage`) já é um redutor de 22 %, e os dois se
+     * COMPÕEM em vez de um substituir o outro: 0,45 × 0,22 = **9,9 % do dano**.
+     * Parece imunidade e não é, e o que impede é o preço — não o número:
+     *
+     * • a guarda ESCOA ki (`guard.drain` 21/s, que em SSJ vira 8,4/s), então a
+     *   barra cheia dá 11,9 s de braços cruzados e acabou. Quem defende o raio
+     *   da morte inteiro chega ao fim dele sem ki, ou seja, sem especial, sem
+     *   arranque e sem a próxima guarda;
+     * • quem está defendendo NÃO está atacando, e o boss não tem pressa.
+     *
+     * O teto do estrago de uma imunidade real seria "nunca morre"; aqui o teto é
+     * "aguenta doze segundos e fica sem nada". É uma postura com preço, que é o
+     * que a guarda sempre foi. */
+    danoDoFreeza: 0.45,
+
+    /* ------------------------------------------------------------- as cores
+     *
+     * "Sua aura, seu ki, sua barra de vida fica amarelo. O cabelo do boneco
+     * também fica amarelo. Todos os seus poderes que ele solta ficam amarelos."
+     *
+     * Três amarelos e não um, e a diferença entre eles é a mesma que separa
+     * tinta de luz: o CABELO é matéria iluminada pelo sol (mais claro, quase
+     * palha), a AURA é emissão aditiva contra um céu já claro (mais saturada,
+     * senão satura em branco e some — ver o comentário de `matChama.opacity` em
+     * `character/aura.js`), e o GOLPE é o meio-termo, porque ele precisa ser
+     * lido a duzentos metros contra montanha, mar e céu. */
+    cor: 0xffd23a,
+    corCabelo: 0xffe45c,
+    corAura: 0xffc81e,
+    /** graus de matiz para a BARRA DE VIDA do HUD. Ela é pintada por giro de
+     *  matiz (`--nk-hue`, ver `ui/style.js`), então o amarelo dela é um número
+     *  e não uma cor: 48° é o ouro que casa com `corCabelo` no mesmo verniz. */
+    hue: 48,
+
+    /* ---------------------------------- o KI EM VOLTA DO CORPO, e por que ele
+     *                                     precisou de três números e não de um
+     *
+     * *"Quando vira super saiadin o KI que fica em torno do jogador quando ele
+     * voa ou carrega o ki deve ficar dourado."*
+     *
+     * Trocar `corAura` NÃO bastava, e a razão está no desenho da aura e não na
+     * cor: `character/aura.js` pinta as três camadas do casulo com a cor do ki
+     * **misturada com BRANCO** — 72 % no núcleo, 45 % nas faíscas, 32 % na
+     * coroa. Isso existe por um bom motivo (a cor crua do jogador virava uma
+     * coroa de palha sobre o céu verde), e o preço dele é que qualquer matiz
+     * chega à tela lavada: o dourado 0xffc81e (255, 200, 30) sai do núcleo como
+     * (255, 240, 192), que é branco com um sopro de creme. O ki continuava
+     * "amarelo" no código e branco no olho.
+     *
+     * E a mistura é ADITIVA, então o segundo agravante é a opacidade: quanto
+     * mais forte a camada, mais perto de branco ela chega no compositor. O
+     * `auraGanho` que eu tinha posto para atender "mais intensa" estava,
+     * portanto, trabalhando CONTRA "dourado" — ele empurrava as três camadas
+     * para a saturação exatamente quando elas mais precisavam segurar a matiz.
+     *
+     * Daí os três números, que são as três alavancas separadas:
+     *
+     * • `auraGanho` continua sendo o TAMANHO (a coroa abre, o casulo engorda);
+     * • `auraBrilho` é a OPACIDADE, e é bem menor de propósito — é ela que
+     *   satura;
+     * • `auraTinta` é quanto do branqueamento SOBREVIVE. É a alavanca nova e a
+     *   que de fato conserta a queixa.
+     */
+    /** Quanto a aura fica MAIOR — "mais intensa". +85 % na coroa e no casulo. */
+    auraGanho: 0.85,
+    /* Quanto a aura fica mais OPACA. +35 % e não +85 % porque aditivo satura:
+     * medido, a 1,85× de opacidade o casulo dourado chega à tela como branco
+     * puro e a troca de cor não aparece. A intensidade que o pedido pede é lida
+     * pelo TAMANHO (acima) e pela cor cheia; a opacidade só precisa acompanhar o
+     * bastante para o efeito não parecer oco. */
+    auraBrilho: 0.35,
+    /* Fração do branqueamento que SOBRA em Super Saiyajin. Com 0,42, o núcleo
+     * cai de 72 % para 30 % de branco (o dourado passa a (255, 217, 97) — ouro
+     * quente em vez de creme), a coroa de 32 % para 13 % e as faíscas de 45 %
+     * para 19 %.
+     *
+     * Não é ZERO, e isso é deliberado: o miolo do casulo é a parte MAIS QUENTE
+     * do ki, e fogo quente clareia no centro. Sem nada de branco o casulo vira
+     * uma bolha de tinta chapada, que lê como gelatina e não como energia —
+     * exatamente a armadilha que o branqueamento original existia para evitar.
+     * 0,42 é o ponto em que o núcleo ainda tem brasa e o olho já lê "ouro". */
+    auraTinta: 0.42,
+    /* Onde o RASTRO já é dourado, ao longo do próprio comprimento (0 = colado no
+     * corpo, 1 = na ponta que se dissipa).
+     *
+     * A cauda nasce BRANCA e só assume a cor do ki ao longe — "o ki esfria com a
+     * idade", diz o comentário dela, e é uma boa regra. Só que o trecho que se
+     * vê de um Super Saiyajin voando é justamente o colado no corpo, e ali a
+     * regra entregava uma fita branca saindo de um lutador dourado. Com 0,72 a
+     * fita já sai de ouro do peito e só o último quarto lava para o branco, que
+     * mantém a leitura de dissipação sem mentir sobre a cor de quem voa. */
+    auraCauda: 0.72,
+    /** Quanto o cabelo ESPETA a mais (fração da altura do penteado). O rig tem
+     *  o cabelo num grupo próprio e já o escala em Y (ver `Fighter.aplicar`);
+     *  +34 % é o que se lê como "arrepiou" sem virar chapéu. */
+    espeto: 0.34,
+
+    /* --------------------------------------------------- a explosão do fim
+     *
+     * "Tem uma explosão de poder ali momentânea" — e ela é o único quadro do
+     * gesto que precisa acontecer NO MUNDO e não no boneco: onda de choque,
+     * chão levantando pedra e clarão.
+     *
+     * `potencia` passa por `craterFor`: 2,4 dão 3,2 + 7,6·√2,4 = **15 m de
+     * boca**. É maior que a cratera de uma bola de ki (5,8 m) e menor que a de
+     * um Kienzan (17,6 m) — a marca de alguém arrebentando o chão em que estava
+     * de pé, não a de um golpe. Ela só é pedida com os pés perto do relevo; no
+     * ar sobram o clarão e o tremor, que é o que se vê na referência. */
+    estouro: {
+      /** Potência da cratera. Ver `craterFor`. */
+      potencia: 2.4,
+      /** m — até onde o clarão se abre. */
+      clarao: 26,
+      /** força e segundos do tremor de câmera. */
+      tremor: 1,
+      tremorDur: 0.6,
+      /** m — altura acima do relevo em que a explosão ainda cava o chão. */
+      alcanceDoChao: 6,
+    },
+  },
+
+  /* ------------------------------------------------------------------- aura
+     O RASTRO DE KI — a fita que fica atrás de quem voa.
+
+     Quem desenha é `src/namek/character/aura.js` (a "cauda"), e o que está aqui
+     é só o TAMANHO dela. Mora no config, e não lá, porque comprimento de rastro
+     é grandeza de jogo e não de desenho: ele é `velocidade × vida`, e a
+     velocidade está poucas linhas acima (`fighter.flySpeed`, `boostSpeed`) —
+     separar os dois números em arquivos diferentes seria esconder metade da
+     conta.
+
+     Vale para TODO MUNDO: o lutador local e os remotos são a mesma classe
+     `Fighter`, e portanto a mesma `Aura`. Não há um segundo caminho de rastro
+     para quem chega pela rede.
+
+     **CINQUENTA POR CENTO MAIS COMPRIDA**, e o pedido é explícito quanto ao
+     eixo: mais COMPRIDA, não mais grossa. Os três números cresceram JUNTOS
+     porque o comprimento é o produto dos três, e alongar um só não alonga nada:
+
+     • `vida` é o que de fato estica. A cauda cobre sempre os mesmos segundos de
+       voo, então ela cresce sozinha com a velocidade — 26 m/s de cruzeiro dão
+       33 m, e o arranque a 64 m/s dá 82 m (eram 22 m e 54 m).
+     • `compMax` tinha de subir junto, senão o teto comeria o aumento inteiro:
+       64 m/s × 1,275 s são 81,6 m contra um teto antigo de 72 m, ou seja, a
+       cauda pararia de crescer exatamente onde o alongamento começaria a
+       aparecer.
+     • `amostras` sobe na mesma proporção para o PASSO continuar em 28 ms. Com
+       as 30 de antes espalhadas por 1,275 s o intervalo iria a 42 ms — 2,7 m de
+       vão a 64 m/s —, e a fita mostraria o canto de cada amostra em vez da
+       curva do voo.
+
+     E a GROSSURA não muda: `aura.js` divide os coeficientes de largura pelo
+     mesmo fator que multiplica o comprimento (ver `LARG_POR_METRO`), então a
+     mesma velocidade produz uma fita da mesma espessura — só mais longa.
+
+     Custo: o buffer da fita é alocado UMA VEZ, na construção da aura (ver
+     `criarFita`). Crescer aqui é memória na entrada — ~13 kB por lutador — e
+     zero alocação por quadro, que é o que o §3 do plano exige. */
+  aura: {
+    rastro: {
+      /** s — quanto tempo de voo cabe na cauda. Era 0,85. */
+      vida: 1.275,
+      /** Quantas amostras de trajetória ela guarda. Eram 30; 45 mantêm o passo
+       *  de amostragem nos mesmos 28 ms. */
+      amostras: 45,
+      /** m — teto de comprimento, para a cauda não deixar de ler como rastro e
+       *  virar uma faixa atravessando a arena. Era 72. */
+      compMax: 108,
+    },
   },
 
   /* --------------------------------------------------------------- projéteis */
@@ -409,10 +1081,44 @@ export const NAMEK = {
      * ilha destruída: o especial sai uma vez por barra cheia, a rajada sai o
      * tempo todo, e destruição acumulada é feita do que sai o tempo todo.
      *
-     * Reduzido pela metade: 0,0156 abre 4,1 m. `craterBase` (3,2 m) domina a
+     * Reduzido pela metade: 0,0156 abria 4,1 m. `craterBase` (3,2 m) domina a
      * conta com potências pequenas, então cortar o raio ao meio pede uma
-     * potência bem menor, não a metade dela. */
-    power: 0.0156,
+     * potência bem menor, não a metade dela.
+     *
+     * E SUBIU DE NOVO, a pedido: *"pode deixar a cratera do poder rápido um
+     * pouco maior e mais funda."* 0,117 dá 3,2 + 7,6·√0,117 = **5,8 m de boca**
+     * — 40 % a mais que os 4,1 m. É o "um pouco maior" literal, e é de propósito
+     * que não é a volta aos 8,3 m: aquele número era o buraco de um especial
+     * saindo seis vezes por segundo.
+     *
+     * Continua uma ordem de grandeza ACIMA de `craterMinPower` (0,01), e essa
+     * folga é o conserto de b7cc70c em pé: o corte existe para filtrar potência
+     * ZERO, nunca a rajada. Quem mexer nesta linha para baixo confere lá antes. */
+    power: 0.117,
+    /* A OUTRA METADE DO PEDIDO — "e mais funda".
+     *
+     * Mesmo mecanismo do `craterDeep` do Kamehameha, e ele existe aqui pela
+     * mesma razão: `craterFor` tira a fundura do RAIO (`craterDepth`, 62 %),
+     * então pedir "mais fundo" pela potência alargaria a boca junto. Sem este
+     * número, os 5,8 m de boca dariam 3,6 m de fundo — uma tigela larga e rasa,
+     * que é justamente o que o pedido não quer.
+     *
+     * 1,7 leva a fundura a 5,8 · 0,62 · 1,7 = **6,1 m**. São 11,6 m de boca de
+     * ponta a ponta por 6,1 m de fundo: um lutador de 1,78 m some dentro do
+     * buraco de UM tiro rápido, e é isso que separa "marcou o chão" de "cavou".
+     *
+     * Onde ele se encaixa na escala de fundura (fração do raio que vira
+     * profundidade): estouro comum 0,62 · Kamehameha 2,17 (0,62 · 3,5) · rajada
+     * 1,05 (0,62 · 1,7). Ou seja, ela FURA um pouco — bem menos que o feixe,
+     * mais que qualquer outra coisa —, que é a leitura de uma bola de energia
+     * concentrada batendo no chão.
+     *
+     * Viaja na rede pelo campo `df` de `NC2S.GROUND_HIT`, como o do feixe (ver
+     * `craterFor`, que é quem o apara em [0,25 · 6]). Quem o escreve no relato é
+     * `Bolas.update`, nos DOIS pontos em que a bola morre no cenário — o chão e
+     * a peça de cenário. Esquecer um dos dois daria buracos de fundura
+     * diferente conforme a bola tivesse batido em terra ou em pedra. */
+    craterDeep: 1.7,
 
     /* A PERSEGUIÇÃO FRACA. Ver §6.1 do plano — "levemente" é o requisito, e
        cada número aqui existe para segurar a palavra "levemente". */
@@ -426,24 +1132,42 @@ export const NAMEK = {
      * É exatamente o que o §6.1 do plano diz que não pode acontecer ("uma bola
      * que persegue de verdade tira o jogo do jogador e o dá ao software").
      *
-     * Agora são 26°/s por 0,75 s = **19,5° de correção contra um cone de 22°**.
-     * A diferença em jogo:
+     * Foram 26°/s por 0,75 s = 19,5° de correção contra um cone de 22°.
+     *
+     * ------------------------------------------------- A PERSEGUIÇÃO DOBROU
+     *
+     * *"Todos os poderes devem ter o nível de perseguição duplicado."* O giro
+     * foi a 52°/s, e o CONE foi junto — 22° → 44° —, porque dobrar só o giro
+     * quebraria a regra que abre este comentário: 52 × 0,75 = 39°, e 39° de
+     * correção dentro de um cone de 22° é o caso "acerto garantido" de novo,
+     * só que com o sinal trocado.
+     *
+     * Com o cone em 44° a régua fica **39° de correção contra 44° de cone**, e
+     * as duas leituras do parágrafo antigo continuam valendo, dobradas:
      *
      * • um alvo que ANDA — 26 m/s de través, a 60 m — sai uns 8° do lugar
-     *   durante o voo, e a bola tem sobra para acompanhar: a mira continua
-     *   perdoando movimento, que é o que ela existe para perdoar;
-     * • um alvo na BORDA do cone (22°) fecha para ~2,5°, e 2,5° a 60 m são
-     *   2,6 m — mais que o raio de acerto. Mira ruim continua errando.
+     *   durante o voo, e agora a bola tem folga de sobra para acompanhar: a
+     *   mira perdoa MUITO mais movimento, que é o pedido;
+     * • um alvo na BORDA do cone (44°) fecha para 5°, e 5° a 60 m são 5,2 m —
+     *   três vezes e meia o raio de acerto (1,5 m). Mira ruim continua errando,
+     *   e continua errando por uma margem que o olho vê.
      *
-     * Ou seja: a bola persegue quem você já estava mirando, e não acha quem
-     * você não mirou. */
+     * ------------------------------------------------------------- e a fuga
+     *
+     * `d = v/ω` (ver `flySpeed`): a 52°/s (0,908 rad/s), quem arranca de lado no
+     * boost vence a corrida angular a menos de 64/0,908 = **70 m**. Como
+     * `acquire` são 50 m, a bola NUNCA nasce fora dessa distância — ou seja, o
+     * arranque lateral desvia de toda rajada, em qualquer disparo do jogo. É o
+     * que mantém a palavra "levemente" de pé mesmo com o giro dobrado: o que
+     * dobrou foi o perdão de mira, não a impossibilidade de desviar. */
     homing: {
-      /** graus/s — teto de giro da direção. */
-      turnRate: 26,
-      /** s — depois disto ela segue reta, sempre. */
+      /** graus/s — teto de giro da direção. Dobrado (era 26). */
+      turnRate: 52,
+      /** s — depois disto ela segue reta, sempre. 52 × 0,75 = 39° no total. */
       duration: 0.75,
-      /** graus — meio-ângulo do cone. Fora dele, não corrige. */
-      cone: 22,
+      /** graus — meio-ângulo do cone. Fora dele, não corrige. Dobrado com o
+       *  giro (era 22), senão a correção total passaria do cone. */
+      cone: 44,
       /** m — alcance da escolha de alvo, no instante do disparo. */
       acquire: 50,
     },
@@ -488,16 +1212,31 @@ export const NAMEK = {
        * grande que acertou em cheio deve tirar metade da vida. A Genki Dama
        * deve tirar a vida inteira."*
        *
-       * "Em cheio", para um feixe, é a sustentação inteira em cima de alguém —
-       * e 21/s por 2,4 s são exatamente 50, metade dos 100 de vida. Um encostão
-       * de meio segundo tira 10, que é a graduação que só um golpe contínuo tem
-       * e que é a razão de ele cobrar por segundo.
+       * "Em cheio", para um feixe, é a SUSTENTAÇÃO INTEIRA em cima de alguém —
+       * e é essa frase que converte a régua de dano num dps, porque este é o
+       * único golpe do repertório que cobra por segundo.
        *
-       * A queda de 62 para 21 parece brutal e não é: com 6,6 m de raio de morte
-       * (o dobro do de antes) ele acerta muito mais, e a conta de quanto ele
-       * tira de quem fica no eixo continua sendo a mesma metade da vida. O que
-       * ele deixou de fazer é matar sozinho — que é o lugar da Genki Dama. */
-      dps: 21,
+       * ------------------------------------------------ a régua nova: 70 %
+       *
+       * A metade virou setenta por cento: *"KameHameHa suga 70%"*. A conta é
+       * uma divisão, e ela é o motivo de o número ser quebrado:
+       *
+       *     70 de vida ÷ 2,4 s de `sustain` = 29,166…/s  →  **29,2**
+       *
+       * 29,2 × 2,4 = 70,08 — os oito centésimos de sobra são o arredondamento
+       * para uma casa, e sobrar é melhor que faltar: 29,1 daria 69,8 e um golpe
+       * anunciado como "70 %" que tira 69,8 é a diferença que ninguém vê e que
+       * mesmo assim é mentira no arquivo.
+       *
+       * A graduação continua sendo o que só um golpe contínuo tem: meio segundo
+       * de encostão tira 14,6, um segundo tira 29,2, e a barra inteira de 2,4 s
+       * tira os 70. Quem sai do eixo paga proporcionalmente ao que ficou nele.
+       *
+       * O que ele NÃO faz é matar sozinho — sobram 30 de vida —, e isso continua
+       * sendo o lugar da Genki Dama (`genki.damage`, a vida inteira). O que ele
+       * ganhou foi deixar de empatar com o Kienzan e o Galick Gun: os três
+       * valiam a mesma metade, e agora são 40 · 60 · 70, que é uma escada. */
+      dps: 29.2,
       /* Potência para a conta da cratera. Ver `craterFor`.
        *
        * 0,58 dá 9 m de boca, e o número foi escolhido contra o IMPACTO e não
@@ -582,72 +1321,106 @@ export const NAMEK = {
        * uma COBRA: uma cabeça que voa e gira, e um corpo que é o caminho por
        * onde ela passou. `powers/beam.js` tem o mecanismo inteiro.
        *
-       * -------------------------------------------------------- por que 85°/s
+       * ------------------------------------------------------- por que 170°/s
        *
-       * Parece muito e não é: o que o olho lê numa curva é o RAIO, não a taxa.
-       * A 340 m/s, 85°/s (1,48 rad/s) fecham uma curva de `v/ω` = **229 m de
-       * raio** — a 55 m de quem atirou o feixe dobrou 14°, e ele só completa os
-       * 40° do teto depois de 160 m de voo. É um gancho longo, que é o que a
-       * referência mostra, e não uma cotovelada.
+       * Eram 85, e dobraram com o resto do repertório: *"todos os poderes devem
+       * ter o nível de perseguição duplicado."*
+       *
+       * Parece muito e não é, e o argumento é o mesmo de sempre: o que o olho lê
+       * numa curva é o RAIO, não a taxa. A 340 m/s, 170°/s (2,967 rad/s) fecham
+       * uma curva de `v/ω` = **114,6 m de raio** (eram 229). A 55 m de quem
+       * atirou o feixe dobrou 27,5° — o dobro dos 14° de antes, na mesma
+       * distância —, e ele gasta o teto inteiro em 0,41 s, ou 140 m de voo.
+       *
+       * Ou seja: o gancho continua sendo um gancho, só que ele acontece na
+       * primeira metade do caminho em vez de se arrastar por trezentos metros. É
+       * a diferença entre um feixe que corrige NA CARA de quem atirou e um que
+       * corrige lá longe, onde ninguém vê a correção acontecer.
        *
        * ------------------------------------------------------------- e a fuga
        *
        * A régua do resto do modo (ver `flySpeed`) diz que quem arranca de lado a
        * `v > ω·d` vence a velocidade angular do golpe, e com o boost a 64 m/s
-       * isso dá 43 m para este. Mas essa conta não é a história inteira aqui, e
-       * vale escrever o que foi MEDIDO contra este arquivo: um lutador que
-       * arranca de lado no instante do tiro escapa **em qualquer distância** —
-       * 0 s de exposição a 50, 100 e 200 m, e 0,02 s (1,2 de dano) a 400 m,
-       * contra os 2,3 a 2,7 s que mata quem fica no eixo.
+       * isso dá 64/2,967 = **21,6 m** para este (eram 43). A corrida angular
+       * deixou de ser a escapatória prática deste golpe — perto demais.
        *
-       * As duas metades da fuga são diferentes, e é por isso que ela vale em
-       * toda a escala: PERTO, o jogador ganha a corrida angular; LONGE, quem
-       * segura o feixe é o `arcMax` — ele gasta os 40° e para de corrigir. O
-       * teto não é só uma trava contra o bumerangue: é a metade da escapatória
-       * que a conta de velocidade angular não cobre.
+       * O que sobrou, e ele basta, é a outra metade: **o `arcMax`**. O feixe
+       * gasta os 70° e para de corrigir PARA SEMPRE, e isso acontece 0,41 s
+       * depois do disparo. Quem arranca de lado no instante do tiro força o
+       * feixe a queimar o orçamento inteiro numa correção que o desvio lateral
+       * já venceu, e depois vê um tubo azul reto passando ao lado.
        *
        * O que a curva compra, então, não é acertar quem foge: é acertar quem se
        * mexe sem se comprometer — quem deriva, quem recua em linha reta, quem
        * decide tarde — e punir quem fica no eixo. Que é a troca certa para um
-       * golpe que custa a barra inteira e 1,05 s de pose.
+       * golpe que custa a barra inteira, 1,05 s de pose e 70 % da vida alheia.
        *
        * ------------------------------------------------------------- e `arcMax`
        *
-       * É o "deve ter um limite essa curva", virado em número, e é uma trava
-       * NOVA — a rajada, o Kienzan e o Galick Gun têm só teto de giro e prazo.
-       * Prazo não é limite de curva: 85°/s por 1,4 s dariam 119°, e um feixe que
-       * corrige 119° não persegue, ele CAÇA — volta por cima do ombro de quem
-       * atirou. Com o teto em 40° o desvio lateral que ele compra é
-       * `R·(1−cos40°)` = 54 m: sobra para pegar quem se mexeu, longe de um
-       * bumerangue.
+       * É o "deve ter um limite essa curva", virado em número, e é a trava que o
+       * Kienzan e o Galick Gun não têm (lá, contornar é o que o golpe faz).
+       *
+       * Ele subiu de 40° para 70° junto com o giro, e NÃO dobrou de propósito. A
+       * conta: o desvio lateral que o teto compra é `R·(1−cos θ)`, e com o raio
+       * caindo pela metade (229 → 114,6 m) manter os 40° teria ENCOLHIDO o
+       * alcance da curva de 54 m para 27 m — dobrar o giro deixaria o feixe pior
+       * de perseguir, que é o oposto do pedido. Com 70° o desvio vai a
+       * 114,6·(1−cos 70°) = **75 m**: meia vez mais que antes.
+       *
+       * Para cima o limite é o bumerangue, e ele é o mesmo de sempre: 170°/s por
+       * 1,4 s de prazo dariam 238°, e um feixe que corrige 238° não persegue,
+       * ele volta por cima do ombro de quem atirou. Com 70° o feixe termina
+       * apontando 70° fora do disparo — bem virado, ainda para a frente.
+       *
+       * `duration` (1,4 s) virou o pano de fundo: a esta taxa o teto de 70°
+       * fecha em 0,41 s, então quem manda é sempre o `arcMax`. O prazo continua
+       * aqui porque a correção só corre DENTRO do cone, e um alvo que entra e
+       * sai do cone pode não gastar o orçamento — nesse caso é o prazo que
+       * encerra a perseguição.
        *
        * O teto é também o que dá ao servidor um cone honesto para conferir o
        * acerto — ver `registrarQueimadura`, que sem ele cairia numa esfera de
-       * 620 m em torno de quem atirou. */
+       * 1 860 m em torno de quem atirou. */
       homing: {
-        /** graus/s — teto de giro. Raio de curva de 229 m a 340 m/s. */
-        turnRate: 85,
-        /** graus — teto da correção TOTAL na vida do feixe. O limite da curva. */
-        arcMax: 40,
-        /** s — depois disto ele segue reto, sempre. */
+        /** graus/s — teto de giro, dobrado (era 85). Raio de curva de 114,6 m a
+         *  340 m/s, contra os 229 m de antes. */
+        turnRate: 170,
+        /** graus — teto da correção TOTAL na vida do feixe. O limite da curva.
+         *  70 e não 80: ver a conta de `R·(1−cos θ)` acima. */
+        arcMax: 70,
+        /** s — depois disto ele segue reto, sempre. Hoje o `arcMax` fecha antes
+         *  (0,41 s); isto é o que vale quando o alvo sai do cone no meio. */
         duration: 1.4,
-        /** graus — meio-ângulo do cone. Fora dele, não corrige. */
+        /* graus — meio-ângulo do cone. Fora dele, não corrige.
+         *
+         * NÃO dobrou, e é o único número deste bloco que ficou parado. O cone
+         * decide QUEM o feixe aceita perseguir; o `arcMax` decide QUANTO ele
+         * persegue. Dobrar o cone junto faria o Kamehameha aceitar alvos a 70°
+         * do disparo — "não sai caçando sozinho" (ver `soTrava`) deixaria de ser
+         * verdade. Com o teto de correção (70°) já valendo o dobro do cone, todo
+         * alvo que o cone aceita cabe no orçamento com folga: o que sobra é
+         * gasto ACOMPANHANDO quem se mexe, que é o que o pedido quer. */
         cone: 35,
         /** m — alcance da escolha de alvo. Só vale se `soTrava` cair. */
         acquire: 320,
-        /* SÓ COM ALVO DESIGNADO — e o que conta como "designado" mudou.
+        /* SÓ COM ALVO DESIGNADO — e hoje quem designa é O CURSOR, e mais nada.
          *
          * A regra nasceu como *"ele só faz curva quando o player está travado o
          * foco no inimigo"*, e ela continua valendo no que importa: o Kamehameha
-         * não sai caçando sozinho. O que mudou foi existir uma SEGUNDA forma de
-         * designar alguém — a mira assistida pelo cursor (`NAMEK.lock.mira`) —,
-         * e o pedido é explícito de que ela vale para tudo: *"todos os poderes
-         * seguem o player, não só o tiro rápido."*
+         * não sai caçando sozinho. O que mudou duas vezes foi o que conta como
+         * "travado o foco". Primeiro apareceu uma SEGUNDA forma de designar
+         * alguém — a mira assistida pelo cursor (`NAMEK.lock.mira`) —, porque o
+         * pedido é explícito de que a perseguição vale para tudo: *"todos os
+         * poderes seguem o player, não só o tiro rápido."* Depois a primeira
+         * forma (a tecla `R`) foi removida a pedido, e a mira assistida ficou
+         * sendo a única.
          *
-         * `soTrava` passou a significar "não adquire alvo sozinho", que é o que
-         * ele sempre quis dizer: sem trava E sem ninguém sob o cursor, o feixe é
-         * a reta que sempre foi. Quem resolve isso é `soltarEspecial`, através
-         * de `LockOn.alvoDeAtaque`. */
+         * `soTrava` significa, então, "não adquire alvo sozinho" — que é o que
+         * ele sempre quis dizer: **sem ninguém sob o cursor no instante do
+         * disparo, o feixe é a reta que sempre foi.** O preço da curvatura deixou
+         * de ser uma tecla e passou a ser a pontaria: apontar para alguém no
+         * momento em que se gasta a barra inteira. Quem resolve isso é
+         * `soltarEspecial`, através de `LockOn.alvoDeAtaque`. */
         soTrava: true,
       },
     },
@@ -683,12 +1456,30 @@ export const NAMEK = {
       hitRadius: 6.5,
       /* Corta de uma vez, como o disco e a Genki Dama.
        *
-       * 50 e não 62: é o "qualquer poder grande que acertou em cheio deve tirar
-       * metade da vida" aplicado sem exceção. Os três golpes de corte seco
-       * (este, o Kienzan e o Kamehameha somado) valem a MESMA metade — o que os
-       * separa passou a ser inteiramente forma, alcance e perseguição, que é
-       * onde a diferença entre eles devia estar desde sempre. */
-      damage: 50,
+       * ------------------------------------------- os quatro deixaram de empatar
+       *
+       * Valia 50, e 50 era o "qualquer poder grande que acertou em cheio deve
+       * tirar metade da vida" aplicado sem exceção. O efeito colateral disso era
+       * que os três golpes de corte seco valiam a MESMA metade, e a diferença
+       * entre eles ficava inteiramente por conta de forma e alcance.
+       *
+       * O pedido novo desempatou os quatro, um a um: *"em vez de metade da vida
+       * ele suga 40%. KameHameHa suga 70%, Jenkidama 100%, GarlikGun 60%."* A
+       * escada que sai disso, contra os 100 de `maxHealth`:
+       *
+       *     Kienzan      40   o mais barato de armar (0,7 s), o menor alvo
+       *     Galick Gun   60   0,9 s de pose, 6,5 m de raio de morte
+       *     Kamehameha   70   sustentado, 2,4 s inteiros em cima de alguém
+       *     Genki Dama  100   5,2 s parado no ar: a aposta
+       *
+       * Ela é lida de baixo para cima como o preço de armar cada um, e é essa
+       * correspondência — quanto custa × quanto tira — que os quatro empatados
+       * em 50 não tinham.
+       *
+       * 60 é o número deste: mais que o disco porque a bola é dez vezes maior e
+       * custa dois centésimos a mais de pose, menos que o feixe porque o feixe
+       * cobra o dano dele por 2,4 s de exposição e este resolve num quadro. */
+      damage: 60,
       /* 9,2 e não 6,4: a escala das crateras subiu (ver `craterBase`) e a régua
          deste golpe subiu com ela. Dá 26,3 m de boca — a bola tem 6,5 m de raio
          de morte e deixa um buraco quatro vezes maior que ela, que é a leitura
@@ -698,20 +1489,48 @@ export const NAMEK = {
       /* ELE PERSEGUE, e persegue MUITO mais do que a bola de ki.
        *
        * O pedido: "o Galick Gun também deve seguir o usuário". A diferença para
-       * a perseguição da rajada (`blast.homing`, 26°/s por 0,75 s, um cone de
-       * 22°) é de outra ordem, e é de propósito — este é o golpe que custa a
+       * a perseguição da rajada (`blast.homing`, 52°/s por 0,75 s, um cone de
+       * 44°) é de outra ordem, e é de propósito — este é o golpe que custa a
        * barra inteira e 0,9 s de pose, e a promessa dele é que ele CHEGA.
        *
-       * 55°/s durante 3 s são 165° de correção: ele contorna, volta e persegue
-       * de verdade. O que faz dele um golpe e não uma sentença é a velocidade
-       * angular contra a distância — a 40 m de quem foge, 55°/s significa que
-       * ele acompanha um alvo cruzando a 38 m/s, e um lutador em arranque faz
-       * 96. Ou seja: **quem arranca de lado escapa; quem tenta correr em linha
-       * reta na frente dele, não.** É a mesma regra do Kienzan, com números
-       * maiores porque a bola é maior e mais lenta. */
+       * --------------------------------------------- 110°/s, e o prazo pela metade
+       *
+       * O giro dobrou (era 55) com o resto do repertório, e o PRAZO caiu de 3 s
+       * para 1,6 s no mesmo movimento. Os dois números andam juntos porque o que
+       * define se um golpe persegue ou vira bumerangue não é a taxa, é o produto:
+       *
+       *     antes   55 × 3,0 s = 165° de correção total
+       *     agora  110 × 1,6 s = 176° de correção total
+       *
+       * Ou seja: ele contorna o MESMO tanto que já contornava — e faz isso em
+       * pouco mais da metade do tempo. É a leitura certa de "perseguição
+       * duplicada" para uma bola que já contornava: ela vira na cara de quem
+       * fugiu, e não trezentos metros depois.
+       *
+       * Deixar o prazo em 3 s daria 330° de correção sem `arcMax` nenhum para
+       * segurar — o golpe voltaria por cima do ombro de quem atirou, que é
+       * exatamente o que o comentário do `arcMax` do Kamehameha diz que um golpe
+       * não pode fazer. Este bloco não declara `arcMax` de propósito (§6.1 do
+       * plano: contornar é o que este golpe faz), então quem faz o papel de teto
+       * é o prazo — e é por isso que ele teve de encolher.
+       *
+       * --------------------------------------------------------------- a fuga
+       *
+       * A conta de sempre (`v > ω·d`, ver `flySpeed`), com o boost a 64 m/s:
+       * 64/1,920 rad/s = **33 m** (eram 67). A 152 m de voo — 1,6 s — ele para
+       * de corrigir e vira um projétil balístico de 6,5 m de raio.
+       *
+       * O que mudou em jogo: perto, quem arranca de lado ainda ganha a corrida
+       * angular, só que agora tem de estar a menos de 33 m em vez de 67. Longe,
+       * a escapatória deixou de ser o ângulo e passou a ser o RELÓGIO — aguentar
+       * 1,6 s de perseguição e depois sair da reta. **Quem tenta correr em linha
+       * reta na frente dele continua não escapando de jeito nenhum.** */
       homing: {
-        turnRate: 55,
-        duration: 3,
+        /** graus/s — dobrado (era 55). Raio de curva de 49,5 m a 95 m/s. */
+        turnRate: 110,
+        /** s — pela metade (era 3), para a correção TOTAL continuar em ~170° em
+         *  vez de ir a 330°. Ver a conta acima: aqui o prazo é o `arcMax`. */
+        duration: 1.6,
         /** graus — cone largo, mas não "atrás de mim". */
         cone: 60,
         /** m — a que distância ele escolhe o alvo, no instante do disparo. */
@@ -740,9 +1559,18 @@ export const NAMEK = {
          espessura de VERDADE, que é a outra metade da reclamação, está em
          `powers/disk.js`: o gume virou um toro, e ele tem volume. */
       hitRadius: 3.4,
-      /** O disco corta de uma vez, não por segundo. Metade da vida, como todo
-       *  poder grande — ver `galick.damage`. */
-      damage: 50,
+      /* O disco corta de uma vez, não por segundo.
+       *
+       * 40 e não 50: *"em vez de metade da vida ele suga 40%."* Ele é o piso da
+       * escada de dano dos quatro especiais (40 · 60 · 70 · 100, ver
+       * `galick.damage`), e o lugar dele lá embaixo é o preço mais baixo de
+       * armar — 0,7 s de pose contra 0,9 do Galick Gun e 5,2 da Genki Dama.
+       *
+       * Ele continua fechando a conta do atordoamento sozinho (`fighter.stagger`
+       * derruba a partir de 30 de dano na janela), e é isso que impede a queda
+       * de 50 para 40 de tirar dele o que ele é: um golpe que, acertando, põe
+       * alguém no chão por 2,4 s. */
+      damage: 40,
       /* 3,6 e não 1,4. O comentário antigo do arquivo chamava o buraco dele de
          "uma cicatriz e não uma cratera", e isso fazia sentido enquanto a régua
          de todo mundo era menor. Com a escala nova, 1,4 daria 12,2 m — já maior
@@ -751,25 +1579,119 @@ export const NAMEK = {
          de diâmetro passando rente ao chão, que é o que se vê na referência. */
       power: 3.6,
       cor: 0xa8ff6f,
-      /* ELE PERSEGUE — "o Kienzan deve seguir o usuário", e o usuário completou
-       * a regra na mesma frase: "é possível escapar, mas o player tem que se
-       * movimentar rápido para os lados".
+      /* ============================================ O KIENZAN É O QUE MAIS PERSEGUE
        *
-       * Essa segunda metade é a especificação inteira, e ela é geométrica. A
-       * 105 m/s com 70°/s de giro, o disco fecha uma curva de raio
-       * `v / ω` = 105 / 1,22 rad/s ≈ **86 m**. Traduzindo para dentro do jogo:
-       * ele acompanha qualquer coisa que se mova em linha reta na frente dele,
-       * e PERDE o alvo que corta de lado a mais de ~55 m/s a curta distância —
-       * ou seja, quem arranca para o lado a menos de 52 m escapa, e quem só
-       * recua não — recuar mantém você no eixo da lâmina.
-       * Exatamente o que foi pedido.
+       * "O Kienzan deve seguir o usuário", e o usuário completou a regra na
+       * mesma frase — duas vezes, com dois anos de distância e a mesma
+       * exigência: *"é possível escapar, mas o player tem que se movimentar
+       * rápido para os lados"*, e depois *"o kienzan é o que persegue mais, o
+       * player só consegue desviar se ele estiver voando com burst
+       * lateralmente."*
+       *
+       * A segunda metade é a especificação inteira, ela é geométrica, e ela é a
+       * ÚNICA regra do arquivo que fixa os DOIS lados de uma desigualdade. Por
+       * isso este é o único `turnRate` do modo que não foi escolhido por
+       * fórmula: foi **medido**, e a medição desmentiu a fórmula.
+       *
+       * ------------------------------- por que a fórmula não serve para este
+       *
+       * A régua que o resto do arquivo usa (`flySpeed`) é a corrida angular: um
+       * alvo a `d` metros cruzando a `v` obriga o golpe a girar `v/d` rad/s, e
+       * quem não consegue fica para trás — daí `fuga = v/ω`. Ela é ótima para
+       * ordenar golpes e **péssima para decidir este número**, porque é um
+       * critério de regime permanente: ela pergunta se o disco consegue manter o
+       * nariz no alvo para sempre, quando o que decide um Kienzan é se ele passa
+       * a mais de 3,4 m (`hitRadius`) uma vez só, em menos de um segundo de voo.
+       *
+       * Perseguição pura (`perseguirPonto` aponta o nariz na posição ATUAL, sem
+       * antecipar) é gastadora: o disco entra numa curva de perseguição, chega
+       * atrás do alvo e desperdiça o giro. Medido, ele erra em distâncias onde a
+       * fórmula garantia acerto — a fuga real é ~1,7 vez a fuga calculada.
+       *
+       * ------------------------------------------------------- a medição
+       *
+       * Banco: o `perseguirPonto` e o `passoDeGiro` de verdade, a 60 Hz, na
+       * mesma ordem de `Disco.passo` (gira, depois anda subdividido pelo raio de
+       * corte), com os valores reais do golpe (105 m/s, 3,4 m, 4,5 s, cone 75°).
+       * Alvo a `d` metros arrancando de través. Faixa em que ele ESCAPA:
+       *
+       *      ω      reação 0      reação 0,15 s   reação 0,22 s
+       *      70   7,0 – 95,5 m   23 – 111,5 m    31,5 – 120 m
+       *     110   7,5 – 58,0 m   23 –  73,5 m    32   –  82,5 m
+       *     114   7,5 – 55,5 m   23 –  71,5 m    32   –  80,0 m
+       *     118   7,5 – 53,5 m   23 –  69,0 m    32   –  78,0 m
+       *     140   7,5 – 43,5 m   23 –  59,5 m    32   –  68,0 m
+       *
+       * Três coisas saem daí, e nenhuma delas estava na fórmula:
+       *
+       * 1. **O VOO NORMAL NUNCA ESCAPA.** Em nenhum `ω` de 70 a 140, em nenhuma
+       *    distância de 6 a 200 m. A metade "o voo normal não desvia" do pedido
+       *    é grátis; a única metade que custa calibragem é a outra.
+       * 2. **A fuga é um INTERVALO, não uma meia-reta.** Colado demais não dá
+       *    tempo de acumular deslocamento antes de o disco chegar (a 20 m ele
+       *    voa 0,19 s), e é por isso que existe um piso. O piso é do TEMPO DE
+       *    REAÇÃO e não do giro: ele fica em 23 m com 0,15 s e em 32 m com os
+       *    0,22 s de `NAMEK.bot.reaction`, igual em toda a coluna. Kienzan à
+       *    queima-roupa não se desvia, e isso é o prêmio de quem fechou a
+       *    distância — não um defeito deste número.
+       * 3. **Reagir tarde ajuda.** O teto SOBE com a reação (120 m contra 95 m,
+       *    a 70°/s), porque um disco que já comprometeu a curva na posição
+       *    velha erra mais feio. É contraintuitivo e é real.
+       *
+       * ------------------------------------------------- por que 114 e não 140
+       *
+       * O teto de fuga encolhe com o giro, e o que ele precisa cobrir é a FAIXA
+       * DE BRIGA: 22 a 55 m — `NAMEK.bot.tooClose` embaixo, `idealRange` em
+       * cima, e é literalmente a faixa que `bots.js` declara no estado "atacar".
+       * Medindo no caso mais severo (reação zero, reflexo perfeito):
+       *
+       *     ω = 112  →  escapa até 56,5 m   ✓
+       *     ω = 114  →  escapa até 55,5 m   ✓  ← o último que cobre
+       *     ω = 116  →  escapa até 54,5 m   ✗
+       *     ω = 140  →  escapa até 43,5 m   ✗  (12 m abaixo da briga)
+       *
+       * **114°/s é o maior giro que ainda honra a frase do usuário na distância
+       * em que o golpe é usado.** A 140 — o dobro literal — um Kienzan lançado
+       * na distância de briga do próprio modo não teria desvio: nem com burst,
+       * que é exatamente o que a frase promete que existe.
+       *
+       * Não é o dobro, e é 63 % a mais que os 70 de antes. Onde o pedido traz um
+       * número e uma condição e os dois não cabem juntos, quem manda é a
+       * condição — e o número foi levado o mais perto do dobro que a condição
+       * deixa.
+       *
+       * ------------------------------------ e ele é o que MAIS persegue, por tudo
+       *
+       * Não só pelo giro (114 passa os 110 do Galick Gun e fica atrás apenas do
+       * feixe, que é outro tipo de coisa — só curva com trava e gasta o arco em
+       * 0,41 s). Ele ganha em todas as vias de uma vez:
+       *
+       *     teto de correção  NENHUM        (único do repertório)
+       *     orçamento         114 × 4,5 s = 513°, sobre uma vida de 18 s
+       *     cone              75°           (o mais largo)
+       *     aquisição         300 m
+       *
+       *     rajada       39° de teto     Kamehameha  70° (`arcMax`)
+       *     Genki Dama   75° (`arcMax`)  Galick Gun 176° (teto pelo prazo)
+       *
+       * Os outros quatro te alcançam ou desistem; este te SEGUE. Os 513° não o
+       * transformam em bumerangue porque quem segura isso é o CONE: passou de
+       * 75° do rumo, a correção para. Medido sobre a vida inteira (18 s), um
+       * disco que errou gasta 65° a 91° de arco e **nunca volta** — a distância
+       * mínima depois de passar é a mesma do momento em que passou.
        *
        * Os 4,5 s de perseguição são quase a vida inteira dele: um disco que
        * persegue por um segundo e depois segue reto seria um disco que erra
        * bonito. Ele é o golpe barato do repertório (0,7 s de pose) e o de menor
        * área — perseguir é o que ele tem. */
       homing: {
-        turnRate: 70,
+        /* graus/s — MEDIDO, não derivado. 114 é o maior giro que ainda deixa o
+         * arranque lateral escapar em toda a faixa de briga (até 55 m), mesmo
+         * com reflexo instantâneo. A 116 o teto cai para 54,5 m e a promessa
+         * quebra. Ver a tabela acima antes de mexer. */
+        turnRate: 114,
+        /** s — quase a vida inteira do disco, e sem `arcMax` nenhum por cima:
+         *  são 513° de correção total, de longe o maior orçamento do modo. */
         duration: 4.5,
         /** graus — o cone é largo porque a lâmina contorna. */
         cone: 75,
@@ -851,26 +1773,48 @@ export const NAMEK = {
        * alguns perseguem mais, outros menos". A Genki Dama era, com o
        * Kamehameha, uma das duas retas puras do repertório.
        *
-       * Ela é a que MENOS persegue de todas, e por larga margem — 20°/s contra
-       * os 26 da rajada, os 55 do Galick Gun e os 70 do Kienzan. O motivo é o
-       * mesmo que antes recomendava não perseguir nada: 96 de dano com 11 m de
-       * raio de morte é o golpe que apaga alguém, e uma perseguição de verdade
-       * o transformaria numa sentença.
+       * Ela é a que MENOS persegue de todas, e continua sendo depois de o
+       * repertório inteiro dobrar de perseguição: 40°/s contra os 52 da rajada,
+       * os 114 do Kienzan, os 110 do Galick Gun e os 170 do Kamehameha. O motivo
+       * é o mesmo que antes recomendava não perseguir nada: 100 de dano com 16 m
+       * de raio de morte é o golpe que apaga alguém — e apaga o grupo em volta
+       * dele —, e uma perseguição de verdade o transformaria numa sentença.
        *
-       * O que sobrou é a correção que perdoa movimento e nada além disso. A
-       * 46 m/s, 20°/s (0,349 rad/s) fecham uma curva de **132 m de raio**, e a
-       * conta da fuga (`v > ω·d`, ver `flySpeed`) diz que quem arranca de lado
-       * com o boost escapa dela a **até 183 m** — a maior distância de fuga do
-       * jogo inteiro. Contra os 43 m do Kamehameha, é outra categoria de golpe:
-       * ele te alcança, ela só te acompanha.
+       * ------------------------------------------------------- 40°/s, e 75° de teto
        *
-       * Ela NÃO tem `soTrava`: 3,6 s parado carregando a bola já são
+       * O giro dobrou (era 20) e o teto de correção total foi de 50° para 75°,
+       * que NÃO é o dobro. A conta que decide isso é a mesma do Kamehameha, e
+       * ela vale repetir porque é contraintuitiva: o que o alvo sente não é o
+       * ângulo, é o DESVIO LATERAL que o golpe compra, e ele é `R·(1−cos θ)`.
+       *
+       *     antes   R = 46/0,349 = 132 m,  θ = 50°  →  132 · 0,357 = 47,2 m
+       *     agora   R = 46/0,698 =  66 m,  θ = 75°  →   66 · 0,741 = 48,8 m
+       *
+       * Ou seja: com o raio de curva caindo pela metade, manter os 50° teria
+       * ENCOLHIDO o alcance da curva para 24 m. Os 75° devolvem o desvio de
+       * antes — e ela o alcança em 1,9 s em vez de 2,5 s. É a perseguição
+       * dobrada onde ela se sente (a bola vira duas vezes mais rápido) sem que a
+       * esfera de 32 m de diâmetro passe a varrer meio mapa.
+       *
+       * ---------------------------------------------------------------- a fuga
+       *
+       * A conta de sempre (`v > ω·d`, ver `flySpeed`): quem arranca de lado com
+       * o boost escapa dela a **até 92 m** (eram 183), e quem só voa, a até
+       * 37 m. Continua sendo a MAIOR distância de fuga do jogo inteiro — contra
+       * os 22 m do Kamehameha, os 33 m do Galick Gun e os 32 m do Kienzan, é
+       * outra categoria de golpe: eles te alcançam, ela só te acompanha.
+       *
+       * Ela NÃO tem `soTrava`: 5,2 s parado carregando a bola já são
        * comprometimento de sobra, e cobrar a trava por cima seria cobrar duas
        * vezes pelo mesmo gesto. */
       homing: {
-        turnRate: 20,
-        /** graus — teto da correção total. Ver `kamehameha.homing.arcMax`. */
-        arcMax: 50,
+        /** graus/s — dobrado (era 20). Ainda o menor do repertório, de longe. */
+        turnRate: 40,
+        /** graus — teto da correção total. Ver `kamehameha.homing.arcMax`. 75 e
+         *  não 100: o que se conserva é o desvio lateral, não o ângulo. */
+        arcMax: 75,
+        /** s — prazo. O `arcMax` fecha antes (1,9 s); isto vale quando o alvo
+         *  sai do cone no meio e a bola não chega a gastar o orçamento. */
         duration: 4,
         /** graus — cone largo: a bola é enorme e vira devagar. */
         cone: 45,
@@ -882,57 +1826,184 @@ export const NAMEK = {
   /** A ordem dos especiais nas teclas 1–4 e no HUD. */
   specialOrder: ["kamehameha", "galick", "disk", "genki"],
 
-  /* ===================================================================== trava
-     A TRAVA DE ALVO — e a regra que manda em tudo aqui é uma frase:
+  /* ==================================================== embate — poder × poder
+     O QUE ACONTECE QUANDO DOIS PODERES SE ENCOSTAM NO AR.
 
-         **LOCK-ON ≠ CÂMERA FIXA NO INIMIGO.**
+     Até aqui, nada: dois Kamehamehas se atravessavam, uma rajada de ki
+     entrava por dentro de uma Genki Dama e saía do outro lado, e o Galick Gun
+     passava por um Kienzan como se fossem hologramas. Quem implementa é
+     `src/namek/powers/colisao.js`, e o cabeçalho de lá tem o argumento inteiro
+     — o que mora AQUI são os números e a tabela, porque a classificação é
+     regra de jogo e regra de jogo não pode existir em duas versões.
 
-     A trava é ASSISTÊNCIA DE COMBATE. Ela diz quem é o alvo; ela não diz para
-     onde o corpo vai, não puxa ninguém para lugar nenhum e não tira do jogador
-     um grau de liberdade sequer. O que ela entrega é: os ataques sabem em quem
-     mirar, a câmera sabe o que manter no quadro, e o corpo ganha uma correção
-     de rumo — forte na hora do golpe, quase nula enquanto se voa.
+     ------------------------------------------------------------- as quatro regras
 
-     O que estava aqui antes atendia a metade disso e falhava na outra: a câmera
-     saía de trás do lutador e ia para cima da LINHA que o liga ao alvo, olhando
-     para um ponto a 42 % do caminho. Voar de lado passava a mostrar o lutador de
-     perfil cruzando a tela; dar a volta no inimigo girava a lente junto, à
-     mesma velocidade angular do jogador. Era câmera presa ao inimigo, que é
-     justamente o que não se quer.
+     1. **Pequeno não derruba grande.** "Um Galick Gun não pode ser explodido
+        por um poder rápido." O pequeno morre com um clarão; o grande segue
+        intacto e SEM DESVIO — nem um grau, senão a rajada barata viraria um
+        leme de graça contra o golpe que custa a barra inteira.
+     2. **Grande contra grande: os dois detonam** no ponto de contato, com o
+        mesmo estouro que cada um faz ao bater no chão. "Cada um" é literal, e
+        é a leitura certa de "assim como se tivesse pegado no chão": o
+        Kamehameha abre o poço fundo dele, a esfera abre a bacia dela e o
+        Kienzan deixa o talho dele — o mesmo som, as mesmas partículas e a
+        mesma potência que o golpe já tem no terreno. No ar não há cratera; a
+        um `craterAr` de raio do solo, o comportamento de chão volta a valer.
+     3. **A Genki Dama é imune a tudo, menos a outra Genki Dama.** Qualquer
+        outro poder que a encoste é CONSUMIDO por ela — detona ali e ela segue
+        inteira. Duas Genki Damas se destroem.
+     4. **As duas bolas de carga do Kamehameha** (durante o `windup`) produzem
+        uma explosão à parte, com raios elétricos, e cancelam os dois golpes.
 
-     Os três blocos abaixo são os três sistemas que o §17 do pedido separa —
-     seleção de alvo, câmera, assistência de mira — e eles são independentes de
-     propósito: a câmera LÊ a trava e não manda nela, o combate LÊ a trava e não
-     manda nela, e o movimento não a conhece.
+     A bola de carga só embate com outra bola de carga, e essa restrição É a
+     regra 1 aplicada com honestidade: se uma rajada de ki pudesse estourar a
+     esfera que se forma nas mãos, o poder pequeno estaria derrubando o poder
+     grande — pela porta dos fundos, e no instante em que ele é mais caro. O
+     corpo de quem carrega já responde por aquele ponto do espaço.
+     ======================================================================== */
+  embate: {
+    /* A TABELA. Um golpe que não está aqui não embate com nada — é a recusa
+       segura, e é de propósito: um especial novo entra na briga no dia em que
+       alguém escrever a classe dele, não por acidente no dia em que for
+       criado. */
+    classe: {
+      blast: "pequeno",
+      kamehameha: "grande",
+      galick: "grande",
+      disk: "grande",
+      genki: "grande",
+    },
 
-     Quem implementa é `src/namek/lockon.js` (o alvo), `src/namek/camera.js`
-     (o enquadramento) e `src/namek/game.js` (a costura). */
+    /* Multiplicador dos raios somados no teste de contato.
+     *
+     * 1,15 e não 1: os dois projéteis são reconstruções (o meu é exato, o do
+     * outro é interpolado a partir do disparo que a sala retransmitiu), e
+     * exigir sobreposição perfeita entre duas simulações que já divergiram
+     * alguns metros é exigir que o embate quase nunca aconteça. Quinze por
+     * cento é a folga que faz o encontro parecer encontro sem fazer os dois
+     * golpes se anularem à distância. */
+    folga: 1.15,
+
+    /* Raio de embate da BOLA DE CARGA do Kamehameha, em frações do `hitRadius`
+     * do golpe (3,6 m → 2,2 m).
+     *
+     * O desenho dela é `hitRadius · 0,22` (0,79 m — ver `beam.js`, que explica
+     * por que ela é pequena: uma parede branca a sete metros da lente tapava a
+     * tela inteira). Um raio de embate igual ao desenho exigiria dois lutadores
+     * a 1,6 m um do outro para o choque acontecer, que é distância de soco: a
+     * regra 4 existiria e nunca dispararia. Com 0,6 são 4,3 m entre os dois
+     * peitos — perto o bastante para ser um confronto declarado, longe o
+     * bastante para ser alcançável em voo. */
+    raioCarga: 0.6,
+
+    /* m — raio de busca ao APLICAR um embate que veio da rede.
+     *
+     * A mensagem não carrega id de projétil (não existe um: o `NC2S.SPECIAL`
+     * nunca teve), ela carrega dono + golpe + ponto. Cada cliente casa isso com
+     * o SEU projétil daquele dono e daquele tipo mais próximo do ponto. 120 m
+     * é generoso porque a cabeça de um Kamehameha anda 340 m/s: meio RTT de
+     * 100 ms já são 17 m, e a minha cópia continuou voando enquanto a
+     * confirmação subia e descia. Casar errado é praticamente impossível — é
+     * preciso a MESMA pessoa ter DOIS golpes do MESMO tipo vivos a menos de
+     * 120 m um do outro. */
+    busca: 120,
+
+    /* s — janela em que a SALA considera dois avisos do mesmo embate como o
+     * mesmo acontecimento. Ver `NamekRoom.registrarEmbate`: qualquer cliente
+     * que veja o choque pode avisar, e numa sala de quinze isso são até quinze
+     * avisos do mesmo par em poucos milissegundos. */
+    janelaSala: 0.4,
+
+    /* Fração do raio de morte a que o solo ainda "conta" numa detonação de
+       embate. Mesma régua que a esfera já usa em `orb.js` (`hitRadius · 2`), e
+       pelo mesmo motivo: uma explosão de 16 m detonando a 20 m do chão arranca
+       chão; a 200 m, não. */
+    craterAr: 2,
+
+    /* ---------------------------------------------------- a explosão de carga
+       Os números da regra 4 — o único efeito PRÓPRIO deste arquivo, e o pedido
+       foi explícito quanto ao tamanho: "dimensionada para ser vista de centenas
+       de metros". Daí o raio absurdo e a duração longa; a resolução das malhas
+       (quantos arcos, quantos nós) mora em `colisao.js`, que é direção de arte,
+       pela mesma divisão que `orb.js` já documenta. */
+    carga: {
+      /** m — raio da bola de fogo. 78 m de raio são 156 de diâmetro: a 500 m de
+       *  distância isso ocupa 18° de tela, mais que a Genki Dama inteira. */
+      raio: 78,
+      /** m — até onde os arcos elétricos chegam, em raios da bola. */
+      arco: 1.9,
+      /** s — o tempo todo do efeito. Longo de propósito: quem estava do outro
+       *  lado da arena precisa ter tempo de virar a cabeça e ver. */
+      duracao: 1.7,
+      /** Força do pedido de luz (a escala de `relato.luz`, em que o feixe pede
+       *  0,85 e a Genki Dama 1,9). Ela GANHA de tudo, e deve. */
+      luz: 2.6,
+      /** Tremor de câmera de quem estava carregando, e por quanto tempo. */
+      tremor: 1.4,
+      tremorT: 0.9,
+      /** Cor do miolo. Quase branca: o que está no centro está quente demais
+       *  para ter matiz — a cor fica nos arcos, que vêm do próprio golpe. */
+      cor: 0xdff4ff,
+    },
+  },
+
+  /* ===================================================================== alvo
+     QUEM É O ALVO — e a TRAVA MANUAL não existe mais.
+
+     *"Pode remover o atalho que dá lock-in no teclado (R). Esse atalho não é
+     mais necessário."*
+
+     Este bloco chamava-se "trava" e girava em torno de um interruptor: o `R`
+     prendia um adversário, a câmera passava a enquadrar os dois, o corpo ganhava
+     uma correção de rumo e o Kamehameha ganhava o direito de fazer curva. Tirado
+     o `R`, **não sobrou gesto nenhum capaz de prender alguém** — e o que só o
+     `R` podia acender deixou de ser "código pouco usado" para ser código
+     inalcançável. Por isso o que saiu, saiu inteiro em vez de ficar aqui
+     esperando um dono:
+
+     • `alcance`, `cone`, `viesDaMira`, `perda` — os critérios de ADQUIRIR e de
+       SEGURAR um alvo travado. Sem trava não há o que adquirir nem o que perder.
+     • `assist` — a correção de rumo que a trava dava ao corpo. Ela não foi
+       transferida para a mira assistida de propósito: a mira assistida é uma
+       leitura do quadro atual e o gesto que ela serve é varrer o mouse por
+       vários adversários. Uma assistência que puxasse o olhar para quem está sob
+       o cursor brigaria com esse gesto justamente enquanto ele acontece.
+     • O ANEL VERMELHO do alvo travado (`NamekHud.setLockRing`) e o retículo
+       "travado" — o marcador do compromisso que deixou de existir. Quem marca
+       hoje é o círculo de cada lutador acendendo (`NamekHud.setAneis`).
+
+     **O que sobrou** é a MIRA ASSISTIDA (`mira`, logo abaixo), e ela herdou a
+     única função da trava que valia por si: dizer aos projéteis em quem mirar.
+     É ela que sustenta o `soTrava` do Kamehameha — ver `alvoDeAtaque`.
+
+     E `camera` continua aqui, DORMENTE e de propósito — ver o bloco.
+
+     Quem implementa é `src/namek/lockon.js` (o alvo e o painel), `src/namek/
+     camera.js` (o enquadramento) e `src/namek/game.js` (a costura). */
   lock: {
     /* ============================================== a MIRA ASSISTIDA (soft)
      *
-     * **Um alvo sem trava**, escolhido a cada quadro por quem está mais perto do
-     * CURSOR na tela. É o pedido, e ele descreve exatamente o problema que a
-     * trava não resolve:
+     * **O único alvo que existe**, escolhido a cada quadro por quem está mais
+     * perto do CURSOR na tela. É o pedido, e ele descreve exatamente o problema
+     * que a trava manual não resolvia:
      *
      *   *"os poderes sempre devem ir no player cujo cursor está mais próximo. Se
      *   o cursor estiver muito longe, aí os poderes saem retos… dessa forma o
      *   player consegue atirar em vários players movendo o mouse rapidamente,
      *   sem ter que ficar preso a algum player."*
      *
-     * A diferença para a trava (`R`) é o COMPROMISSO. A trava é uma decisão que
-     * dura: ela muda a câmera, sobrevive ao alvo sair da tela, e é o preço da
-     * curvatura do Kamehameha. A mira assistida não decide nada — ela é uma
+     * A diferença para a trava que existia no `R` era o COMPROMISSO: aquela era
+     * uma decisão que durava — mudava a câmera, sobrevivia ao alvo sair da tela,
+     * e era o preço da curvatura do Kamehameha. Esta não decide nada: é uma
      * leitura do quadro atual, morre no quadro seguinte, e a única coisa que ela
-     * faz é dizer aos projéteis para onde ir.
+     * faz é dizer aos projéteis para onde ir. Tirada a trava, ficou esta — e o
+     * modo não perdeu função nenhuma, porque a única que importava era essa.
      *
-     * Por isso ela **não mexe na câmera e não tem anel vermelho**: o pedido é
-     * literal sobre isso ("sem travar a câmera, sem a parte vermelha nem nada").
-     * O aviso é o círculo que cada lutador já tem mudando de cor — ver
-     * `NamekHud.setAneis`.
-     *
-     * A trava GANHA quando existe: ela é a intenção declarada do jogador, e uma
-     * mira automática que a contradissesse seria o software desfazendo uma
-     * decisão explícita. Ver `LockOn.alvoDeAtaque`.
+     * Ela **não mexe na câmera e não tem anel vermelho**: o pedido é literal
+     * sobre isso ("sem travar a câmera, sem a parte vermelha nem nada"). O aviso
+     * é o círculo que cada lutador já tem mudando de cor — ver
+     * `NamekHud.setAneis` — e, desde o pedido da vida do alvo, a barra de vida
+     * dele no painel do canto (ver `painel`, logo abaixo).
      */
     mira: {
       /* Raio da zona, em frações da MEIA-ALTURA da tela.
@@ -968,94 +2039,94 @@ export const NAMEK = {
       cone: 70,
     },
 
-    /* ----------------------------------------------------- seleção de alvo */
-    /* m — a RÉGUA da distância, e ela deixou de ser uma parede.
+    /* ================================================= o PAINEL DO ALVO ----
+     * A VIDA DE QUEM ESTÁ DO OUTRO LADO — **um widget só, com duas razões de
+     * aparecer**. São dois pedidos que chegaram juntos e que descrevem a mesma
+     * placa do canto direito:
      *
-     * Era o alcance máximo: além de 420 m não se travava, e o que já estivesse
-     * travado caía. Isso pôs um teto na trava mais baixo que o teto de voo (520
-     * m), então subir ao céu para procurar quem estava no chão desligava
-     * justamente o sistema que serve para achar quem está longe. Hoje não existe
-     * distância que impeça de travar nem distância que solte a trava — quem
-     * solta é o alvo sair do quadro (ver `perda`), que é uma condição que o
-     * jogador controla e entende.
+     *   1. *"Quando o player acerta o outro deve aparecer a vida do player que
+     *      ele acertou na tela dele diminuindo, independente se tiver lock-in ou
+     *      não. Ou seja, o player que atacou sabe quanto de vida do outro player
+     *      ele tirou."*
+     *   2. *"No lock-in que acontece quando o mouse fica perto, a vida do player
+     *      inimigo deve aparecer para o player que está no lock-in. Deve ser a
+     *      vida dinâmica e diminui conforme o player perde vida seja para ele ou
+     *      outros players."*
      *
-     * O número continua aqui porque duas contas precisam de uma escala: a nota
-     * de `proximidade` na hora de escolher entre dois candidatos (`_melhor`), e
-     * o `avisoEm` que faz o anel piscar. Nas duas ele diz "a partir daqui é
-     * longe", e em nenhuma ele diz "a partir daqui não vale". */
-    alcance: 420,
-    /** graus — meio-ângulo do cone de aquisição. Generoso, mas não "atrás de
-     *  mim": travar em quem está às costas seria travar por engano. */
-    cone: 55,
-    /* Peso da DISTÂNCIA AO CENTRO DA TELA contra a distância no espaço, na hora
-     * de escolher.
+     * DOIS WIDGETS SERIAM O ERRO. As duas metades mostram exatamente a mesma
+     * coisa (retrato, nome, barra de vida com fantasma) do mesmo adversário, na
+     * mesma quina da tela — e na briga elas são a MESMA pessoa quase sempre, o
+     * que poria duas placas idênticas uma em cima da outra. É a placa do alvo do
+     * BT3, que já existia: o que mudou foi quem a acende.
      *
-     * O jogador aponta para quem ele quer brigar — essa é a intenção declarada,
-     * e ela ganha. Mas com peso 1 (só o centro da tela), um adversário a 300 m
-     * exatamente no eixo vencia um a 20 m três graus fora, o que é sempre a
-     * escolha errada numa briga colada. 0,72 é o meio: manda quem está mirado,
-     * e o desempate é a proximidade. */
-    viesDaMira: 0.72,
-
-    /* ------------------------------------------------------------- a perda
-       "Não perder o lock simplesmente porque o inimigo saiu por alguns frames
-       da tela" — o pedido é explícito, e por isso a perda é um RELÓGIO e não uma
-       condição instantânea. O alvo pode sair do quadro, passar por trás de uma
-       montanha e voltar; o que derruba a trava é ele ficar inalcançável por
-       tempo suficiente. */
-    perda: {
-      /** s fora do quadro antes de a trava cair. É a ÚNICA perda por relógio que
-       *  existe: a distância saiu da conta junto com a parede de `alcance`. */
-      tempo: 2.5,
-      /** Fração de NDC além da qual o alvo conta como "fora do quadro". Maior
-       *  que 1 de propósito: uma margem além da borda da tela, para quem está
-       *  raspando o canto não começar a contagem. */
-      margem: 1.3,
-      /** Fração de `alcance` a partir da qual a trava começa a piscar no HUD.
-       *  É o "a indicação visual pode informar que o alvo está distante". */
-      avisoEm: 0.8,
-    },
-
-    /* ------------------------------------------------------- assistência ---
-     * A correção de rumo que a trava dá ao CORPO, em rad/s de velocidade
-     * angular. Ela nunca é uma atribuição de ângulo: é um teto de giro, e um
-     * teto de giro pode sempre ser vencido pelo mouse — que é o que garante que
-     * o jogador continua no controle.
+     * ------------------------------------------------------------ precedência
      *
-     * Os quatro valores são a escada do §8 do pedido: fraca voando, forte
-     * atacando, mais forte ainda no corpo a corpo.
-     */
-    assist: {
-      /* rad/s — só voando.
+     * **O ACERTO GANHA da mira, enquanto a janela dele estiver viva.** As razões,
+     * em ordem:
+     *
+     * • acertar é um ACONTECIMENTO e mirar é um estado. O painel do acerto
+     *   responde "quanto eu tirei dele?", que é uma pergunta com prazo de
+     *   validade de dois segundos; o da mira responde "quem vai levar o próximo
+     *   tiro?", que continua verdadeiro para sempre e volta sozinho quando a
+     *   janela fecha;
+     * • o conflito é raro por construção — quem você acerta é quase sempre quem
+     *   está sob o cursor —, e quando ele existe é porque um golpe SEU está
+     *   cobrando de alguém enquanto o cursor já passeia por outro (o feixe
+     *   queimando um enquanto se procura o próximo). Nesse caso o que importa é
+     *   o estrago que está saindo, não o alvo que ainda não foi escolhido;
+     * • um acerto novo sempre toma a frente, inclusive de outra vítima — o painel
+     *   segue o último golpe que saiu da sua mão.
+     *
+     * As duas metades leem a vida do MESMO lugar (`RemoteFighters`, alimentado
+     * pelo `NS2C.VITALS` a 10 Hz e por todo `NS2C.HURT`), e é isso que faz a
+     * barra descer quando um TERCEIRO acerta o seu alvo. */
+    painel: {
+      /** s que o painel fica na tela depois do último acerto MEU.
        *
-       * 0,25 rad/s são 14°/s, e o número veio de uma MEDIDA: com 0,7 (40°/s),
-       * virar a mira 60° para longe do inimigo era desfeito pela assistência em
-       * um segundo e meio. Isso não é "correção leve", é o software decidindo
-       * para onde o jogador olha — e o §8 do pedido é explícito sobre a
-       * assistência ter de ser fraca justamente quando se está só voando.
+       *  Longo o bastante para ser lido depois que a briga saiu de cima (a
+       *  rajada sai a 6 Hz; a última bola de uma sequência não pode sumir junto
+       *  com o dedo) e curto o bastante para não virar uma placa permanente que
+       *  contradiz a mira. */
+      acerto: 2.6,
+      /** s que o painel sobrevive ao cursor SAIR de cima de alguém.
        *
-       * Com 14°/s ela endireita quem está à deriva ao longo de vários segundos
-       * e não briga com ninguém que decidiu virar: um movimento de mouse comum
-       * gira dez vezes isso num quadro só. */
-      passiva: 0.25,
-      /** rad/s — durante e logo depois de um ataque. */
-      ataque: 4.5,
-      /** rad/s — dentro do alcance de corpo a corpo. */
-      perto: 8,
-      /** m — o que conta como corpo a corpo para a assistência. */
-      alcancePerto: 20,
-      /** s — quanto a assistência forte dura depois do último ataque. Sem esta
-       *  cauda, a correção viveria um quadro e não corrigiria nada. */
-      janela: 0.35,
-      /** Fração da assistência que sobra quando o jogador está MANOBRANDO (com
-       *  entrada lateral ou vertical). É o "mais fraca quando está tentando
-       *  escapar ou se reposicionando": quem vira de propósito não é
-       *  desvirado. */
-      manobra: 0.2,
+       *  Sem esta cauda o painel pisca: a zona da mira assistida é apertada
+       *  (`mira.raioTela`) e um adversário voando a 60 m/s entra e sai dela
+       *  várias vezes por segundo. Meio segundo é mais que a maior lacuna que um
+       *  alvo em fuga produz e menos que o tempo de trocar de alvo de propósito.
+       *
+       *  Ela vale só para o PAINEL. O alvo dos projéteis (`LockOn.sob`) não tem
+       *  cauda nenhuma e morre no quadro em que o cursor sai — atirar em quem o
+       *  cursor já deixou seria a assistência decidindo pelo jogador. */
+      mira: 0.5,
+      /** s do esmaecimento na saída. O painel some desbotando em vez de piscar
+       *  para fora — é a mesma cortesia que os pinos da bússola já têm. */
+      fade: 0.35,
+      /** s que o número do dano fica na tela depois do último acerto. Menor que
+       *  `acerto` de propósito: o "−34" é a notícia, e ele deve apagar antes da
+       *  placa para não continuar afirmando um golpe que já passou. */
+      dano: 1.6,
     },
 
     /* ------------------------------------------------------------- câmera --
-     * O ENQUADRAMENTO, e ele é o coração do pedido §4–§6.
+     * DORMENTE: **nada nesta versão do modo passa um alvo para a câmera.**
+     *
+     * O enquadramento de dois corpos era o privilégio da trava manual, e o `R`
+     * foi embora (ver o cabeçalho do bloco). `NamekGame` passa `null` como
+     * `lockTarget`, então `NamekCamera._enquadrarTrava` — e cada número daqui —
+     * nunca chega a rodar: a lente fica sempre no enquadramento livre.
+     *
+     * Fica de pé, e não vai para o lixo, por duas razões. A primeira é que a
+     * mira assistida **não pode** herdar isto: o pedido é literal em "sem travar
+     * a câmera", e uma lente que se ajeitasse sozinha a cada adversário que
+     * passa sob o cursor seria o oposto do gesto que ela serve. A segunda é que
+     * este é o único enquadramento de dois corpos que o modo tem escrito, com a
+     * zona morta e a mistura de braço já medidas — jogá-lo fora custaria
+     * reescrevê-lo por inteiro no dia em que um alvo designado voltar (uma
+     * finalização, um duelo, um modo de treino), e ele não custa um ciclo por
+     * quadro enquanto ninguém o chama.
+     *
+     * O que ele fazia, para quem for acordá-lo — era o coração do pedido §4–§6:
      *
      * A câmera NÃO aponta para o inimigo. Ela mantém uma ZONA da tela em que o
      * alvo deve permanecer, e só se mexe quando ele sai dessa zona — e aí só o
@@ -1136,17 +2207,23 @@ export const NAMEK = {
      * duzentos Kamehamehas para ficar coberta. A rajada, que é o que sai o
      * tempo todo, mal marcava.
      *
-     * Agora a rajada abre 8,3 m e o Kamehameha, 9 m de boca com 20 m de fundo
-     * (ver `craterDeep` no golpe). O que muda de verdade é a base: com 3,2 m,
-     * QUALQUER coisa que encoste no chão deixa buraco de gente, e é a soma
-     * desses buracos — não os quatro especiais — que come a ilha.
+     * Agora a rajada abre **5,8 m de boca por 6,1 m de fundo** (ver
+     * `blast.power` e `blast.craterDeep`) e o Kamehameha, 9 m de boca com 19,5 m
+     * de fundo (ver `craterDeep` no golpe). O que muda de verdade é a base: com
+     * 3,2 m, QUALQUER coisa que encoste no chão deixa buraco de gente, e é a
+     * soma desses buracos — não os quatro especiais — que come a ilha.
      *
      * `craterDepth` de 0,35 para 0,62 é o "mais fundas" literal. Ele não faz a
      * cratera virar poço porque a bacia é um cosseno elevado (`craterDelta`):
      * fundo redondo, parede que suaviza na borda. O que ele muda é que dá para
-     * ENTRAR no buraco — 8,3 m de boca por 5,1 m de fundo é uma bacia em que um
-     * lutador de 1,78 m se esconde, e era isso que faltava para a destruição
-     * ser terreno em vez de textura. */
+     * ENTRAR no buraco — e a rajada, que hoje deixa 11,6 m de boca por 6,1 m de
+     * fundo, some com um lutador de 1,78 m em UM tiro. Era isso que faltava para
+     * a destruição ser terreno em vez de textura.
+     *
+     * Os dois multiplicadores de fundura (`craterDeep`) são a exceção a esta
+     * escala e existem porque ela move raio e profundidade JUNTOS: o Kamehameha
+     * pede 3,5 para perfurar em vez de amassar, e a rajada pede 1,7 para cavar
+     * em vez de arranhar. Quem os interpreta é `craterFor`. */
     /** m — raio base de qualquer cratera. */
     craterBase: 3.2,
     /** m — quanto o raio cresce com a raiz da potência. */
@@ -1174,11 +2251,18 @@ export const NAMEK = {
      * `NamekField.addCrater`). O corte continua aqui só para um golpe de
      * potência zero não pedir cratera nenhuma.
      *
-     * Precisa ficar ABAIXO de `blast.power` (0,0156). Quando a rajada foi
-     * reduzida pela metade para abrir uma cratera menor (8,3 m → 4,1 m), 0,1
-     * ficou acima dela — e o corte, que devia só filtrar potência zero,
-     * passou a filtrar a rajada inteira: nenhum tiro rápido abria cratera
-     * nenhuma, grande ou pequena. */
+     * **Precisa ficar ABAIXO de `blast.power`**, e essa é a única invariante
+     * desta linha. Quando a rajada foi reduzida pela metade para abrir uma
+     * cratera menor (8,3 m → 4,1 m, potência 0,45 → 0,0156), 0,1 ficou acima
+     * dela — e o corte, que devia só filtrar potência zero, passou a filtrar a
+     * rajada inteira: nenhum tiro rápido abria cratera nenhuma, grande ou
+     * pequena. Foi o defeito de b7cc70c.
+     *
+     * A rajada voltou a subir depois (0,117, uma boca de 5,8 m), então hoje a
+     * folga é de uma ordem de grandeza. **0,01 fica onde está mesmo assim**: o
+     * conserto não foi "acompanhar a rajada", foi pôr o corte tão embaixo que
+     * nenhum ajuste futuro de balanceamento o alcance. Um corte que precisa ser
+     * lembrado toda vez que outro número muda é o mesmo bug esperando. */
     craterMinPower: 0.01,
     /** m — queda a partir da qual o pouso abre cratera e levanta poeira. */
     slamSpeed: 26,
@@ -1223,29 +2307,324 @@ export const NAMEK = {
     lava: {
       /* m — a cota em que a lava assenta. **Bem abaixo do mar (−8).**
        *
-       * Era −14, e o pedido foi *"a lava deve ficar mais funda"*. O número não é
-       * de gosto: ele decide quanto de PAREDE existe entre a boca do buraco e a
-       * poça, e é essa parede que faz o poço ler como poço.
+       * −14 → −28 → −56, e as três vezes o pedido foi o mesmo: *"a lava deve
+       * ficar mais funda"*, e depois *"para aparecer deve ser ainda mais funda.
+       * O dobro de fundura."* O número não é de gosto: ele decide quanto de
+       * PAREDE existe entre a boca do buraco e a poça, e é essa parede que faz o
+       * poço ler como poço.
        *
-       * Com −14 e um relevo de clareira a +1,2, sobravam quinze metros — o
-       * bastante para o buraco ser uma bacia com fundo laranja, e não o bastante
-       * para ele ser um poço. Com −28 são quase trinta metros de rocha em volta,
-       * e as camadas de cor que o terreno pinta por profundidade (terra, marrom
-       * escuro, rocha cinza, brasa) ganham espaço para acontecer todas antes de
-       * a lava aparecer — hoje elas ficavam espremidas.
+       * A régua é o relevo da clareira. Medido em `NamekField.baseHeight` sobre
+       * o raio de nascimento (150 m), ele vai de **−0,5 a +38 m, com média
+       * +3,0**, e o centro exato está em +1,2 — a ondulação do piso é pequena,
+       * mas a saia de duas das montanhas soltas entra na clareira. Contra o
+       * ponto médio:
        *
-       * O custo é quanto se cava para chegar lá, e ele foi medido: um Kamehameha
-       * abre 19,5 m de fundo e não chega; dois chegam. A rajada precisa de ~8
-       * tiros no mesmo ponto. Isso é uma conquista, que é o que ela deve ser. */
-      nivel: -28,
-      /** m — o fundo tem de passar disto para a poça acender. */
-      gatilho: -32,
+       *     −14   15 m de parede   uma bacia com fundo laranja
+       *     −28   29 m             um poço
+       *     −56   57 m             um POÇO, com as camadas de solo inteiras
+       *
+       * Os 57 m são o que as cinco camadas de cor do terreno precisavam para
+       * caber (terra clara, terra funda, rocha, rocha-mãe, brasa). Elas estavam
+       * calibradas para 34 m de escavação e ficariam espremidas no primeiro
+       * terço do buraco — ver `corDeCratera`, em `world/terrain.js`, que foi
+       * reescalada junto com esta linha e não se ajusta sozinha.
+       *
+       * ---------------------------------------------------- o custo, MEDIDO
+       *
+       * Chegar à lava é cavar `1,2 − (−64) = 65,2 m` no centro do buraco. Quem
+       * cava é a fusão de crateras (`NamekField.addCrater`): o primeiro golpe
+       * vale a fundura inteira e cada golpe seguinte no mesmo ponto acrescenta
+       * 80 % dela. Com `craterFor` dando `raio · 0,62 · craterDeep`:
+       *
+       *     KAMEHAMEHA  9,0 m de boca × 0,62 × 3,5 = 19,5 m por golpe
+       *                 19,5 → 35,1 → 50,7 → 66,3      **4 golpes** (eram 2)
+       *     RAJADA      5,8 m de boca × 0,62 × 1,7 = 6,1 m por tiro
+       *                 6,1 → … → 64,8 (13) → 69,7     **14 tiros** (eram 16)
+       *     GENKI DAMA  52 m de boca × 0,62 = 32,2 m por golpe
+       *                 32,2 → 58,0 → 83,8             **3 golpes**
+       *     GALICK GUN  16,3 m por golpe → **5 golpes**
+       *     KIENZAN     10,9 m por golpe → **8 golpes**
+       *
+       * O Kamehameha DOBROU de custo, que é exatamente o pedido. A rajada quase
+       * não mudou (16 → 14) porque a cratera dela cresceu no mesmo movimento
+       * (ver `blast.power` e `blast.craterDeep`) — e 14 tiros no mesmo ponto são
+       * 2,3 s de gatilho preso mirando o mesmo palmo de chão, o que continua
+       * sendo uma conquista e não um acidente.
+       *
+       * Os números acima são do centro. Varrendo a clareira inteira (317 pontos
+       * numa grade de 15 m dentro do raio de nascimento), o Kamehameha fura em
+       * **4 golpes em 68 % dela e em 5 no resto**, e não há um único ponto que
+       * resista a 10. É esse "não há um único ponto" que custou o teto de
+       * escavação de `field.js` — ver `DESL_MIN`, que subiu junto.
+       *
+       * A conta ignora o corredor que o Kamehameha abre enquanto atravessa a
+       * rocha (`atravessar`), como sempre ignorou: ali os buracos caem ao longo
+       * do trajeto e só se somam quando o feixe é apontado quase para baixo. */
+      nivel: -56,
+      /* m — o fundo tem de passar disto para a poça acender.
+       *
+       * Oito metros abaixo de `nivel`, e a distância entre os dois é o que
+       * impede uma poça de nascer rasa demais para ter onde assentar: a lava é
+       * desenhada como um disco plano na cota de `nivel` (ver `world/lava.js`),
+       * então um buraco que parasse exatamente ali mostraria o disco raspando o
+       * chão. Os oito metros de folga garantem que, quando ela acende, já existe
+       * bacia embaixo dela.
+       *
+       * Acompanhou o `nivel` na duplicação (−32 → −64), e tinha de acompanhar:
+       * ele é medido na mesma régua e não em fração. */
+      gatilho: -64,
       /** dano por segundo em quem encosta. Alto: é para doer, não para coçar. */
       dano: 34,
       /** m — quanto acima da superfície da lava o toque ainda conta. */
       margem: 1.8,
       /** m — teto do raio de uma poça, por segurança contra número absurdo. */
       raioMax: 40,
+    },
+  },
+
+  /* ---------------------------------------------------- os dois planetas ----
+     "Adicione 2 planetas distintos grandes no cenário. Eles devem ficar
+     distantes. Devem ser planetas parecidos com luas. Kamehameha nesses planetas
+     os destrói. Porém, após destruído, cai uma chuva de meteoros pegando fogo de
+     tamanhos variados no cenário, causando grandes explosões e deformidade."
+
+     ---------------------------------------------------------- o que eles são
+
+     Duas ESFERAS DE VERDADE, e não discos pintados no domo. A diferença importa
+     em três lugares e é ela que dita todos os números abaixo:
+
+     • **Dá para acertá-las.** O Kamehameha é testado contra a esfera por
+       interseção raio-esfera (ver `NamekPlanetas.naMira`), e não por um
+       "cosseno maior que tanto" — o que é a mesma conta só enquanto o atirador
+       está no centro do mundo.
+     • **O relevo as esconde.** Elas escrevem profundidade a 2.400 m, então a
+       serra na frente as recorta como recorta qualquer outra coisa. Um disco no
+       fragmento do domo apareceria POR CIMA da montanha, porque o domo desenha
+       primeiro e sem profundidade.
+     • **Elas acompanham o olho**, como o domo e as nuvens. É o que as mantém
+       "longe": sem isso, voar 700 m na direção de uma delas mudaria o tamanho
+       aparente em 30 % — e um corpo celeste que cresce quando você voa para ele
+       é uma bola pendurada, não um planeta.
+
+     ------------------------------------------------------- por que 2.400 m
+
+     O domo do céu está a 2.600 m do olho (`RAIO_DOMO`, em `sky.js`) e o `far` da
+     câmera é 3.600. Os planetas ficam DENTRO do domo (senão o domo os cobriria) e
+     bem além de qualquer coisa do mundo — o mar acaba a 3.200 m mas mora rente à
+     linha d'água, e os dois estão a 31° e 24° de altura, longe dele.
+
+     O raio segue disso: o que o jogador julga é o tamanho ANGULAR, e o metro só
+     existe para o teste de acerto ser geometria e não trigonometria solta.
+       Kuraia  340 m a 2.400 m → 16,1° de diâmetro
+       Rubel   235 m a 2.400 m → 11,2° de diâmetro
+     Contra os 7,8° do sol principal, os dois são visivelmente CORPOS. Com o
+     campo vertical de 68° deste modo, Kuraia ocupa um quarto da altura da tela —
+     que é o "grandes" do pedido, e o limite dele: mais que isso vira obstáculo.  */
+  planetas: {
+    /** m — distância AO OLHO dos dois corpos. Ver o cabeçalho. */
+    distancia: 2400,
+
+    /**
+     * Fração do raio que o feixe precisa acertar para destruir.
+     *
+     * O mesmo 0,75 da Terra do arqueiro (`CONFIG.special.earth.aimFrac`), um
+     * tico mais apertado: **raspar a borda não destrói planeta nenhum.** Sem
+     * isto, um Kamehameha passando a meio grau do limbo contaria como acerto e o
+     * jogador não teria como saber por que — a única leitura honesta de um
+     * disparo assim é "passou de raspão".
+     */
+    miolo: 0.72,
+
+    /**
+     * s entre o disparo e o clarão. **É teatro, e o teatro é o ponto.**
+     *
+     * A Terra do arqueiro leva 3,5 s pela mesma razão, escrita lá: um golpe que
+     * apaga um planeta no mesmo quadro em que sai da mão lê como efeito de tela.
+     * Aqui são 3,2 — o feixe do Kamehameha leva 1,05 s de pose mais ~2 s até a
+     * cabeça sumir no céu, então o clarão chega logo depois de o jogador perder o
+     * feixe de vista. É o instante em que ele já desistiu de esperar.
+     */
+    viagem: 3.2,
+
+    /* ------------------------------------------------- a sequência da morte
+       Três atos, e os três somam `viagem` à parte. Estão aqui e não no cliente
+       porque a sala agenda a chuva a partir deles: o primeiro meteoro tem de
+       cair DEPOIS de o planeta ter visivelmente se partido, ou a causa chega
+       atrasada em relação ao efeito. */
+    /** s — as rachaduras acendendo, antes de qualquer estouro. */
+    rachar: 1.3,
+    /** s — o clarão branco engolindo o disco. Curto: é uma detonação. */
+    clarao: 0.55,
+    /** s — os cacos se abrindo e esfriando até sumirem. */
+    cacos: 5.2,
+
+    /**
+     * Os dois corpos. `dir` é a direção A PARTIR DO OLHO, já normalizada.
+     *
+     * As direções não são gosto — elas foram escolhidas contra a do SOL
+     * (`SOIS[0].dir`, azimute 33,7°, altura 32°), porque é ela que decide a FASE
+     * de cada um, e a fase é metade do que faz uma esfera pintada parecer um
+     * corpo celeste:
+     *
+     *   Kuraia  azimute 205°, altura 31° → quase oposta ao sol, 72 % iluminada.
+     *           Uma lua gibosa alta, com o terminador cortando um quarto do disco.
+     *   Rubel   azimute 300°, altura 24° → perpendicular ao sol, 42 % iluminada.
+     *           Meia-lua franca: o terminador passa perto do meio e a sombra é
+     *           metade do corpo.
+     *
+     * E elas estão a **82° uma da outra**, o que é o "direções diferentes" do
+     * pedido com uma consequência prática: com o campo horizontal de ~100° deste
+     * modo, dá para ver as duas no mesmo quadro só de relance, e nunca as duas
+     * bem no meio. Cada uma é um marco de uma metade do céu — que é para o que
+     * serve um corpo celeste num mapa sem bússola.
+     *
+     * `paleta` é do cliente (`world/planetas.js` a lê) e mora aqui por um motivo
+     * só: os dois planetas são UMA descrição, e espalhar metade dela num arquivo
+     * de desenho é como o repositório já perdeu a direção do sol uma vez.
+     */
+    corpos: [
+      {
+        id: "kuraia",
+        nome: "Kuraia",
+        dir: [-0.777, 0.515, -0.362],
+        raio: 340,
+        /* A LUA CINZENTA. Regolito, crateras por toda parte, nenhum mar — é o
+           corpo "parecido com uma lua" do pedido, na leitura mais literal.
+           `rocha` é o piso, `alta` é o que o sol acende, `bacia` é o fundo das
+           crateras (mais escuro, porque ali a poeira é mais funda) e `sombra` é
+           o lado escuro, que NÃO é preto: um planeta com lado escuro preto lê
+           como um recorte de papel. Ele é iluminado pelo próprio céu. */
+        paleta: { rocha: 0x8d8a86, alta: 0xd8d5cf, bacia: 0x5a5854, sombra: 0x1d2a2a },
+        /** Densidade das crateras — células por raio. Alta: ela é PICOTADA. */
+        crateras: 5.2,
+        /** Quanto do disco é bacia escura. Zero em Kuraia: ela não tem mares. */
+        mares: 0,
+        /** Voltas por minuto aparentes. Devagar: é um corpo, não um pião. */
+        giro: 0.35,
+      },
+      {
+        id: "rubel",
+        nome: "Rubel",
+        dir: [0.457, 0.407, -0.791],
+        raio: 235,
+        /* O CORPO FERRUGEM. Mesma família (é uma lua, cheia de cratera), outra
+           história geológica: ferro oxidado, bacias de lava já fria cobrindo um
+           terço da superfície e um terminador que puxa para o violeta. A
+           distinção "à primeira vista" que o pedido cobra sai de três coisas ao
+           mesmo tempo — a cor, as manchas escuras grandes (que Kuraia não tem) e
+           o tamanho menor. */
+        paleta: { rocha: 0xa85f37, alta: 0xe8a878, bacia: 0x4a241b, sombra: 0x2a1220 },
+        crateras: 3.6,
+        /** Um terço da superfície em bacia escura — os "mares" dele. */
+        mares: 0.34,
+        giro: 0.22,
+      },
+    ],
+
+    /* ================================================== a chuva de meteoros ==
+       O que acontece DEPOIS da destruição, e é a metade do pedido que dura.
+
+       Quem decide tudo é a SALA (`server/namek/planetas.js`): onde cada rocha
+       cai, quando, de que tamanho, e quem ela mata. O cliente recebe uma reta e
+       um relógio e desenha — é o mesmo repartição de autoridade do resto do modo
+       (§8 do plano), e aqui ela não é opcional: uma chuva sorteada em cada tela
+       seria quinze planetas diferentes se destruindo ao mesmo tempo.               */
+    chuva: {
+      /** s entre o planeta se partir e a primeira rocha entrar no céu.
+       *  Depois de `rachar + clarao`, e antes de os cacos acabarem: a chuva
+       *  começa COM o planeta ainda se desfazendo, que é o que liga uma coisa à
+       *  outra sem precisar de uma linha de texto explicando. */
+      atraso: 2.4,
+      /** s de chuva. Vinte segundos são ~27 rochas — o bastante para mudar o
+       *  mapa de vez e curto o bastante para a partida continuar sendo uma luta
+       *  e não uma corrida de obstáculos. */
+      duracao: 20,
+      /** s médios entre duas rochas. Sorteado entre metade e uma vez e meia
+       *  disto: intervalo fixo vira metrônomo, e metrônomo não assusta. */
+      intervalo: 0.75,
+      /** Quantas podem estar no ar ao mesmo tempo. É o tamanho do pool dos dois
+       *  lados — a sala nunca solta a de número 21, então o cliente nunca
+       *  precisa de uma vaga que ele não tem. */
+      vivosMax: 20,
+      /** m — o comprimento do trajeto, do céu ao chão, medido na direção do
+       *  planeta que explodiu. Elas entram INCLINADAS, pelo lado dele: é isso
+       *  que faz a chuva ter uma origem visível em vez de cair do zênite. */
+      comprimento: 620,
+      /** fração do raio da arena em que as rochas caem. 0,92 deixa a orla livre:
+       *  cratera fora do círculo é recusada por `NamekRoom.cratera` e viraria
+       *  uma explosão sem buraco. */
+      raioQueda: 0.92,
+      /** Chance de uma rocha ser mirada PERTO de alguém em vez de sorteada no
+       *  disco. É a mesma decisão de `NamekRoom.tempo` com os raios: uma chuva
+       *  que cai onde não há ninguém é uma chuva que não aconteceu. */
+      viesNosCorpos: 0.45,
+      /** m — a que distância de alguém cai a rocha enviesada. Nunca em cima: o
+       *  mínimo é maior que o maior raio letal, senão a chuva mataria sem
+       *  ninguém ter tido onde ler o aviso. */
+      viesPerto: 34,
+      viesLonge: 210,
+    },
+
+    /* ------------------------------------------------------------ o meteoro
+       Três classes, e a variedade de tamanho é o pedido literal ("de tamanhos
+       variados"). `peso` é a chance de sorteio de cada uma — a pequena é a
+       maioria, a colossal é o acontecimento. */
+    meteoro: {
+      classes: [
+        /** Pedrisco. Cratera de 15 m, explosão que mata a 6 m. */
+        { raio: 2.2, power: 2.4, velocidade: 150, peso: 0.5 },
+        /** Pedregulho. Cratera de 22 m. */
+        { raio: 5, power: 6, velocidade: 125, peso: 0.35 },
+        /** Colosso. Cratera de 37 m — o maior buraco que este jogo abre. */
+        { raio: 11, power: 20, velocidade: 100, peso: 0.15 },
+      ],
+
+      /* ================== OS DOIS RAIOS, e por que eles são dois ==============
+       *
+       * O pedido tem duas frases e elas descrevem coisas diferentes:
+       *
+       *   "Esses meteoros, se pegam no player, tira 50% da vida."
+       *   "O raio de explosão do meteoro também mata os players."
+       *
+       * A primeira é a rocha EM VOO encostando em alguém: um corpo sólido a
+       * 150 m/s passando por cima de você. Dói muito e não mata — 50 de 100 é
+       * metade da vida, exatamente como está escrito, e fica entre o Kienzan
+       * (40) e o Galick Gun (60) na escada dos especiais — um pouco menos que um
+       * Kamehameha inteiro em cima de alguém (70). Cobra UMA vez por
+       * rocha e por vítima: uma pedra não atropela a mesma pessoa duas vezes.
+       *
+       * A segunda é o ESTOURO no chão, e ali não há fração: quem está dentro da
+       * bola de fogo morre. É o que separa "fui atingido" de "estava no ponto de
+       * impacto", e é por isso que os dois raios não podem ser o mesmo número —
+       * se fossem, ou o atropelamento mataria (e a primeira frase deixaria de
+       * valer) ou a explosão pouparia (e a segunda também).
+       *
+       * Os dois são MÚLTIPLOS do raio da rocha, e não metros fixos, porque o
+       * pedido é sobre tamanhos variados: um pedrisco de 2,2 m que matasse a
+       * trinta metros seria uma mina terrestre disfarçada de pedra.
+       *
+       *   classe      rocha   acerto (50 %)   letal (morte)
+       *   pedrisco    2,2 m       4,2 m           6,2 m
+       *   pedregulho  5,0 m       9,5 m          14,0 m
+       *   colosso    11,0 m      20,9 m          30,8 m
+       *
+       * O colosso mata num raio quase igual ao da cratera que ele abre (37 m), e
+       * é a leitura certa: morre quem estava dentro do buraco que se abriu.
+       */
+      /** Múltiplo do raio da rocha — o toque EM VOO. Cobra `danoDireto`. */
+      raioAcerto: 1.9,
+      /** Múltiplo do raio da rocha — a explosão no chão. Dentro dela, é FATAL. */
+      raioLetal: 2.8,
+      /** Fração da vida cheia que o toque em voo leva. Meia vida, literalmente. */
+      danoDireto: 0.5,
+
+      /** graus/s — o tombo da rocha no ar. Só desenho; a sala não o simula. */
+      giro: 55,
+      /** s entre dois sopros do rastro de fogo, por rocha. Ver `meteoros.js`. */
+      rastro: 0.075,
+      /** Múltiplo do raio — o tamanho da mancha que ela projeta no chão antes de
+       *  chegar. É o aviso, e ele é generoso de propósito: a explosão mata. */
+      marca: 3.4,
     },
   },
 
@@ -1259,6 +2638,167 @@ export const NAMEK = {
     blink: 6,
     /** m — altura em que se reaparece, para a entrada ser voando. */
     dropHeight: 120,
+  },
+
+  /* ------------------------------------------------------------------ peixe
+     O PEIXE GIGANTE que salta no mar — o do começo de Dragon Ball, aquele que o
+     Goku pesca. Corpo roliço, boca larga, barbatanas grandes; de tempos em
+     tempos ele emerge num arco, gira o corpo no ar e mergulha de volta.
+
+     Três decisões moram nesta tabela e vale dizer por quê antes dos números:
+
+     • **A SALA É DONA DELE.** Quando salta, onde salta, o rumo do arco e a vida
+       que lhe resta são todos do servidor, pelo mesmo motivo que a vida dos
+       lutadores é (§8 do plano): quinze telas têm de ver o MESMO peixe no mesmo
+       lugar, e um bicho sorteado no cliente sairia da água em quinze horas
+       diferentes. O que viaja é o salto INTEIRO num pacote só (ver `NS2C.FISH`),
+       e cada cliente integra a mesma parábola a partir dele — é o mesmo truque
+       do `q` do Kamehameha: manda-se o roteiro, não o quadro.
+
+     • **ELE SÓ EXISTE ENQUANTO SALTA.** Fora do arco não há peixe na cena: nem
+       corpo, nem colisor, nem consulta. O único resto é o VULTO — a sombra
+       subindo debaixo d'água nos `aviso` segundos que antecedem a saída, que é o
+       que impede o salto de ser um susto sem aviso e o que dá ao jogador tempo
+       de apontar. Fora dessa janela ele custa exatamente zero.
+
+     • **A ÁGUA ABERTA, E NÃO A ARENA.** A linha d'água cai por volta de 612 m do
+       centro (ver `NamekField.baseHeight`) e o teto de passeio é 760 m
+       (`world.flyRadius`). A faixa abaixo é o que sobra: fora da rebentação, à
+       vista de quem está na ilha, e alcançável por quem quiser chegar perto. */
+  peixe: {
+    /* ------------------------------------------------------------- o corpo (m)
+       Enorme de propósito: um lutador tem 1,78 m, e o peixe tem quinze deles do
+       focinho à base da cauda. É a escala que a referência pede — o bicho não é
+       fauna de cenário, é um acontecimento.
+
+       Os três medem o TRONCO. A silhueta desenhada é maior, e o quanto sai de
+       cada peça: a cauda acrescenta ~19 % atrás (31 m de ponta a ponta), a
+       dorsal quase dobra a altura no meio, e as peitorais abertas dão 15 m de
+       envergadura. Medir o tronco é a convenção útil das duas — é ele que a
+       tabela de perfil de `world/peixe.js` escala, e ninguém quer reescrever
+       aquela tabela para mudar o tamanho de uma nadadeira. */
+    comprimento: 26,
+    altura: 9.6,
+    largura: 7.4,
+    /* m — raio da ESFERA de acerto, centrada no meio do corpo.
+     *
+     * Uma esfera e não a cápsula do lutador: a cápsula é vertical por
+     * construção (`distancia2AoAlvo` interpola em y), e um peixe no ar está
+     * deitado. Com `altura = 2 × raio` a cápsula degenera exatamente numa
+     * esfera, que é a forma honesta para um corpo que gira no ar — ver
+     * `NamekPeixe.alvo`. 9 m cobrem o bojo inteiro e deixam de fora só a ponta
+     * da cauda e o focinho, que é a margem certa: acertar o peixe tem de ser
+     * fácil quando se está perto e difícil de duzentos metros. */
+    raioAcerto: 9,
+
+    /* O id reservado dele na lista de alvos do sistema de poderes.
+     *
+     * NEGATIVO pelo mesmo motivo que o do Freeza é (ver `NAMEK.freeza.id`, logo
+     * abaixo neste arquivo): `proximoId` da sala começa em 1 e só cresce, então
+     * nenhum lutador — humano ou bot — colide com ele nem depois de mil entradas.
+     *
+     * **−2 porque o −1 já é do Freeza**, e é para isso que os dois moram no
+     * mesmo arquivo: os ids negativos são um espaço de nomes COMPARTILHADO, e
+     * cada alvo que não é gente precisa de um só seu. Duas peças com o mesmo
+     * número não dariam erro nenhum — o desvio do boss em `NamekGame.reportar`
+     * roda primeiro e engoliria calado todo acerto no peixe. */
+    alvoId: -2,
+
+    /* --------------------------------------------------------- onde ele mora
+       m do centro da arena. A praia acaba aos ~630 m e a água abre depois disso;
+       `flyRadius` é 760. Esta faixa é a água aberta VISÍVEL: longe o bastante da
+       costa para não sair de dentro da rebentação, perto o bastante para caber
+       na tela de quem está na ilha e para quem quiser voar até lá conseguir. */
+    raioMin: 648,
+    raioMax: 726,
+    /* Fração dos saltos que acontece na direção de ALGUÉM que está em campo, em
+       vez de num ângulo qualquer do círculo. É a mesma regra do relâmpago
+       (`NamekRoom.tempo`) e existe pelo mesmo motivo: um peixe que salta às
+       costas de todo mundo é um peixe que não saltou. */
+    perto: 0.65,
+    /** graus — abertura do sorteio em torno do rumo de quem foi escolhido. */
+    pertoAbertura: 38,
+
+    /* ------------------------------------------------------------- o relógio */
+    /** s — intervalo médio entre dois saltos do mesmo peixe. */
+    intervalo: 19,
+    /* s — o sorteio em torno do intervalo, para os dois lados. Sem ele o peixe
+       vira metrônomo, e um metrônomo deixa de ser um acontecimento na terceira
+       repetição. */
+    variacao: 8,
+    /** s — carência até o primeiro salto de um peixe recém-nascido. */
+    primeiro: 7,
+    /** s — o vulto sob a água antes de o corpo romper a superfície. */
+    aviso: 2.4,
+    /* s — **quanto demora até aparecer outro depois que um morre.** É o pedido
+       literal, e o número é longo de propósito: matar o peixe tem de ser um
+       acontecimento com consequência, não uma torneira. */
+    respawn: 34,
+
+    /* --------------------------------------------------------------- o salto
+       Uma parábola balística resolvida por FRAÇÃO do salto (u ∈ [0,1]) e não por
+       integração de gravidade: os dois dão a mesma curva, e a fechada é a única
+       que garante que quinze clientes com quinze `dt` diferentes desenhem o
+       peixe no mesmo ponto. Ver `NamekPeixe.pose`. */
+    duracaoMin: 2.6,
+    duracaoMax: 3.9,
+    /** m — altura do ápice acima da linha d'água. */
+    alturaMin: 24,
+    alturaMax: 47,
+    /** m — quanto ele avança na horizontal do mergulho à saída. */
+    alcanceMin: 34,
+    alcanceMax: 92,
+    /* Fração de `alcance` que o corpo desloca DE LADO no ápice — a "curva" do
+       pedido. O deslocamento é zero nas duas pontas e máximo no meio, então a
+       trajetória vergueia e volta em vez de virar uma banana torta. */
+    curvaMax: 0.22,
+    /** rad — rolagem acumulada no salto inteiro. O parafuso do corpo no ar. */
+    giroMax: 2.6,
+    /** m — fundura em que o vulto começa a subir. */
+    vultoFundura: 9,
+    /** s — o mergulho visível depois de a cauda entrar na água. */
+    afundar: 2.4,
+
+    /* --------------------------------------------------------- vida e morte */
+    /* A vida dele. 160 é uma barra e meia de lutador: uma Genki Dama (100) não
+       resolve sozinha, um Kamehameha inteiro em cima (21/s por 2,4 s) chega
+       perto, e a rajada básica (6 por bola) mata em 27 acertos — o que num salto
+       de três segundos e meio a 6 bolas/s é possível e não é fácil. */
+    vida: 160,
+    /** s — teto do `dt` de UM aviso de feixe. Mesma trava do `SPECIAL_HIT`. */
+    dtMax: 0.5,
+    /* Teto de dano de um aviso de FEIXE, e só dele.
+     *
+     * A distinção é o ponto: o dano de um projétil (Galick, Kienzan, Genki) sai
+     * inteiro do config e o cliente não tem como inflá-lo, enquanto o do feixe é
+     * `dps × dt` com o `dt` vindo pela rede. Aplicar o teto aos dois — que é o
+     * que estava escrito — fazia a Genki Dama (100) bater igual ao Galick Gun
+     * (60) no peixe: o maior golpe do jogo aparado em silêncio justamente contra
+     * o único alvo em que ele é a escolha óbvia.
+     *
+     * Com `dtMax` de meio segundo e 29,2 de dps, um aviso legítimo chega a 14,6.
+     * Os 40 aqui são folga de segurança, não equilíbrio. */
+    danoAvisoMax: 40,
+    /** m — distância máxima entre quem relata o acerto e o ponto do salto. */
+    alcanceAviso: 1400,
+    /** s — carência entre dois avisos de acerto do mesmo jogador. */
+    avisoCarencia: 0.07,
+    /** Potência do estouro da morte — alimenta o efeito e a receita de som. */
+    mortePotencia: 6,
+
+    /* ---------------------------------------------------------------- cores
+       Sem textura nenhuma, como todo o resto do jogo: o que separa dorso, barriga
+       e barbatana é cor de vértice num material só. */
+    /** Dorso: azul-esverdeado escuro, para destacar contra o mar turquesa. */
+    cor: 0x2f5f72,
+    /** Barriga: quase branca — é ela que aparece quando ele vira no ar. */
+    corBarriga: 0xdcead8,
+    /** Barbatana e cauda: um degrau mais escuro que o dorso. */
+    corBarbatana: 0x214657,
+    /** Olho e boca: preto. */
+    corOlho: 0x100c0a,
+    /** Espuma do respingo e da entrada. */
+    corEspuma: 0xe8fbff,
   },
 
   /* -------------------------------------------------------------------- rede */
@@ -1369,8 +2909,28 @@ export const NAMEK = {
      *
      * Serve para aprender onde a Genki Dama cai, quanto tempo o Kamehameha leva
      * para sair e quantos golpes derrubam — que é exatamente o que não dá para
-     * descobrir apanhando. */
-    dificuldadePadrao: "medio",
+     * descobrir apanhando.
+     *
+     * ------------------------------------------------------- e o PADRÃO é fácil
+     *
+     * *"Por padrão todos os bots adicionados devem ser no fácil caso o jogador
+     * não selecione a dificuldade deles."* Era "medio", e "medio" é uma escolha
+     * que ninguém fez: quem abre a sala e aperta "+ bot" não pediu 72 % de
+     * velocidade, 65 % de esquiva e 60 % de chance de especial — ele pediu
+     * companhia. O nível que um jogador não escolheu tem de ser o que menos
+     * atrapalha quem ainda está aprendendo onde ficam as teclas.
+     *
+     * A dificuldade é da SALA e não do bot (ver o bloco acima), então este
+     * padrão vale nos três lugares em que ela nasce, e vale por LEITURA — não há
+     * nenhum "medio" literal em nenhum deles, e não pode passar a haver:
+     *
+     *   • `BotPool` (`server/namek/bots.js`), no construtor;
+     *   • `NamekRoom.limpar`, que devolve a sala ao padrão quando ela esvazia;
+     *   • `NamekGame` (`src/namek/game.js`), enquanto o `welcome` não chega.
+     *
+     * Quem quiser bots bravos aperta o botão do menu, e a escolha vale para a
+     * sala inteira e para os bots já em campo — que é o contrato do bloco. */
+    dificuldadePadrao: "facil",
     /** A ordem em que os níveis aparecem no menu. Do mais manso ao mais bravo. */
     dificuldadeOrdem: ["parado", "facil", "medio", "dificil"],
     /* m — a cota que o alvo de treino mantém ACIMA DO RELEVO.
@@ -1388,6 +2948,51 @@ export const NAMEK = {
       dificil: { nome: "Difícil", mover: 1, esquiva: 1, rajada: 1, especial: 1, erro: 1 },
     },
   },
+
+  /* ====================================================================== FREEZA
+     O BOSS. Um só, em campo, contra TODO MUNDO ao mesmo tempo.
+
+     **Os números dele NÃO moram aqui.** Eles moram em
+     `src/shared/namek/ajustes-freeza.js`, que é um arquivo escrito para ser
+     editado por quem está JOGANDO — cada parâmetro com uma explicação em
+     português simples do que acontece se aumentar e do que acontece se
+     diminuir, mais um punhado de receitas prontas ("quero ele bem fácil",
+     "quero ele brutal").
+
+     Ele é a FONTE DE VERDADE, e este campo é só o encanamento que o traz para
+     dentro de `NAMEK`. Nada é redeclarado aqui de propósito: um número que
+     existisse nos dois lugares divergiria no primeiro ajuste, e o arquivo de
+     ajustes viraria decoração — o usuário mexeria nele e o jogo continuaria
+     usando o valor daqui.
+
+     ------------------------------------------------------- por que ele é assim
+
+     Ele não é um lutador com números maiores, e a separação começa na estrutura:
+     um bot é um `NamekBot` na lista da sala, com vida de 100, placar,
+     renascimento e a mesma cápsula de 1,78 m de todo mundo. O Freeza tem vida na
+     casa dos milhares, não renasce, não entra no placar, não ocupa vaga em
+     `NAMEK.net.maxPlayers` e voa o tempo todo. Ver o §1 de
+     `server/namek/freeza.js` para o argumento inteiro.
+
+     A ESCALA do corpo é maior que a canônica de propósito: 1,58 m de Freeza
+     contra 1,78 m de lutador fariam do boss o menor corpo em campo. 2,24 m (mais
+     a cauda, que sozinha tem 2,6 m) é o que o olho lê como "aquilo ali é o
+     chefe" antes de a barra de vida aparecer no topo da tela.
+
+     A VIDA é função de quanta gente está em campo — ver `vidaDoFreeza`, logo
+     abaixo, que é onde a conta e o argumento dela estão.
+
+     Duas travas técnicas que o arquivo de ajustes marca como "NÃO MEXA", e que
+     valem ser sabidas de deste lado também:
+
+     • `raio` tem de ser menor que a METADE de `altura`. `distancia2AoAlvo` (em
+       `powers/blast.js`) monta o eixo da cápsula de `y + raio` até
+       `y + altura − raio`; invertido, ele degenera e o volume de acerto vira
+       uma esfera por acidente.
+     • `rajada.velocidade`/`raio` e `onda.raio` são DITADOS pelos pools do
+       cliente, que leem `NAMEK.blast` e `NAMEK.ki`. Divergir aqui faz o dano
+       acontecer num lugar e o desenho em outro. */
+  freeza: FREEZA,
 };
 
 /**
@@ -1401,6 +3006,72 @@ export const NAMEK = {
 export function dificuldadeBot(id) {
   const B = NAMEK.bot;
   return B.dificuldades[id] ?? B.dificuldades[B.dificuldadePadrao];
+}
+
+/* ------------------------------------------------------------------- Freeza */
+
+/**
+ * Os multiplicadores de uma dificuldade do BOSS, com o padrão para id
+ * desconhecido.
+ *
+ * Existe pelo mesmo motivo que `dificuldadeBot`, e o preço do engano aqui seria
+ * pior: um `undefined` multiplicando a vida máxima do Freeza dá `NaN`, e um boss
+ * com `NaN` de vida não é um boss difícil — é um boss que nunca morre, porque
+ * toda comparação com `NaN` é falsa.
+ */
+export function dificuldadeFreeza(id) {
+  const F = NAMEK.freeza;
+  return F.dificuldades[id] ?? F.dificuldades[F.dificuldadePadrao];
+}
+
+/**
+ * **A vida do boss, em função de quanta gente está em campo.**
+ *
+ * O pedido é literal: *"seu life aumenta de acordo com a quantidade de
+ * players."* A conta:
+ *
+ *     vida = (vidaBase + vidaPorLutador × n) × dificuldade.vida
+ *
+ * com `n` = humanos + bots vivos ou não, limitado a `lutadoresMax`.
+ *
+ * **Linear, e não por raiz.** A tentação é usar `√n` (é o que muitos jogos
+ * fazem, para o boss não virar uma esponja quando a sala enche), e aqui seria
+ * errado: o dano que a sala inteira entrega TAMBÉM cresce linearmente, então uma
+ * vida sublinear faria a luta encurtar a cada pessoa que entra — e uma luta de
+ * boss que fica mais curta quanto mais gente chega é uma luta que só o primeiro
+ * jogador viu. O que cai com a lotação é a EFICIÊNCIA (quem está morto não
+ * atira), e é por isso que a duração medida sobe um pouco em vez de ficar plana.
+ * Ver a tabela de segundos medidos no fim de `ajustes-freeza.js`.
+ *
+ * Está aqui, e não na sala, porque os dois lados a leem: o servidor para decidir
+ * quando ele morre, o cliente para desenhar a barra cheia no instante em que ele
+ * entra — antes do primeiro `FREEZA_STATE` chegar.
+ *
+ * @param {number} lutadores humanos + bots em campo
+ * @param {string} [dificuldade] id em `NAMEK.freeza.dificuldadeOrdem`
+ */
+export function vidaDoFreeza(lutadores, dificuldade) {
+  const F = NAMEK.freeza;
+  const n = Number.isFinite(lutadores) ? Math.max(0, Math.min(lutadores, F.lutadoresMax)) : 0;
+  const d = dificuldadeFreeza(dificuldade);
+  return Math.round((F.vidaBase + F.vidaPorLutador * n) * d.vida);
+}
+
+/**
+ * O dano que um golpe de jogador tira do BOSS. Ver `NAMEK.freeza.dano`.
+ *
+ * Uma função e não uma leitura direta da tabela porque o `kind` vem da REDE (é
+ * o cliente que declara qual golpe acertou), e um id inventado devolveria
+ * `undefined` — que somado à vida dela vira `NaN`. O padrão é o da rajada, que é
+ * o menor da tabela: um golpe que a sala não reconhece nunca pode valer mais que
+ * o que ela reconhece.
+ *
+ * @param {string} kind `"blast"` ou uma chave de `NAMEK.specials`
+ * @returns {number} dano por acerto — ou por SEGUNDO, no caso do Kamehameha
+ */
+export function danoNoFreeza(kind) {
+  const v = NAMEK.freeza.dano[kind];
+  return Number.isFinite(v) ? v : NAMEK.freeza.dano.blast;
 }
 
 /* ------------------------------------------------------------------ crateras */

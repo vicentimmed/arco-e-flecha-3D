@@ -39,8 +39,8 @@
    descrever a curva por onde ele passou em vez de o feixe inteiro dobrar toda
    vez que a mira corrige.
 
-   Os limites da curva (85°/s, teto total de 40°, cone de 35°, e só com a trava)
-   estão em `NAMEK.specials.kamehameha.homing`, com a conta de cada um.
+   Os limites da curva (170°/s, teto total de 70°, cone de 35°, e só com a
+   trava) estão em `NAMEK.specials.kamehameha.homing`, com a conta de cada um.
 
    E quando ele PASSA do alvo, acabou: `alvo` é zerado para sempre e o resto da
    vida dele é reta. Um feixe que reengata porque a vítima voltou a ficar na
@@ -329,8 +329,13 @@ class Feixe {
 
   /* ---------------------------------------------------------------- disparo */
 
-  acender(field, { owner, kind, origem, dir, target, local }) {
-    const S = NAMEK.specials[kind];
+  acender(field, { owner, kind, origem, dir, target, local, info = null }) {
+    /* `info` vem de `PowerSystem.spawnSpecial` e é a definição do golpe COMO
+       ELE É VISTO: a de sempre, ou a cópia dourada do Super Saiyajin. Todas as
+       leituras de `S.cor` / `this.info.cor` deste arquivo saem dela sem saber
+       disso — ver o comentário lá e o cabeçalho de `character/ssj.js`. O `??` é
+       para quem chamar `acender` direto, sem passar pelo sistema. */
+    const S = info ?? NAMEK.specials[kind];
     this.field = field;
     this.owner = owner;
     this.kind = kind;
@@ -347,6 +352,9 @@ class Feixe {
     this.alcance = S.range;
     this.bateu = false;
     this.saiu = false;
+    /** Interceptado por outro poder — ver `abortarPorEmbate`. Zerado aqui, e
+     *  não só em `apagar`, porque o slot do pool é reciclado a cada disparo. */
+    this.abatido = false;
 
     /* ------------------------------------------------------- a perfuração --
        Ver `NAMEK.specials.kamehameha.atravessar`, que tem o argumento inteiro
@@ -1170,8 +1178,98 @@ class Feixe {
     });
   }
 
+  /* ----------------------------------------------------------- o embate ---
+     Os três ganchos da colisão poder-contra-poder. A regra mora em
+     `powers/colisao.js`; o que está aqui é o mínimo que só este arquivo sabe
+     fazer — onde o feixe ESTÁ e como ele morre. */
+
+  /** Ainda é a esfera entre as mãos? Ver a regra 4 em `NAMEK.embate`. */
+  get carregando() {
+    return this.viva && this.t < this.info.windup;
+  }
+
+  /**
+   * A distância de um ponto ao feixe — **ao caminho, não à cabeça.**
+   *
+   * O feixe é a única coisa deste modo que não é uma esfera: ele é uma cobra de
+   * até 620 m, e um Galick Gun que atravessa o meio do tubo tem de encontrar
+   * feixe ali. É a mesma conta do dano (`distanciaAoCaminho`), com duas coisas
+   * a mais:
+   *
+   * • durante a carga não HÁ caminho — o caminho tem dois nós no mesmo ponto e
+   *   comprimento zero, e `distanciaAoCaminho` devolveria `Infinity` para uma
+   *   esfera que está bem ali, na mão. Nessa fase a resposta é a distância à
+   *   bola de carga;
+   * • um pré-filtro de esfera envolvente. O caminho inteiro cabe na esfera
+   *   centrada na boca do golpe com raio `frente`, então a distância ao caminho
+   *   nunca é menor que `d(boca) − frente`. Quando esse piso já passa do corte,
+   *   os 48 segmentos são dispensados por uma raiz quadrada — e isso acontece
+   *   para quase todas as bolas de ki em voo, que é onde este teste é chamado
+   *   centenas de vezes por quadro.
+   *
+   * @param {number} corte a distância acima da qual quem chama já perdeu o
+   *   interesse. É repassada ao corte antecipado do teste de caminho.
+   */
+  distanciaDoEmbate(x, y, z, corte) {
+    const dx = x - this.ox;
+    const dy = y - this.oy;
+    const dz = z - this.oz;
+    const dBoca = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (this.t < this.info.windup) return dBoca;
+    const piso = dBoca - this.frente;
+    if (piso > corte) return piso;
+    return this.distanciaAoCaminho(x, y, z, corte);
+  }
+
+  /**
+   * O feixe foi INTERCEPTADO por outro poder.
+   *
+   * Dois desfechos, e a diferença é a fase:
+   *
+   * • **na carga**, ele simplesmente deixa de existir — não há feixe para
+   *   dissipar, há uma bola nas mãos que foi anulada. Quem paga é quem
+   *   carregava: a barra já foi gasta em `soltarEspecial` e não volta, que é
+   *   exatamente o "quem carregava perde a barra" do pedido;
+   * • **em voo**, ele entra em DISSIPAÇÃO em vez de sumir. A energia parou de
+   *   sair da mão e o que sobrou no ar corre para a frente e apaga — que é o
+   *   que o próprio arquivo já sabe desenhar (ver `FRACAO_DISSIPACAO`). Um tubo
+   *   de meio quilômetro que pisca para fora de existência num quadro é a
+   *   leitura de bug, não de golpe abatido.
+   *
+   * A exposição acumulada é DESPEJADA antes de qualquer coisa: o que este feixe
+   * já queimou até aqui é dano legítimo e a sala precisa ouvir a respeito, ou
+   * até meio segundo de fritura desapareceria por causa da interceptação.
+   */
+  abortarPorEmbate(relato) {
+    if (!this.viva || this.abatido) return false;
+    const S = this.info;
+    if (this.t < S.windup) {
+      this.apagar();
+      return true;
+    }
+    this.abatido = true;
+    this.despejar(relato, false);
+    /* A cabeça para onde foi interceptada e a cauda começa a correr: `t` é
+       empurrado para o fim da sustentação, que é o gatilho que `update` já usa
+       para começar a dissipar. Nada mais precisa saber que houve um embate. */
+    this.t = S.windup + S.sustain;
+    this.alcance = this.frente;
+    /* `bateu` liga a bola de impacto na ponta — a cabeça encontrou ALGO, e é o
+       que se quer ver no ponto da interceptação. Mas ele também é meia chave do
+       `bater`, que abriria uma cratera ali; e "ali" é o ar, a duzentos metros do
+       chão. `reportouChao` é a outra meia chave, e marcá-la aqui é o que fecha
+       a porta: quem decide se aquele ponto merece cratera é o árbitro do embate
+       (`ColisorDePoderes.detonar`), que tem a altura do relevo na mão e a régua
+       de `NAMEK.embate.craterAr` para consultar. */
+    this.bateu = true;
+    this.reportouChao = true;
+    this.furando = false;
+    return true;
+  }
+
   apagar() {
     this.viva = false;
+    this.abatido = false;
     this.group.visible = false;
     this.nVitimas = 0;
   }

@@ -143,7 +143,9 @@ const SEM_ACAO = {
   jumpPressed: false,
   flyPressed: false,
   burstPressed: false,
-  lockPressed: false,
+  /* Sem `lockPressed`: a trava de alvo perdeu a tecla (ver o cabeçalho de
+     `input.js`), e um campo neutro para uma ação que não existe mais seria a
+     única linha deste objeto que não descreve o teclado. */
   menuPressed: false,
 };
 
@@ -185,6 +187,58 @@ export class FighterController {
     this.travado = false;
     /** A arrancada está acesa NESTE quadro (com ki pago). Alimenta a câmera. */
     this.boosting = false;
+
+    /* ====================================================== O REGIME DE VOO ==
+     *
+     * **Onde o mundo termina, e ele deixou de ser uma constante.**
+     *
+     * O pedido do fim de Namekusei é literal: *"no momento que os players estão
+     * fugindo do planeta o limite de altura de voo do céu deve ser maior para
+     * eles conseguirem chegar no espaço sem morrer."* E `NAMEK.world.ceiling`
+     * são 520 m — o teto certo para uma partida comum, e uma parede exatamente
+     * onde a fuga precisa passar.
+     *
+     * A constante NÃO mudou, e não podia: subi-la para dois quilômetros no
+     * config esvaziaria a arena para cima em toda partida normal, e o modo
+     * inteiro é uma briga que acontece perto do chão. O que mudou é que este
+     * controlador parou de LER a constante e passou a ler este objeto — que
+     * nasce valendo exatamente ela, e que a fase do fim reescreve enquanto
+     * durar. Quem escreve é `NamekGame.step`, a partir do `EstadoDoFim`
+     * (`src/namek/world/fuga.js`); quem nunca escreve nada (o banco de provas,
+     * a bancada de desenvolvimento) continua voando no planeta de sempre.
+     *
+     * É um objeto de campos e não quatro propriedades soltas porque ele é
+     * REESCRITO por quadro e nunca recriado: quatro `this.x = y` do lado de fora
+     * seriam quatro linhas para alguém esquecer uma; um objeto é uma coisa só,
+     * com um nome, e a lista do que o fim do planeta muda cabe na leitura dele.
+     */
+    this.regime = {
+      /** m — o teto de voo em vigor. */
+      teto: NAMEK.world.ceiling,
+      /* m — a faixa em que a BARREIRA MACIA horizontal vai afrouxando com a
+       * altitude, e ela existe por causa de uma briga real entre dois sistemas.
+       *
+       * `world.softEdge` puxa de volta quem se afasta do centro. Ela protege o
+       * mapa pelos lados — e a 1 500 m de altura não protege nada: só empurra
+       * para dentro quem está subindo em espiral, que durante a contagem é
+       * exatamente quem está correndo contra o relógio para chegar ao alto.
+       * `Infinity`
+       * (o padrão) quer dizer "o freio vale inteiro em qualquer altura", que é
+       * o comportamento de sempre. */
+      freioSolta: Infinity,
+      freioMorre: Infinity,
+      /**
+       * A BOLHA DO ESPAÇO, ou `null` enquanto houver planeta.
+       *
+       * `{ x, y, z, raio }`. Quando ela existe, a lista do que este arquivo
+       * desliga é curta e literal, e está toda em `_integrar`: **campo de
+       * altura, gravidade, pouso, decolagem e o freio cilíndrico do planeta.**
+       * No lugar do último entra um freio ESFÉRICO em torno do centro dela —
+       * esférico porque no espaço não há "para baixo", e um limite cilíndrico
+       * deixaria a fuga vertical aberta para sempre.
+       */
+      espaco: null,
+    };
 
     /* Canais de animação — os mesmos nomes que `packFighter` lê. */
     this.gaitPhase = 0;
@@ -509,8 +563,24 @@ export class FighterController {
   _integrar(h, a, ki) {
     const F = NAMEK.fighter;
     const W = NAMEK.world;
+    const R = this.regime;
+    /* A BOLHA, se houver. Ver `regime.espaco`: um `if` limpo em cinco lugares —
+       gravidade, teto, freio de borda, contato com o chão e decolagem — em vez
+       de números mágicos espalhados. */
+    const bolha = R.espaco;
     const p = this.position;
     const v = this.velocity;
+
+    /* NO ESPAÇO SE VOA SEMPRE. Não é um atalho: é o que "não há chão" quer dizer
+       neste controlador. Sem os pés em lugar nenhum, `grounded` é falso por
+       definição, e um lutador que não está voando é um lutador em queda livre —
+       para dentro de um relevo que ficou dois quilômetros abaixo e que já nem é
+       desenhado. Deixar o `F` desligar o voo aqui seria deixar o jogador se
+       apagar da partida com uma tecla. */
+    if (bolha) {
+      this.flying = true;
+      this.grounded = false;
+    }
 
     if (this._stun > 0) {
       this._stun -= h;
@@ -672,8 +742,11 @@ export class FighterController {
     let temAlvo = false;
     let ganho = F.airAccel;
     let arrasto = F.airDrag;
-    /* A gravidade corre SEMPRE, menos quando ele está voando e no controle. */
-    let gravidade = !this.flying || this.stunned;
+    /* A gravidade corre SEMPRE, menos quando ele está voando e no controle.
+       E NUNCA no espaço: um corpo atordoado ali não tem para onde cair, e
+       deixar `−11,4 m/s²` correndo sobre alguém que levou um golpe o mandaria
+       para fora da bolha por baixo, a caminho de um planeta que já explodiu. */
+    let gravidade = bolha ? false : !this.flying || this.stunned;
 
     if (imovel) {
       /* Parado no lugar, aura acesa, vulnerável. No ar isto segura o corpo (é a
@@ -713,9 +786,13 @@ export class FighterController {
         temAlvo = true;
       }
 
-      /* TETO. A subida vai morrendo nos últimos metros em vez de bater. */
-      if (alvoY > 0) {
-        const folga = (W.ceiling - p.y) / FAIXA_TETO;
+      /* TETO. A subida vai morrendo nos últimos metros em vez de bater.
+         O número vem do REGIME e não da constante — ver `this.regime`: em
+         partida comum ele É `NAMEK.world.ceiling`, e durante a fuga do planeta
+         ele são os 2 000 m de `NAMEK.fim.fuga.teto`. Dentro da bolha do espaço
+         não há teto nenhum: quem cuida do limite lá é o freio esférico. */
+      if (alvoY > 0 && !bolha) {
+        const folga = (R.teto - p.y) / FAIXA_TETO;
         if (folga < 1) alvoY *= clamp(folga, 0, 1);
       }
 
@@ -787,29 +864,88 @@ export class FighterController {
        cratera, grade de deslocamento) e `flyRadius` é o de PASSEIO. Enquanto
        eram o mesmo número, o jogador era virado de volta a 420 m — antes de a
        serra terminar —, e a praia e o mar eram cenário inalcançável. */
-    const limite = W.flyRadius ?? W.radius;
-    const r = modulo2(p.x, p.z);
-    if (r > W.softEdge.start) {
-      const inv = 1 / r;
-      const nx = p.x * inv;
-      const nz = p.z * inv;
-      const excesso = r - W.softEdge.start;
+    if (bolha) {
+      /* ------------------------------------------- a barreira macia ESFÉRICA
+       *
+       * A mesma mecânica dos dois termos, em três dimensões: no espaço não há
+       * "para baixo", então um freio cilíndrico como o do planeta deixaria a
+       * saída pelo topo e pelo fundo abertas — e sair da bolha por baixo é cair
+       * de volta para um planeta que já não existe.
+       *
+       * O centro é o da bolha e não a origem do mundo: ela fica a 2 250 m de
+       * altura (`NAMEK.fim.espaco.altura`), e medir a distância a partir do
+       * chão de antes puxaria todo mundo para o lugar de onde o planeta saiu. */
+      const dx = p.x - bolha.x;
+      const dy = p.y - bolha.y;
+      const dz = p.z - bolha.z;
+      const d = modulo(dx, dy, dz);
+      const inicio = bolha.raio * NAMEK.fim.espaco.freioInicio;
+      if (d > inicio) {
+        const inv = 1 / d;
+        const nx = dx * inv;
+        const ny = dy * inv;
+        const nz = dz * inv;
+        const excesso = d - inicio;
 
-      const t = clamp(excesso / (limite - W.softEdge.start), 0, 1);
-      const paraFora = alvoX * nx + alvoZ * nz;
-      if (paraFora > 0) {
-        alvoX -= nx * paraFora * t;
-        alvoZ -= nz * paraFora * t;
+        const t = clamp(excesso / Math.max(1, bolha.raio - inicio), 0, 1);
+        const paraFora = alvoX * nx + alvoY * ny + alvoZ * nz;
+        if (paraFora > 0) {
+          alvoX -= nx * paraFora * t;
+          alvoY -= ny * paraFora * t;
+          alvoZ -= nz * paraFora * t;
+        }
+
+        const forca = W.softEdge.pull * excesso * (d > bolha.raio ? 2 : 1);
+        v.x -= nx * forca * h;
+        v.y -= ny * forca * h;
+        v.z -= nz * forca * h;
       }
+    } else {
+      const limite = W.flyRadius ?? W.radius;
+      const r = modulo2(p.x, p.z);
+      if (r > W.softEdge.start) {
+        const inv = 1 / r;
+        const nx = p.x * inv;
+        const nz = p.z * inv;
+        const excesso = r - W.softEdge.start;
 
-      /* Fora do LIMITE de voo o puxão dobra. É a garantia de que ninguém fica
-         pendurado no vazio: mesmo um teleporte a mil metros da borda volta.
-         Contra `flyRadius`, pelo mesmo motivo de cima — `isInsideWorld` responde
-         pelo raio de jogo (460 m), que hoje é bem menor que o de passeio, e
-         usá-lo aqui dobraria o freio já em cima da montanha. */
-      const forca = W.softEdge.pull * excesso * (r > limite ? 2 : 1);
-      v.x -= nx * forca * h;
-      v.z -= nz * forca * h;
+        /* -------------------------------------- e ele AFROUXA COM A ALTITUDE
+         *
+         * Durante a fuga do planeta, `regime.freioSolta`/`freioMorre` deixam de
+         * ser `Infinity` e este fator cai de 1 a 0 entre as duas cotas. É a
+         * correção que a fuga exigia: o freio existe para o mapa não vazar
+         * pelos LADOS, e a mil metros de altura ele não protege nada — só
+         * empurra para dentro quem está subindo em espiral, que durante a
+         * contagem é exatamente quem está correndo contra o relógio do planeta
+         * para chegar ao alto.
+         *
+         * O afrouxamento vale só para o termo que tira autoridade do motor. O
+         * PUXÃO de quem está fora do limite continua inteiro em qualquer
+         * altura (ver o `forca` lá embaixo): ele não é a borda do passeio, é a
+         * garantia de que ninguém fica pendurado no vazio, e isso não tem nada
+         * a ver com estar fugindo. */
+        let solto = 1;
+        if (p.y > R.freioSolta) {
+          const faixa = Math.max(1, R.freioMorre - R.freioSolta);
+          solto = 1 - clamp((p.y - R.freioSolta) / faixa, 0, 1);
+        }
+
+        const t = clamp(excesso / (limite - W.softEdge.start), 0, 1) * solto;
+        const paraFora = alvoX * nx + alvoZ * nz;
+        if (paraFora > 0) {
+          alvoX -= nx * paraFora * t;
+          alvoZ -= nz * paraFora * t;
+        }
+
+        /* Fora do LIMITE de voo o puxão dobra. É a garantia de que ninguém fica
+           pendurado no vazio: mesmo um teleporte a mil metros da borda volta.
+           Contra `flyRadius`, pelo mesmo motivo de cima — `isInsideWorld`
+           responde pelo raio de jogo (460 m), que hoje é bem menor que o de
+           passeio, e usá-lo aqui dobraria o freio já em cima da montanha. */
+        const forca = W.softEdge.pull * excesso * (r > limite ? 2 : 1);
+        v.x -= nx * forca * h;
+        v.z -= nz * forca * h;
+      }
     }
 
     /* ------------------------------------------------------ o servo -------- */
@@ -857,13 +993,23 @@ export class FighterController {
     p.z += v.z * h;
 
     /* Teto, como travessa final. A faixa acima já tirou a vontade de subir; isto
-       aqui é o que segura um empurrão vertical que veio de fora. */
-    if (p.y > W.ceiling) {
-      p.y = W.ceiling;
+       aqui é o que segura um empurrão vertical que veio de fora.
+       `regime.teto`, e não a constante: ver o comentário de `this.regime`. Sem
+       esta linha ler o regime, um lutador em fuga levaria um empurrão para cima
+       e seria cortado a 520 m — no meio da subida que o modo inteiro pede. */
+    if (!bolha && p.y > R.teto) {
+      p.y = R.teto;
       if (v.y > 0) v.y = 0;
     }
 
-    /* ------------------------------------------------------- o contato ----- */
+    /* ------------------------------------------------------- o contato -----
+       NO ESPAÇO NÃO HÁ CONTATO. É a maior das cinco coisas que a bolha desliga,
+       e ela sai daqui inteira: sem esta saída, `heightAt` continuaria devolvendo
+       o relevo do planeta (a função é pura em (x, z) e não sabe que o planeta
+       explodiu), e todo mundo estaria voando a 2 250 m sobre um chão fantasma
+       que só se manifestaria ao alguém descer até ele. */
+    if (bolha) return null;
+
     const chao = this._chao(p.x, p.z);
 
     if (p.y > chao) {

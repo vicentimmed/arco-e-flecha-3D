@@ -36,6 +36,9 @@
        acertos    → NC2S.BLAST_HIT     { id, victim, p }
        queimando  → NC2S.SPECIAL_HIT   { victim, kind, dt }
        chao       → NC2S.GROUND_HIT    { p, power }
+       embates    → NC2S.POWER_CLASH   { a, ka, b, kb, p, c }  — e um pedaço
+                    local: é ele que manda o `game.js` encerrar a pose do
+                    especial que foi anulado (ver §6 e `filaEmbates`)
        empurroes  → efeito local (a onda empurra quem está na própria tela)
        noAr       → efeito local (o estouro que NÃO tocou o chão, e por isso
                     não tem cratera para anunciá-lo — ver `filaNoAr`)
@@ -121,6 +124,27 @@
    carga apareça só precisa ter alguém escutando esse evento — e se não houver
    ninguém, o `emit` não faz nada e o golpe continua inteiro, porque tudo o que é
    ESTRUTURAL aqui (feixe, disco, esfera, casca) é geometria, não partícula.
+
+   ============================================================================
+   6. O EMBATE — quando um poder encosta noutro
+   ============================================================================
+
+   Era a lacuna mais visível do modo: dois Kamehamehas se atravessavam sem se
+   ver. Quem resolve é `powers/colisao.js`, e ele fica FORA dos cinco pools pelo
+   mesmo motivo que a varredura da onda é feita em `spawnBurst` e não escondida
+   dentro de `burst.js` — a regra de quem ganha de quem não pertence a nenhum
+   deles, e escrevê-la dentro do feixe obrigaria a metade simétrica a existir
+   dentro da esfera, para envelhecerem separadas.
+
+   Os cinco arquivos ganharam três ganchos ao todo (`varrerEmbate` nas bolas,
+   `abortarPorEmbate` nos três especiais, mais `carregando` e
+   `distanciaDoEmbate` no feixe, que são as duas coisas que só ele sabe
+   responder). Tudo o mais — a tabela, o teste, o estouro e a rede — mora lá.
+
+   O que o embate ACRESCENTA a este arquivo é um canal (`embates`) e um passo,
+   depois dos cinco pools; o resto do sistema não mudou uma linha. E ele não
+   pede luz nova: a explosão da regra 4 usa a MESMA `PointLight` de sempre, pelo
+   pedido mais forte do quadro, exatamente como todo o resto do §4.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -138,6 +162,8 @@ import { BeamPool } from "./beam.js";
 import { DiskPool } from "./disk.js";
 import { OrbPool } from "./orb.js";
 import { BurstPool } from "./burst.js";
+import { infoDoGolpe } from "../character/ssj.js";
+import { ColisorDePoderes } from "./colisao.js";
 
 /* --------------------------------------------------------------------- luz */
 /** m — alcance da única luz do sistema. */
@@ -215,6 +241,14 @@ export class PowerSystem {
     this.orbes = new OrbPool(scene, field);
     this.bursts = new BurstPool(scene, field);
 
+    /* O ÁRBITRO DO EMBATE — poder contra poder (§6, e o cabeçalho longo de
+       `colisao.js`). Ele mora fora dos cinco pools de propósito: a regra de
+       quem ganha de quem não pertence a nenhum deles, e escrevê-la dentro do
+       feixe obrigaria a metade simétrica a existir dentro da esfera. É a mesma
+       razão pela qual a varredura da onda acontece em `spawnBurst`, aqui, e não
+       escondida em `burst.js`. */
+    this.colisor = new ColisorDePoderes(scene);
+
     /* As capacidades saem do pior caso de cada canal, não de um número redondo:
        64 acertos é mais bolas acertando num quadro só do que 15 pessoas
        conseguem ter em voo mirando na mesma direção; 32 queimaduras cobrem seis
@@ -273,6 +307,26 @@ export class PowerSystem {
       push: { x: 0, y: 0, z: 0 },
       dano: 0,
     }));
+    /* OS EMBATES do quadro — dois poderes que se encostaram. Quatro é folgado:
+       são precisos oito especiais em voo, batendo dois a dois no mesmo quadro,
+       para encher isto.
+       É o único canal deste sistema em que um registro serve a DOIS destinos
+       diferentes, e por isso os dois campos de controle: `enviar` diz que fui EU
+       quem detectou (e portanto tenho de contar à sala, ver `NC2S.POWER_CLASH`),
+       `cancelar` diz que o especial que EU estava carregando foi anulado — e
+       quem sabe encerrar a pose é o `game.js`, porque o relógio dela
+       (`this.casting`) é dele e não do feixe. */
+    this.filaEmbates = new Fila(4, () => ({
+      enviar: false,
+      cancelar: false,
+      modo: null,
+      carga: false,
+      aOwner: null,
+      aKind: null,
+      bOwner: null,
+      bKind: null,
+      p: { x: 0, y: 0, z: 0 },
+    }));
 
     /** O objeto devolvido por `update`. Sempre o MESMO — as listas é que giram. */
     this.saida = {
@@ -281,6 +335,9 @@ export class PowerSystem {
       chao: this.filaChao.lista,
       empurroes: this.filaEmpurroes.lista,
       noAr: this.filaNoAr.lista,
+      /* Os embates poder-contra-poder (§6). Meio canal local, meio canal de
+         rede — ver `filaEmbates`. */
+      embates: this.filaEmbates.lista,
       /* O TREMOR DE CÂMERA do quadro, e não uma lista: sacudir a lente duas
          vezes no mesmo quadro não é o dobro do tremor, é o tremor mais forte
          dos dois. Mesma regra da luz, e pelo mesmo motivo — a tela é uma só.
@@ -299,6 +356,7 @@ export class PowerSystem {
       chao: () => this.filaChao.novo(),
       empurrao: () => this.filaEmpurroes.novo(),
       noAr: () => this.filaNoAr.novo(),
+      embate: () => this.filaEmbates.novo(),
       /* O tremor da lente. Como a luz: o mais forte do quadro ganha, e somar
          dois seria sacudir o dobro por dois acontecimentos que o olho lê como
          um só. */
@@ -373,6 +431,29 @@ export class PowerSystem {
     if (!disparo || !disparo.origem || !disparo.dir) return null;
     const kind = disparo.kind;
     if (!NAMEK.specials[kind]) return null;
+    /* ------------------------------------------ "TODOS OS PODERES FICAM AMARELOS"
+     *
+     * A DEFINIÇÃO DO GOLPE É ESCOLHIDA AQUI, e é esta linha inteira que atende ao
+     * pedido do Super Saiyajin sem tocar em nenhuma das doze leituras de `.cor`
+     * espalhadas por `beam.js`, `orb.js` e `disk.js`.
+     *
+     * O truque está explicado no cabeçalho de `character/ssj.js`, e o resumo é:
+     * os projéteis leem a cor de `this.info`, e `this.info` era sempre
+     * `NAMEK.specials[kind]`. Trocando o OBJETO por uma cópia dourada — pronta,
+     * congelada e construída uma vez na carga do módulo —, as doze leituras
+     * mudam de resposta sem mudar de linha, e a décima terceira que alguém
+     * escrever amanhã nasce certa.
+     *
+     * `disparo.ssj` é escrito por quem dispara: pelo laço, para o próprio tiro;
+     * pelo tratador do `NS2C.SPECIAL`, a partir do bit 16 da pose de quem
+     * atirou. Ele não viaja na mensagem do especial porque não precisa — o
+     * estado já chega a 20 Hz na pose, e um campo a mais aqui seria a mesma
+     * informação dita duas vezes, com a chance de as duas discordarem.
+     *
+     * O campo é escrito NO objeto recebido e não numa cópia: ele já é um literal
+     * por disparo em quem chama, e um segundo objeto por especial seria
+     * alocação num caminho quente para não dizer nada de novo. */
+    disparo.info = infoDoGolpe(kind, disparo.ssj === true);
     switch (kind) {
       case "kamehameha":
         return this.beams.disparar(disparo);
@@ -440,6 +521,7 @@ export class PowerSystem {
     this.filaChao.limpar();
     this.filaEmpurroes.limpar();
     this.filaNoAr.limpar();
+    this.filaEmbates.limpar();
     this._luzPedido.forca = 0;
     this.saida.abalo.forca = 0;
     this.saida.abalo.dur = 0;
@@ -450,8 +532,26 @@ export class PowerSystem {
     this.orbes.update(passo, lista, localId, this.relato);
     this.bursts.update(passo, lista, localId, this.relato);
 
+    /* O EMBATE VEM DEPOIS DOS CINCO POOLS, e a ordem é a coisa toda: as posições
+       que ele testa têm de ser as DESTE quadro. Rodando antes, ele compararia o
+       feixe de agora com a esfera de 16 ms atrás — a 340 m/s contra 95, cinco
+       metros e meio de erro num teste cuja margem inteira são sete. */
+    this.colisor.varrer(passo, this, localId, this.relato, this.field);
+
     this.acenderLuz(passo);
     return this.saida;
+  }
+
+  /**
+   * Um `NS2C.POWER_CLASH` chegou da sala — o embate confirmado.
+   *
+   * Ele é só REPASSADO, e a razão de o método existir mesmo assim é a mesma que
+   * `spawnBlast` tem: quem chama (o `game.js`) não conhece os pools nem o
+   * árbitro. A aplicação acontece no próximo `update`, dentro do passo — ver
+   * `ColisorDePoderes.daRede`, que explica por que não é aqui.
+   */
+  embateDaRede(msg) {
+    this.colisor.daRede(msg);
   }
 
   /** A luz segue o pedido mais forte do quadro, amortecida. */
@@ -490,11 +590,13 @@ export class PowerSystem {
     this.disks.clear();
     this.orbes.clear();
     this.bursts.clear();
+    this.colisor.clear();
     this.filaAcertos.limpar();
     this.filaQueima.limpar();
     this.filaChao.limpar();
     this.filaEmpurroes.limpar();
     this.filaNoAr.limpar();
+    this.filaEmbates.limpar();
     this._luzPedido.forca = 0;
     this.saida.abalo.forca = 0;
     this.luz.intensity = 0;
@@ -507,6 +609,7 @@ export class PowerSystem {
     this.disks.dispose();
     this.orbes.dispose();
     this.bursts.dispose();
+    this.colisor.dispose();
     this.scene.remove(this.luz);
     this.luz.dispose?.();
   }
@@ -524,3 +627,8 @@ export { BeamPool } from "./beam.js";
 export { DiskPool } from "./disk.js";
 export { OrbPool } from "./orb.js";
 export { BurstPool } from "./burst.js";
+/* A tabela do embate, reexportada porque ela é PURA e há quem precise dela sem
+   precisar do árbitro — o desfecho de um par de golpes é a mesma função nos dois
+   caminhos (detecção local e confirmação da sala), e ter uma segunda cópia dela
+   em qualquer lugar seria a divergência que o §2 de `colisao.js` combate. */
+export { ColisorDePoderes, classeDe, resolverEmbate, EMBATE } from "./colisao.js";

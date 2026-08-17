@@ -123,11 +123,65 @@ const CSS = `
 
 .nk-placa {
   position: absolute;
-  top: 14px;
+  top: var(--nk-topo, 14px);
   display: flex;
   flex-direction: column;
   gap: 7px;
   z-index: 3;
+}
+
+/* ==================================================== o TOPO, com o CHEFE ===
+   *"O life do Freeza sobrescreve outros elementos visuais do jogo."*
+
+   O relato veio com captura: a faixa verde da vida do boss atravessava a tela
+   inteira na mesma altura das placas dos cantos, o número da SUA vida ficava
+   meio escondido atrás dela e o selo "KI CHEIO" disputava a linha com os onze
+   mil pontos de vida dele. Três informações no mesmo pedaço de tela.
+
+   ---------------------------------------------------------- por que na vertical
+
+   Não dá para resolver na horizontal, e a conta prova. A 1512 px de tela, a
+   placa do jogador ocupa até ~519 px (retrato + barras + número) e a do alvo
+   ~450 px do outro lado: sobram ~530 px de vão no meio. A barra do boss pede
+   62vw = 937 px — e a largura DELA não é ênfase, é resolução: com onze mil
+   pontos de vida, 940 px movem um pixel a cada doze pontos e 400 px, um a cada
+   vinte e sete (o argumento inteiro está no cabeçalho de 'ui/boss.js', e ele
+   está certo). Encolhê-la para caber no vão custaria metade da única coisa que
+   faz aquela barra ser legível durante a luta.
+
+   Espaço vertical, por outro lado, é o que mais sobra nesta tela.
+
+   -------------------------------------------------------- quem cede, e por quê
+
+   **O boss fica onde está e o resto do HUD desce.** A barra dele é a peça mais
+   importante da tela enquanto ele existe — é a partida —, e o topo-centro é o
+   lugar que o gênero inteiro reservou para "a coisa contra a qual todos estão
+   lutando". As placas dos cantos continuam sendo os cantos: elas descem 96 px e
+   não mudam mais nada. É também a leitura certa da fase: quando o chefe entra,
+   o jogo vira outro, e a tela dizer isso é a favor.
+
+   O deslocamento é só ENQUANTO a barra estiver na tela, e quem responde a isso é
+   o próprio DOM: ':has()' pergunta se existe uma '.nk-boss' não escondida dentro
+   do HUD. Sem JavaScript nenhum no meio — nada para o laço lembrar de chamar,
+   nada para dessincronizar, e a volta acontece sozinha quando ela some (ela fica
+   visível uns segundos depois da queda, mostrando a barra esvaziar; com um sinal
+   de código, esse intervalo seria o momento exato em que a colisão voltaria).
+   Em navegador sem ':has()' a regra é ignorada e o layout é o de hoje — pior,
+   nunca quebrado.
+
+   96 px é a altura do bloco dele com folga: título (26 px no maior clamp) + 4 +
+   barra (24 + 6 de borda) + 4 + rodapé (~22), que dá ~91. O cartaz "FREEZA
+   CHEGOU" fica por baixo disso, mas é TEXTO CENTRALIZADO e some em 3,4 s — ele
+   não alcança os cantos onde as placas moram. */
+.nk-hud:has(.nk-boss:not([hidden])) {
+  --nk-topo: 110px;
+}
+
+/* O feed de abates desce junto: ele mora logo abaixo da placa do alvo (e a
+   distância entre os dois é o que faz os dois lerem como o mesmo assunto), então
+   ele acompanha o deslocamento em vez de ficar para trás por cima dela. */
+.nk-hud:has(.nk-boss:not([hidden])) .nk-feed {
+  top: 214px;
 }
 
 .nk-placa--eu { left: 16px; align-items: flex-start; }
@@ -293,6 +347,43 @@ const CSS = `
 @keyframes nk-bater {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.16); }
+}
+
+/* ------------------------------------------------------- quanto você tirou --
+   O número do dano na placa do alvo: '−34' ao lado da vida dele.
+
+   *"O player que atacou sabe quanto de vida do outro player ele tirou."* A barra
+   com fantasma já mostra o TAMANHO da pancada, e é ela que faz sentir; o número
+   é a outra metade, e as duas são necessárias por razões diferentes — o fantasma
+   se lê de canto de olho no meio da briga, o número se lê quando se quer saber
+   se falta um golpe ou dois para derrubar alguém.
+
+   ÂMBAR, e não vermelho: vermelho neste HUD é a vida acabando (o seu número
+   crítico, o clarão de dano). Um '−34' vermelho na placa do outro seria a mesma
+   cor dizendo coisas opostas em dois cantos da tela. Âmbar é a cor do fantasma
+   logo ao lado — a mesma pancada, escrita duas vezes. */
+.nk-dano {
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1;
+  color: #ffc24a;
+  min-width: 3.2ch;
+  text-align: center;
+  /* Nunca empurra a barra: a placa é ancorada na direita e o número entra e sai
+     várias vezes por briga. Sem isto, a barra do alvo pularia de posição a cada
+     acerto. */
+  flex: none;
+}
+.nk-dano[hidden] { display: none !important; }
+
+/* O PULO A CADA GOLPE. A classe é reposta pelo HUD a cada acerto novo (ver
+   'setTarget'), e sem ele a segunda bola de uma rajada só mudaria o número — o
+   olho, que está na briga e não na placa, não veria diferença nenhuma. */
+.nk-dano.nk-bateu { animation: nk-dano-pulo 0.26s ease-out; }
+
+@keyframes nk-dano-pulo {
+  0% { transform: scale(1.55) translateY(-3px); color: #fff3d0; }
+  100% { transform: scale(1) translateY(0); color: #ffc24a; }
 }
 
 /* ================================================================ barra de ki
@@ -610,9 +701,10 @@ const CSS = `
  * mais o alvo derivasse para fora do centro — que, com a zona morta da câmera
  * nova, passou a ser o tempo todo.
  *
- * Quem diz para onde o tiro vai, travado, é o anel em volta do adversário
- * ('.nk-alvo-anel'). Duas miras na tela ao mesmo tempo, uma delas errada, é pior
- * que nenhuma. */
+ * Quem dizia para onde o tiro ia, travado, era o anel em volta do adversário —
+ * e os dois saíram juntos quando a tecla 'R' saiu. A regra continua escrita
+ * porque a bancada exercita o estado, e porque ela é a lição: duas miras na tela
+ * ao mesmo tempo, uma delas errada, é pior que nenhuma. */
 .nk-mira.nk-travado { display: none; }
 
 /* Carregando: dourado e girando. Carregar ki trava o lutador no lugar (§5), e a
@@ -622,83 +714,13 @@ const CSS = `
 
 @keyframes nk-girar { to { transform: rotate(360deg); } }
 
-/* ============================================================ anel da trava
- *
- * O CÍRCULO VERMELHO EM VOLTA DO ADVERSÁRIO — o retículo do pedido.
- *
- * Ele não fica no centro da tela: ele é ancorado no corpo de quem está travado,
- * e a razão está em 'NamekHud.setLockRing'. O que este bloco resolve é fazer um
- * círculo vermelho de tamanho variável ler como MIRA e não como enfeite, e são
- * três coisas:
- *
- * • **o contorno duplo** — um anel vermelho com uma sombra preta por fora e um
- *   brilho vermelho por dentro. Vermelho puro sobre o clarão de um Kamehameha
- *   some, e sobre o céu verde de Namekusei ele vibra; a borda preta resolve os
- *   dois, e é a mesma lição que o retículo do centro já tinha aprendido.
- * • **as quatro cantoneiras** — quatro cantos de um quadrado imaginário em volta
- *   do círculo. É a diferença entre "um círculo" e "uma mira travada": nenhum
- *   objeto do mundo tem cantoneiras, então elas são lidas como interface na
- *   hora, sem precisar de nada escrito.
- * • **nada de 'transition' na posição** — o anel persegue um corpo que voa a
- *   64 m/s, e uma transição de CSS por cima disso faria o anel ficar atrasado em
- *   relação ao adversário de um jeito que o olho lê como "o jogo travou". A cor
- *   e a opacidade, essas sim, transicionam.
- */
-
-.nk-alvo-anel {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 3;
-  border: 2px solid #ff3b28;
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.85),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.55),
-    0 0 12px rgba(255, 59, 40, 0.55);
-  pointer-events: none;
-  /* 'will-change' porque ele muda de transform em TODO quadro: é o aviso ao
-     navegador para deixar o elemento numa camada própria e não repintar o HUD
-     inteiro por causa dele. */
-  will-change: transform, width, height;
-}
-.nk-alvo-anel[hidden] { display: none !important; }
-
-/* As cantoneiras. 'inset' negativo as põe FORA do círculo — coladas nele, elas
-   somem contra a própria borda. */
-.nk-alvo-anel .nk-c {
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border: 2px solid #ff3b28;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
-}
-.nk-alvo-anel .nk-c1 { left: -7px;  top: -7px;    border-right: 0; border-bottom: 0; }
-.nk-alvo-anel .nk-c2 { right: -7px; top: -7px;    border-left: 0;  border-bottom: 0; }
-.nk-alvo-anel .nk-c3 { left: -7px;  bottom: -7px; border-right: 0; border-top: 0; }
-.nk-alvo-anel .nk-c4 { right: -7px; bottom: -7px; border-left: 0;  border-top: 0; }
-
-/* ALVO DISTANTE: o anel pisca devagar. É a "indicação visual de que o alvo está
-   distante" do §13 — a trava ainda vale, mas está perto do limite de alcance e
-   pode cair. Piscar e não mudar de cor: cor nova é informação nova para
-   aprender, e piscar todo mundo já entende como "atenção". */
-.nk-alvo-anel.nk-longe { animation: nk-alvo-pulso 1.1s ease-in-out infinite; }
-
-/* PERDENDO: o alvo saiu do quadro e o relógio da perda está correndo (§14). O
-   anel fica tracejado e desbota — ele está descrevendo alguém que já não se vê,
-   e um anel sólido sobre o vazio seria mentira. Ele continua na tela de
-   propósito: é a borda do quadro por onde o adversário saiu, e é para lá que o
-   jogador tem de virar. */
-.nk-alvo-anel.nk-perdendo {
-  border-style: dashed;
-  opacity: 0.55;
-  animation: nk-alvo-pulso 0.5s ease-in-out infinite;
-}
-
-@keyframes nk-alvo-pulso {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
+/* O ANEL VERMELHO DA TRAVA ('.nk-alvo-anel') morava aqui, com as quatro
+   cantoneiras, o estado "alvo distante" e o estado "perdendo". Saiu inteiro
+   junto com a tecla 'R': sem trava não existe adversário preso, e a única coisa
+   que podia acender aquele anel era ela. Ver 'NAMEK.lock' para a decisão, e o
+   bloco logo abaixo para o que ficou no lugar — os círculos de TODO MUNDO, com o
+   de quem está sob o cursor aceso, que é o que o pedido da mira assistida pede
+   ao dizer "sem travar a câmera, sem a parte vermelha nem nada". */
 
 /* ====================================================== os círculos de todos
  *
@@ -709,8 +731,10 @@ const CSS = `
  * de cor quando o mouse estiver perto dele."*
  *
  * Por isso a distância entre os dois estados é de COR e de PESO, e não de forma:
- * forma nova (cantoneiras, tracejado) é o vocabulário da trava, e usá-la aqui
- * faria as duas coisas se confundirem justamente quando as duas estão na tela.
+ * forma nova (cantoneiras, tracejado) era o vocabulário da trava, e desde que
+ * ela saiu do jogo estes círculos são os ÚNICOS marcadores de alvo que existem —
+ * o que torna a discrição do apagado ainda mais importante, porque agora não há
+ * nada mais forte na tela para contrastar com ele.
  *
  * O apagado é deliberadamente discreto. Com quinze em campo, quinze círculos
  * fortes seriam a briga escondida atrás da interface.
@@ -744,6 +768,68 @@ const CSS = `
     0 0 14px rgba(255, 211, 77, 0.6),
     inset 0 0 10px rgba(255, 211, 77, 0.28);
 }
+
+/* -------------------------------------------------------------- o CHEFE ----
+   O anel do Freeza. Mesmo nó, mesmo pool, outra leitura — e ele precisa ser
+   reconhecível **antes de ser lido**: *"deve ficar claro quem é o Freeza dos
+   outros jogadores à distância."*
+
+   Três sinais somados, porque a distância come um de cada vez:
+
+   • A COR ('--nk-anel-cor', o magenta de 'NAMEK.freeza.cor'). É o primeiro a
+     chegar e o primeiro a morrer: a 400 m o anel tem uma dúzia de pixels e um
+     céu claro por trás.
+   • O ANEL DUPLO — o traço grosso mais um halo por fora, feito com um segundo
+     'box-shadow' em vez de um pseudo-elemento (é uma propriedade animável, e a
+     composição resolve as duas camadas sem tocar em layout). Silhueta diferente
+     lê como "outra categoria de coisa" mesmo quando a cor já se perdeu.
+   • O NOME por cima. É o único que não depende de convenção nenhuma, e o único
+     que responde "quem é" em vez de "onde está".
+
+   Ele NÃO pulsa. A tentação é grande e estaria errada: o que pulsa nesta tela é
+   o que exige uma decisão agora (o pino do alvo, o número da vida crítica). O
+   chefe fica em campo por minutos — um marcador piscando por três minutos vira
+   ruído e ensina o olho a ignorá-lo, que é o oposto do pedido. */
+.nk-lutador-anel.nk-chefe {
+  border-width: 3px;
+  border-color: var(--nk-anel-cor, #c21ad8);
+  box-shadow:
+    0 0 0 1.5px rgba(0, 0, 0, 0.85),
+    0 0 0 7px color-mix(in srgb, var(--nk-anel-cor, #c21ad8) 34%, transparent),
+    0 0 22px color-mix(in srgb, var(--nk-anel-cor, #c21ad8) 70%, transparent);
+}
+
+/* O anel do chefe ACESO (o cursor está nele) mantém o magenta e ganha o ouro por
+   fora, em vez de trocar de cor: trocar apagaria a identidade dele justamente no
+   instante em que o jogador o escolheu. */
+.nk-lutador-anel.nk-chefe.nk-sob {
+  border-color: var(--nk-ouro);
+  box-shadow:
+    0 0 0 1.5px rgba(0, 0, 0, 0.85),
+    0 0 0 8px color-mix(in srgb, var(--nk-anel-cor, #c21ad8) 46%, transparent),
+    0 0 26px rgba(255, 211, 77, 0.7);
+}
+
+/* O RÓTULO. Escondido em todo mundo — quinze nomes flutuando seriam a briga
+   atrás de uma lista telefônica — e visível só no chefe. Ancorado ACIMA do anel
+   por 'bottom: 100%', que é o que o mantém colado à borda de cima seja qual for
+   o tamanho do anel (ele varia com a distância, de 44 a 600 px). */
+.nk-anel-nome {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -4px);
+  display: none;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  color: var(--nk-anel-cor, #e6a2ff);
+  /* Filtra o brilho do próprio anel: sem o contorno, o nome sobre o halo
+     magenta some. '.nk-contorno' já entra pela classe, isto é o reforço. */
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95);
+}
+.nk-lutador-anel.nk-chefe .nk-anel-nome { display: block; }
 
 /* ============================================================= dano recebido */
 
@@ -823,6 +909,45 @@ const CSS = `
   color: #fff;
   -webkit-text-stroke: 2px rgba(0, 0, 0, 0.85);
   paint-order: stroke fill;
+}
+
+/* ------------------------------------------------------------- o CHEFE -----
+   O pino do Freeza, e ele é o marcador que resolve o caso pior: o boss FORA da
+   tela. Ali não há corpo para circular nem cor de gi para reconhecer — só uma
+   seta na borda, no meio de até catorze setas iguais.
+
+   Por isso ele é o único pino com NOME. A seta cresce (34 px contra 26) e ganha
+   o magenta dele, mas o que responde "quem é" numa borda cheia de setas é a
+   palavra escrita — e ela é barata porque o rótulo já existia para a distância.
+
+   Ele também não desbota com a distância (ver 'forca' em 'NamekGame.bussola'):
+   o pino de gente nasce e morre conforme ela se afasta, o do chefe está sempre
+   em força total, porque o motivo de ele existir não é a distância — é o
+   jogador ter perdido de vista a coisa contra a qual a sala inteira está
+   lutando. */
+.nk-pino.chefe {
+  --nk-pino-cor: #e6a2ff;
+  /* Acima de qualquer pino de gente que caia no mesmo canto da tela. */
+  z-index: 1;
+}
+
+.nk-pino.chefe .nk-pino-seta {
+  font-size: 34px;
+  filter: drop-shadow(0 0 6px rgba(194, 26, 216, 0.85)) drop-shadow(0 0 3px rgba(0, 0, 0, 0.95));
+}
+
+.nk-pino.chefe .nk-pino-anel {
+  width: 42px;
+  height: 42px;
+  border-width: 3px;
+  box-shadow: 0 0 14px rgba(194, 26, 216, 0.8), inset 0 0 10px rgba(255, 255, 255, 0.2);
+}
+
+.nk-pino.chefe .nk-pino-d {
+  font-size: 12.5px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: #f6dcff;
 }
 
 /* O ALVO TRAVADO é maior e pulsa. Ele é o único pino que descreve uma decisão
@@ -1314,6 +1439,10 @@ const CSS = `
 @media (max-width: 1000px) {
   .nk-hud .nk-vida { height: 22px; }
   .nk-hud .nk-vida-num { font-size: 24px; }
+  /* O número do dano encolhe JUNTO com a barra do alvo: ele é o elemento mais à
+     esquerda da placa da direita, e é ele que encosta na placa do jogador
+     primeiro quando a tela aperta. */
+  .nk-hud .nk-dano { font-size: 15px; min-width: 2.6ch; }
   .nk-hud .nk-retrato { width: 50px; height: 50px; }
   .nk-hud .nk-especiais { margin-left: 60px; }
   .nk-hud .nk-esp-nome { display: none; }

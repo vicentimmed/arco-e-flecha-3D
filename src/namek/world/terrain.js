@@ -194,13 +194,17 @@ const PALETA = {
    * clareira, porque o que se vê num corte é a distância à superfície de onde o
    * corte começou. A única exceção é a brasa, que é por COTA — ver
    * `corDeCratera`. */
-  /** 0–2 m: a terra raspada, clara e seca. É o que aparece assim que a grama sai. */
+  /* As faixas abaixo são as de HOJE, e elas dobraram quando a lava dobrou de
+   * fundura: o perfil inteiro tem de caber entre a grama e o magma, e furar até
+   * a lava passou a custar 65 m de escavação em vez de 33. Ver `corDeCratera`,
+   * que tem a conta e a razão de a primeira faixa NÃO ter dobrado junto. */
+  /** 0–1,6 m: a terra raspada, clara e seca. É o que aparece assim que a grama sai. */
   escavado: new THREE.Color("#9c7f56"),
-  /** 2–9 m: o horizonte B, mais escuro e mais úmido. */
+  /** 5–18 m: o horizonte B, mais escuro e mais úmido. */
   terraFunda: new THREE.Color("#68492c"),
-  /** 9–20 m: o marrom vira cinza — começou a rocha. */
+  /** 18–40 m: o marrom vira cinza — começou a rocha. */
   rochaFunda: new THREE.Color("#565049"),
-  /** 20 m+: rocha-mãe, quase sem cor. */
+  /** 40–66 m: rocha-mãe, quase sem cor. Fecha junto com o gatilho da lava. */
   rochaProfunda: new THREE.Color("#2f2c2a"),
   /** O que aparece quando o fundo se aproxima da lava. Ver `corDeCratera`. */
   brasa: new THREE.Color("#b8431a"),
@@ -717,29 +721,62 @@ export class NamekTerrain {
        pintar por causa dele deixaria o campo inteiro levemente marrom. */
     if (cav <= 0.05) return out;
 
-    // 1. a grama sai. Rápido — raspou, virou terra.
+    /* AS PROFUNDIDADES DOBRARAM COM A LAVA, e elas não se ajustam sozinhas.
+     *
+     * As quatro faixas abaixo eram 0–1,6 · 2,5–9 · 9–20 · 20–34, e o 34 do fim
+     * não era um número solto: era exatamente onde um buraco na clareira
+     * encontrava a lava (`lava.gatilho` em −32, relevo a +1,2). O perfil de solo
+     * inteiro cabia entre a grama e o magma, que é o que o pedido descreve.
+     *
+     * Quando a lava foi para −56 (gatilho −64), furar passou a custar 65,2 m de
+     * escavação e este perfil ficaria ESPREMIDO no primeiro terço: os últimos
+     * 31 m do poço seriam uma parede monocromática de `rochaProfunda`, e o
+     * jogador cavando perderia justamente a informação de que está progredindo.
+     *
+     * Por isso as três faixas de baixo foram multiplicadas por ~2 (9 → 18,
+     * 20 → 40, 34 → 66) e a de cima NÃO foi:
+     *
+     * • o horizonte A tem a espessura que tem. Ele é a camada de matéria
+     *   orgânica raspada, e ela mede um metro e meio em qualquer solo, num
+     *   planeta com a crosta fina ou grossa. Dobrá-la faria a cratera de uma
+     *   rajada (6,1 m de fundo) ficar metade verde de novo, que é a queixa
+     *   original deste bloco;
+     * • as de baixo descrevem a DISTÂNCIA À LAVA, e essa distância dobrou.
+     *
+     * O fim (66 m) continua caindo um pouco depois do gatilho (65,2 m): a
+     * rocha-mãe termina de fechar bem quando o magma aparece, que é a leitura
+     * certa de "cavei a crosta inteira". */
+    // 1. a grama sai. Rápido — raspou, virou terra. NÃO escala: ver acima.
     out.lerp(PALETA.escavado, smoothstep(0.15, 1.6, cav));
     // 2. o marrom escurece
-    out.lerp(PALETA.terraFunda, smoothstep(2.5, 9, cav));
+    out.lerp(PALETA.terraFunda, smoothstep(5, 18, cav));
     // 3. o marrom vira cinza: começou a rocha
-    out.lerp(PALETA.rochaFunda, smoothstep(9, 20, cav));
+    out.lerp(PALETA.rochaFunda, smoothstep(18, 40, cav));
     // 4. rocha-mãe
-    out.lerp(PALETA.rochaProfunda, smoothstep(20, 34, cav));
+    out.lerp(PALETA.rochaProfunda, smoothstep(40, 66, cav));
 
     /* 5. A BRASA, e ela é a única camada medida por COTA e não por escavação.
      *
      * O motivo é que ela não descreve o solo, descreve a proximidade do que está
-     * embaixo dele: a lava assenta numa cota fixa (`lava.nivel`, −14 m) e não a
+     * embaixo dele: a lava assenta numa cota fixa (`lava.nivel`, −56 m) e não a
      * uma profundidade fixa. Um poço de trinta metros aberto no topo de uma
      * montanha de 140 m para a 110 m de altitude — não há brasa nenhuma lá. O
-     * mesmo poço aberto na clareira chega aos −26 e está quente.
+     * mesmo poço aberto na clareira desce para os −29 e ainda não está quente:
+     * ela só começa a acender aos −26.
      *
      * É também o aviso que o jogador precisa para o teste que ele descreveu
      * ("furar até chegar na lava"): a cor esquenta antes de a poça acender, e é
      * ela que diz "continue cavando aqui" em vez de deixar a pessoa adivinhando
-     * se o buraco está fundo o bastante. */
+     * se o buraco está fundo o bastante.
+     *
+     * A FAIXA CRESCEU DE 18 PARA 32 m (`nivel + 30` até `nivel − 2`) junto com a
+     * lava, e por uma razão de proporção: os 18 m antigos eram 55 % do caminho a
+     * cavar; com 65 m para descer eles seriam 28 %, e o aviso chegaria tarde
+     * demais para ser um aviso. Com 32 m ele acende quando faltam 40 % do
+     * caminho — o mesmo lugar relativo de antes. Continua ancorado em `L.nivel`
+     * e não em números fixos, então mexer na lava move os dois juntos. */
     const L = NAMEK.destruction.lava;
-    const quente = smoothstep(L.nivel + 16, L.nivel - 2, h);
+    const quente = smoothstep(L.nivel + 30, L.nivel - 2, h);
     if (quente > 0.001) out.lerp(PALETA.brasa, quente * 0.85);
     return out;
   }

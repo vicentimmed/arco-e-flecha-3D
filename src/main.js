@@ -4126,12 +4126,19 @@ async function main() {
       return;
     }
     window.game = namek;
-    lobby.setReady();
+    /* O `onEnter` ANTES do `setReady` — a ordem é o conserto de um bug, não
+       estilo. `setReady` pode entrar SOZINHO na porta guardada pela recarga de
+       troca de jogo (ver `AUTO_ENTER_KEY` no lobby), e é exatamente esse o
+       caminho de quem clica em Namekusei vindo do arqueiro. Com a ordem
+       trocada, aquele `submit` automático chamava o `onEnter` que ainda era o
+       vazio de fábrica: a tela de entrada travava em "entrando…" para sempre,
+       sem erro nenhum, e só um F5 (que consome a marca) destravava. */
     lobby.onEnter = async (nome) => {
       await namek.connect(nome);
       lobby.hide();
       namek.start();
     };
+    lobby.setReady();
     return;
   }
 
@@ -4147,8 +4154,9 @@ async function main() {
   }
 
   window.game = game;
-  lobby.setReady();
 
+  // Antes do `setReady`, pela mesma razão do desvio de Namekusei acima: é a
+  // volta de lá para cá, e ela entra sozinha na porta escolhida.
   lobby.onEnter = async (nome, entrada) => {
     // Um erro aqui (sala cheia, servidor fora) volta para o lobby com a
     // mensagem: quem tentou entrar precisa saber por que não entrou.
@@ -4156,6 +4164,7 @@ async function main() {
     lobby.hide();
     game.start();
   };
+  lobby.setReady();
 }
 
 main();

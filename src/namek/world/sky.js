@@ -3,31 +3,36 @@
 
    O CÉU VERDE É A MARCA DO PLANETA. Antes de qualquer rocha, antes da vila,
    antes das ajisas, o que diz "isto é Namekusei" é o gradiente verde-claro com
-   três sóis nele. Se este arquivo estivesse certo e todos os outros errados, o
-   estágio ainda seria reconhecível; o contrário não é verdade.
+   o sol dentro dele. Se este arquivo estivesse certo e todos os outros errados,
+   o estágio ainda seria reconhecível; o contrário não é verdade.
+
+   **O SOL É UM SÓ**, a pedido do usuário, e o arquivo tinha três. O argumento
+   inteiro está no bloco `SOL`, mais abaixo — leia-o antes de "consertar" isto de
+   volta para o cânone.
 
    ------------------------------------------------------------ o que custa o quê
 
    Três coisas moram aqui e todas as três são armadilhas de orçamento (§3):
 
-   • **Os três sóis não são objetos.** São três produtos escalares dentro do
-     fragmento do domo — zero malha, zero chamada de desenho, zero luz. Uma
-     esfera emissiva por sol seriam três draw calls e, pior, três coisas com
-     posição de mundo que teriam de acompanhar a câmera para não passarem por
-     trás das montanhas.
+   • **O sol não é um objeto.** É um punhado de contas dentro do fragmento do
+     domo — zero malha, zero chamada de desenho, zero luz própria. Uma esfera
+     emissiva seria uma draw call e, pior, uma coisa com posição de mundo que
+     teria de acompanhar a câmera para não passar por trás das montanhas.
 
-     O ORÇAMENTO DELES É EM FRAGMENTO, e é o único item deste arquivo que não
+     O ORÇAMENTO DELE É EM FRAGMENTO, e é o único item deste arquivo que não
      aparece na tabela de triângulos do `scenery.js`. O domo desenha PRIMEIRO e
      sem escrever profundidade, então ele paga a tela inteira uma vez —
      ~2,1 M fragmentos a 1080p, e cada instrução aqui é multiplicada por isso.
-     A conta atual, por pixel: quatro `pow` para o sol principal (disco, coroa,
-     halo e dispersão), dois para cada um dos secundários e um para a barra de
-     horizonte — nove, contra os seis de antes. Três `pow` a mais em tela cheia
-     são ~0,15 ms numa integrada, e é o que o sol GRANDE custou.
 
-     A hierarquia é deliberada e é ela que segura essa conta: um céu com três
-     sóis do mesmo tamanho não tem sol nenhum, tem três adesivos. Um deles é o
-     sol e paga a conta inteira; os outros dois são companhia e pagam o mínimo.
+     A conta, por pixel, em TODA a tela: um `acos`, três `pow` (as três camadas
+     de dispersão) e um `pow` da barra de horizonte. Cinco, contra os nove de
+     quando havia três sóis — o laço dos dois menores cobrava dois `acos`, dois
+     `smoothstep` e dois `pow` de cada pixel do quadro, inclusive dos que estão
+     a 180° deles.
+
+     E o corpo do sol — limbo, granulação, cromosfera — custa MAIS que o disco
+     antigo, mas só dentro de um `if (u < 1.6)`: são 2,7 % dos pixels a 1080p.
+     Foi a troca que pagou o sol "bem trabalhado" sem gastar um quadro por ele.
 
    • **Duas luzes, e só duas.** Uma direcional (o sol principal) e uma
      hemisférica (o rebote do céu no chão). O §3 permite três; a terceira é dos
@@ -70,7 +75,13 @@ import { NAMEK } from "../../shared/namek/config.js";
 export const NAMEK_CAMERA_FAR = 3600;
 
 /** m — raio do domo. Ele acompanha a câmera, então isto é distância AO OLHO. */
-const RAIO_DOMO = 2600;
+/* Exportado porque os DOIS PLANETAS moram dentro dele: `world/planetas.js`
+   confere que `NAMEK.planetas.distancia` cabe aqui, e cabendo eles são
+   recortados pelo relevo como qualquer outra coisa em vez de serem pintados por
+   cima dele. Um segundo literal "2600" lá seria a mesma armadilha que a nota de
+   `NAMEK_SOL_DIR` descreve: o dia em que o domo encolhesse, os planetas ficariam
+   do lado de fora e sumiriam sem que nada apontasse por quê. */
+export const RAIO_DOMO = 2600;
 
 /* m — altura das duas camadas de nuvem. ACIMA do teto de voo (520 m), e isso é
    requisito, não estética: um plano horizontal de nuvem visto de dentro vira
@@ -79,11 +90,51 @@ const RAIO_DOMO = 2600;
 const NUVEM_BAIXA = 620;
 const NUVEM_ALTA = 980;
 
-/* Os TRÊS SÓIS. Espalhados em azimute de propósito: com dois no mesmo quadrante
-   metade das direções de olhar não mostraria sol nenhum, e o traço mais citado
-   do planeta ficaria escondido na maior parte do tempo.
-   O primeiro é O SOL — é ele que a direcional segue, é ele que faz o rastro no
-   mar e é ele que a barra do horizonte acende. Os outros dois são companhia.
+/* ============================================================================
+   O SOL. **UM SÓ**, e isto é um pedido explícito do usuário.
+
+     *"Quando fui jogar me pareceu que tinha vários sóis. Deve ter um único sol,
+     o maior e mais bem trabalhado."*
+
+   ------------------------------------------------ ISTO CONTRARIA O CÂNONE
+
+   E contraria de propósito. Namekusei tem três sóis na referência, o
+   `docs/plano-namekusei.md` dizia isso, e este arquivo tinha três — um grande e
+   dois pequenos, espalhados em azimute para que qualquer direção de olhar
+   mostrasse sol. **Não "conserte" isto de volta.** O plano foi atualizado junto
+   (§1, "o céu") e traz o pedido escrito lá também.
+
+   O motivo do usuário é o que importa e ele é bom: dois discos de 1,7° e 1,4°
+   em cantos opostos do céu não leem como "os três sóis de Namekusei" — leem
+   como manchas claras no domo, e a primeira coisa que se pergunta ao ver uma é
+   se aquilo é um bug de renderização. Um sol só, grande, com limbo, cromosfera,
+   granulação e três camadas de dispersão, é uma imagem que se explica sozinha.
+
+   ------------------------------------------------------- o que a troca custou
+
+   **Nada em iluminação, e vale medir porque parece o contrário.** Os dois
+   menores nunca foram luz: eles eram dois produtos escalares dentro do fragmento
+   do domo, sem malha, sem `Light` e sem contribuição nenhuma para o
+   sombreamento da cena (é o que o §1 do cabeçalho deste arquivo já dizia). As
+   luzes dinâmicas do modo eram DUAS antes (uma direcional e uma hemisférica) e
+   continuam DUAS depois; a terceira vaga do orçamento do §3 continua sendo dos
+   poderes. Montanha, mar, terreno e lutador recebem exatamente a mesma luz de
+   antes — o que mudou foi só o que se vê no domo.
+
+   Em custo de fragmento a troca até SOBRA. Saíram dois `acos`, dois `smoothstep`
+   e dois `pow` (o laço dos menores, que rodava em cada pixel da tela); entrou
+   granulação, que custa dois ruídos 2D — e que só é avaliada DENTRO do disco,
+   atrás de um `if`. O disco tem 12° num campo de 68°: são 2,7 % dos pixels.
+
+   ---------------------------------------------------------- a direção NÃO mudou
+
+   `(0.705, 0.53, 0.471)` — azimute 33,7°, altura 32° — está intocada, e isso é
+   requisito e não preguiça. Ela é exportada como `NAMEK_SOL_DIR` e alimenta o
+   rastro do mar, a bruma dourada do terreno, a folha em contraluz do mato E as
+   FASES DE KURAIA E RUBEL (ver `NAMEK.planetas.corpos`): as direções das duas
+   luas foram escolhidas contra esta para uma sair 72 % iluminada e a outra 42 %.
+   Girar o sol aqui deixaria as duas com a mesma cara e apagaria o trabalho lá,
+   além de rodar o rastro do mar e todo o sombreamento assado no terreno.
 
    ------------------------------------------------------- por que ele é BAIXO
 
@@ -109,17 +160,27 @@ const NUVEM_ALTA = 980;
    O azimute NÃO mudou (33,7° a partir de +x): mexer nele giraria o rastro do
    mar e a orientação de todo o sombreamento assado no terreno de uma vez, e não
    há nada a ganhar com isso. */
-const SOIS = [
-  /* raio é ANGULAR, em radianos, e é o que "um sol maior" quer dizer aqui.
-     0,068 rad de raio são 7,8° de diâmetro; com a câmera deste modo em 68° de
-     campo vertical, isso são 124 pixels de disco a 1080p — grande o bastante
-     para ser um corpo celeste e não um ponto, pequeno o bastante para não virar
-     um obstáculo no meio de uma luta aérea. Eram 0,028 rad: 51 px, um furo de
-     alfinete. */
-  { dir: new THREE.Vector3(0.705, 0.53, 0.471), cor: new THREE.Color("#ffa53c"), raio: 0.068 },
-  { dir: new THREE.Vector3(-0.62, 0.38, 0.54), cor: new THREE.Color("#fffbe8"), raio: 0.015 },
-  { dir: new THREE.Vector3(0.18, 0.3, -0.86), cor: new THREE.Color("#eaffe9"), raio: 0.012 },
-];
+const SOL = {
+  dir: new THREE.Vector3(0.705, 0.53, 0.471),
+  cor: new THREE.Color("#ffa53c"),
+  /* O raio é ANGULAR, em radianos, e é o "maior" do pedido.
+   *
+   * A escada deste número conta a história inteira do arquivo:
+   *   0,028 rad → 3,2° de diâmetro,  51 px a 1080p — um furo de alfinete;
+   *   0,068 rad → 7,8°,             124 px — um corpo celeste, mas discreto;
+   *   0,105 rad → 12,0°,            190 px — O sol daquele céu.
+   *
+   * A conta é `diâmetro angular / campo vertical × altura da tela`: 12° de 68°
+   * são 17,6 % da altura do quadro. Para comparar com o que já existe no céu,
+   * Kuraia tem 16,1° e Rubel 11,2° — ou seja, o sol passou a ser maior que uma
+   * das duas luas e da ordem da outra, que é exatamente onde ele precisava
+   * estar para ninguém confundir qual dos três corpos é a fonte de luz.
+   *
+   * O teto está em não virar obstáculo: acima de uns 15° o disco começa a cobrir
+   * um adversário inteiro a distância de briga, e um golpe que sai de dentro do
+   * sol é um golpe que não se vê chegar. */
+  raio: 0.105,
+};
 
 /**
  * A direção do sol PRINCIPAL, normalizada. Exportada porque o mar precisa dela
@@ -137,7 +198,7 @@ const SOIS = [
  * impossível por construção, porque não existe um segundo lugar onde escrever a
  * direção do sol.
  */
-export const NAMEK_SOL_DIR = SOIS[0].dir.clone().normalize();
+export const NAMEK_SOL_DIR = SOL.dir.clone().normalize();
 
 /**
  * As duas cores da BRUMA ACESA — a perspectiva aérea vista CONTRA o sol.
@@ -188,7 +249,7 @@ const DIA = {
      perspectiva aérea de sobra e deixa a faixa aparecer. */
   nevoaDens: 0.0003,
   solLuz: new THREE.Color("#ffe6b4"),
-  /* Ver a nota de altura em `SOIS`: 3,5 e 0,74 são o que devolve ao chão plano
+  /* Ver a nota de altura em `SOL`: 3,5 e 0,74 são o que devolve ao chão plano
      a luz que baixar o sol de 55° para 32° tirou dele. */
   solInt: 3.5,
   ceuLuz: new THREE.Color("#a8f0b6"),
@@ -201,7 +262,7 @@ const DIA = {
      `solNucleo`  o miolo, quase branco. É a única parte que estoura no ACES, e
                   é ESSE estouro que faz o olho ler "fonte de luz" em vez de
                   "círculo pintado".
-     `solCor[0]`  a BORDA do disco (mora em `SOIS`). Âmbar saturado, porque o
+     `solCor`     a BORDA do disco (mora em `SOL`). Âmbar saturado, porque o
                   escurecimento de limbo tem de sobrar cor depois de multiplicado
                   por `solForca` — um limbo pálido some no núcleo e o sol vira um
                   botão liso.
@@ -212,17 +273,41 @@ const DIA = {
                   deixar de ser o céu de Namekusei.
      `solHoriz`   a barra rente à linha do mundo, no azimute do sol.            */
   solNucleo: new THREE.Color("#fffaea"),
-  /* O MESMO OBJETO de `SOIS[0].cor`, e não uma cópia dele: a cor do sol de dia é
+  /* O MESMO OBJETO de `SOL.cor`, e não uma cópia dele: a cor do sol de dia é
      parte da descrição do sol e mora lá em cima, junto com a direção e o raio.
      Repeti-la aqui daria duas verdades sobre a mesma coisa, e a que envelhece é
      sempre a que não está sendo lida no momento. Ninguém escreve nestas cores —
      `lerpColors` só as lê. */
-  solLimbo: SOIS[0].cor,
+  solLimbo: SOL.cor,
+  /* A CROMOSFERA — o aro fino colado no limbo, por fora do disco.
+     Ela é mais QUENTE que o corpo e não mais fria, e isso é o contrário do que
+     a intuição pede: a camada acima da fotosfera é rarefeita e emite nas linhas
+     de hidrogênio, então o que se vê é rosa-alaranjado brilhante, e não uma
+     borda apagada. Puxada para o rosa de propósito — é a matiz que ela tem num
+     eclipse, e é ela que impede o disco de terminar num corte de tesoura contra
+     o lima do céu. */
+  solCromo: new THREE.Color("#ff9a6e"),
   solHalo: new THREE.Color("#ffc06a"),
   solDisp: new THREE.Color("#d9f08a"),
   solHoriz: new THREE.Color("#ffd08a"),
-  /** Multiplicador do corpo do disco. Acima de ~2,2 o núcleo já satura no ACES. */
-  solForca: 2.6,
+  /* Multiplicador do corpo do disco.
+   *
+   * ERA 2,6, E ISSO VIROU UM DEFEITO NO DIA EM QUE O SOL CRESCEU. Aquele número
+   * foi escolhido para um disco de 7,8°, em que saturar o corpo INTEIRO era
+   * aceitável: um sol pequeno que estoura em branco continua lendo como sol. Com
+   * 12° medidos na bancada, o resultado foi um círculo branco chapado de ponta a
+   * ponta — limbo, granulação e âmbar existiam no shader e nenhum deles chegava
+   * à tela, porque os três canais já batiam no teto antes do tonemap.
+   *
+   * A conta, no ACES com exposição 1,05: o miolo tem de passar de 1,0 (é o
+   * estouro que faz o olho ler "fonte de luz" em vez de "círculo pintado") e a
+   * BORDA tem de ficar abaixo. Com 1,55, o centro sai em 1,55 (estoura, como
+   * deve) e o último quinto do raio — onde `limbo` vale 0,3 a 0,6 — sai entre
+   * 0,46 e 0,93 no verde: âmbar de verdade, com detalhe.
+   *
+   * O jeito de conferir isto é MEDINDO O PIXEL, nunca lendo o código: um sol
+   * chapado e um sol com limbo são a mesma linha de GLSL com dois números. */
+  solForca: 1.55,
   /** Fração do raio em que a borda do disco se desfaz. De dia ela é nítida. */
   solBorda: 0.09,
 
@@ -266,10 +351,17 @@ const TEMPESTADE = {
      limpo colado por cima da tempestade. */
   solNucleo: new THREE.Color("#ff8a4a"),
   solLimbo: new THREE.Color("#c2301a"),
+  /* Na tempestade ela quase some: a cromosfera é a camada mais fina do corpo e
+     é a primeira coisa que a fumaça engole. O que sobra é um contorno de brasa
+     no lugar do aro rosa. */
+  solCromo: new THREE.Color("#8e2a12"),
   solHalo: new THREE.Color("#a02a16"),
   solDisp: new THREE.Color("#6b1a10"),
   solHoriz: new THREE.Color("#8e2410"),
-  solForca: 1.35,
+  /* Mesma correção do dia, pelo mesmo motivo: o disco INCHA 55 % na tempestade
+     (a fumaça o incha, ver a nota longa acima), e a 1,35 o sol de brasa também
+     saía chapado — só que em laranja. A 1,15 ele volta a ter miolo e borda. */
+  solForca: 1.15,
   solBorda: 0.62,
 
   nuvemTopo: new THREE.Color("#a8382a"),
@@ -292,13 +384,17 @@ const DOMO_FRAG = /* glsl */ `
   uniform vec3 zenith;
   uniform vec3 horizonte;
   uniform vec3 chao;
-  uniform vec3 solDir[3];
-  uniform vec3 solCor[3];
-  uniform float solRaio[3];
-  /* O corpo do sol principal e as três camadas de dispersão em volta dele.
+  /* UM sol, e por isso três escalares e não três arrays. Ver o cabeçalho: a
+     troca é pedido do usuário e o plano foi atualizado junto. */
+  uniform vec3 solDir;
+  uniform vec3 solCor;
+  uniform float solRaio;
+  /* O corpo do sol e as camadas de dispersão em volta dele.
      Uniforms e não constantes porque TODOS caminham durante a tempestade — ver
      aplicar e a nota do sol em TEMPESTADE. */
   uniform vec3 solNucleo;
+  /** O aro quente colado no limbo — a cromosfera. Ver o bloco do sol. */
+  uniform vec3 solCromo;
   uniform vec3 solHalo;
   uniform vec3 solDisp;
   uniform vec3 solHoriz;
@@ -347,38 +443,150 @@ const DOMO_FRAG = /* glsl */ `
     // aparece uma borda dura exatamente onde o mar encontra o domo.
     col = mix(chao, col, smoothstep(-0.14, 0.03, h));
 
-    /* ------------------------------------------------------------- O SOL ---
-       Tratado à parte dos outros dois: ver a nota de hierarquia no cabeçalho.  */
-    vec3 sd = normalize(solDir[0]);
+    /* ========================================================== O SOL =======
+       **UM SÓ.** Ver o cabeçalho para o pedido que tirou os outros dois, e a
+       nota de 'SOL.raio' para a escada de tamanho. Ele paga sozinho a conta de
+       fragmento que antes era dividida em três, e o que ele comprou com isso
+       está nos quatro blocos abaixo: limbo de verdade, granulação, cromosfera e
+       as três dispersões. */
+    vec3 sd = normalize(solDir);
     float c0 = max(dot(dir, sd), 0.0);
     float ang0 = acos(clamp(c0, -1.0, 1.0));
-    float r0 = max(solRaio[0], 1e-4);
+    float r0 = max(solRaio, 1e-4);
+    /* Distância ao centro do disco em RAIOS. É a única divisão do bloco, e tudo
+       o que é do corpo do sol sai dela. */
+    float u = ang0 / r0;
 
-    /* O DISCO SUBSTITUI o céu, ele não é somado a ele. Somado, um disco de
-       0,068 rad sobre lima saturado sai ESVERDEADO no miolo — o sol ficava com
-       a cor do planeta, que é o defeito mais engraçado e mais difícil de
-       enxergar deste arquivo, porque o disco continua parecendo um disco. */
-    float disco = 1.0 - smoothstep(r0 * (1.0 - solBorda), r0 * (1.0 + solBorda * 0.5), ang0);
-    /* ESCURECIMENTO DE LIMBO: toda estrela é mais quente no centro que na borda.
-       Ao quadrado para o núcleo branco ficar apertado e a borda âmbar sobrar —
-       linear, o âmbar ocupava só o último décimo do raio e não se via.
-       Escrito como "1 menos crescente" e não como um smoothstep de bordas
-       invertidas: o GLSL declara o resultado INDEFINIDO quando a primeira borda
-       é maior que a segunda, e o idioma funcionar em todas as placas em que
-       alguém testou não é o mesmo que ele ser válido. */
-    float limbo = 1.0 - smoothstep(0.0, 1.02, ang0 / r0);
-    vec3 corpo = mix(solCor[0], solNucleo, limbo * limbo);
-    col = mix(col, corpo * solForca, disco * solDisco);
+    /* PERTO DO SOL, e só aqui: disco, limbo, granulação e cromosfera custam o
+       que custam em 2,7 % da tela (12° de disco num campo de 68°, mais a
+       margem do aro). Fora deste 'if' sobram as três dispersões, que são o que
+       o resto do céu precisa. É esta guarda que faz um sol muito mais
+       trabalhado custar MENOS que os três de antes. */
+    /* O DISCO SUBSTITUI o céu, ele não é somado a ele. Somado, um disco sobre
+       lima saturado sai ESVERDEADO no miolo — o sol ficava com a cor do
+       planeta, que é o defeito mais engraçado e mais difícil de enxergar
+       deste arquivo, porque o disco continua parecendo um disco.
+
+       Ele é calculado FORA da guarda de perto porque as dispersões precisam
+       dele: ver 'foraDoCorpo', logo abaixo. Longe do sol o ternário o zera sem
+       custo nenhum. */
+    float disco = u < 1.6
+      ? 1.0 - smoothstep(1.0 - solBorda, 1.0 + solBorda * 0.5, u)
+      : 0.0;
+
+    if (u < 1.6) {
+      if (disco > 0.0) {
+        /* --------------------------------- ESCURECIMENTO DE LIMBO, de verdade
+           A lei física, e ela é mais barata que o truque que estava aqui: o que
+           se vê num ponto do disco é a fotosfera olhada de esguelha, e o ângulo
+           dentro da estrela tem cosseno 'mu = sqrt(1 - u²)'. A intensidade cai
+           como 'I(mu)/I(0) = 1 - k(1 - mu)'.
+
+           Estava '1 - smoothstep(0, 1.02, u)' ao quadrado, e a diferença é
+           visível: aquilo escurece DEVAGAR no miolo e desaba na borda, o que dá
+           uma bola de gude iluminada de frente. A lei de limbo faz o contrário —
+           o disco fica quase liso em quase toda a extensão e cai nos últimos
+           quinze por cento. É por isso que uma foto do Sol tem miolo chapado e
+           borda marcada, e é essa silhueta que o olho reconhece como estrela.
+
+           'k = 0,72' é a ordem do coeficiente no visível, arredondado para cima
+           porque o ACES devolve parte do contraste que a lei tira. */
+        float mu = sqrt(max(0.0, 1.0 - u * u));
+        float limbo = 1.0 - 0.72 * (1.0 - mu);
+
+        /* ------------------------------------------------------ GRANULAÇÃO
+           A fotosfera não é esmalte: são células de convecção, e o que se lê à
+           distância é um mosqueado fino de poucos por cento de contraste. É o
+           detalhe que separa "disco pintado" de "superfície".
+
+           Ela é amostrada em coordenadas DO DISCO — dois eixos perpendiculares à
+           direção do sol — e não sobre 'dir'. A diferença não é sutileza: sobre
+           a direção de olhar, o padrão escorregaria pelo disco toda vez que a
+           câmera girasse, e o sol pareceria ter a superfície derretendo. Sobre
+           os eixos do disco, ele está preso nele.
+
+           O terceiro eixo do ruído é o TEMPO, devagar: granulação de verdade
+           ferve, e uma superfície absolutamente parada num céu onde a nuvem anda
+           lê como adesivo.
+
+           E ela ACOMPANHA O LIMBO ('· mu'): na borda a célula é vista de raspão
+           e o contraste some, pela mesma razão física do escurecimento. */
+        vec3 eixoA = normalize(cross(sd, vec3(0.0, 1.0, 0.0)));
+        vec3 eixoB = cross(sd, eixoA);
+        vec2 uvSol = vec2(dot(dir, eixoA), dot(dir, eixoB)) / r0;
+        float gran =
+          ruido3(vec3(uvSol * 9.0, tempo * 0.05)) * 0.64 +
+          ruido3(vec3(uvSol * 23.0, tempo * 0.09)) * 0.36;
+        /* Dezoito por cento de amplitude, ou ±9 % de contraste no miolo. Acima
+           de uns 30 % a superfície vira couro e o corpo deixa de ler como fonte
+           de luz — que é a única coisa que ele não pode deixar de ser. */
+        float grao = 1.0 + (gran - 0.5) * 0.18 * mu;
+
+        /* A COR vai do âmbar da borda ao quase-branco do miolo, e a rampa é
+           'mu^0,55' para o núcleo claro ocupar a metade central em vez de um
+           ponto. O escurecimento entra como MULTIPLICADOR ('limbo'), separado
+           da cor: são duas coisas diferentes — quanto chega e de que
+           temperatura. Misturá-las numa curva só foi o que produziu, na versão
+           anterior, uma borda âmbar de um décimo de raio que não se via. */
+        /* A RAMPA É ÍNGREME (expoente 2,6) e isso é o oposto do que parece
+           certo. Com 0,55 o branco do núcleo ocupava quase o disco inteiro — em
+           'mu = 0,6', que é dois terços do raio, a mistura já dava 0,76 de
+           branco — e a cor do sol ficava espremida num aro fino que o limbo
+           ainda escurecia. Com 2,6 o mesmo ponto dá 0,22: o núcleo claro fica
+           dentro dos 45 % centrais e a metade de fora é âmbar, que é a
+           proporção que uma foto do Sol mostra. */
+        vec3 corpo = mix(solCor, solNucleo, pow(mu, 2.6));
+        col = mix(col, corpo * solForca * limbo * grao, disco * solDisco);
+      }
+
+      /* -------------------------------------------------------- A CROMOSFERA
+         O aro fino e quente colado no limbo, POR FORA do disco. Num eclipse é a
+         linha rosa que aparece no instante em que a fotosfera some; num céu
+         diurno é o que impede o disco de terminar num corte de tesoura contra o
+         verde. Meia largura de ~7 % do raio — é uma linha, não um halo, e o
+         halo já existe logo abaixo.
+
+         'exp(-x²)' e não 'pow': um sino gaussiano custa um 'exp' e nenhuma
+         potência, e ele é exatamente a forma que se quer. */
+      float du = (u - 1.0) * 14.0;
+      col += solCromo * exp(-du * du) * 0.55 * solBrilho * solDisco * (1.0 - disco);
+    }
 
     /* AS TRÊS CAMADAS DE DISPERSÃO, da colada à larga. Os expoentes não são
        gosto: pow(cos θ, n) cai à metade em θ ≈ sqrt(2·ln2 / n), então 140, 15
        e 2 dão meias-larguras de 6,4°, 20° e 55°. A de 55° é a que faltava — é
        ela que clareia o céu INTEIRO daquele lado, e é isso, e não o disco, que o
        olho lê como "há uma fonte de luz enorme ali". Só o disco e a coroa dão um
-       sol recortado colado num papel de parede. */
-    col += solCor[0] * pow(c0, 140.0) * 0.85 * solBrilho;
-    col += solHalo * pow(c0, 15.0) * 0.34 * solBrilho;
-    col += solDisp * pow(c0, 2.0) * 0.12 * solBrilho;
+       sol recortado colado num papel de parede.
+
+       A PRIMEIRA cresceu junto com o corpo: 6,4° de meia-largura contra um disco
+       que agora tem 6,0° de RAIO significa que ela mal saía de dentro dele, e o
+       que era para ser a coroa colada virava um reforço do miolo. 45 dão 11,3°,
+       ou seja, quase dois raios — a coroa volta a acontecer FORA do sol, que é
+       onde uma coroa acontece. */
+    /* ============================ A CORoA NÃO ENTRA NO DISCO ================
+       E este era o defeito que a medição de pixel pegou. Sem o fator abaixo, a
+       varredura pelo meio do sol dava, em raios do disco:
+
+         u=0,75  rgb(245,227,186)     u=0,90  rgb(238,229,180)
+
+       — o verde SUBINDO onde o escurecimento de limbo devia estar caindo. A
+       razão é simples e é física: as três dispersões são a atmosfera brilhando
+       em torno da fonte, e elas eram somadas em cima do corpo também. Perto do
+       limbo elas estão no máximo, e o que elas somavam ali cancelava exatamente
+       a queda que a lei de limbo produzia. O disco tinha o gradiente inteiro
+       calculado e apagado por cima.
+
+       Multiplicar por '1 - disco' é o que a natureza faz: a coroa só se vê num
+       eclipse, quando o corpo sai da frente. Contra a fotosfera ela é invisível,
+       porque a fotosfera é milhões de vezes mais brilhante. */
+    float foraDoCorpo = 1.0 - disco * solDisco;
+    col += solCor * pow(c0, 45.0) * 0.5 * solBrilho * foraDoCorpo;
+    col += solHalo * pow(c0, 15.0) * 0.34 * solBrilho * foraDoCorpo;
+    /* E a larga ganhou um terço a mais. Ela era a soma de três fontes espalhando
+       no céu; agora é uma só, e sem esse acréscimo o lado do sol ficaria mais
+       apagado do que estava — que é a única perda real de tirar os dois menores. */
+    col += solDisp * pow(c0, 2.0) * 0.16 * solBrilho * foraDoCorpo;
 
     /* A BARRA DO HORIZONTE. Rente à linha do mundo e no AZIMUTE do sol.
        Separada da dispersão porque ela é uma função diferente: a dispersão é
@@ -393,16 +601,9 @@ const DOMO_FRAG = /* glsl */ `
     float rente = 1.0 - smoothstep(0.0, 0.34, abs(h));
     col += solHoriz * pow(azim, 3.5) * rente * 0.30 * solBrilho;
 
-    /* Os DOIS SÓIS MENORES: disco e uma coroa, e nada mais. Eles existem para
-       que qualquer direção de olhar mostre sol — o traço mais citado do planeta
-       — e para dar escala ao principal. Um terço do custo dele, cada. */
-    for (int i = 1; i < 3; i++) {
-      float c = max(dot(dir, normalize(solDir[i])), 0.0);
-      float a = acos(clamp(c, -1.0, 1.0));
-      float d = 1.0 - smoothstep(solRaio[i] * 0.72, solRaio[i], a);
-      col = mix(col, solCor[i] * 2.2, d * solDisco);
-      col += solCor[i] * pow(c, 90.0) * 0.30 * solBrilho;
-    }
+    /* (Aqui moravam os DOIS SÓIS MENORES — um laço com disco e coroa para cada
+       um. Saíram a pedido do usuário; ver o bloco 'SOL', no topo, para o
+       argumento inteiro. Não os traga de volta sem ler aquilo.) */
 
     if (storm > 0.004) {
       /* A NUVEM REVOLTA, no próprio domo. Duas oitavas e só quando há
@@ -588,15 +789,16 @@ export class NamekSky {
         horizonte: { value: DIA.horizonte.clone() },
         chao: { value: DIA.chao.clone() },
         /* A MESMA direção que a luz direcional usa — ver `montarLuzes`. Os dois
-           lados leem `SOIS[0].dir`, e é por isso que é impossível o disco estar
+           lados leem `SOL.dir`, e é por isso que é impossível o disco estar
            num canto do céu e o sombreamento da cena vir do outro. */
-        solDir: { value: SOIS.map((s) => s.dir.clone().normalize()) },
-        solCor: { value: SOIS.map((s) => s.cor.clone()) },
-        /* Clonado num array PRÓPRIO porque o raio do sol principal cresce na
-           tempestade (a fumaça o incha): escrever direto em `SOIS[0].raio`
-           estragaria a constante para a próxima partida. */
-        solRaio: { value: SOIS.map((s) => s.raio) },
+        solDir: { value: SOL.dir.clone().normalize() },
+        /* CLONADAS, as duas. A cor caminha para a brasa e o raio INCHA 55 % na
+           tempestade (a fumaça o incha); escrever direto em `SOL.cor` ou em
+           `SOL.raio` estragaria a constante para a próxima partida. */
+        solCor: { value: SOL.cor.clone() },
+        solRaio: { value: SOL.raio },
         solNucleo: { value: DIA.solNucleo.clone() },
+        solCromo: { value: DIA.solCromo.clone() },
         solHalo: { value: DIA.solHalo.clone() },
         solDisp: { value: DIA.solDisp.clone() },
         solHoriz: { value: DIA.solHoriz.clone() },
@@ -667,12 +869,12 @@ export class NamekSky {
   montarLuzes() {
     this.sol = new THREE.DirectionalLight(DIA.solLuz.getHex(), DIA.solInt);
     /* A direcional é DIREÇÃO, não lugar: o que importa é o vetor até o alvo.
-       E ela sai de `SOIS[0].dir`, a MESMA constante que o domo desenha — o erro
+       E ela sai de `SOL.dir`, a MESMA constante que o domo desenha — o erro
        clássico de cenário é pintar o sol num canto e deixar a luz vindo do
        outro, e ele nasce de haver dois lugares onde escrever a direção do sol.
        Aqui só há um. Quem mexer na altura do sol mexe nos dois de uma vez, e a
-       única coisa a conferir é a conta de cosseno que está na nota de `SOIS`. */
-    this.sol.position.copy(SOIS[0].dir).normalize().multiplyScalar(600);
+       única coisa a conferir é a conta de cosseno que está na nota de `SOL`. */
+    this.sol.position.copy(SOL.dir).normalize().multiplyScalar(600);
     this.sol.castShadow = false;
     this.root.add(this.sol);
     this.root.add(this.sol.target);
@@ -884,24 +1086,25 @@ export class NamekSky {
                     vermelho" de "sol atrás de fumaça".                        */
     u.solBrilho.value = 1 - smoothstep(0.04, 0.42, s);
     u.solDisco.value = 1 - smoothstep(0.4, 0.95, s);
-    u.solCor.value[0].lerpColors(DIA.solLimbo, TEMPESTADE.solLimbo, s);
+    u.solCor.value.lerpColors(DIA.solLimbo, TEMPESTADE.solLimbo, s);
     u.solNucleo.value.lerpColors(DIA.solNucleo, TEMPESTADE.solNucleo, s);
     u.solHalo.value.lerpColors(DIA.solHalo, TEMPESTADE.solHalo, s);
     u.solDisp.value.lerpColors(DIA.solDisp, TEMPESTADE.solDisp, s);
     u.solHoriz.value.lerpColors(DIA.solHoriz, TEMPESTADE.solHoriz, s);
     u.solForca.value = DIA.solForca + (TEMPESTADE.solForca - DIA.solForca) * s;
     u.solBorda.value = DIA.solBorda + (TEMPESTADE.solBorda - DIA.solBorda) * s;
-    u.solRaio.value[0] = SOIS[0].raio * (1 + 0.55 * s);
+    u.solRaio.value = SOL.raio * (1 + 0.55 * s);
 
-    /* Os DOIS MENORES somem, e somem ANTES do principal: têm 1,7° e 1,4° de
-       diâmetro contra os 7,8° dele, e a primeira coisa que uma atmosfera
-       carregada engole é o que é pequeno.
-       Eles escurecem em vez de virar brasa porque três brasas no céu viram
-       confusão — o planeta morrendo tem de ter UM foco. */
-    const visivel = 1 - smoothstep(0.08, 0.5, s);
-    for (let i = 1; i < 3; i++) {
-      u.solCor.value[i].copy(SOIS[i].cor).multiplyScalar(visivel);
-    }
+    /* A CROMOSFERA caminha junto com o resto e some CEDO, junto com o halo: ela
+       é a camada mais fina do corpo e a primeira que a fumaça engole. Ela não
+       precisa de uma curva própria porque já é multiplicada por `solBrilho` no
+       fragmento — o mesmo dial que mata a dispersão limpa.
+
+       (Aqui morava o laço que apagava os dois sóis MENORES antes do principal.
+       Saiu com eles; ver o bloco `SOL`, no topo, para o pedido do usuário que
+       tirou os dois. O planeta morrendo continua tendo UM foco — só que agora
+       ele tem um foco o tempo todo, e não só na tempestade.) */
+    u.solCromo.value.lerpColors(DIA.solCromo, TEMPESTADE.solCromo, s);
 
     this.nevoa.color.lerpColors(DIA.nevoa, TEMPESTADE.nevoa, s);
     this.nevoa.density = DIA.nevoaDens + (TEMPESTADE.nevoaDens - DIA.nevoaDens) * s;

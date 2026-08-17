@@ -154,14 +154,34 @@
         <button id="gastar">gastar tudo</button>
       </div>
 
-      <h2>Alvo travado</h2>
+      <!-- A placa do alvo tem DUAS razões de aparecer no jogo (você acertou
+           alguém, ou o cursor está em cima de alguém) e quem escolhe entre elas
+           é o `LockOn`, não o HUD. Aqui a bancada é o `LockOn`: o botão "na
+           tela" é a razão da mira, e "acertar" é a razão do golpe — é ele que
+           exercita o número do dano, que é a única peça nova desta placa. -->
+      <h2>Alvo na tela</h2>
       <div class="linha">
         <label>vida do alvo <span data-eco="alvo">78</span></label>
         <input id="alvo" type="range" min="0" max="100" step="1" value="78" />
       </div>
       <div class="botoes">
-        <button id="travar" class="on">travado</button>
+        <button id="travar" class="on">na tela</button>
         <button id="trocar">trocar de alvo</button>
+        <button id="acertar">acertar (−13)</button>
+      </div>
+
+      <!-- O CHEFE. Três coisas que só existem juntas e que só se conferem
+           olhando: a barra dele no topo (que não pode atropelar o HUD do
+           jogador), o anel magenta com o nome em volta do corpo, e a seta da
+           bússola para quando ele está fora da tela. -->
+      <h2>Freeza</h2>
+      <div class="linha">
+        <label>vida do chefe <span data-eco="chefe">100</span>%</label>
+        <input id="chefe-vida" type="range" min="0" max="100" step="1" value="100" />
+      </div>
+      <div class="botoes">
+        <button id="chefe">chamar o chefe</button>
+        <button id="chefe-onde">está: na tela</button>
       </div>
 
       <h2>Especial armado</h2>
@@ -202,9 +222,16 @@
     <script type="module">
       import { NamekHud } from "../src/namek/ui/hud.js";
       import { NAMEK } from "../src/shared/namek/config.js";
+      import { BossBar } from "../src/namek/ui/boss.js";
 
       const palco = document.getElementById("palco");
       const hud = new NamekHud(palco);
+      /* A barra do chefe é montada DENTRO de `.nk-hud`, como o jogo a monta
+         (`hudEl: this.hud.el`) — e não dentro do palco. A diferença importa: o
+         deslocamento das placas quando o chefe está em campo é uma regra de CSS
+         (`.nk-hud:has(.nk-boss:not([hidden]))`), e ela só vale com a barra
+         aninhada no lugar certo. */
+      const bossBar = new BossBar(hud.el);
 
       /* ------------------------------------------------------------ o mundo
          Um estado falso, escrito à mão, com as mesmas grandezas que a sala
@@ -215,6 +242,13 @@
         ki: 0,
         alvoVida: 78,
         alvoIndice: 0,
+        /** Quanto EU já tirei desta vítima, e até quando o número fica na tela. */
+        alvoDano: 0,
+        danoAte: 0,
+        /** O chefe: em campo?, vida em fração, e se ele está no quadro. */
+        chefe: false,
+        chefeVida: 1,
+        chefeNaTela: true,
         armado: 0,
         travado: true,
         carregando: false,
@@ -283,9 +317,58 @@
       $("trocar").addEventListener("click", () => {
         mundo.alvoIndice = (mundo.alvoIndice + 1) % ALVOS.length;
         mundo.alvoVida = 30 + Math.round(Math.random() * 70);
+        mundo.alvoDano = 0;
         $("alvo").value = String(mundo.alvoVida);
         eco("alvo", mundo.alvoVida);
       });
+      /* UM ACERTO MEU: tira vida e SOMA no número, como `LockOn.registrarAcerto`
+         faz em jogo. Duas batidas seguidas têm de mostrar "−26" e não "−13"
+         duas vezes — é a pergunta "quanto eu já tirei dele" sendo respondida. */
+      $("acertar").addEventListener("click", () => {
+        mundo.alvoVida = Math.max(0, mundo.alvoVida - 13);
+        mundo.alvoDano += 13;
+        mundo.danoAte = performance.now() + NAMEK.lock.painel.dano * 1000;
+        mundo.travado = true;
+        $("travar").classList.add("on");
+        $("alvo").value = String(mundo.alvoVida);
+        eco("alvo", mundo.alvoVida);
+      });
+
+      /* ------------------------------------------------------------- o chefe */
+      const VIDA_CHEFE = 10903; // o número da captura de tela do relato
+      $("chefe").addEventListener("click", (e) => {
+        mundo.chefe = !mundo.chefe;
+        e.target.classList.toggle("on", mundo.chefe);
+        e.target.textContent = mundo.chefe ? "dispensar o chefe" : "chamar o chefe";
+        if (mundo.chefe) {
+          bossBar.entrar(
+            { nome: NAMEK.freeza.nome, vida: VIDA_CHEFE, vidaMax: VIDA_CHEFE },
+            NAMEK.freeza.dificuldades?.[NAMEK.freeza.dificuldadePadrao]?.nome ?? "",
+          );
+        } else {
+          bossBar.sair();
+        }
+      });
+      $("chefe-onde").addEventListener("click", (e) => {
+        mundo.chefeNaTela = !mundo.chefeNaTela;
+        e.target.textContent = mundo.chefeNaTela ? "está: na tela" : "está: fora da tela";
+      });
+      $("chefe-vida").addEventListener("input", (e) => {
+        mundo.chefeVida = Number(e.target.value) / 100;
+        eco("chefe", e.target.value);
+        bossBar.setVida(mundo.chefeVida * VIDA_CHEFE, VIDA_CHEFE);
+      });
+
+      /* Os marcadores do chefe, nos dois canais que o HUD tem. As duas listas
+         são reaproveitadas entre quadros, como as do jogo. */
+      const ANEIS = [
+        { id: 2, x: -0.34, y: 0.12, dist: 60, raio: 0.10, visivel: true, sob: false, cor: 0xc07bff, boss: false, nome: "" },
+        { id: -1, x: 0.26, y: -0.04, dist: 240, raio: 0.055, visivel: true, sob: false, cor: NAMEK.freeza.cor, boss: true, nome: NAMEK.freeza.nome },
+      ];
+      const PINOS = [
+        { angulo: 2.4, x: 0, y: 0, dist: 310, cor: NAMEK.freeza.cor, travado: false, forca: 1, boss: true, nome: NAMEK.freeza.nome },
+        { angulo: -0.7, x: 0, y: 0, dist: 180, cor: 0xffd34d, travado: false, forca: 0.8, boss: false, nome: "" },
+      ];
 
       // Os quatro especiais, montados da MESMA ordem que o HUD usa.
       const fileira = $("especiais");
@@ -388,17 +471,33 @@
           }
         }
 
+        /* Os marcadores do chefe. Na tela ele é o anel magenta com o nome; fora
+           dela é a seta da bússola — nunca os dois, que é a regra que
+           `NamekGame.bussola` aplica no jogo. */
+        if (mundo.chefe) {
+          ANEIS[1].visivel = mundo.chefeNaTela;
+          hud.setAneis(ANEIS);
+          hud.setMarcas(mundo.chefeNaTela ? PINOS.slice(1) : PINOS);
+          bossBar.update(dt);
+        } else {
+          hud.setAneis(null);
+          hud.setMarcas(null);
+          bossBar.update(dt);
+        }
+
         hud.setVitals(mundo.vida, NAMEK.fighter.maxHealth, mundo.ki, NAMEK.ki.max);
         hud.setSpecials(mundo.armado, mundo.ki >= NAMEK.ki.max - 0.001);
         hud.setDead(mundo.morteRestante);
         if (mundo.travado) {
           const a = ALVOS[mundo.alvoIndice];
+          if (agora > mundo.danoAte) mundo.alvoDano = 0;
           hud.setTarget({
             id: a.id,
             nome: a.nome,
             cor: a.cor,
             vida: mundo.alvoVida,
             vidaMax: NAMEK.fighter.maxHealth,
+            dano: mundo.alvoDano,
           });
         } else {
           hud.setTarget(null);
@@ -411,6 +510,9 @@
       // Para cutucar de dentro do console.
       window.hud = hud;
       window.mundo = mundo;
+      window.bossBar = bossBar;
+      window.ANEIS = ANEIS;
+      window.PINOS = PINOS;
     </script>
   </body>
 </html>

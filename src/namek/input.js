@@ -13,29 +13,39 @@
    teclado. Um `KeyT` aqui não é "a tecla de traçado desligada": é uma tecla que
    este modo nunca ouviu falar.
 
-   ------------------------------------------------------ o TAB, que saiu do mapa
+   ------------------------------------------- a TRAVA DE ALVO, que saiu do mapa
 
-   A trava de alvo era o `Tab`, e ela não sobreviveu ao navegador. O Tab é a
-   tecla de NAVEGAÇÃO da página: solto, ele leva o foco para o próximo elemento
-   — e, no fim da lista, para os controles do próprio navegador. A partir daí o
-   jogo não recebe mais tecla nenhuma, porque o teclado passou a ser de outro.
-   `preventDefault` segura isso ENQUANTO o evento chega até nós, e o problema é
-   exatamente que existem estados em que ele não chega: sem Pointer Lock — que
-   aqui não é exceção, é o modo livre inteiro (iframe, painel de preview, a
-   janela que ainda não recebeu um clique no canvas) — o foco já pode estar do
-   lado de fora do documento quando o jogador aperta. O arqueiro tropeçou nisto
-   antes e desistiu do Tab pelo mesmo motivo (`Input.scoreboard`, em
-   `systems/input.js`), e o pedido do usuário aqui foi literal: *"a tecla TAB
-   não é uma boa tecla para ser utilizada, pois, como está no navegador, tende a
-   trocar de foco"*.
+   Houve uma tecla de trava aqui, e ela mudou de casa duas vezes antes de deixar
+   de existir. Primeiro era o `Tab`, e ele não sobreviveu ao navegador: o Tab é a
+   tecla de NAVEGAÇÃO da página — solto, leva o foco para o próximo elemento e,
+   no fim da lista, para os controles do próprio navegador; a partir daí o jogo
+   não recebe mais tecla nenhuma, porque o teclado passou a ser de outro. Depois
+   virou o `R`, e agora saiu inteira, a pedido: *"pode remover o atalho que dá
+   lock-in no teclado (R). Esse atalho não é mais necessário."*
 
-   A trava de alvo é o `R`, então, e o Tab não é tecla de nada — mas ele
-   CONTINUA sendo engolido durante o jogo (`preventDefault` e mais nada), pelo
-   mesmo motivo pelo qual saiu: um Tab distraído no meio de uma perseguição não
-   pode levar o teclado embora só porque deixou de ter função. E é engolido
-   apenas durante o JOGO: com a porta de entrada ou o menu na frente, o teclado
-   é deles e o Tab volta a navegar entre botões, que é o único lugar onde
-   navegar entre botões faz sentido.
+   **Nenhuma tecla herdou a função**, e é por isso que este parágrafo existe em
+   vez de uma linha no `switch`: quem procurar a trava aqui precisa saber que ela
+   não mudou de tecla de novo. O que designa alvo hoje é o CURSOR (a mira
+   assistida, `NAMEK.lock.mira`), e ela não passa pelo teclado — ver
+   `src/namek/lockon.js`.
+
+   E a vaga do `R` não ficou vazia: a TRANSFORMAÇÃO mudou-se para lá (ver o
+   `case "KeyR"` lá embaixo). Isso não é a trava por outro nome — é uma tecla
+   livre sendo reaproveitada, e não sobrou uma linha do lock-on amarrada a ela.
+
+   Foi junto a `assistirMira`, que este arquivo expunha: a assistência girava o
+   olhar do jogador em direção ao alvo TRAVADO, e sem trava não há alvo a que ela
+   possa pertencer. Enfiá-la na mira assistida seria pior que apagá-la — o gesto
+   que a mira assistida serve é varrer o mouse por vários adversários, e uma
+   correção que puxasse o olhar para quem está sob o cursor brigaria com o dedo
+   do jogador durante o gesto inteiro.
+
+   O Tab, esse, CONTINUA sendo engolido durante o jogo (`preventDefault` e mais
+   nada), pelo mesmo motivo pelo qual saiu: um Tab distraído no meio de uma
+   perseguição não pode levar o teclado embora só porque deixou de ter função. E
+   é engolido apenas durante o JOGO: com a porta de entrada ou o menu na frente,
+   o teclado é deles e o Tab volta a navegar entre botões, que é o único lugar
+   onde navegar entre botões faz sentido.
 
    ------------------------------------------------------------ a defesa, no `E`
 
@@ -48,8 +58,7 @@
    carrega ki, `Q` é a onda de choque, `Espaço` decola, e o botão direito é a
    arrancada. O `E` é o vizinho de cima do `D`, cai debaixo do dedo indicador
    sem tirar nenhum outro do lugar, e é a mesma posição que os jogos de tiro
-   usam para a ação segurada de apoio. O `R`, que ficou com a trava, é uma BORDA
-   (um toque), e por isso pode morar um pouco mais longe.
+   usam para a ação segurada de apoio.
 
    E não, o `E` da faca do arqueiro não é um conflito: é o primeiro parágrafo
    deste cabeçalho. Aquele mapa não vale aqui, e nenhuma tecla dele foi herdada
@@ -237,7 +246,9 @@ export class NamekInput {
     this._pPulo = false;
     this._pVoo = false;
     this._pOnda = false;
-    this._pTravar = false;
+    this._pSSJ = false;
+    /* BANCADA: Alt+K mata o Freeza. Ver o `case "KeyK"` no `keydown`. */
+    this._pMatarBoss = false;
     this._pMenu = false;
     this._pEspecial = -1;
     /** Toques em crase acumulados dentro da janela de 600 ms. Ver `_crase`. */
@@ -304,8 +315,24 @@ export class NamekInput {
       flyPressed: false,
       /** `Q`. */
       burstPressed: false,
-      /** `R` — era o `Tab`. Ver a seção "o TAB, que saiu do mapa". */
-      lockPressed: false,
+      /* Não procure `lockPressed`: a trava de alvo não tem mais tecla. Ver a
+         seção "a TRAVA DE ALVO, que saiu do mapa" no cabeçalho. */
+      /**
+       * `R` — **virar SUPER SAIYAJIN.**
+       *
+       * O `R` é a vaga que a trava de alvo deixou ao sair do mapa, e ele é a
+       * tecla certa para isto por três motivos: é uma BORDA (um toque, como o
+       * `F` e o `Q`, e não um estado segurado como o `C` e o `E`); o navegador
+       * não a disputa, que é a lição inteira da seção do `Tab` no cabeçalho; e
+       * ela pode morar longe do WASD justamente por ser um toque — a mão sai do
+       * `D`, aperta e volta, e os três segundos seguintes são de animação, em
+       * que não há nada para comandar.
+       *
+       * É uma borda e nunca um estado porque a transformação acontece UMA vez:
+       * segurar não a torna mais forte, e um `R` preso disparando pedidos a
+       * 30 Hz seria trinta `NC2S.SSJ` por segundo para a sala recusar.
+       */
+      ssjPressed: false,
       /** `Esc` — o único atalho do jogo antigo que sobrevive aqui. */
       menuPressed: false,
       /** Um por especial, na ordem de `NAMEK.specialOrder` (teclas 1–4).
@@ -365,7 +392,9 @@ export class NamekInput {
     a.respawn = this._pPulo;
     a.flyPressed = this._pVoo;
     a.burstPressed = this._pOnda;
-    a.lockPressed = this._pTravar;
+    a.ssjPressed = this._pSSJ;
+    /** BANCADA: Alt+K. Ver o `case "KeyK"` no `keydown`. */
+    a.matarBossPressed = this._pMatarBoss;
     a.menuPressed = this._pMenu;
     a.locked = this._travado;
 
@@ -375,74 +404,27 @@ export class NamekInput {
     this._pPulo = false;
     this._pVoo = false;
     this._pOnda = false;
-    this._pTravar = false;
+    this._pSSJ = false;
+    this._pMatarBoss = false;
     this._pMenu = false;
     this._pEspecial = -1;
 
     return a;
   }
 
-  /**
-   * A ASSISTÊNCIA DE MIRA da trava — o §8 do pedido, aplicado onde ele tem de
-   * ser aplicado: **no olhar do jogador, e não no corpo dele.**
-   *
-   * Este arquivo é o dono do `yaw` e do `pitch` — o mouse escreve aqui, e o
-   * `FighterController` só copia (`if (Number.isFinite(a.yaw)) this.yaw = a.yaw`).
-   * Fosse a assistência aplicada no controlador, ela seria sobrescrita pelo
-   * próximo movimento de mouse e o jogador sentiria o corpo brigando com a
-   * câmera. Aplicada aqui, ela e o mouse SOMAM no mesmo número, que é o que faz
-   * a correção parecer o personagem se ajeitando em vez de o jogo tomando o
-   * controle.
-   *
-   * E é por isso que ela é um TETO DE GIRO (`taxa`, em rad/s) e nunca uma
-   * atribuição de ângulo: `taxa · dt` é sempre pequeno comparado ao que um
-   * movimento de mouse produz num quadro, então virar de propósito sempre vence.
-   * A escada de valores — 0,7 rad/s voando, 4,5 atacando, 8 no corpo a corpo —
-   * mora em `NAMEK.lock.assist`, e quem a escolhe é `LockOn`.
-   *
-   * O `pitch` é corrigido a METADE da taxa do `yaw`, e isso não é economia: o
-   * jogador tolera o rumo se ajeitando sozinho e não tolera o horizonte subindo
-   * e descendo sem ele mandar. O yaw é onde a assistência paga, e o pitch é onde
-   * ela incomoda.
-   *
-   * @param {object} acoes o objeto que `actions()` devolveu NESTE quadro — os
-   *   ângulos são escritos nele também, senão a correção só valeria no quadro
-   *   seguinte (o objeto é lido pelo controlador logo depois desta chamada).
-   * @param {{x,y,z}} alvo o ponto a mirar (o peito do adversário)
-   * @param {{x,y,z}} origem o peito de quem mira
-   * @param {number} taxa rad/s
-   * @param {number} dt
-   */
-  assistirMira(acoes, alvo, origem, taxa, dt) {
-    if (!(taxa > 0) || !(dt > 0) || this._suspenso) return;
-    const dx = alvo.x - origem.x;
-    const dy = alvo.y - origem.y;
-    const dz = alvo.z - origem.z;
-    const plano = Math.sqrt(dx * dx + dz * dz);
-    if (plano < 1e-3) return;
+  /* A ASSISTÊNCIA DE MIRA morava aqui (`assistirMira`) e foi embora com a trava
+     de alvo — ver a seção "a TRAVA DE ALVO, que saiu do mapa" no cabeçalho.
 
-    /* Convenção do repositório: frente = (−sin yaw, 0, −cos yaw). */
-    const yawAlvo = Math.atan2(-dx, -dz);
-    const pitchAlvo = Math.atan2(dy, plano);
+     Ela girava o `yaw` e o `pitch` DESTE arquivo em direção ao alvo travado, com
+     um teto de giro em rad/s. Aplicava-se aqui, e não no `FighterController`, de
+     propósito: este arquivo é o dono dos dois ângulos (o controlador só copia),
+     então a correção e o mouse somavam no mesmo número em vez de brigar. O
+     desenho estava certo; o que sumiu foi o alvo a que ele pertencia.
 
-    /* A diferença dobrada para (−π, π]. Sem isto, um alvo do outro lado do
-       norte faria a assistência girar o caminho longo — o jogador veria o
-       personagem dar quase uma volta inteira para corrigir três graus. */
-    let dYaw = yawAlvo - this._yaw;
-    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
-    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
-
-    const passo = taxa * dt;
-    this._yaw += clamp(dYaw, -passo, passo);
-
-    const dPitch = clamp(pitchAlvo - this._pitch, -passo * 0.5, passo * 0.5);
-    this._pitch = clamp(this._pitch + dPitch, -PITCH_LIMITE, PITCH_LIMITE);
-
-    if (acoes) {
-      acoes.yaw = this._yaw;
-      acoes.pitch = this._pitch;
-    }
-  }
+     Quem for reviver isso um dia precisa reviver um COMPROMISSO junto — um alvo
+     que o jogador declarou e que dura. Contra o alvo da mira assistida, que
+     troca a cada movimento de mouse, a correção seria o jogo puxando o olhar de
+     volta para quem o jogador acabou de decidir abandonar. */
 
   /**
    * Engata a mira: pede o ponteiro e segue em frente se ele for negado.
@@ -873,18 +855,40 @@ export class NamekInput {
         this._pOnda = true;
         break;
       case "KeyR":
-        /* A TRAVA DE ALVO, que era o Tab. Sem `preventDefault`: o `R` não
-           significa nada para o navegador, e essa é a diferença inteira entre
-           as duas teclas — a que precisava ser defendida do navegador foi
-           trocada por uma que ele não disputa. Ver a seção do cabeçalho.
-
-           NOTA DE MERGE: o ramo `namekusei-controls-reference` também tirou a
-           trava do Tab, e escolheu o `E`. As duas mudanças nasceram do mesmo
-           incômodo e chegaram a teclas diferentes; ficou o `R` porque aqui o
-           `E` passou a ser a DEFESA, que é uma tecla SEGURADA e por isso precisa
-           do lugar mais confortável ao lado do WASD. A trava é um toque e pode
-           morar um dedo mais longe. */
-        this._pTravar = true;
+        /* SUPER SAIYAJIN. Sem `preventDefault`: o `R` não significa nada para o
+           navegador, e essa é a diferença entre ele e o `Tab` — a tecla que
+           precisava ser defendida do navegador nunca voltou ao mapa, e esta
+           nunca precisou.
+         *
+         * A vaga é a que a trava de alvo deixou ao sair (ver a seção "a TRAVA DE
+         * ALVO, que saiu do mapa", no cabeçalho): ela foi conferida livre antes
+         * de ser ocupada, e não há outra tecla de borda tão à mão. */
+        this._pSSJ = true;
+        break;
+      case "KeyK":
+        /* ==================================================== BANCADA: Alt+K
+         * **Mata o Freeza na hora.** Não é jogo — é bancada, e o painel de
+         * atalhos diz isso com todas as letras ("matar o Freeza (teste)").
+         *
+         * Ele existe para testar o que vem DEPOIS da luta (a fuga de Namekusei
+         * começa quando o boss cai) sem ter de vencer os cem segundos de briga a
+         * cada tentativa.
+         *
+         * **Com ALT**, e o modificador é a defesa: este é um comando destrutivo
+         * e irreversível, e um `K` solto seria apertado sem querer no meio de
+         * uma briga — o `K` fica ao lado do nada, mas a mão que procura o `J` ou
+         * o `L` passa por ele. Alt não é usado por mais nenhum atalho do modo.
+         *
+         * O cliente só PEDE. Quem mata é a sala, pela porta de sempre
+         * (`NC2S.BOT` com `{ boss: "matar" }`), e ela mata pelo caminho de morte
+         * de VERDADE — o mesmo `levarDano` que uma Genki Dama usa —, para o
+         * `aoMorrer` disparar e a fuga começar. Um atalho que pulasse etapas
+         * mataria o boss sem começar o que ele deve começar, e aí não serviria
+         * para o que foi pedido. */
+        if (e.altKey) {
+          e.preventDefault();
+          this._pMatarBoss = true;
+        }
         break;
       case "Escape":
         /* Chega aqui só no modo LIVRE (sem lock, o navegador não intercepta).

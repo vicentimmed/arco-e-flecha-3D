@@ -36,6 +36,11 @@ import { NC2S, NS2C, packFighter, vecFrom } from "../shared/namek/protocol.js";
 import { gameEvents, EventType } from "../core/events.js";
 
 import { NamekWorld, NAMEK_CAMERA_FAR } from "./world/index.js";
+/* O FIM DE NAMEKUSEI: o estado (a cópia cliente da máquina de estados da sala,
+   que também escreve o regime de voo) e a tela da fuga. Ver `world/fuga.js`. */
+import { EstadoDoFim, FASE } from "./world/fuga.js";
+import { FugaHud } from "./ui/fuga.js";
+import { PEIXE_ALVO_ID } from "./world/peixe.js";
 import { NamekFx } from "./fx/index.js";
 import { PowerSystem } from "./powers/index.js";
 import { Fighter } from "./character/index.js";
@@ -46,9 +51,11 @@ import { NamekInput } from "./input.js";
 import { NamekHud, NamekMenu } from "./ui/index.js";
 import { EVENTO_MENU } from "./ui/menu.js";
 import { KiMeter } from "./ki.js";
+import { SuperSaiyajin, podeAcender, vidaMaxima } from "./character/ssj.js";
 import { NamekAudio } from "./audio.js";
 import { NamekClient } from "./net/client.js";
 import { RemoteFighters } from "./net/remote.js";
+import { BossSystem } from "./boss/index.js";
 
 /** s — teto do passo. Ver o cabeçalho. */
 const DT_MAX = 0.05;
@@ -113,10 +120,47 @@ export class NamekGame {
     /* -------------------------------------------------------- o jogador --- */
     this.controller = new FighterController(this.field);
     this.ki = new KiMeter();
+    /**
+     * O SUPER SAIYAJIN do lutador local — a máquina de estados em
+     * `character/ssj.js`.
+     *
+     * Ela não decide nada (a sala é quem aceita ou recusa o `NC2S.SSJ`): ela
+     * PREVÊ, para os três segundos de animação começarem no quadro em que a
+     * tecla desce, e se desfaz sozinha se a confirmação não chegar. Ver o
+     * cabeçalho de lá.
+     */
+    this.ssj = new SuperSaiyajin();
+    /* Borda do aviso de transformação — ver o `setAvisoSSJ` no quadro. Começa
+       falso para que o primeiro quadro em que a condição valer TOQUE. */
+    this._avisouSSJ = false;
+    /**
+     * O Freeza está em campo? É a condição do alerta e do gatilho — "durante a
+     * batalha com freeza".
+     *
+     * Ele é lido do estado do BOSS de forma defensiva: as mensagens dele
+     * (`NS2C.FREEZA_STATE`, `FREEZA_IN`, `FREEZA_DOWN`) são de outro arquivo e
+     * podem não existir nesta versão do protocolo, então cada assinatura abaixo
+     * é guardada por um `if` no id da mensagem. Sem chefe, este campo fica falso
+     * para sempre e a transformação simplesmente não acontece — que é o modo
+     * como ele era antes desta feature, e é o lado seguro para falhar.
+     */
+    this.freezaVivo = false;
     this.me = new Fighter(this.scene, 0xff7a1a, true);
     this.cam = new NamekCamera(this.camera3, this.field);
     this.input = new NamekInput(canvas);
     this.hud = new NamekHud(uiRoot);
+    /* O FIM DO PLANETA — o estado e a tela dele.
+     *
+     * `EstadoDoFim` não decide nada (§8: a sala é a autoridade sobre quem
+     * escapa e quem morre); ele guarda a fase, prevê o relógio entre dois
+     * pacotes e escreve o REGIME DE VOO no controlador — que é como o teto de
+     * 520 m vira 2 000 durante a fuga e como o chão desliga no espaço. Ver
+     * `world/fuga.js`.
+     *
+     * A tela é separada do HUD porque ela vive e morre com uma fase que quase
+     * sempre não está acontecendo — o cabeçalho de `ui/fuga.js` explica. */
+    this.fim = new EstadoDoFim();
+    this.fugaHud = new FugaHud(uiRoot);
     /* O som nasce MUDO e só acorda no primeiro clique — ver `NamekAudio.unlock`.
        Todo navegador suspende o contexto de áudio até um gesto do usuário, e
        aqui o gesto é o mesmo que captura o ponteiro. */
@@ -148,6 +192,20 @@ export class NamekGame {
     this.net = new NamekClient();
     this.remotes = new RemoteFighters(this.scene, () => this.net.serverTime);
 
+    /* O BOSS. Ele assina as próprias mensagens de rede no construtor, desenha o
+       próprio corpo, usa os POOLS que já existem para os poderes dele e monta a
+       barra de vida dentro do HUD — daí o gancho ser este objeto e mais três
+       linhas no `step`. Ver o cabeçalho de `boss/index.js`. */
+    this.boss = new BossSystem({
+      scene: this.scene,
+      powers: this.powers,
+      fx: this.fx,
+      audio: this.audio,
+      hudEl: this.hud.el,
+      net: this.net,
+      meuId: () => this.myId,
+    });
+
     /** Meu id na sala. Vem no `welcome`. */
     this.myId = null;
     this.myName = "";
@@ -158,17 +216,15 @@ export class NamekGame {
     this.invulnUntil = 0;
 
     /**
-     * A TRAVA DE ALVO — o sistema, em `lockon.js`.
+     * QUEM É O ALVO — o sistema, em `lockon.js`.
      *
-     * Era um `this.lockId = null` mais um `alternarTrava()` aqui dentro, e
-     * funcionava enquanto a trava fosse um interruptor. Ela deixou de ser:
-     * agora tem alcance, tolerância a perda, troca de alvo, uma escada de
-     * assistência de mira e um estado de "alvo distante" que o HUD desenha. Ver
-     * o cabeçalho de `lockon.js` para por que isso saiu daqui.
-     *
-     * `lockId` continua existindo como PROPRIEDADE derivada (logo abaixo)
-     * porque meia dúzia de lugares deste arquivo o leem — e todos eles querem
-     * exatamente "o id travado", que é o que ele continua sendo.
+     * O nome da classe ainda diz "lock" e o campo ainda se chama `lock`, mas a
+     * TRAVA saiu junto com a tecla `R`: o que mora ali hoje é a mira assistida
+     * pelo cursor (quem está sob o retículo, e é nele que os projéteis miram) e o
+     * painel de vida do adversário do momento. Ver o cabeçalho de `lockon.js`
+     * para o que foi removido e por quê; os nomes ficaram porque renomear a
+     * classe custaria tocar em cinco arquivos para não mudar comportamento
+     * nenhum.
      */
     this.lock = new LockOn();
     /** Especial armado (índice em `NAMEK.specialOrder`). */
@@ -210,14 +266,24 @@ export class NamekGame {
       vivo: true, invuln: false,
     };
     this._pontoTrava = { x: 0, y: 0, z: 0 };
-    /** O que o HUD desenha do anel da trava. Reaproveitado — ver `anelDaTrava`. */
-    this._anelHud = { x: 0, y: 0, raio: 0, distante: false, perdendo: false };
     /* A bússola: a lista devolvida ao HUD e o banco de registros dela. Os dois
        são reaproveitados entre quadros — ver `bussola`. */
     this._bussola = [];
     this._pinoBanco = [];
     this._pinoV = new THREE.Vector3();
-    this._alvoHud = { id: 0, nome: "", cor: 0, vida: 0, vidaMax: NAMEK.fighter.maxHealth };
+    /** Rascunho da projeção do PORTAL da fuga. Próprio e não emprestado do pino:
+     *  são dois marcadores diferentes na mesma tela, e um rascunho comum é a
+     *  primeira coisa que quebra quando alguém mudar a ordem do quadro. */
+    this._fimV = new THREE.Vector3();
+    /** O que a tela do fim mostra, reescrito por quadro. Ver `ui/fuga.js`. */
+    this._fimHud = {
+      ativo: false, segundos: 0, metros: 0, fracao: 0,
+      altitude: 0, altitudeAlvo: 0, escapou: false, rotulo: "", sub: "",
+    };
+    /** O painel de vida do alvo, reescrito por quadro — ver `dadosDoAlvo`. */
+    this._alvoHud = {
+      id: 0, nome: "", cor: 0, vida: 0, vidaMax: NAMEK.fighter.maxHealth, dano: 0,
+    };
 
     this._onResize = () => this.resize();
     window.addEventListener("resize", this._onResize);
@@ -318,6 +384,15 @@ export class NamekGame {
 
   build(progresso = () => {}) {
     this.world.build(progresso);
+    /* O peixe é do MUNDO e o som é do jogo; esta é a única linha em que os dois
+       precisam um do outro. Ver `NamekPeixe.ligarAudio` — o peixe só CHAMA a
+       API do áudio, não a estende. */
+    this.world.peixe?.ligarAudio(this.audio);
+    /* A chuva de meteoros, pelo mesmo contrato e pelo mesmo motivo: ela é a
+       única coisa do mapa que MATA sem que ninguém tenha atirado, e o assobio da
+       rocha descendo é o aviso que ela não tinha. Ver
+       `NamekAudio.assobioDeQueda`. */
+    this.world.meteoros?.ligarAudio(this.audio);
     return this;
   }
 
@@ -360,6 +435,17 @@ export class NamekGame {
         this.world.breakProp(chave.slice(0, sep), Number(chave.slice(sep + 1)));
       }
 
+      /* E OS PLANETAS QUE JÁ EXPLODIRAM. Somem do céu SEM a sequência: quem
+         chega no meio precisa do estado, não do acontecimento — o mesmo que
+         vale para a cratera e para a rocha derrubada. Ver `NamekPlanetas.jaCaidos`. */
+      this.world.planetasCaidos(msg.planetas ?? []);
+
+      /* E O SALTO DO PEIXE EM CURSO, se houver. Mesmo argumento das crateras:
+         quem entra no meio de um mergulho tem de ver o mesmo bicho que os
+         outros. Vem `null` entre um salto e outro, e aí o próximo `NS2C.FISH`
+         chega pelo caminho normal. */
+      if (msg.fish) this.world.peixe?.agendar(msg.fish);
+
       /* `.id` — o `welcome` traz o clima como `{ id, w }`, não como a string
          que o `NS2C.WEATHER` de cada troca manda. Passar o objeto inteiro não
          estourava: `setWeather` valida contra `NAMEK.weather.ids`, não achava o
@@ -373,6 +459,13 @@ export class NamekGame {
       this.menu.setDificuldade(this.dificuldade);
       this.remotes.reconcile((msg.fighters ?? []).filter((f) => f.id !== this.myId));
       this.hud.setScores(this.placar(msg.scores));
+      /* EM QUE PÉ ESTÁ O FIM DO PLANETA. Sem esta linha, quem entrasse durante a
+         contagem veria teto de 520 m, nenhum portal e nenhum relógio — e morreria
+         sem nunca ter sabido que havia um. O `setFim` logo em seguida é o que põe
+         o cenário no estado certo antes do primeiro quadro, em vez de deixá-lo
+         chegar lá pela transição de fase que não vai mais acontecer. */
+      this.fim.aplicarEstado(msg.fim, this.myId);
+      this.world.setFim(this.fim);
       /* Quem nasce é o `NS2C.SPAWN`, que a sala manda logo depois do `welcome`
          — e é ele que traz o ponto, o rumo e o fim da invulnerabilidade. Havia
          um `this.nascer(msg.you.spawn)` aqui, lendo um campo inexistente e
@@ -388,7 +481,9 @@ export class NamekGame {
 
     net.on(NS2C.LEAVE, (msg) => {
       this.remotes.remove(msg.id);
-      if (this.lockId === msg.id) this.lockId = null;
+      /* E some do painel do alvo, se ele estiver lá: sem isto a placa ficaria
+         dois segundos pedindo a vida de alguém que não está mais na sala. */
+      this.lock.esquecer(msg.id);
     });
 
     net.on(NS2C.STATES, (msg) => this.remotes.applyStates(msg));
@@ -419,6 +514,11 @@ export class NamekGame {
         hand: msg.hand,
         target: msg.target ?? null,
         local: false,
+        /* A COR DA BOLA ALHEIA sai do estado do DONO, e não da mensagem: o bit
+           16 da pose dele já chega a 20 Hz, e um campo no `BLAST` seria a mesma
+           informação dita duas vezes — com a chance de as duas discordarem
+           numa retransmissão atrasada. */
+        ssj: this.remotes.get(msg.owner)?.ssj === true,
       });
       /* A bola dos OUTROS também soa. Sem isto o campo de batalha é mudo
          exceto por você, e quinze lutadores brigando viram um filme sem trilha
@@ -438,6 +538,9 @@ export class NamekGame {
            disco do outro perseguir a MESMA pessoa na minha tela e na dele. */
         target: msg.target ?? null,
         local: false,
+        /* E o golpe do adversário transformado sai DOURADO — mesma leitura do
+           bit 16 que a rajada acima faz, e pelo mesmo motivo. */
+        ssj: this.remotes.get(msg.owner)?.ssj === true,
       });
       this.audio.especial(vecFrom(msg.o), msg.kind);
     });
@@ -490,6 +593,21 @@ export class NamekGame {
         if (de) this.hud.damageFrom(this.anguloNaTela(de.pose));
         return;
       }
+      /* O GOLPE FOI MEU: acende o painel do alvo com a vida da vítima.
+       *
+       * *"Quando o player acerta o outro deve aparecer a vida do player que ele
+       * acertou na tela dele diminuindo, independente se tiver lock-in ou não."*
+       *
+       * Aqui só se registra QUEM e QUANTO; a placa é desenhada no laço, a partir
+       * da vida viva do remoto (que a linha logo abaixo acaba de atualizar). Ver
+       * `LockOn.registrarAcerto` e `NAMEK.lock.painel`.
+       *
+       * Vale para todo golpe que a SALA cobrou em meu nome — bola, feixe, disco,
+       * esfera, onda, e o dano já descontado pela guarda do outro —, porque a
+       * autoridade sobre a vida é dela e este é o único aviso honesto de que o
+       * meu golpe encostou em alguém. */
+      if (msg.by === this.myId) this.lock.registrarAcerto(msg.id, msg.amount);
+
       const r = this.remotes.get(msg.id);
       if (r) {
         r.health = msg.health;
@@ -512,28 +630,45 @@ export class NamekGame {
     net.on(NS2C.DEATH, (msg) => {
       const dir = msg.d ? vecFrom(msg.d) : null;
 
-      /* O PRÊMIO DO ABATE, no quadro em que o corpo começa a cair.
-       *
-       * A sala já encheu a barra dela (ver `matar`) e o `VITALS` traria o valor
-       * em até 100 ms — mas o `sincronizar` PERSEGUE em vez de escrever, então a
-       * barra local levaria meio segundo para chegar ao topo e o especial
-       * recusaria durante esse tempo com a tela dizendo que dá. Encher aqui é o
-       * "instantaneamente" do pedido; as duas pontas já concordam, e a amostra
-       * seguinte não tem o que corrigir. */
-      if (msg.killer === this.myId && msg.victim !== this.myId && !this.down) {
-        this.ki.encher();
-        this.hud.toast("derrubou — ki cheio");
-        this.audio.kiEncheu();
-      }
+      /* O BOSS RI DO ABATE, se o abate foi dele. A pergunta é feita pelo módulo
+         do boss porque é ele quem conhece o repertório do Freeza — ver
+         `BossSystem.matou`, que também explica por que o teste é pelo `kind` e
+         não pelo `killer` (que vem `null` de propósito para os golpes dele). */
+      this.boss?.matou?.(msg.kind);
 
+      /* NÃO HÁ PRÊMIO DE ABATE AQUI, e a ausência é deliberada.
+       *
+       * Havia: quem matava alguém enchia a barra no quadro do abate, prevendo o
+       * `por.ki = NAMEK.ki.max` que a sala fazia em `matar`. As duas metades
+       * foram embora juntas, e tinham de ir — uma previsão que a sala não
+       * confirma é pior do que previsão nenhuma: a barra encheria na tela e o
+       * `VITALS` seguinte a arrastaria de volta para baixo em meio segundo,
+       * exatamente enquanto o jogador tenta soltar o especial que ela prometeu.
+       *
+       * O prêmio que sobrou é o da QUEDA, e ele está no `STAGGER` logo abaixo.
+       * Ver `NamekRoom.matar` para por que os dois não pagavam a mesma coisa. */
       if (msg.victim === this.myId) {
         this.morrer(dir);
         this.audio.morreu(this.controller.position);
       } else {
         const morto = this.remotes.get(msg.victim);
         morto?.fighter.die(dir);
-        if (morto) this.audio.morreu(morto.pose);
-        if (this.lockId === msg.victim) this.lockId = null;
+        if (morto) {
+          this.audio.morreu(morto.pose);
+          /* A VIDA DELE VAI A ZERO AQUI, e não na amostra de `VITALS` seguinte.
+             O golpe que MATA não manda `HURT` — a sala chama `matar` e sai antes
+             (ver `aplicarDano`) —, então a última notícia que a placa do alvo
+             teria era a vida de ANTES do golpe final, e a barra ficaria parada em
+             12 ou 30 até os 100 ms da amostra chegarem. */
+          morto.health = 0;
+        }
+        /* E O PAINEL FICA DE PÉ para mostrar isso, quando o abate foi seu: a
+           última coisa que a placa desenha é a barra dele esvaziando, que é a
+           resposta completa a *"quanto de vida do outro player ele tirou"* no
+           único instante em que a pergunta se encerra. Dano zero de propósito —
+           o total continua sendo o que os golpes anteriores somaram, porque a
+           sala não diz quanto valeu o golpe final. */
+        if (msg.killer === this.myId) this.lock.registrarAcerto(msg.victim, 0);
       }
       /* Os DOIS como objeto, e não como nome solto: o feed pinta cada lado com
          a cor do lutador e destaca a sua própria linha por id. Passando string,
@@ -559,8 +694,18 @@ export class NamekGame {
        * especial exige a barra CHEIA: com a barra ainda velha na tela, a
        * primeira tentativa seria recusada com um "ki insuficiente" que já não é
        * verdade. Prever aqui é o que faz o presente chegar junto com o aviso. */
-      if (msg.by === this.myId && msg.id !== this.myId) {
-        this.ki.valor = this.ki.max;
+      /* `!this.down` porque a sala também exige `por.alive` (ver `derrubar`):
+         um feixe que ainda estava aceso pode derrubar alguém depois de quem o
+         soltou já ter morrido, e aí a sala NÃO paga o prêmio. Prever um presente
+         que ela vai recusar é o mesmo erro que o `DEATH` acabou de deixar de
+         cometer — a barra encheria na tela e o `VITALS` seguinte a desfaria. */
+      if (msg.by === this.myId && msg.id !== this.myId && !this.down) {
+        /* `encher()` e não a escrita crua: é o mesmo valor, mas ele também zera
+           o relógio da regeneração passiva, e passar por um lugar só é o que
+           mantém o prêmio da queda idêntico ao que a sala faz em `derrubar`.
+           Desde que o abate deixou de pagar (ver o `DEATH` acima), este é o
+           ÚNICO caminho do jogo que enche a barra de graça. */
+        this.ki.encher();
         this.hud.toast(`${this.nomeDe(msg.id)} caiu — ki cheio`);
         this.audio.kiEncheu();
       }
@@ -623,6 +768,20 @@ export class NamekGame {
       if (p) this.fx.propDust(msg.kind, p.x, p.y, p.z, p.raio);
     });
 
+    /* O PEIXE GIGANTE. Duas mensagens e nada mais: o salto inteiro chega num
+       pacote só, com `NAMEK.peixe.aviso` segundos de antecedência, e a partir
+       dele o cliente integra a mesma parábola que a sala integra. Ver
+       `src/namek/world/peixe.js`. */
+    net.on(NS2C.FISH, (msg) => this.world.peixe?.agendar(msg));
+
+    net.on(NS2C.FISH_DOWN, (msg) => {
+      this.world.peixe?.matar(msg);
+      /* Um recado, e não um abate: matar o peixe não entra no placar (ver
+         `NamekRoom.registrarPeixe`) — mas é o acontecimento mais raro do mapa e
+         quem o derrubou merece o crédito na tela de todo mundo. */
+      this.hud.toast(`${this.nomeDe(msg.by)} derrubou o peixe gigante`);
+    });
+
     net.on(NS2C.WEATHER, (msg) => {
       this.weather = msg.id;
       this.menu.setWeather(msg.id);
@@ -650,10 +809,350 @@ export class NamekGame {
       if (d < 260) this.cam.shake(NAMEK.weather.tempestade.tremor * (1 - d / 260), 0.4);
     });
 
+    /* ============================================ os planetas e a chuva ==== */
+
+    /* UM PLANETA SE PARTIU. A sequência inteira (rachadura, clarão, cacos) é
+       função fechada de `msg.w` mais as durações do config — ver
+       `NamekPlanetas.derrubar`. Aqui só se dá a partida no relógio e se conta o
+       que aconteceu. */
+    net.on(NS2C.PLANET_DOWN, (msg) => {
+      if (!this.world.derrubarPlaneta(msg.id, msg.w)) return;
+      const nome = NAMEK.planetas.corpos.find((c) => c.id === msg.id)?.nome ?? msg.id;
+      this.hud.banner(`${nome.toUpperCase()} FOI DESTRUÍDO`, 3.5);
+      if (msg.by === this.myId) this.hud.toast("você destruiu um planeta");
+      else this.hud.toast(`${this.nomeDe(msg.by)} destruiu ${nome}`);
+      /* O ESTOURO CHEGA DEPOIS DA LUZ, e é o único lugar do modo em que isso é
+         de propósito: o corpo está a 2.400 m, e som nenhum deste jogo viaja —
+         o que se ouve é a onda chegando. Dois segundos e meio depois do clarão
+         é o que a distância pediria se o ar de Namekusei fosse o nosso, e é
+         também o tempo em que o jogador para de olhar para o céu e volta para a
+         briga: o trovão o traz de volta. `detonouNoAr` com potência de Genki
+         Dama escolhe a receita colossal (ver `_receitaDeImpacto`). */
+      const p = NAMEK.planetas.corpos.find((c) => c.id === msg.id);
+      if (p) {
+        setTimeout(() => {
+          /* O jogo pode ter sido desmontado nesses dois segundos e meio (menu,
+             recarga, troca de sala). Tocar num contexto de áudio já fechado
+             estoura dentro de um timer, longe de qualquer pilha que explique de
+             onde ele veio — e `running` é o mesmo sinal que o laço usa. */
+          if (!this.running) return;
+          const c = this.controller.position;
+          this.audio.detonouNoAr(
+            { x: c.x + p.dir[0] * 60, y: c.y + p.dir[1] * 60, z: c.z + p.dir[2] * 60 },
+            40,
+            "genki",
+          );
+          this.cam.shake(0.55, 1.1);
+        }, 2500);
+      }
+    });
+
+    /* UMA ROCHA ENTROU NO CÉU. Seis números e um relógio; o resto é desenho. */
+    net.on(NS2C.METEOR, (msg) => this.world.soltarMeteoro(msg));
+
+    /* E ELA ESTOUROU. A cratera e o SOM vêm pelo `NS2C.CRATER` que a sala manda
+       no mesmo quadro (ver `NamekMeteoros.estourar`); o que sai daqui é o que só
+       existe nesta tela — a bola de fogo, o tranco da lente e as peças de
+       cenário que o estouro derrubou. */
+    net.on(NS2C.METEOR_HIT, (msg) => {
+      this.world.estourarMeteoro(msg);
+      if (!Array.isArray(msg.p)) return;
+      const p = { x: msg.p[0], y: msg.p[1], z: msg.p[2] };
+      /* O tremor cai com a distância, como o do relâmpago — e o alcance cresce
+         com a rocha: um colosso a duzentos metros sacode, um pedrisco a
+         duzentos metros não. */
+      const alcance = 90 + (Number(msg.r) || 1) * 22;
+      const d = Math.hypot(
+        p.x - this.controller.position.x,
+        p.y - this.controller.position.y,
+        p.z - this.controller.position.z,
+      );
+      if (d < alcance) this.cam.shake(0.4 + 0.7 * (1 - d / alcance), 0.5);
+      /* As peças dentro do buraco caem. É o MESMO caminho do impacto de um
+         golpe (`NC2S.PROP_HIT` → `NS2C.PROP_DOWN`), e a sala deduplica por
+         peça — então quinze telas reportando a mesma rocha derrubada custam
+         quinze mensagens e uma queda. Sem isto, uma ajisa ficaria de pé no
+         meio de uma cratera de trinta e sete metros. */
+      this.derrubarPorPerto(p, Number(msg.power) || 1);
+    });
+
+    /* O EMBATE CONFIRMADO — dois poderes que se encostaram no ar.
+     *
+     * Vem de todo mundo, inclusive de volta de mim, e a volta não é desperdício
+     * nem problema: quem avisou já aplicou localmente (é predição, como o resto
+     * do jogo), e a busca por dono+tipo não acha mais nada porque os projéteis
+     * já morreram. A mensagem é idempotente por construção — ver
+     * `NS2C.POWER_CLASH` no protocolo, e o §2 de `powers/colisao.js` para por
+     * que a sala precisa estar no meio disto.
+     *
+     * Ela é ENFILEIRADA, não aplicada: matar um projétil dentro do tratador
+     * seria mexer num pool que o quadro atual pode estar percorrendo. */
+    net.on(NS2C.POWER_CLASH, (msg) => this.powers.embateDaRede(msg));
+
     net.on(NS2C.SCORES, (msg) => this.hud.setScores(this.placar(msg.s)));
+
+    /* ==================================================== O FIM DE NAMEKUSEI ==
+       Quatro mensagens, e nenhuma delas decide nada aqui: a sala manda a fase, o
+       relógio, quem escapou e quem morreu; este lado desenha. Ver o bloco `fim`
+       de `shared/namek/protocol.js`. */
+
+    net.on(NS2C.FIM_ESTADO, (msg) => {
+      const antes = this.fim.fase;
+      this.fim.aplicarEstado(msg, this.myId);
+      if (antes === this.fim.fase) return;
+
+      /* Uma faixa por transição. Elas são o roteiro do modo dito em voz alta —
+         é a única forma de alguém que nunca viu isto descobrir, no meio de uma
+         briga, que agora existe um relógio e uma saída. */
+      if (this.fim.fase === FASE.FREEZA) {
+        this.hud.banner("O CÉU SE FECHOU", 3);
+      } else if (this.fim.fase === FASE.CONTAGEM) {
+        this.hud.banner("O PLANETA VAI EXPLODIR — VOE PARA O CÉU", 4);
+        this.audio.kiEncheu?.();
+      } else if (this.fim.fase === FASE.ESPACO) {
+        this.hud.banner("NAMEKUSEI SE FOI", 3.5);
+      } else if (this.fim.fase === FASE.CALMO) {
+        this.hud.banner("O PLANETA CONTINUA", 2.5);
+      }
+    });
+
+    net.on(NS2C.FIM_CONTAGEM, (msg) => this.fim.aplicarContagem(msg));
+
+    net.on(NS2C.FIM_ESCAPOU, (msg) => {
+      const eu = this.fim.aplicarEscape(msg, this.myId);
+      const p = msg.p ? vecFrom(msg.p) : null;
+      if (!eu) {
+        /* O corpo do OUTRO não é movido daqui, e é de propósito: a posição de um
+           humano é dele (§8), e o que chega é a pose de 20 Hz. O interpolador vai
+           cobrir os dois quilômetros na janela de 100 ms dele — um risco subindo
+           pela tela, que por acaso é exatamente a leitura certa do que acabou de
+           acontecer. Forçar um teleporte aqui seria este cliente escrevendo a
+           posição de outro, que é a única coisa que o modelo de confiança do modo
+           não permite. */
+        this.hud.toast(`${this.nomeDe(msg.id)} escapou do planeta`);
+        return;
+      }
+      if (p) {
+        this.controller.teleport(p.x, p.y, p.z, this.controller.yaw);
+        /* A lente teleporta junto: sem isto ela persegue amortecida o ponto novo
+           e varre dois mil metros de céu no caminho. Mesma marcação do
+           nascimento, e pelo mesmo motivo. */
+        this.cam.markTeleport();
+        this.controller.flying = true;
+      }
+      this.hud.banner("VOCÊ ESCAPOU — O ESPAÇO", 3.5);
+      this.audio.kiEncheu?.();
+    });
+
+    net.on(NS2C.FIM_EXPLODIU, (msg) => {
+      this.fim.aplicarExplosao(msg);
+      /* O CLARÃO É LOCAL E IMEDIATO, como a poeira de um impacto: ele não espera
+         nada e não pergunta nada. Quem morreu recebe o `DEATH` de sempre por
+         outro caminho — este aqui é só o cenário. */
+      this.fugaHud.explodiu();
+      this.cam.shake(NAMEK.fim.explosao.tremor, 2.6);
+      this.audio.detonouNoAr?.(this.controller.position, 48, "genki");
+      this.hud.banner(
+        this.fim.euEscapei ? "NAMEKUSEI EXPLODIU" : "O PLANETA LEVOU VOCÊ",
+        4,
+      );
+    });
+
+    /* ============================================== o SUPER SAIYAJIN ======
+     *
+     * Duas mensagens que chegam e uma condição observada — e a condição (o
+     * Freeza em campo) é lida de forma DEFENSIVA, porque o boss é de outro
+     * arquivo e as mensagens dele podem não existir nesta versão do protocolo.
+     * `NS2C.FREEZA_*` valeria `undefined` num protocolo sem chefe, e
+     * `net.on(undefined, …)` assinaria um evento de nome "undefined" que nunca
+     * dispara — inofensivo, mas mudo e difícil de explicar. Com o `if`, a
+     * ausência do chefe é o que ela é: o Super Saiyajin não existe naquela
+     * partida, exatamente como não existia antes desta feature. */
+    if (NS2C.FREEZA_IN) {
+      net.on(NS2C.FREEZA_IN, () => {
+        this.freezaVivo = true;
+      });
+    }
+    if (NS2C.FREEZA_STATE) {
+      /* A REDE DE SEGURANÇA. A pose do chefe sai a 20 Hz e **só enquanto ele
+         está de pé** (`NamekFreeza.passo` sai na primeira linha quando ele
+         morre), então a mera chegada dela já é a resposta — não há campo de vida
+         a ler, e não haveria como ler um: a mensagem carrega pose e mais nada.
+         Com isto, um `FREEZA_IN` perdido se conserta em 50 ms em vez de deixar
+         o jogador sem alerta pela luta inteira. */
+      net.on(NS2C.FREEZA_STATE, () => {
+        this.freezaVivo = true;
+      });
+    }
+    if (NS2C.FREEZA_DOWN) {
+      net.on(NS2C.FREEZA_DOWN, () => {
+        this.freezaVivo = false;
+        /* A BATALHA ACABOU, A TRANSFORMAÇÃO ACABA JUNTO — ver o §"quando ela
+           ACABA" em `NAMEK.ssj`. A sala manda um `SSJ_OFF` logo atrás
+           (`server/namek/ssj.js: manutencao`); desligar aqui é previsão, e ela é
+           a que faz o ouro sair da tela no mesmo quadro em que o chefe cai em
+           vez de um décimo de segundo depois. */
+        if (this.ssj.aceso) this.desligarSSJ();
+      });
+    }
+
+    /* A transformação COMEÇOU. Ela vale para qualquer um: para mim, alinhando o
+       relógio da previsão com o da sala; para os outros, começando a animação e
+       levantando o teto de vida do alvo travado. */
+    net.on(NS2C.SSJ_ON, (msg) => {
+      if (msg.id === this.myId) {
+        if (this.ssj.confirmar(msg.w, this.net.serverTime)) {
+          this.me.transformar(Math.max(0, (this.net.serverTime - msg.w) / 1000));
+        }
+        this.me.ssj = true;
+        if (Number.isFinite(msg.health)) this.health = msg.health;
+        this.hud.setSSJ(true);
+        this.hud.setAvisoSSJ(false);
+        this.hud.banner("SUPER SAIYAJIN", 2.6);
+        /* O GRITO, e ele já existe: três segundos de rugido subindo que acabam
+           no estouro seco do clarão, tudo dentro do mesmo buffer (ver
+           `NamekAudio.transformacao`). O `if` com fallback para `kiEncheu` era o
+           paliativo enquanto o som não chegava, e sai junto. */
+        this.audio.transformacao?.(this.controller.position);
+        return;
+      }
+      const r = this.remotes.get(msg.id);
+      if (!r) return;
+      r.fighter.transformar(Math.max(0, (this.net.serverTime - msg.w) / 1000));
+      /* O `ssj` do corpo alheio vem da POSE (bit 16) a 20 Hz e não é escrito
+         aqui: escrever os dois criaria duas verdades sobre o mesmo estado, e a
+         que chegasse por último ganharia. O que ESTA mensagem traz e a pose não
+         tem é o INSTANTE — ver o protocolo. */
+      this.hud.toast(`${this.nomeDe(msg.id)} virou Super Saiyajin`);
+    });
+
+    /* E ACABOU: o lutador morreu, ou o Freeza caiu. */
+    net.on(NS2C.SSJ_OFF, (msg) => {
+      if (msg.id !== this.myId) return;
+      this.desligarSSJ();
+      /* A vida vem na mensagem porque o fim APARA o teto (160 → 100), e quem
+         estava acima dele precisa da poda junto com o motivo — e não como um
+         número que despenca sozinho no `VITALS` seguinte. */
+      if (Number.isFinite(msg.health)) this.health = msg.health;
+    });
 
     net.on("disconnected", () => this.hud.toast("conexão caiu — reconectando…"));
     net.on("reconnecting", () => this.hud.toast("reconectando…"));
+  }
+
+  /**
+   * **A EXPLOSÃO DE PODER** — o último quadro dos três segundos.
+   *
+   * *"A aura dele fica amarela e mais intensa e tem uma explosão de poder ali
+   * momentânea."* São quatro coisas no mesmo instante, e cada uma cobre um
+   * sentido diferente do jogador:
+   *
+   * • o CLARÃO, na cor do Super Saiyajin — é o que se vê da tela inteira;
+   * • as FAGULHAS subindo, que dão volume ao clarão de perto;
+   * • o CHÃO, quando há chão ao alcance: a onda de choque de `NamekFx.slam`
+   *   (poeira em anel e pedra levantando) mais uma cratera de 15 m carimbada
+   *   pela sala. É o "chão levantando pedra" literal, e ela é pedida pelo mesmo
+   *   `NC2S.GROUND_HIT` de todo golpe — a cratera do grito é uma cratera como
+   *   qualquer outra: aparece para todo mundo, entra na lista de quem chegar
+   *   depois e funda a lava se insistirem no mesmo ponto;
+   * • o TREMOR da lente, que é o que dá PESO ao resto.
+   *
+   * Ela não faz DANO, e a ausência é deliberada: a onda de choque do jogo já
+   * existe, custa ki e tem um botão (`Q`). Uma segunda onda, de graça, saindo do
+   * fim de uma invencibilidade de três segundos, seria a coisa mais forte do
+   * modo — e transformaria a transformação num ataque.
+   */
+  estourarSSJ() {
+    const E = NAMEK.ssj.estouro;
+    const p = this.controller.position;
+    const peito = p.y + NAMEK.fighter.chest;
+
+    this.fx.clarao(p.x, peito, p.z, E.clarao, NAMEK.ssj.cor, 1);
+    this.fx.fagulhas(p.x, peito, p.z, 0.6, NAMEK.ssj.cor, 40, 26);
+    this.cam.shake(E.tremor, E.tremorDur);
+    /* NENHUM SOM AQUI, e a ausência é a correção de um erro.
+       O estouro deste instante já está tocando: ele são os últimos 200 ms do
+       `transformacao`, disparado três segundos atrás pelo `NS2C.SSJ_ON` (ver
+       `gritoDeTransformacao`, em `audio.js`, que descreve o corte seco no fim).
+       O `detonouNoAr` que havia aqui era o paliativo de quando aquele som não
+       existia; mantê-lo seria duas detonações com um piscar de diferença, que
+       não soa como uma explosão maior — soa como eco de defeito. */
+
+    /* O CHÃO, se houver chão. `heightAt` é a mesma função que a sala usa, então
+       "perto do chão" quer dizer a mesma coisa nos dois lados. No ar não há
+       cratera a pedir — e não haver é a leitura certa: um buraco abrindo no
+       terreno debaixo de alguém que gritou a duzentos metros de altura seria a
+       explosão acontecendo no lugar errado. */
+    const chao = this.field.heightAt(p.x, p.z);
+    if (p.y - chao > E.alcanceDoChao) return;
+    this.fx.slam(p.x, chao, p.z, NAMEK.destruction.slamSpeed * 1.6);
+    this.derrubarPorPerto({ x: p.x, y: chao, z: p.z }, E.potencia);
+    this.net.send(NC2S.GROUND_HIT, {
+      p: [p.x, chao, p.z],
+      power: E.potencia,
+    });
+  }
+
+  /** Desfaz o Super Saiyajin nas quatro peças que o carregam: o estado, o corpo,
+   *  a barra e o HUD. Um caminho só — morte, fim da batalha e recusa da sala
+   *  passam todos por aqui. */
+  desligarSSJ() {
+    this.ssj.desligar();
+    this.me.ssj = false;
+    this.ki.ssj = false;
+    this.hud.setSSJ(false);
+  }
+
+  /**
+   * O `R`: pedir a transformação.
+   *
+   * O cliente confere a MESMA regra que a sala vai conferir (`podeAcender`) —
+   * não para decidir, que é dela, mas para não começar três segundos de animação
+   * que vão ser desfeitos. Recusado, ele explica: o alerta na tela já diz quando
+   * dá, e um toque de tecla que não faz nada e não fala é a pior resposta
+   * possível.
+   */
+  pedirSSJ() {
+    if (!this.contextoSSJ()) {
+      /* A mensagem separa os dois "não" que o jogador consegue consertar. O
+         terceiro (estar caído) não vira aviso: quem está no chão tem coisa mais
+         urgente na tela. */
+      if (this.down || this.controller.caido) return;
+      this.hud.toast(
+        this.freezaVivo
+          ? "Super Saiyajin: só com 30 % de vida ou menos"
+          : "Super Saiyajin: só na batalha contra o Freeza",
+      );
+      return;
+    }
+    if (!this.ssj.pedir()) return;
+    /* A previsão liga TUDO no mesmo quadro: o bit da pose (para quem olha de
+       longe ver o ouro subindo junto com o grito), a economia da barra e a
+       animação do corpo. A sala confirma logo atrás; se não confirmar, o
+       `update` da máquina desfaz os quatro em bloco. */
+    this.me.ssj = true;
+    this.ki.ssj = true;
+    this.me.transformar(0);
+    this.hud.setSSJ(true);
+    this.hud.setAvisoSSJ(false);
+    this.net.send(NC2S.SSJ, {});
+  }
+
+  /**
+   * As condições do alerta e do gatilho, num lugar só.
+   *
+   * Ele é o mesmo objeto reaproveitado entre quadros (o alerta é reavaliado a
+   * 60 Hz), pela regra de sempre: um literal por quadro são 3 600 objetos por
+   * minuto para o coletor recolher numa pergunta que quase sempre dá "não".
+   */
+  contextoSSJ() {
+    const c = this._ctxSSJ ?? (this._ctxSSJ = {});
+    c.vida = this.health;
+    c.freeza = this.freezaVivo;
+    c.vivo = !this.down;
+    c.caido = this.controller.caido === true;
+    c.ssj = this.ssj.aceso;
+    return podeAcender(c);
   }
 
   async connect(nome) {
@@ -675,6 +1174,12 @@ export class NamekGame {
     this.me.revive();
     this.down = false;
     this.deadUntil = 0;
+    /* MORRER DESLIGA O SUPER SAIYAJIN, e o corpo que renasce é um corpo novo:
+       teto de 100, barra sem desconto, cabelo preto. A sala pensa o mesmo (ver
+       `apagar`, chamado de `NamekRoom.matar`) e é por isso que a vida aqui volta
+       ao `maxHealth` base sem consultar `vidaMaxima`. Ver o §"quando ela ACABA"
+       em `NAMEK.ssj`. */
+    this.desligarSSJ();
     this.health = NAMEK.fighter.maxHealth;
     this.invulnUntil = spawn.invulnUntil ?? this.net.serverTime + NAMEK.respawn.invuln * 1000;
     this.hud.setDead(null);
@@ -690,32 +1195,22 @@ export class NamekGame {
     this.down = true;
     this.deadUntil = this.net.serverTime + NAMEK.respawn.delay * 1000;
     this.me.die(direcao);
-    this.lockId = null;
+    /* Morto não aponta para ninguém: solta a mira, os círculos e o painel. */
+    this.lock.soltar();
     this.casting = null;
     this.cam.shake(1, 0.6);
   }
 
   /* --------------------------------------------------------------- ajuda -- */
 
-  /**
-   * O id travado, ou null.
-   *
-   * Uma leitura do sistema de trava, e não um campo — é o que permitiu mover a
-   * máquina de estados para `lockon.js` sem reescrever os oito lugares deste
-   * arquivo que só querem saber "em quem estou travado".
-   *
-   * Ele tem `set` porque três desses lugares SOLTAM a trava (o alvo saiu da
-   * sala, o alvo morreu, eu morri), e escrever `null` é a forma mais legível de
-   * dizer isso. Qualquer outro valor é recusado de propósito: prender um alvo é
-   * uma decisão que passa por `alternarTrava`, que é quem sabe validar.
-   */
-  get lockId() {
-    return this.lock.id;
-  }
+  /* NÃO PROCURE `lockId` AQUI. Ele era o id do adversário preso pela tecla `R`,
+     e sumiu com ela — não existe mais estado "travado" neste arquivo.
 
-  set lockId(v) {
-    if (v === null) this.lock.soltar();
-  }
+     O que responde às mesmas perguntas hoje, e cada um a uma delas:
+       `this.lock.sob`        quem está sob o cursor (mira assistida)
+       `this.lock.alvoDeAtaque()`  em quem os projéteis miram
+       `this.lock.noPainel`   quem a placa do canto está mostrando
+     Ver `src/namek/lockon.js` e o bloco `lock` do config. */
 
   nomeDe(id) {
     if (id === this.myId) return this.myName;
@@ -880,27 +1375,51 @@ export class NamekGame {
        aparece como a seta tremendo contra a borda. */
     cam.updateMatrixWorld();
 
-    for (const r of this.remotes.byId.values()) {
+    /* `mirados()` e não `remotes`: o CHEFE entra na bússola pela mesma porta que
+       o pôs na mira. Ele é o único corpo do modo que o jogador precisa achar sem
+       nunca tê-lo visto — e o que o pedido cobra é justamente isto: *"deve ficar
+       um aviso visual no Freeza para saber onde ele está."* */
+    for (const r of this.mirados()) {
       if (r.down) continue;
+      const chefe = r.boss === true;
       const p = r.pose;
       const dx = p.x - c.x;
       const dy = p.y - c.y;
       const dz = p.z - c.z;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (d < PINO_DE) continue;
+      /* A régua de distância vale para GENTE. O chefe tem outra (logo abaixo,
+         depois da projeção), e ela não é de distância: é de estar ou não no
+         quadro. */
+      if (!chefe && d < PINO_DE) continue;
 
       const n = lista.length;
       let m = this._pinoBanco[n];
       if (!m) {
-        m = this._pinoBanco[n] = { angulo: null, x: 0, y: 0, dist: 0, cor: null, travado: false, forca: 0 };
+        m = this._pinoBanco[n] = {
+          angulo: null, x: 0, y: 0, dist: 0, cor: null, travado: false, forca: 0,
+          boss: false, nome: "",
+        };
       }
 
       /* O PEITO, e não os pés: o anel tem de cair sobre o corpo, e mirar nos
-         pés o deixaria pendurado meio metro abaixo de quem ele circula. */
+         pés o deixaria pendurado meio metro abaixo de quem ele circula. O do
+         chefe é mais alto (2,24 m de corpo contra 1,78 m). */
       const v = this._pinoV;
-      v.set(p.x, p.y + NAMEK.fighter.chest, p.z).project(cam);
+      v.set(p.x, p.y + (chefe ? NAMEK.freeza.peito : NAMEK.fighter.chest), p.z).project(cam);
       const atras = v.z > 1;
       const naTela = !atras && Math.abs(v.x) <= 0.95 && Math.abs(v.y) <= 0.95;
+      /* A REGRA DO CHEFE, e ela divide o trabalho com o outro marcador em vez de
+       * duplicá-lo:
+       *
+       *   NA TELA  → o anel magenta com o nome, em volta do corpo (`setAneis`);
+       *   FORA     → a seta na borda, aqui, a QUALQUER distância.
+       *
+       * Sem a segunda metade, perder o Freeza de vista era perdê-lo — ele voa a
+       * 118 m/s e teleporta 46 m por salto, então "atrás de você" é o estado
+       * mais comum da luta e o mais caro de não saber. E sem a divisão, os dois
+       * marcadores desenhariam no mesmo corpo ao mesmo tempo, que é a tela
+       * dizendo duas vezes a mesma coisa por cima de si mesma. */
+      if (chefe && naTela) continue;
       if (naTela) {
         m.angulo = null;
         m.x = v.x;
@@ -927,7 +1446,9 @@ export class NamekGame {
          * direita do meu olhar" e `y` é "quanto está acima", nas unidades do
          * mundo. O ângulo entre eles é o rumo verdadeiro, em qualquer posição,
          * inclusive atrás. */
-        const q = this._pinoV.set(p.x, p.y + NAMEK.fighter.chest, p.z);
+        const q = this._pinoV.set(
+          p.x, p.y + (chefe ? NAMEK.freeza.peito : NAMEK.fighter.chest), p.z,
+        );
         q.applyMatrix4(cam.matrixWorldInverse);
         /* O único ponto sem rumo é o que cai exatamente sobre o eixo do olhar,
            e ele quase não existe na prática: a mira é no PEITO, um metro e
@@ -941,8 +1462,18 @@ export class NamekGame {
 
       m.dist = Math.round(d);
       m.cor = r.color;
-      m.travado = r.id === this.lockId;
-      m.forca = Math.min(1, (d - PINO_DE) / (PINO_CHEIO - PINO_DE));
+      /* O PINO DESTACADO é o de quem está sob o cursor, e não mais o do alvo
+         travado (que deixou de existir). É a mesma promessa em outro lugar da
+         tela: o pino aceso e o círculo aceso são a mesma pessoa, e é nela que o
+         próximo tiro vai. */
+      m.travado = r.id === this.lock.sob;
+      m.boss = chefe;
+      m.nome = chefe ? (r.name ?? NAMEK.freeza.nome) : "";
+      /* O CHEFE NÃO DESBOTA. A rampa existe para o pino de gente nascer e morrer
+         suave conforme a distância — o dele não tem distância que o justifique:
+         ou ele está fora do quadro, e aí é a informação mais urgente da tela, ou
+         não há pino nenhum. */
+      m.forca = chefe ? 1 : Math.min(1, (d - PINO_DE) / (PINO_CHEIO - PINO_DE));
       lista.push(m);
     }
 
@@ -952,7 +1483,87 @@ export class NamekGame {
        transição de opacidade recomeça do zero em toda troca. Ordenando por
        distância, quem está perto fica ancorado nos primeiros nós. */
     lista.sort(ordemDoPino);
+    /* E O CHEFE FICA NO PRIMEIRO NÓ, sempre — fora da ordenação por distância.
+     *
+     * Pelo mesmo argumento do parágrafo acima, levado a sério: o pino dele é o
+     * único que carrega TEXTO próprio ("FREEZA · 240 m") e uma classe própria, e
+     * ele se aproxima e se afasta o tempo todo. Deixado na ordem por distância,
+     * ele trocaria de nó do DOM várias vezes por minuto, e a cada troca o rótulo
+     * e o estilo do chefe saltariam para o pino de outra pessoa por um quadro.
+     * Ancorado no índice 0, ele é sempre o mesmo elemento. */
+    for (let i = 1; i < lista.length; i++) {
+      if (!lista[i].boss) continue;
+      const chefe = lista[i];
+      for (let k = i; k > 0; k--) lista[k] = lista[k - 1];
+      lista[0] = chefe;
+      break;
+    }
     return lista;
+  }
+
+  /**
+   * A TELA DO FIM — a contagem, os metros que faltam e a seta do portal.
+   *
+   * *"Deve ter um indicativo no céu para o lugar que eles têm que voar para
+   * escapar do planeta e quantos metros faltam."* A coluna de luz é do cenário
+   * (`world/fuga.js`); o que se resolve aqui é a metade que o cenário não
+   * consegue dizer — o número, a barra e o rumo de quem está olhando para o
+   * outro lado.
+   *
+   * Depois do HUD e depois da câmera, como a bússola e pelo mesmo motivo: ela
+   * projeta pela lente DESTE quadro, e a lente foi resolvida lá em cima.
+   */
+  telaDoFim(dt) {
+    const F = this.fim;
+    const ativo = F.fase === FASE.CONTAGEM || F.fase === FASE.EXPLODINDO;
+
+    const h = this._fimHud;
+    h.ativo = ativo;
+    h.segundos = F.restante;
+    h.metros = F.metros;
+    h.fracao = F.fracaoDaFuga;
+    h.altitude = F.altitude;
+    h.altitudeAlvo = F.altitudeAlvo;
+    h.escapou = F.euEscapei;
+    /* As duas linhas de texto mudam quando você já está do lado de fora: a
+       contagem continua valendo (o planeta ainda vai explodir, e é o que você
+       veio ver), mas a instrução deixou de ser sua. */
+    h.rotulo = F.euEscapei ? "NAMEKUSEI VAI EXPLODIR" : "O PLANETA VAI EXPLODIR";
+    h.sub = F.euEscapei ? "VOCÊ ESTÁ FORA — ASSISTA" : "SUBA ATÉ O RASGO DE LUZ";
+    this.fugaHud.set(h);
+
+    /* O MARCADOR. Some depois de escapar: atravessado o portal, ele fica atrás e
+       abaixo, e uma seta apontando para a saída de onde você já saiu é a única
+       coisa da tela que não significa mais nada. */
+    if (!ativo || F.euEscapei) {
+      this.fugaHud.setMarca(undefined);
+      this.fugaHud.update(dt);
+      return;
+    }
+
+    const cam = this.camera3;
+    /* Como na bússola: a lente andou neste quadro e `project` lê
+       `matrixWorldInverse`, que só é recalculada dentro do `render`. */
+    cam.updateMatrixWorld();
+    const v = this._fimV.set(F.portal.x, F.portal.y, F.portal.z).project(cam);
+    const atras = v.z > 1;
+    const naTela = !atras && Math.abs(v.x) <= 0.95 && Math.abs(v.y) <= 0.95;
+
+    if (naTela) {
+      this.fugaHud.setMarca(null, v.x, v.y, F.metros);
+    } else {
+      /* O rumo sai do ESPAÇO DA CÂMERA e não do NDC, e este caso é o exemplo
+         extremo do que `bussola` documenta: o portal está a dois quilômetros de
+         altura sobre o centro do mapa, então para quem voa rente ao chão na
+         borda ele fica quase no plano da lente — exatamente onde a projeção
+         divide por um número que tende a zero e devolve um rumo inventado. */
+      const q = this._fimV.set(F.portal.x, F.portal.y, F.portal.z);
+      q.applyMatrix4(cam.matrixWorldInverse);
+      const ang = q.x * q.x + q.y * q.y < 1e-6 ? Math.PI / 2 : Math.atan2(q.y, q.x);
+      this.fugaHud.setMarca(ang, 0, 0, F.metros);
+    }
+
+    this.fugaHud.update(dt);
   }
 
   /** Ângulo na tela de onde veio uma pancada — alimenta a marca de dano. */
@@ -964,43 +1575,55 @@ export class NamekGame {
 
   /* -------------------------------------------------------------- mira ---- */
 
-  /**
-   * Escolhe o alvo travado, ou o solta.
-   *
-   * Trava no que está mais perto do CENTRO DA TELA, não no mais próximo no
-   * espaço: o jogador aponta para quem ele quer brigar, e o mais próximo é
-   * frequentemente alguém às costas dele.
-   */
-  /**
-   * O `R`: trava, TROCA ou solta — nesta ordem, e num gesto só.
-   *
-   * A escolha e a troca moram em `LockOn.alternar`; aqui fica o que é do jogo e
-   * não do sistema: o som, o retículo e o aviso na tela. Ver o cabeçalho de
-   * `lockon.js` para por que a mesma tecla faz as três coisas (resumo: o mapa
-   * de teclas deste modo é fechado a pedido, e a regra "troca enquanto houver
-   * para quem trocar, solta quando acaba a fila" resolve o §12 sem inventar
-   * tecla nenhuma).
-   */
-  alternarTrava() {
-    const origem = this._origemDaTrava();
-    const r = this.lock.alternar(
-      this.remotes.byId.values(),
-      origem,
-      this.cam.aimDirection(),
-    );
-    if (r === "nada") return;
+  /* A TRAVA MANUAL (`alternarTrava`, na tecla `R`) morava aqui e foi removida a
+     pedido — *"pode remover o atalho que dá lock-in no teclado (R)"*. Com ela
+     saíram o `pontoDaTrava` e o `anelDaTrava`, que só existiam para servi-la: o
+     primeiro dizia à câmera e ao tiro onde estava o alvo preso, o segundo
+     desenhava o círculo vermelho em volta dele.
 
-    if (r === "soltou") {
-      this.hud.setCrosshair("livre");
-      this.hud.setLockRing(null);
-      return;
-    }
-    this.audio.travou();
-    this.hud.setCrosshair("travado");
-    if (r === "trocou") this.hud.toast(`alvo: ${this.nomeDe(this.lock.id)}`);
+     Quem designa alvo hoje é o CURSOR, e ele não precisa de gesto nenhum — ver
+     `LockOn` e o bloco `lock` do config para a decisão inteira. */
+
+  /**
+   * A VIDA DO ALVO PARA O PAINEL — quem `LockOn.noPainel` escolheu, ou null.
+   *
+   * As duas razões de a placa aparecer (você acertou alguém / o cursor está em
+   * cima de alguém) já foram resolvidas lá; aqui só se traduz um id em nome, cor
+   * e vida. O rascunho é reaproveitado: a placa é escrita a 60 Hz e um objeto
+   * novo por quadro seria lixo criado no meio da briga.
+   *
+   * A VIDA VEM DE `RemoteFighters`, e isso é a metade do pedido que ninguém vê:
+   * aquele registro é atualizado pelo `NS2C.VITALS` (10 Hz, todo mundo) e por
+   * TODO `NS2C.HURT`, inclusive os que não têm nada a ver comigo. É por isso que
+   * a barra do alvo desce quando quem o acerta é um terceiro — *"a vida dinâmica
+   * diminui conforme o player perde vida, seja para ele ou para outros
+   * players"*.
+   */
+  dadosDoAlvo() {
+    const id = this.lock.noPainel;
+    if (id === null || this.down) return null;
+    const r = this.remotes.get(id);
+    /* Saiu da sala entre um quadro e outro: a placa some, e é a resposta certa —
+       não há vida nenhuma a mostrar de quem não está mais aqui. */
+    if (!r) return null;
+
+    const a = this._alvoHud;
+    a.id = r.id;
+    a.nome = r.name;
+    a.cor = r.color;
+    a.vida = r.health;
+    /* O teto do ADVERSÁRIO também é variável — ele pode estar transformado, e o
+       bit 16 da pose dele já diz. Com o teto fixo, um Super Saiyajin com 130 de
+       160 apareceria com a barra estourada em 100 %, que é a leitura oposta à
+       verdadeira (ele está em 81 % e ainda dá para derrubá-lo). */
+    a.vidaMax = vidaMaxima(r.ssj);
+    /* O número só sai quando o golpe foi MEU (e é o `LockOn` quem sabe disso —
+       ele zera o dano quando a placa está no ar por causa da mira). */
+    a.dano = this.lock.danoNaTela();
+    return a;
   }
 
-  /** O peito de quem está travando — a origem de toda medida da trava. */
+  /** O peito de quem mira — a origem de toda medida da mira assistida. */
   _origemDaTrava() {
     const c = this.controller.position;
     const o = this._pontoTrava;
@@ -1008,63 +1631,6 @@ export class NamekGame {
     o.y = c.y + NAMEK.fighter.chest;
     o.z = c.z;
     return o;
-  }
-
-  /** O ponto do alvo travado, ou null. Rascunho do sistema: não guarde. */
-  pontoDaTrava() {
-    return this.lock.ponto();
-  }
-
-  /**
-   * O ANEL da trava, em coordenadas de tela — o que o HUD desenha.
-   *
-   * O RAIO SAI DA ÓTICA e não de um número fixo, e é isso que faz o anel
-   * descrever uma pessoa em vez de ser um adesivo: um lutador de 1,78 m a `d`
-   * metros ocupa `1,78 / d` radianos, e a tela inteira ocupa
-   * `2·tan(fov/2)` na mesma unidade de plano de projeção. A conta abaixo é essa
-   * razão virada em pixels, com um piso — a partir de umas centenas de metros o
-   * corpo tem meia dúzia de pixels e o anel precisa continuar visível para o
-   * jogador saber para onde virar.
-   *
-   * Ele é generoso de propósito (1,9 × a meia-altura): um anel colado no corpo
-   * some atrás do próprio adversário quando ele está de frente. O que se quer é
-   * um círculo EM VOLTA dele, que é o pedido literal.
-   */
-  anelDaTrava() {
-    if (this.lock.id === null || this.down) return null;
-    const ndc = this.lock.naTela();
-    if (!ndc) return null;
-
-    const cam = this.camera3;
-    const alturaMundo = NAMEK.fighter.height * 1.9;
-    const d = Math.max(1, this.lock.separacao);
-    /* Metade da altura da tela, em unidades de mundo, à distância do alvo. */
-    const meiaTela = Math.tan((cam.fov * Math.PI) / 360) * d;
-    const raio = ((alturaMundo * 0.5) / meiaTela) * (window.innerHeight * 0.5);
-
-    const a = this._anelHud;
-    /* FORA DO QUADRO o anel é fixado na BORDA por onde o alvo saiu. Deixá-lo na
-       posição projetada seria pior que escondê-lo: atrás da lente a projeção
-       espelha, e o anel apareceria do lado oposto ao adversário — apontando o
-       jogador para longe de quem ele está caçando, exatamente quando ele mais
-       precisa da informação. */
-    if (this.lock.foraDoQuadro) {
-      const ex = ndc.atras ? -ndc.x : ndc.x;
-      const ey = ndc.atras ? -ndc.y : ndc.y;
-      const m = Math.max(Math.abs(ex), Math.abs(ey), 1e-3);
-      a.x = (ex / m) * 0.92;
-      a.y = (ey / m) * 0.92;
-      /* Atrás da lente não há tamanho aparente honesto: um raio fixo pequeno é
-         a resposta que não inventa nada. */
-      a.raio = 22;
-    } else {
-      a.x = ndc.x;
-      a.y = ndc.y;
-      a.raio = raio;
-    }
-    a.distante = this.lock.distante;
-    a.perdendo = this.lock.foraDe > 0;
-    return a;
   }
 
   /* ------------------------------------------------------------ disparos -- */
@@ -1080,11 +1646,6 @@ export class NamekGame {
     if (!this.ki.gastar(NAMEK.ki.blastCost)) return;
 
     this.blastCooldown = 1 / NAMEK.blast.rate;
-    /* ATACOU: arma a janela de assistência forte (§8 do pedido). A janela existe
-       porque a rajada sai a 6 Hz e a assistência precisa sobreviver ao intervalo
-       entre dois tiros — sem ela, a correção duraria um quadro e não corrigiria
-       nada. Ver `LockOn.atacou`. */
-    this.lock.atacou();
     const mao = this.nextHand;
     this.nextHand = mao === 0 ? 1 : 0;
 
@@ -1097,7 +1658,7 @@ export class NamekGame {
     this.me.lastHand = mao;
     this.me.handPose = 1;
     const origem = this.me.handPoint(mao);
-    const dir = this.direcaoDeTiro(origem);
+    const dir = this.direcaoDeTiro();
     const alvo = this.escolherAlvoDaBola(origem, dir);
 
     const id = this.blastSeq++;
@@ -1109,6 +1670,12 @@ export class NamekGame {
       hand: mao,
       target: alvo,
       local: true,
+      /* Dourada em Super Saiyajin — "todos os poderes que ele solta ficam
+         amarelos", e a bolinha é o que ele solta o tempo todo. O desconto de ki
+         desta rajada não está aqui: quem o aplica é o `KiMeter`, no `gastar`
+         acima, e é por isso que ele vale também para a onda e para a guarda sem
+         uma linha em cada uma. */
+      ssj: this.ssj.aceso,
     });
     this.audio.rajada(origem, this.myId);
 
@@ -1123,66 +1690,67 @@ export class NamekGame {
   }
 
   /**
-   * Para onde a bola sai.
+   * Para onde o tiro sai: **pela MIRA, sempre.**
    *
-   * Com alvo travado ela sai na direção DELE, não do retículo — é o que o BT3
-   * faz, e é o que torna o combate aéreo jogável: mirar à mão em alguém que se
-   * move a 64 m/s enquanto você também se move não é habilidade, é sorte.
+   * Houve um segundo caminho aqui — com a tecla `R` apertada, o tiro saía na
+   * direção exata do alvo preso, em vez do eixo óptico. Ele saiu com a tecla, e
+   * a perda é menor do que parece: quem designa alvo hoje é o cursor, e o cursor
+   * já está praticamente em cima do adversário quando a mira assistida o elege
+   * (a zona é apertada — `NAMEK.lock.mira.raioTela`). A correção que sobrava
+   * para o caso travado é hoje a PERSEGUIÇÃO do próprio projétil (§6.1), que é
+   * limitada de propósito e é o que perdoa a pontaria sem tirá-la do jogador.
    *
-   * Sem trava, sai pela mira. E em nenhum dos dois casos a bola procura sozinha
-   * — a perseguição dela é fraca e limitada, ver o §6.1 do plano.
+   * O método continua existindo, em vez de as duas chamadas virarem
+   * `cam.aimDirection()` direto, porque ele é o ÚNICO lugar em que se decide
+   * para onde um tiro sai — e a próxima pessoa que quiser mexer nisso (uma
+   * finalização, um duelo, um alvo designado que volte) precisa ter um lugar só
+   * para procurar.
    */
-  /**
-   * Para onde o tiro sai.
-   *
-   * Com trava ele sai na direção do ALVO — é o que o BT3 faz, e é o que torna o
-   * combate aéreo jogável: mirar à mão em alguém que se move a 64 m/s enquanto
-   * você também se move não é habilidade, é sorte. É também o §10 do pedido
-   * inteiro: *"o jogador está voando para a esquerda, o inimigo está à direita,
-   * ele continua voando para a esquerda mas dispara um Ki Blast direcionado ao
-   * inimigo."* Nada aqui olha para onde o corpo está indo.
-   *
-   * MAS NÃO É UM MÍSSIL PERFEITO, e essa é a diferença que este método passou a
-   * fazer. `LockOn.alvoDeAtaque` recusa o alvo que está fora do quadro: quem
-   * saiu de vista continua TRAVADO (o relógio da perda não venceu, a câmera
-   * ainda o procura) e deixa de receber tiro dirigido. O §9 é explícito sobre
-   * isso — *"deve existir uma margem de erro… o inimigo ainda pode esquivar"* —
-   * e um tiro que sai pelas costas do atirador atrás de alguém que ele não vê é
-   * o oposto de assistência.
-   *
-   * Sem trava (ou com o alvo fora de vista), sai pela mira, e a perseguição
-   * fraca de cada projétil (§6.1) continua sendo tudo o que perdoa a pontaria.
-   */
-  direcaoDeTiro(origem) {
-    const trava = this.lock.alvoDeAtaque() !== null ? this.pontoDaTrava() : null;
-    if (trava) {
-      const dx = trava.x - origem.x;
-      const dy = trava.y - origem.y;
-      const dz = trava.z - origem.z;
-      const d = Math.hypot(dx, dy, dz) || 1;
-      return { x: dx / d, y: dy / d, z: dz / d };
-    }
+  direcaoDeTiro() {
     return this.cam.aimDirection();
   }
 
   /**
    * Quem a bola vai perseguir — decidido AQUI, no disparo, e nunca revisto.
    *
-   * O alvo travado tem prioridade. Sem trava, o mais alinhado com o tiro dentro
-   * de `acquire` metros. Uma bola que troca de alvo no meio do voo lê como bug,
-   * e é por isso que este valor viaja na mensagem em vez de cada cliente
-   * recalculá-lo (ver o comentário de `NC2S.BLAST`).
+   * Quem está sob o CURSOR tem prioridade — é a mira assistida, e ela é a
+   * intenção declarada do jogador no instante em que ele apertou o botão. Sem
+   * ninguém sob o cursor, vale o mais alinhado com o tiro dentro de `acquire`
+   * metros. Uma bola que troca de alvo no meio do voo lê como bug, e é por isso
+   * que este valor viaja na mensagem em vez de cada cliente recalculá-lo (ver o
+   * comentário de `NC2S.BLAST`).
    */
+  /**
+   * **Tudo em que a mira pode pegar: os lutadores remotos E O BOSS.**
+   *
+   * Os três seletores de alvo deste arquivo — a bola, o especial e a trava —
+   * varriam `remotes.byId`, que é a lista de LUTADORES. O Freeza não é um: ele
+   * não entra em `todos()` na sala e não chega pelo `NS2C.JOIN`. O resultado era
+   * o defeito descrito em `BossSystem.candidato()`, e ele vale repetir aqui
+   * porque é aqui que ele nascia: **nenhum poder do jogador curvava na direção
+   * do boss**, e o Kamehameha — que só curva com alvo designado — saía reto
+   * contra ele sempre. Medido: 7,9 % de acerto na rajada contra 64,2 % com a
+   * perseguição ligada.
+   *
+   * Um gerador, e não uma lista montada: `remotes.byId.values()` já era um
+   * iterador, e o que se acrescenta é no máximo um objeto que o `BossSystem`
+   * mantém reusado. Zero alocação por quadro além do próprio iterador, que já
+   * existia.
+   */
+  *mirados() {
+    yield* this.remotes.byId.values();
+    const boss = this.boss.candidato();
+    if (boss) yield boss;
+  }
+
   escolherAlvoDaBola(origem, dir) {
-    /* `alvoDeAtaque` e não `lockId`: um alvo travado mas fora de vista não
-       recebe perseguição. Ver `direcaoDeTiro`, que tem o argumento. */
     const travado = this.lock.alvoDeAtaque();
     if (travado !== null) return travado;
     const H = NAMEK.blast.homing;
     const cosCone = Math.cos((H.cone * Math.PI) / 180);
     let melhor = null;
     let melhorCos = cosCone;
-    for (const r of this.remotes.byId.values()) {
+    for (const r of this.mirados()) {
       if (r.down) continue;
       const dx = r.pose.x - origem.x;
       const dy = r.pose.y + NAMEK.fighter.chest - origem.y;
@@ -1214,7 +1782,8 @@ export class NamekGame {
     const cosCone = Math.cos((H.cone * Math.PI) / 180);
     let melhor = null;
     let melhorCos = cosCone;
-    for (const r of this.remotes.byId.values()) {
+    // O BOSS entra na varredura junto com os lutadores. Ver `mirados()`.
+    for (const r of this.mirados()) {
       if (r.down) continue;
       const dx = r.pose.x - origem.x;
       const dy = r.pose.y + NAMEK.fighter.chest - origem.y;
@@ -1243,29 +1812,29 @@ export class NamekGame {
       this.hud.toast("ki insuficiente — segure C para carregar");
       return;
     }
-    this.ki.gastarTudo();
-    /* A janela de assistência também vale para o especial, e vale principalmente
-       para ele: a direção é travada no início da pose, então o rumo do corpo no
-       instante do disparo é o rumo do golpe pelos próximos 2,4 s. */
-    this.lock.atacou();
+    /* `gastarEspecial` e não `gastarTudo`: em Super Saiyajin o golpe custa um
+       terço da barra, e são **três com uma carga** (ver `NAMEK.ssj`). O limiar
+       de `podeEspecial` logo acima já caiu junto — os dois leem a mesma chave
+       `ki.ssj`, e é ela que faz esta função continuar não sabendo do assunto. */
+    this.ki.gastarEspecial();
 
     const origem = this.me.chestPoint();
-    const dir = this.direcaoDeTiro(origem);
+    const dir = this.direcaoDeTiro();
     /* O ALVO DO GOLPE QUE PERSEGUE, escolhido AGORA e nunca revisto.
      *
      * Todos os quatro especiais têm `homing` hoje — o pedido foi literal ("todos
      * os poderes devem perseguir o player, alguns perseguem mais, outros
-     * menos"). A trava manual (a tecla R) ganha de tudo, porque ela é a intenção
-     * declarada do jogador; sem trava, vale o mais alinhado com a mira dentro do
-     * alcance de aquisição do golpe, que é bem maior que o de uma bola de ki
-     * (300 m contra 50).
+     * menos"). Quem está sob o CURSOR ganha de tudo, porque é a intenção
+     * declarada do jogador; sem ninguém sob o cursor, vale o mais alinhado com a
+     * mira dentro do alcance de aquisição do golpe, que é bem maior que o de uma
+     * bola de ki (300 m contra 50).
      *
      * O KAMEHAMEHA É A EXCEÇÃO, e ela é o pedido: "para fazer curva, ele só faz
      * curva quando o player está travado o foco no inimigo". `soTrava` corta a
-     * aquisição automática — sem a tecla R ele sai sem alvo, e sem alvo ele é o
-     * feixe reto que sempre foi. É uma regra boa por si só: a trava vira o PREÇO
-     * da curvatura, e quem quiser o gancho tem de se comprometer com alguém
-     * antes de gastar a barra inteira.
+     * aquisição automática — sem ninguém designado ele sai sem alvo, e sem alvo
+     * ele é o feixe reto que sempre foi. Com a tecla `R` removida, o preço da
+     * curvatura deixou de ser um compromisso e passou a ser pontaria: é preciso
+     * estar apontando para alguém no instante em que se gasta a barra inteira.
      *
      * É a mesma regra do §6.1 aplicada a um golpe caro, e ela precisa ser
      * resolvida aqui e viajar na mensagem: dois clientes escolhendo sozinhos
@@ -1289,8 +1858,17 @@ export class NamekGame {
        o fim dele permitiria carregar olhando para o chão e disparar tendo girado
        para o céu, o que apaga o custo de se comprometer — que é a única coisa
        que o windup existe para cobrar. */
-    this.powers.spawnSpecial({ owner: this.myId, kind, origem, dir, target: alvo, local: true });
-    this.audio.especial(origem, kind);
+    /* `ssj` é o que faz o golpe sair DOURADO — ele escolhe a definição do golpe
+       lá dentro (ver `PowerSystem.spawnSpecial`), e daí a cor alcança as doze
+       leituras de `.cor` do feixe, da esfera e do disco sem tocar em nenhuma. */
+    this.powers.spawnSpecial({
+      owner: this.myId, kind, origem, dir, target: alvo, local: true, ssj: this.ssj.aceso,
+    });
+    /* O `true` é "este golpe é MEU", e ele só muda uma coisa no áudio: a
+       sustentação do meu Kamehameha vem do loop sem posição (ver
+       `NamekAudio.update`), então tocar também a versão posicional dele seria o
+       mesmo rugido duas vezes. Ver `NamekAudio.especial`. */
+    this.audio.especial(origem, kind, true);
     this.net.send(NC2S.SPECIAL, {
       kind,
       o: [origem.x, origem.y, origem.z],
@@ -1298,6 +1876,35 @@ export class NamekGame {
       target: alvo,
       w: this.net.serverTime,
     });
+
+    /* ------------------------------------------------- o tiro no planeta --
+     *
+     * **Só o Kamehameha**, e é o pedido literal. Nenhum outro especial encosta
+     * nos dois corpos: o Kienzan e o Galick Gun perseguem gente e a Genki Dama é
+     * uma bola que cai — o feixe é o único golpe do jogo com escala para a
+     * pergunta fazer sentido, exatamente como a Terra do arqueiro só responde ao
+     * Kamehameha de lá.
+     *
+     * O teste é feito AQUI e não dentro de `powers/beam.js` por três razões, e
+     * nenhuma é de organização:
+     *
+     *   1. o feixe alcança 1.860 m e o planeta está a 2.400 — a cabeça NUNCA
+     *      chega nele. Não há interseção a acontecer em voo, e esperá-la seria
+     *      esperar para sempre;
+     *   2. a direção que vale é a TRAVADA no disparo, e ela é conhecida aqui,
+     *      no quadro em que é decidida (`beam.js` a recebe pronta);
+     *   3. a sala confere contra essa mesma direção (`NamekPlanetas.pedido`), e
+     *      testar de outro vetor deste lado só produziria acertos recusados sem
+     *      explicação.
+     *
+     * O planeta não cai agora: a sala espera `NAMEK.planetas.viagem` segundos
+     * antes de anunciar. O feixe vai embora, o jogador desiste de esperar, e o
+     * céu acende. Ver o comentário de `viagem` no config.
+     */
+    if (kind === "kamehameha") {
+      const planeta = this.world.planetaNaMira(origem, dir);
+      if (planeta) this.net.send(NC2S.PLANET_HIT, { id: planeta });
+    }
   }
 
   onda() {
@@ -1360,6 +1967,52 @@ export class NamekGame {
       if (falta <= 0 && acoes.respawn) this.net.send(NC2S.RESPAWN, {});
     }
 
+    /* ------------------------------------------------ SUPER SAIYAJIN ---
+     *
+     * Antes da guarda, do ki e do controle, e a ordem é a mesma lógica do bloco
+     * do menu logo acima: os três segundos de transformação CALAM tudo o que
+     * vem depois, e resolvê-los no fim deixaria um quadro de guarda, de carga e
+     * de tiro passando por baixo do grito.
+     *
+     * O alerta é reavaliado por quadro porque as três condições dele mudam por
+     * quadro (a vida cai, a vida sobe com o renascimento, o chefe entra e sai).
+     * `setAvisoSSJ` sai na primeira linha quando o estado já bate, então isto
+     * custa a pergunta e mais nada. */
+    if (acoes.ssjPressed) this.pedirSSJ();
+
+    /* BANCADA: Alt+K mata o Freeza. Só PEDE — quem mata é a sala, e ela mata
+       pelo caminho de morte de verdade, para o `aoMorrer` disparar e a fuga
+       começar. Ver `NamekFreeza.matarPorTeste`. Sem boss em campo o pedido é
+       inócuo do outro lado, então não há o que conferir aqui. */
+    if (acoes.matarBossPressed) this.net.send(NC2S.BOT, { boss: "matar" });
+    const ssjEvento = this.ssj.update(dt);
+    if (ssjEvento === "explodiu") this.estourarSSJ();
+    else if (ssjEvento === "cancelou") {
+      /* A sala não confirmou em três segundos: a previsão se desfaz. Ver o
+         cabeçalho de `character/ssj.js` — é o mesmo contrato do especial, que
+         também é recusado em silêncio, com a diferença de que aqui a recusa
+         precisa de uma palavra: o jogador viu o corpo dele fazer a animação
+         inteira. */
+      this.desligarSSJ();
+      this.hud.toast("a transformação não foi aceita");
+    }
+    /* A barra do Super Saiyajin é a mesma barra; o que muda é o preço de tudo o
+       que se faz com ela. A chave é escrita todo quadro (e não só na virada)
+       porque ela é a única ligação entre a máquina de estados e a economia, e um
+       caminho de saída que esquecesse de zerá-la deixaria a barra descontada
+       para sempre. Ver `KiMeter.ssj`. */
+    this.ki.ssj = this.ssj.aceso;
+    const podeSSJ = this.contextoSSJ();
+    this.hud.setAvisoSSJ(podeSSJ);
+    /* O SOM DO AVISO, e ele sai só na SUBIDA da borda.
+       O aviso é reavaliado por quadro (é o comentário logo acima), então tocar
+       a cada quadro em que a condição vale seriam sessenta bipes por segundo. O
+       que interessa é o instante em que ela passa a valer — a vida cruzou os
+       30 %, ou o chefe acabou de entrar — porque é aí que a informação é nova.
+       Ver `NamekAudio.ssjPronto`. */
+    if (podeSSJ && !this._avisouSSJ) this.audio.ssjPronto?.();
+    this._avisouSSJ = podeSSJ;
+
     /* -------------------------------------------------------- defesa --- */
     /* A GUARDA, resolvida ANTES do ki e do controle, porque as duas coisas
      * dependem dela: ela come da barra e ela corta a velocidade.
@@ -1373,7 +2026,15 @@ export class NamekGame {
      * pose. Não é trabalho repetido: é a mesma divisão de sempre — o cliente
      * prevê para a barra dele responder no quadro, a sala decide para a barra
      * de todo mundo ser a mesma. */
-    const querDefender = acoes.guard === true && !this.down && !this.controller.caido && !this.casting;
+    /* E ninguém defende NO MEIO DA PRÓPRIA TRANSFORMAÇÃO: os braços estão
+       cruzados acima da cabeça, o corpo está preso, e ele já é invencível — uma
+       guarda ali não protegeria de nada e só drenaria a barra. */
+    const querDefender =
+      acoes.guard === true &&
+      !this.down &&
+      !this.controller.caido &&
+      !this.casting &&
+      !this.ssj.transformando;
     const defendendo = querDefender && this.ki.valor > 0;
     if (defendendo) this.ki.drenar(NAMEK.guard.drain, dt);
     this.controller.defendendo = defendendo;
@@ -1382,7 +2043,17 @@ export class NamekGame {
     /* ------------------------------------------------------------ ki --- */
     /* Defender e carregar são exclusivos: as duas mãos estão ocupadas de jeitos
        opostos, e a sala somaria o ganho de uma ao dreno da outra. */
-    this.ki.carregando = acoes.charge && !this.down && !this.casting && !defendendo && !this.controller.caido;
+    this.ki.carregando =
+      acoes.charge &&
+      !this.down &&
+      !this.casting &&
+      !defendendo &&
+      !this.controller.caido &&
+      /* Nem carregar durante o grito: a pose de carga e a de transformação são
+         as duas mais parecidas do jogo (as duas plantam os pés e cerram os
+         punhos), e deixá-las coexistir daria um corpo no meio do caminho entre
+         elas — além de encher a barra de graça durante uma invencibilidade. */
+      !this.ssj.transformando;
     this.ki.update(dt);
     if (this.ki.encheuAgora) {
       this.hud.toast("ki cheio — especial pronto");
@@ -1413,32 +2084,32 @@ export class NamekGame {
      * A trava dura o que a POSE dura (`duracaoDaPose`), não o que o projétil
      * dura: quem segura um feixe fica preso enquanto ele estiver aceso, e quem
      * ARREMESSA um disco fica preso só a fração de segundo do arremesso. */
-    /* A ASSISTÊNCIA DE MIRA — a trava ajeitando o rumo, antes de o corpo andar.
-     *
-     * Ela usa o estado da trava do quadro ANTERIOR (a revalidação vem depois,
-     * junto com a câmera), e isso é aceitável pelo mesmo motivo de sempre: um
-     * quadro a 60 Hz é 16 ms, e o que ela corrige são graus por segundo. Trazer
-     * `lock.update` para cá custaria a matriz de câmera deste quadro, que ainda
-     * não existe — e é justamente a dependência circular que o §17 do pedido
-     * manda evitar.
-     *
-     * Quem está no meio de um especial não recebe assistência: a direção do
-     * golpe foi travada no início da pose (ver `soltarEspecial`), e girar o
-     * corpo depois disso mexeria no personagem sem mexer no feixe. */
-    if (!this.down && !this.casting && this.lock.id !== null && !this.lock.foraDoQuadro) {
-      const p = this.pontoDaTrava();
-      if (p) {
-        this.input.assistirMira(
-          acoes,
-          p,
-          this._origemDaTrava(),
-          this.lock.assistencia,
-          dt,
-        );
-      }
-    }
+    /* A ASSISTÊNCIA DE MIRA rodava aqui, girando o olhar do jogador em direção
+       ao alvo travado antes de o corpo andar. Foi embora com a tecla `R`: sem
+       trava não há alvo a que ela possa pertencer, e passá-la para a mira
+       assistida brigaria com o gesto que a mira assistida serve (varrer o mouse
+       por vários adversários). Ver o cabeçalho de `input.js`. */
 
-    this.controller.travado = this.casting !== null;
+    /* ------------------------------------------------------------- o fim ---
+     * O REGIME DE VOO, escrito ANTES do passo do controlador — e a ordem é a
+     * coisa toda: é ele que diz quanto vale o teto neste quadro (520 m em
+     * partida comum, 2 650 durante a fuga) e se ainda existe chão. Escrevê-lo
+     * depois daria um quadro de física com a régua do quadro anterior, e o
+     * quadro em que isso mais importa é justamente o da troca — o instante em
+     * que o jogador atravessa o portal.
+     *
+     * O `passo` vem antes por dependência: ele adianta o relógio da contagem e
+     * mede a altitude e a distância até o portal, que é o que `aplicarRegime` e
+     * o HUD leem em seguida. Ver `world/fuga.js`. */
+    this.fim.passo(dt, this.controller.position);
+    this.fim.aplicarRegime(this.controller);
+
+    /* O CORPO FICA PRESO NOS TRÊS SEGUNDOS, pelo mesmo mecanismo do especial e
+       pela mesma razão: o gesto é uma pose inteira, dos pés à cabeça, e um
+       lutador que sai voando no meio dela mostraria o X acima da cabeça
+       atravessando a arena a 64 m/s. Preso, ele fica onde plantou os pés — que é
+       exatamente onde a explosão do fim vai abrir o buraco. */
+    this.controller.travado = this.casting !== null || this.ssj.transformando;
     const pouso = this.down ? null : this.controller.update(dt, acoes, this.ki);
 
     /* O POUSO FORTE. Cratera, poeira e dano — é o pedido literal: "se o player
@@ -1459,36 +2130,30 @@ export class NamekGame {
       this.derrubarPorPerto(pouso.p, power);
     }
 
-    /* A TRAVA vem antes da câmera porque é ela que decide o enquadramento deste
-       quadro. O DISPARO vem depois. */
-    if (!this.down && acoes.lockPressed) this.alternarTrava();
-
-    /* A REVALIDAÇÃO da trava, e a escada de assistência. Ela roda com a matriz
-     * de câmera do quadro ANTERIOR — de propósito, e é a ordem certa: a câmera
-     * deste quadro ainda não foi resolvida (ela vem lá embaixo, depois da pose),
-     * e o que a trava pergunta à câmera é *"o alvo saiu do quadro?"*, que é uma
-     * pergunta sobre o que o jogador ACABOU DE VER. Um quadro de atraso num
-     * relógio de dois segundos e meio não muda nada; inverter a ordem para
-     * "consertar" isso criaria uma dependência circular entre os dois sistemas,
-     * que é exatamente o que o §17 do pedido manda não fazer.
+    /* A MIRA ASSISTIDA, resolvida com a matriz de câmera do quadro ANTERIOR — de
+     * propósito, e é a ordem certa: a câmera deste quadro ainda não foi resolvida
+     * (ela vem lá embaixo, depois da pose), e o que a mira pergunta à câmera é
+     * *"onde cada um cai na tela?"*, que é uma pergunta sobre o que o jogador
+     * ACABOU DE VER. Inverter a ordem para "consertar" um quadro de atraso a 60 Hz
+     * criaria a dependência circular que o §17 do pedido manda não fazer.
      *
-     * `manobra` é o freio do §8: quem está com entrada lateral ou vertical está
-     * manobrando de propósito, e não pode ser desvirado pela assistência. */
+     * É daqui que saem, no mesmo passo, três coisas que precisam concordar: o
+     * alvo dos projéteis, os círculos que o HUD acende e o painel de vida do
+     * adversário. Uma segunda varredura seria uma segunda oportunidade de elas
+     * discordarem. */
     if (this.down) {
       this.lock.soltar();
     } else {
       this.lock.update(dt, {
         origem: this._origemDaTrava(),
-        buscar: (id) => this.remotes.get(id),
-        /* A lista de candidatos: a mira assistida varre todo mundo por quadro
-           (ver `LockOn._sobAMira`), e é dessa varredura que saem tanto o alvo
-           dos projéteis quanto os círculos que o HUD desenha. */
-        candidatos: this.remotes.byId.values(),
+        /* O BOSS vai junto — e é esta linha que faz o Kamehameha curvar contra
+           ele. `alvoDeAtaque()` lê o que esta varredura escolheu, e o feixe só
+           curva quando há alvo designado (`soTrava`). Ver `mirados()`. */
+        candidatos: this.mirados(),
         camera: this.camera3,
         /* A proporção da tela, para a zona da mira ser um CÍRCULO em pixels e
            não uma elipse. Ver o comentário em `_sobAMira`. */
         aspecto: this.camera3.aspect,
-        manobra: acoes.strafe !== 0 || acoes.up !== 0,
       });
     }
 
@@ -1526,7 +2191,22 @@ export class NamekGame {
     this.me.specialFraction = this.casting ? this.casting.t / this.casting.dur : 0;
     this.me.specialIndex = this.casting ? this.casting.indice : -1;
     this.me.down = this.down;
-    this.me.invuln = agora < this.invulnUntil;
+    /* O ESTADO do Super Saiyajin, escrito todo quadro — é ele que vira o bit 16
+       da pose e chega a todas as outras telas. Escrever aqui, e não só na
+       virada, é a mesma disciplina do resto deste bloco: o `Fighter` é um
+       espelho do estado, e um espelho que só é atualizado em eventos é um
+       espelho que um evento perdido deixa mentindo para sempre. */
+    this.me.ssj = this.ssj.aceso;
+    /* A INVENCIBILIDADE DOS TRÊS SEGUNDOS entra pelo MESMO canal da
+       invulnerabilidade de nascimento, e isso não é atalho: as duas dizem a
+       mesma coisa ("nada acerta este corpo agora"), viajam no mesmo bit 2 e são
+       cobradas pelo mesmo `if` da sala (`aplicarDano`). Um segundo canal para a
+       mesma ideia seria um segundo lugar para esquecer de olhar.
+     *
+     * O efeito colateral é o PISCAR do renascimento aparecer durante o grito — e
+     * ele é bem-vindo: é o vocabulário que este jogo já usa para dizer
+     * "intocável", e o jogador do outro lado o lê sem precisar aprender nada. */
+    this.me.invuln = agora < this.invulnUntil || this.ssj.invencivel;
     /* O corpo caído vai para a rede pelo bit 4, e a queda de verdade quem a
        conta é o controlador: `derrubar` acendeu o relógio dele lá, e é ele que
        sabe quando o lutador se levanta. Escrever o estado a partir do relógio da
@@ -1560,14 +2240,27 @@ export class NamekGame {
     ac.velocity = c.velocity;
     ac.flying = c.flying;
     ac.boosting = c.boostBlend > 0.3;
-    this.cam.update(dt, ac, this.pontoDaTrava());
+    /* `null` E NÃO UM ALVO: **nada neste modo enquadra dois corpos.** O
+       enquadramento de trava (`NamekCamera._enquadrarTrava`, `NAMEK.lock.camera`)
+       era o privilégio da tecla `R`, que saiu — e a mira assistida não pode
+       herdá-lo, porque o pedido dela é literal em "sem travar a câmera". O
+       argumento continua no contrato da câmera, dormente, para o dia em que
+       houver um alvo designado de novo; ver a nota DORMENTE no config. */
+    this.cam.update(dt, ac, null);
 
     /* ---------------------------------------------------------- disparo --- */
     /* CAÍDO NÃO ATIRA, e DEFENDENDO tampouco. A sala recusa os dois de qualquer
        jeito (ver `registrarRajada`); calar aqui é o que impede o cliente de
        desenhar uma bola que nunca existiu para mais ninguém — o tiro sairia na
        tela de quem apertou, não acertaria nada, e leria como perda de pacote. */
-    if (!this.down && !c.caido && !defendendo) {
+    /* E QUEM ESTÁ SE TRANSFORMANDO TAMPOUCO. Os três segundos são invencíveis;
+       atirar de dentro deles daria uma janela em que o lutador machuca e não
+       pode ser machucado, que é a única forma de esta transformação virar
+       injusta. A sala recusa os três disparos pela mesma razão e pelo mesmo
+       teste (`SSJ.invencivel`, em `registrarRajada`, `registrarEspecial` e
+       `registrarOnda`); calar aqui é o que impede o cliente de desenhar um tiro
+       que não existiu para mais ninguém. */
+    if (!this.down && !c.caido && !defendendo && !this.ssj.transformando) {
       if (acoes.burstPressed) this.onda();
       for (let i = 0; i < NAMEK.specialOrder.length; i++) {
         if (acoes.special[i]) this.soltarEspecial(i);
@@ -1589,6 +2282,25 @@ export class NamekGame {
     eu.vivo = !this.down;
     eu.invuln = this.me.invuln;
     alvos.push(eu);
+    /* E O PEIXE GIGANTE, quando há um no ar. Ele entra na MESMA lista das
+       pessoas — uma esfera de nove metros com id `PEIXE_ALVO_ID` — e com isso
+       ganha de graça tudo o que o sistema de poderes já sabe fazer: rajada
+       estourando nele, feixe queimando, disco cortando, esfera detonando. O que
+       muda é só o canal do aviso, e isso é resolvido em `reportar`.
+       `alvo()` devolve null entre um salto e outro (§"fora do salto ele some" de
+       `world/peixe.js`), então fora dos poucos segundos de voo isto é uma
+       chamada que retorna imediatamente.
+       A pose é a do quadro ANTERIOR, porque o mundo ainda não andou neste — são
+       menos de sessenta centímetros no pior caso, contra um alvo de nove metros
+       de raio. */
+    const peixe = this.world.peixe?.alvo();
+    if (peixe) alvos.push(peixe);
+    /* E O BOSS, pela mesma porta e pelo mesmo motivo: entrando na lista de
+       alvos ele ganha de graça tudo o que o sistema de poderes sabe fazer —
+       bola estourando nele, Kamehameha parando nele, Genki Dama detonando
+       contra ele. O canal do aviso é que muda, e isso é resolvido em `reportar`.
+       Sem boss em campo, esta chamada sai na primeira linha. */
+    this.boss.comoAlvo(alvos);
     /* O MUNDO vai junto: é dele que sai `propsNear`, e é isso que faz a bola
        de ki parar na pedra em vez de atravessá-la. */
     const eventos = this.powers.update(dt, alvos, this.myId, this.world);
@@ -1596,6 +2308,14 @@ export class NamekGame {
 
     /* ------------------------------------------------------------ cena ---- */
     this.fx.update(dt, this.camera3.position);
+    /* O BOSS depois dos poderes e antes do mundo: ele interpola a posição que a
+       sala mandou, move o corpo e caminha a barra do HUD. Sem boss em campo é
+       uma comparação e um `return`. */
+    this.boss.update(dt, this.camera3.position);
+    /* O fim ANTES do mundo: `setFim` decide se o planeta ainda é desenhado, se o
+       céu é o de estrelas e quanto o chão já rachou — e `world.update` é quem
+       caminha tudo isso. Invertido, o cenário mostraria a fase anterior. */
+    this.world.setFim(this.fim);
     this.world.update(dt, this.camera3.position, agora);
 
     /* A câmera JÁ foi atualizada, lá em cima, antes do disparo — ver o
@@ -1607,37 +2327,30 @@ export class NamekGame {
     /* A BÚSSOLA vem depois da câmera e antes do resto do HUD: ela projeta pela
        lente deste quadro, e a lente acabou de ser resolvida lá em cima. */
     this.hud.setMarcas(this.bussola());
-    /* O ANEL VERMELHO em volta do adversário travado — o retículo do pedido.
-       Depois da câmera, como a bússola e pelo mesmo motivo: ele projeta pela
-       lente deste quadro. */
-    this.hud.setLockRing(this.anelDaTrava());
     /* Os círculos de todo mundo, e o aceso é para onde o tiro vai. A lista é a
        MESMA projeção que escolheu o alvo da assistência — ver
        `LockOn.naTelaTodos`, que existe justamente para o anel aceso e o alvo do
        tiro nunca discordarem. */
-    this.hud.setAneis(this.lock.naTelaTodos, this.lockId);
+    this.hud.setAneis(this.lock.naTelaTodos);
 
-    this.hud.setVitals(this.health, NAMEK.fighter.maxHealth, this.ki.valor, this.ki.max);
+    /* O TETO DE VIDA É VARIÁVEL desde o Super Saiyajin: 100 normalmente, 160
+       transformado (`NAMEK.ssj.vidaBonus`). Passá-lo em vez de `maxHealth` é o
+       que faz a barra desenhar a fração certa — com o teto fixo, quem se
+       transforma apareceria com 90 numa barra de 100 e o preenchimento bateria
+       no fim aos 100 de 160. Ver `vidaMaxima`, e a gêmea dela na sala. */
+    this.hud.setVitals(this.health, vidaMaxima(this.ssj.aceso), this.ki.valor, this.ki.max);
     this.hud.setSpecials(this.specialIndex, this.ki.podeEspecial());
-    const trava = this.lockId !== null ? this.remotes.get(this.lockId) : null;
-    /* A trava pode ter caído sozinha neste quadro (alvo morreu, sumiu, ou o
-       relógio da perda venceu — ver `LockOn.update`). O retículo do centro tem
-       de voltar junto: sem esta linha ele ficaria escondido para sempre, porque
-       quem o devolvia era só o caminho do `R`. */
-    this.hud.setCrosshair(
-      this.lockId !== null ? "travado" : this.ki.carregando ? "carregando" : "livre",
-    );
-    if (trava) {
-      const ah = this._alvoHud;
-      ah.id = trava.id;
-      ah.nome = trava.name;
-      ah.cor = trava.color;
-      ah.vida = trava.health;
-      this.hud.setTarget(ah);
-    } else {
-      this.hud.setTarget(null);
-    }
+    /* O retículo tem dois estados agora, e não três: o "travado" era o do alvo
+       preso pela tecla `R`. Ver `NamekHud.setCrosshair`. */
+    this.hud.setCrosshair(this.ki.carregando ? "carregando" : "livre");
+    /* O PAINEL DE VIDA DO ALVO — um widget, duas razões (você acertou alguém, ou
+       o cursor está em cima de alguém). Quem escolhe é `LockOn.noPainel`; aqui
+       só se traduz o id em nome, cor e vida. Ver `dadosDoAlvo`. */
+    this.hud.setTarget(this.dadosDoAlvo());
     this.hud.update(dt);
+
+    /* --------------------------------------------------- a tela do fim ---- */
+    this.telaDoFim(dt);
 
     /* Os sons CONTÍNUOS. Um só lugar, uma vez por quadro: carga, feixe e vento
        são estados, não acontecimentos, e tratá-los como evento produziria um
@@ -1645,7 +2358,16 @@ export class NamekGame {
     const v = c.velocity;
     this.audio.update({
       carregando: this.ki.carregando,
-      feixeAceso: this.casting !== null && this.casting.t >= specialInfo(this.casting.kind).windup,
+      /* SÓ O KAMEHAMEHA ACENDE O RUGIDO. `casting` cobre a pose de qualquer
+         especial, e a pose dos outros três dura `windup + SOLTURA` — ou seja,
+         durante os 0,45 s de soltura do Galick, do Kienzan e da Genki Dama esta
+         condição era verdadeira e o loop do FEIXE tocava por cima de um golpe
+         que não é feixe nenhum. Três golpes emprestando o timbre de um quarto é
+         exatamente o que o pedido de "timbres distintos" proíbe. */
+      feixeAceso:
+        this.casting !== null &&
+        this.casting.kind === "kamehameha" &&
+        this.casting.t >= specialInfo(this.casting.kind).windup,
       velocidade: Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z),
     });
 
@@ -1669,6 +2391,22 @@ export class NamekGame {
     if (!ev) return;
 
     for (const a of ev.acertos) {
+      /* O BOSS, pelo canal dele. Mesmo desvio do peixe logo abaixo e pelo mesmo
+         motivo: a sala procura um LUTADOR pelo id do `BLAST_HIT`, e o Freeza não
+         é um. `acertou` devolve true quando a vítima era ele — e nesse caso já
+         mandou o aviso e desenhou a fagulha. */
+      if (this.boss.acertou(a.victim, "blast", 0, a.p)) continue;
+      /* O PEIXE GIGANTE entra na mesma lista de alvos que as pessoas (ver o
+         bloco de `alvos` no `step`), e é aqui que os dois caminhos se separam:
+         a sala procura um LUTADOR pelo id do `BLAST_HIT`, e o peixe não é um.
+         Mandar o aviso pelo canal certo é a diferença entre o bicho perder vida
+         e o pacote morrer em silêncio do outro lado. */
+      if (a.victim === PEIXE_ALVO_ID) {
+        this.net.send(NC2S.FISH_HIT, { i: this.world.peixe?.salto?.i, kind: "blast" });
+        this.world.peixe?.levouGolpe(a.p.x, a.p.y, a.p.z);
+        this.audio.acertoNoCorpo(a.p, false, a.victim);
+        continue;
+      }
       this.net.send(NC2S.BLAST_HIT, {
         id: a.blastId,
         victim: a.victim,
@@ -1679,7 +2417,30 @@ export class NamekGame {
     }
 
     for (const q of ev.queimando) {
+      /* O BOSS, com o `dt` junto: o Kamehameha cobra por segundo de exposição e
+         é esse número que a tabela `NAMEK.freeza.dano` multiplica. */
+      /* Sem ponto: a fila `queimando` não carrega um (ver `PowerSystem`), e não
+         precisa — o único alvo possível é o boss, e `acertou` usa o peito dele. */
+      if (this.boss.acertou(q.victim, q.kind, q.dt, null)) continue;
+      /* O mesmo desvio do laço acima, com o `dt` junto: um feixe cobra por
+         segundo de exposição, e é esse número que vira dano no peixe. */
+      if (q.victim === PEIXE_ALVO_ID) {
+        this.net.send(NC2S.FISH_HIT, {
+          i: this.world.peixe?.salto?.i,
+          kind: q.kind,
+          dt: q.dt,
+        });
+        continue;
+      }
       this.net.send(NC2S.SPECIAL_HIT, { victim: q.victim, kind: q.kind, dt: q.dt });
+      /* O SOM DE QUEIMAR ALGUÉM. Este era o único canal de acerto do jogo que
+         ia inteiro para a rede sem fazer barulho na ponta de quem atirou:
+         segurar um Kamehameha em cima de um adversário por dois segundos
+         devolvia, no máximo, o "toc" genérico do `HURT` dele voltando. A posição
+         é a do corpo queimado — o feixe não sabe onde a vítima está, mas o
+         `remotes` sabe, e é a mesma pose que o acerto normal já usa. */
+      const alvo = this.remotes.get(q.victim);
+      if (alvo) this.audio.queimouAlguem(alvo.pose, q.kind, q.victim);
     }
 
     /* O ESTOURO NO AR. Ele não abre cratera — não há chão — e por isso não passa
@@ -1687,6 +2448,40 @@ export class NamekGame {
        de altura era a maior coisa que o modo desenha acontecendo em silêncio. */
     for (const a of ev.noAr) {
       this.audio.detonouNoAr(a.p, a.power, a.kind);
+    }
+
+    /* O EMBATE — dois poderes que se encostaram (§6 de `powers/index.js`).
+     *
+     * O registro faz DUAS coisas, e é por isso que o laço tem dois `if`:
+     *
+     * • **`cancelar`** encerra a pose do especial que foi anulado. Ele existe
+     *   porque o relógio da pose é DAQUI (`this.casting`), não do feixe: sem
+     *   isto, o lutador ficaria parado no ar terminando a animação de um
+     *   Kamehameha que já não existe, travado (`controller.travado`) até o
+     *   relógio vencer sozinho. A barra não volta, e não deve — ela foi gasta no
+     *   instante do disparo, e é isso que faz o choque de duas cargas custar
+     *   alguma coisa aos dois lados.
+     * • **`enviar`** conta à sala, que confirma para todo mundo. Só sobe o que
+     *   ESTE cliente detectou; o que chegou pela rede é aplicado e cala. Sem
+     *   essa distinção, cada confirmação recebida geraria uma confirmação nova e
+     *   o mesmo embate ricochetearia pela sala para sempre. */
+    for (const e of ev.embates) {
+      if (e.cancelar) {
+        this.casting = null;
+        this.hud.toast("golpe anulado no choque");
+      }
+      if (!e.enviar) continue;
+      this.net.send(NC2S.POWER_CLASH, {
+        a: e.aOwner,
+        ka: e.aKind,
+        b: e.bOwner,
+        kb: e.bKind,
+        p: [e.p.x, e.p.y, e.p.z],
+        /* O único bit que a tabela não consegue deduzir dos tipos: dois
+           Kamehamehas podem se encontrar como bolas de carga (explosão própria,
+           regra 4) ou como feixes em voo (o estouro de sempre). */
+        c: e.carga ? 1 : 0,
+      });
     }
 
     /* O TREMOR do quadro, se houve. É do MEU golpe (o sistema só o relata para
@@ -1761,9 +2556,11 @@ export class NamekGame {
     this.net.disconnect();
     this.input.dispose();
     this.hud.dispose();
+    this.fugaHud.dispose();
     this.menu.dispose();
     this.audio.dispose();
     this.remotes.dispose();
+    this.boss.dispose();
     this.powers.dispose();
     this.fx.dispose();
     this.world.dispose();

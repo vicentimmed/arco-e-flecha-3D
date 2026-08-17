@@ -68,17 +68,20 @@
 
    ---------------------------------------------------- o traço que CURVA
 
-   O Galick Gun persegue FORTE (55°/s por 3 s, ver `NAMEK.specials.galick.homing`)
-   e a Genki Dama persegue de leve (20°/s, com teto de 50° na correção total).
-   Essa assimetria é mecânica, já estava paga, e não aparecia em lugar nenhum na
-   tela.
+   O Galick Gun persegue FORTE (110°/s por 1,6 s, ver
+   `NAMEK.specials.galick.homing`) e a Genki Dama persegue de leve (40°/s, com
+   teto de 75° na correção total). Essa assimetria é mecânica, já estava paga, e
+   não aparecia em lugar nenhum na tela.
 
    Agora aparece: o Galick Gun arrasta atrás de si uma FITA construída sobre as
    posições que ele REALMENTE ocupou — dezoito amostras a cada 42 ms, três
    quartos de segundo de história, uns 66 m a 95 m/s. Quando ele contorna um
-   alvo, a fita contorna junto e fica no ar desenhando a curva: 38,5° de arco,
-   que se afastam 5,5 m da linha reta. Ver `TRACO_PASSO` para por que é essa a
-   medida que importa, e não o comprimento.
+   alvo, a fita contorna junto e fica no ar desenhando a curva: **82,5° de
+   arco** (a perseguição dobrou; eram 38,5°), que se afastam 12,3 m da linha
+   reta contra os 5,5 m de antes. Ver `TRACO_PASSO` para por que é essa a medida
+   que importa, e não o comprimento — e note que a fita ficou MUITO mais
+   expressiva sem uma linha de desenho ter mudado: ela mostra o que o golpe faz,
+   e o golpe passou a virar duas vezes mais rápido.
 
    É a única coisa deste arquivo que **não pode ser lida numa captura parada** e
    é justamente por isso que ela é a peça mais importante: em movimento, um
@@ -543,8 +546,12 @@ class Esfera {
 
   /* ---------------------------------------------------------------- disparo */
 
-  acender(field, { owner, kind, origem, dir, local, target = null }) {
-    const S = NAMEK.specials[kind];
+  acender(field, { owner, kind, origem, dir, local, target = null, info = null }) {
+    /* `info` é a definição do golpe COMO ELE É VISTA — dourada em Super
+       Saiyajin. Ver `PowerSystem.spawnSpecial`, que a escolhe, e o cabeçalho de
+       `character/ssj.js`, que explica por que a cor virou uma troca de objeto em
+       vez de doze `if`. */
+    const S = info ?? NAMEK.specials[kind];
     const E = estiloDe(kind);
     this.field = field;
     this.owner = owner;
@@ -704,23 +711,29 @@ class Esfera {
    * AS DUAS PERSEGUEM, e é uma mudança recente: "todos os poderes devem
    * perseguir o player, alguns perseguem mais, outros menos". A Genki Dama era
    * a exceção declarada deste arquivo, e a justificativa de então continua
-   * valendo como MEDIDA — ela é uma parede de 11 m viajando devagar, e uma
-   * perseguição de verdade nela seria um golpe de 96 de dano do qual não se
-   * escapa. Por isso ela persegue como a mais mansa de todas: 20°/s contra os
-   * 55 do Galick Gun.
+   * valendo como MEDIDA — ela é uma parede de 16 m viajando devagar, e uma
+   * perseguição de verdade nela seria um golpe de 100 de dano do qual não se
+   * escapa. Por isso ela persegue como a mais mansa de todas: 40°/s contra os
+   * 110 do Galick Gun.
    *
    * A conta que faz "dá para escapar" ser verdade é a mesma do Kienzan, e ela
    * não é o raio da curva — é a comparação de velocidades ANGULARES: a `d`
    * metros, quem foge de lado a `v` gira `v/d` rad/s em torno do projétil, e
    * escapa se isso passar de `ω`. Com o arranque a 64 m/s o corte fica em
-   * **66 m** para o Galick Gun e em **183 m** para a Genki Dama — a maior
+   * **33 m** para o Galick Gun e em **92 m** para a Genki Dama — a maior
    * distância de fuga do jogo, que é o que separa "ele te alcança" de "ela só
    * te acompanha". Recuar em linha reta nunca funciona nos dois casos: recuar
    * mantém você no eixo.
    *
+   * (Os dois cortes eram 66 m e 183 m; a perseguição do repertório inteiro
+   * dobrou. O que não mudou foi a ORDEM entre eles, e ela é a informação: a
+   * Genki Dama continua sendo quase três vezes mais fácil de largar.)
+   *
    * O TETO TOTAL (`arcMax`) é a trava que a Genki Dama trouxe junto. Sem ele,
-   * 20°/s por 4 s dariam 80° de correção — a bola contornaria — e o prazo, que
-   * é a única trava que o Galick Gun tem, não sabe dizer isso. Quem declara
+   * 40°/s por 4 s dariam 160° de correção — a bola daria meia volta — e o
+   * prazo, que é a única trava que o Galick Gun tem, não sabe dizer isso. Lá o
+   * prazo teve de ENCOLHER para fazer o papel do teto (ver
+   * `NAMEK.specials.galick.homing`); aqui, quem declara
    * `arcMax` acumula o giro aqui e para quando o gasta. Ver
    * `NAMEK.specials.kamehameha.homing`, que tem o argumento inteiro.
    *
@@ -1210,6 +1223,30 @@ class Esfera {
       this.traco.visible = true;
       this.traco.material.opacity = 0.85;
     }
+  }
+
+  /**
+   * A esfera foi INTERCEPTADA por outro poder — o gancho do embate.
+   *
+   * Ver `powers/colisao.js`, que é onde a regra mora. O que ela faz aqui é
+   * abrir a casca sem passar por `detonar`, e a diferença entre as duas é
+   * exatamente o que o embate NÃO é:
+   *
+   * • sem DANO. Um golpe interceptado no meio do céu não chegou a ninguém, e
+   *   dar a ele a explosão de área no ponto da interceptação faria abater uma
+   *   Genki Dama com um Kienzan ser pior do que deixá-la passar.
+   * • sem CRATERA e sem SOM daqui. Os dois saem do árbitro, para os dois lados
+   *   do embate ao mesmo tempo e por um caminho só — se cada poder relatasse o
+   *   seu, o mesmo choque abriria dois buracos no mesmo ponto.
+   *
+   * O que sobra é a casca abrindo, que é a leitura da esfera arrebentando, e é
+   * o desenho que `passoDoEstouro` já faz.
+   */
+  abortarPorEmbate() {
+    if (!this.viva || this.estourando) return false;
+    this.estourando = true;
+    this.tEstouro = 0;
+    return true;
   }
 
   apagar() {

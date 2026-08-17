@@ -49,6 +49,7 @@ import { clamp, damp, smoothstep, solveTwoBoneIK } from "../../utils/math.js";
 import { orientSegment } from "../../utils/geometry.js";
 import { OSSO, criarMateriais, montarCorpo, tingir, nivelDeDetalhe } from "./rig.js";
 import { Aura } from "./aura.js";
+import { corDoGolpe } from "./ssj.js";
 import {
   PIVO,
   criarPose,
@@ -62,6 +63,7 @@ import {
   poseDano,
   poseArremessado,
   poseDefesa,
+  poseTransformacao,
   poseQueda,
   poseMorte,
   aplicarRajada,
@@ -122,8 +124,17 @@ function criarContexto() {
     esp: 0,
     espU: 0,
     espSolta: 0.4,
+    /** 0…1 da animação de transformação. Ver `poseTransformacao`. */
+    ssjU: 0,
   };
 }
+
+/** A cor NATURAL do cabelo, guardada uma vez: é para ela que o penteado volta
+ *  quando a transformação acaba. Lida do material recém-criado em vez de
+ *  escrita à mão aqui — o preto do penteado mora em `rig.js: criarMateriais`, e
+ *  uma segunda cópia dele envelheceria calada. */
+const _cabeloNatural = new THREE.Color();
+let _temCabeloNatural = false;
 
 export class Fighter {
   /**
@@ -135,6 +146,13 @@ export class Fighter {
   constructor(parent, cor = 0xff7a1a, local = false) {
     this.local = local;
     this.mat = criarMateriais();
+    /* A cor de origem do penteado, capturada uma vez para o módulo inteiro: é
+       para ela que o cabelo volta quando o Super Saiyajin acaba. Os materiais
+       são por corpo (ver `criarMateriais`), mas o preto é o mesmo em todos. */
+    if (!_temCabeloNatural) {
+      _cabeloNatural.copy(this.mat.cabelo.color);
+      _temCabeloNatural = true;
+    }
     this.corpo = montarCorpo(this.mat);
     /** O grupo do corpo. Exposto porque a etiqueta de nome é filha dele. */
     this.root = this.corpo.root;
@@ -174,6 +192,21 @@ export class Fighter {
      *  Quem escreve é o dono: o laço principal para o lutador local, o
      *  `VITALS` para os remotos. */
     this.kiFull = false;
+    /**
+     * **SUPER SAIYAJIN** — o bit 16 da rede (`packFighter`).
+     *
+     * Quem escreve é o dono, como todo campo desta seção: o laço principal para
+     * o lutador local, a pose recebida para os remotos. `Fighter` só lê — e o
+     * que ele faz com isto é pintar: cabelo amarelo e espetado, aura de ouro e
+     * mais intensa, e a cor dos poderes que ele solta (essa última mora em
+     * `character/ssj.js`, porque quem a lê são os projéteis).
+     *
+     * A ANIMAÇÃO é outra coisa e tem relógio próprio (`_ssjT`, aceso por
+     * `transformar()`): este campo é o ESTADO, e ele já vale no primeiro quadro
+     * do gesto — quem olha de longe tem de ver o ouro subindo junto com o grito,
+     * não depois dele.
+     */
+    this.ssj = false;
 
     /* --------------------------------------------- espelhos amortecidos ---- */
     this._run = 0;
@@ -186,6 +219,22 @@ export class Fighter {
     this._guarda = 0;
     /** Espelho amortecido de `kiFull`. Sobe suave e cai quase seco — ver `atualizarAura`. */
     this._cheio = 0;
+    /* Espelho amortecido do Super Saiyajin — é ele que faz o cabelo, a aura e o
+       espeto CHEGAREM em vez de trocarem num quadro. Sobe devagar (é o clímax
+       de três segundos de animação) e desce mais devagar ainda: a transformação
+       acaba quando o Freeza cai, num instante em que ninguém está atirando, e
+       um apagão seco ali leria como o boneco sendo desligado. */
+    this._ssj = 0;
+    /* s da ANIMAÇÃO de transformação, ou −1 quando não há nenhuma. O relógio é
+       daqui e não do dono porque ele vale igual para o lutador local e para os
+       remotos: os dois recebem `transformar()` (um pela tecla, o outro pelo
+       `NS2C.SSJ_ON`) e daí em diante o corpo se vira sozinho. */
+    this._ssjT = -1;
+    /** Peso amortecido da POSE de transformação. Gêmeo de `_esp`. */
+    this._ssjPose = 0;
+    /** A cor do cabelo foi escrita no quadro anterior? É o que permite parar de
+     *  escrever quando o ouro acaba — e escrever a última vez, em preto. */
+    this._ssjEscrito = false;
     this._andar = 0;
     this._queda = 0;
     this._pitch = 0;
@@ -314,12 +363,45 @@ export class Fighter {
     this._eixoTombo.set(1, this._hitX * 0.6, this._hitZ * 0.35).normalize();
   }
 
+  /**
+   * Começa a ANIMAÇÃO de transformação: os três segundos de
+   * `poseTransformacao`, do X acima da cabeça ao grito.
+   *
+   * É o gêmeo de `derrubar` — um GATILHO, e não um estado. O estado é o campo
+   * `ssj`, e quem o escreve é o dono; isto aqui só acende o relógio da pose, e
+   * ele é o mesmo para o lutador local (que chama no quadro da tecla) e para os
+   * remotos (que chamam ao receber `NS2C.SSJ_ON`).
+   *
+   * @param {number} [desde] segundos já decorridos, quando o aviso chega
+   *   atrasado. O `SSJ_ON` carrega o instante do começo justamente para isto:
+   *   os três segundos de todo mundo terminam juntos, e quem recebe a notícia
+   *   meio segundo depois entra a meio segundo do gesto em vez de recomeçá-lo.
+   */
+  transformar(desde = 0) {
+    if (this._morrendo) return;
+    const d = NAMEK.ssj.duracao;
+    if (desde >= d) {
+      /* Chegou depois do fim (uma reconexão, alguém que já estava transformado
+         quando você entrou): nada de tocar três segundos de grito em quem já
+         está transformado — só o estado, que o campo `ssj` já carrega. */
+      this._ssjT = -1;
+      return;
+    }
+    this._ssjT = Math.max(0, desde);
+  }
+
   /** Volta do zero para a pose viva. O piscar quem liga é o campo `invuln`. */
   revive() {
     this._morrendo = false;
     this.down = false;
     this.tonto = false;
     this.defendendo = false;
+    /* Morrer desliga o Super Saiyajin — ver o §"quando ela ACABA" em
+       `NAMEK.ssj`. A sala pensa o mesmo (`server/namek/ssj.js: apagar` é
+       chamado em `matar`), e zerar aqui é o que garante que o corpo que
+       reaparece não venha dourado enquanto o primeiro `VITALS` não chega. */
+    this.ssj = false;
+    this._ssjT = -1;
     this._guarda = 0;
     this._tontoT = 0;
     this._morteT = 0;
@@ -403,6 +485,31 @@ export class Fighter {
        o tempo todo — a aura deixava de dizer "cheio" e virava enfeite. */
     const cheio = this.kiFull ? 1 : 0;
     this._cheio = damp(this._cheio, cheio, cheio ? 3.5 : 18, dt);
+
+    /* ------------------------------------------------------ Super Saiyajin
+     *
+     * Duas coisas com relógios diferentes, e é por isso que são dois campos:
+     *
+     * • `_ssj` é o ESTADO pintado — cabelo, aura, espeto. Ele sobe em 1,6 s
+     *   (mais devagar que qualquer outro canal daqui) porque o ouro tem de
+     *   CHEGAR ao longo do grito e não aparecer no primeiro quadro dele; e desce
+     *   ainda mais devagar (0,9) porque a transformação acaba quando o Freeza
+     *   cai, num instante em que ninguém está atirando, e um apagão seco ali
+     *   leria como o boneco sendo desligado.
+     * • `_ssjT` é a ANIMAÇÃO, e ela tem duração fixa. Ela avança sozinha e se
+     *   apaga no fim; o peso dela na pose (`_ssjPose`) é amortecido como o do
+     *   especial, para a saída do gesto emendar na postura de baixo. */
+    this._ssj = damp(this._ssj, this.ssj ? 1 : 0, this.ssj ? 1.6 : 0.9, dt);
+    if (this._ssjT >= 0) {
+      this._ssjT += dt;
+      if (this._ssjT >= NAMEK.ssj.duracao) this._ssjT = -1;
+    }
+    /* Morto ou caído não se transforma: a sala já recusa o pedido, mas um golpe
+       que derrube alguém NO MEIO do gesto (não acontece hoje — ele é invencível
+       — e pode acontecer no dia em que a invencibilidade mudar) não pode deixar
+       a pose de grito rodando por cima de um corpo no chão. */
+    const gritando = this._ssjT >= 0 && !this._morrendo && !this.down && !this.tonto;
+    this._ssjPose = damp(this._ssjPose, gritando ? 1 : 0, gritando ? 9 : 6, dt);
 
     /* Marcha: quanto se anda sai da VELOCIDADE, não de um canal.
      *
@@ -497,6 +604,11 @@ export class Fighter {
     ctx.esp = this._espIdx;
     ctx.espU = this._espU;
     ctx.espSolta = this._espSolta;
+    /* A fração da transformação. Ela SEGURA em 1 depois que o relógio apaga —
+       e não volta a zero — porque o peso (`_ssjPose`) é quem tira a pose de
+       cena: com a fração caindo junto, o corpo desfaria o gesto de trás para a
+       frente (os braços subiriam de volta para a cabeça) enquanto some. */
+    ctx.ssjU = this._ssjT >= 0 ? clamp(this._ssjT / NAMEK.ssj.duracao, 0, 1) : 1;
   }
 
   /** As camadas, na ordem em que uma tem o direito de cobrir a outra. */
@@ -532,9 +644,20 @@ export class Fighter {
       poseEspecial(_tmpPose, ctx);
       misturarPose(_pose, _tmpPose, this._esp);
     }
+    /* A TRANSFORMAÇÃO entra DEPOIS do especial e ganha dele, e é a única camada
+       de postura do arquivo que faz isso. O motivo é que ela não coexiste com
+       nada: o laço principal prende o corpo (`controller.travado`) e cala tiro,
+       especial, onda, guarda e carga durante os três segundos, e a sala recusa
+       os mesmos cinco do lado dela. Se um especial ainda estiver na tela quando
+       o grito começa — o Kamehameha dura 3,45 s e pode atravessar o gesto —,
+       quem tem de aparecer é o grito. */
+    if (this._ssjPose > 0.002) {
+      poseTransformacao(_tmpPose, ctx);
+      misturarPose(_pose, _tmpPose, this._ssjPose);
+    }
     if (this._queda > 0.002) {
       poseQueda(_tmpPose, ctx);
-      misturarPose(_pose, _tmpPose, this._queda * (1 - this._esp));
+      misturarPose(_pose, _tmpPose, this._queda * (1 - this._esp) * (1 - this._ssjPose));
     }
 
     /* A rajada é CAMADA e entra depois de tudo o que é postura: atirar não muda
@@ -547,7 +670,12 @@ export class Fighter {
     aplicarRajada(
       _pose,
       ctx,
-      this._hand * (1 - this._esp) * (1 - this._charge) * (1 - this._guarda),
+      /* E a transformação abafa o braço da rajada pelo mesmo motivo das outras
+         três: com os punhos cerrados acima da cabeça — ou plantados na cintura
+         — a mão não está livre para atirar. Ninguém atira durante o gesto (o
+         laço cala o botão e a sala recusa o disparo); o que este fator impede é
+         o rabo de um tiro anterior ainda estar decaindo quando o X se arma. */
+      this._hand * (1 - this._esp) * (1 - this._charge) * (1 - this._guarda) * (1 - this._ssjPose),
     );
 
     /* A DOR NÃO CANCELA O COMPROMISSO — ela só o incomoda.
@@ -636,7 +764,32 @@ export class Fighter {
        enxerga de cinquenta metros. */
     const cab = p.cabelo;
     R.cabeloRaiz.rotation.x = cab * 0.5;
-    R.cabeloRaiz.scale.set(1, 1 + Math.max(0, -cab) * 0.22, 1 + Math.max(0, cab) * 0.4);
+    /* E O SUPER SAIYAJIN ESPETA POR CIMA DISSO. O penteado inteiro é um grupo
+       (ver `montarCabelo`), então "arrepiar" é uma escala em Y — a mesma que a
+       carga de ki já usa, somada. `espeto` (+34 %) é o que se lê como cabelo em
+       pé sem virar chapéu; e ele NÃO some quando o gesto acaba, porque o estado
+       (`_ssj`) é permanente enquanto a transformação durar. */
+    const espeto = 1 + this._ssj * NAMEK.ssj.espeto;
+    R.cabeloRaiz.scale.set(
+      1,
+      (1 + Math.max(0, -cab) * 0.22) * espeto,
+      1 + Math.max(0, cab) * 0.4,
+    );
+    /* A COR DO CABELO, e ela é a única coisa que este arquivo escreve num
+       material por quadro.
+     *
+     * É uma interpolação e não uma troca porque a transformação DURA três
+     * segundos: o preto tem de virar ouro ao longo do grito, e é essa passagem
+     * que faz o gesto parecer causar alguma coisa. `_ssj` já é o valor
+     * amortecido; escrever aqui custa um `lerp` de três floats por lutador por
+     * quadro, e só quando há ouro em jogo — parado em zero, nada é escrito, que
+     * é o caso de catorze dos quinze corpos na maior parte da partida. */
+    if (this._ssj > 0.002 || this._ssjEscrito) {
+      this._ssjEscrito = this._ssj > 0.002;
+      this.mat.cabelo.color
+        .copy(_cabeloNatural)
+        .lerp(_cor.set(NAMEK.ssj.corCabelo), this._ssj);
+    }
 
     /* O PÉ FICA COLADO NO CHÃO enquanto o corpo quica e agacha por cima dele.
      *
@@ -770,20 +923,51 @@ export class Fighter {
       const carga = smoothstep(0, this._espSolta, this._espU);
       i = Math.max(i, this._esp * (0.5 + 0.5 * carga));
     }
+    /* O SUPER SAIYAJIN É A SEXTA FONTE, e a única que é um PISO em vez de mais
+     * um candidato ao máximo.
+     *
+     * O pedido é que a aura fique amarela e mais intensa, e "mais intensa" tem
+     * de valer inclusive parado, sem carga, sem arranque e sem barra cheia —
+     * senão a leitura seria "ele está aceso quando faz alguma coisa", que é o
+     * que já acontecia antes da transformação. 0,62 é acima da prontidão (0,38)
+     * e da guarda (0,42) e abaixo da carga (1): quem está transformado brilha
+     * mais que qualquer estado passivo do jogo e ainda tem para onde subir
+     * quando carrega ou arranca.
+     *
+     * O GRITO é o pico. Durante os três segundos ela vai ao talo, e é a única
+     * hora da partida em que a aura chega a 1 sem ninguém segurar tecla —
+     * "explosão de poder" começa aqui e termina no estouro do fim. */
+    i = Math.max(i, this._ssj * 0.62, this._ssjPose);
+
     // Morto não brilha, e quem está sendo arremessado perde a concentração.
     i *= (1 - this._morte) * (1 - this._tombo * 0.7);
 
     /* A cor do ki vira a cor do GOLPE durante um especial. É de graça (o config
        já declara a cor de cada um) e é informação de jogo: o roxo do Galick Gun
        aparece na aura de quem está carregando, um segundo antes de o feixe
-       sair. */
+       sair.
+     *
+     * E ela passa por `corDoGolpe` em vez de ler `NAMEK.specials[…].cor`
+     * direto: em Super Saiyajin o golpe é dourado, e a aura de quem o carrega
+     * tem de anunciar o dourado — foi para isso que a cor virou uma função (ver
+     * o cabeçalho de `character/ssj.js`). */
     if (this._esp > 0.01) {
       const nome = NAMEK.specialOrder[this._espIdx];
-      const cor = nome ? NAMEK.specials[nome]?.cor : null;
+      const cor = nome ? corDoGolpe(nome, this.ssj) : null;
       if (cor != null) this.aura.setColor(cor);
+    } else if (this.ssj) {
+      /* Transformado e sem golpe na mão: OURO. Ele ganha da cor do jogador de
+         propósito — a cor do gi diz quem é a pessoa, e o ouro diz em que
+         patamar ela está, que é a informação mais urgente das duas. */
+      this.aura.setColor(NAMEK.ssj.corAura);
     } else if (this.color != null) {
       this.aura.setColor(this.color);
     }
+    /* E a aura fica MAIS GROSSA, não só mais forte. Ver `Aura.ssj`: a
+       intensidade acima já a acende, e este canal é o que abre a coroa e
+       engorda o casulo — sem ele, "mais intensa" seria só um número maior no
+       mesmo desenho. */
+    this.aura.ssj = Math.max(this._ssj, this._ssjPose);
 
     _auraCtx.intensidade = clamp(i, 0, 1);
     /* O canal de VOO, e não o de arranque: a cauda e o sopro pertencem a quem

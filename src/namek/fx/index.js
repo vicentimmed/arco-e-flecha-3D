@@ -521,11 +521,16 @@ export class NamekFx {
     /* O NACO. Só numa encosta de verdade e só a partir de um buraco de 7 m.
      *
      * O corte por raio é o que mantém a promessa do §7 do plano e o que o
-     * usuário pediu por escrito: bola de ki CHAMUSCA (potência 0,0156, raio
-     * 4,1 m — não chega aqui, mas ainda abre cratera, só que pequena),
+     * usuário pediu por escrito: bola de ki CAVA (potência 0,117, raio 5,8 m —
+     * abre buraco de gente, com 6,1 m de fundo, mas não chega neste corte),
      * especial ARRANCA. Sem ele, uma rajada básica numa ladeira cuspiria
      * blocos de pedra do tamanho de um lutador seis vezes por segundo, e a
      * montanha inteira viraria confete.
+     *
+     * A margem entre os dois encolheu quando a cratera da rajada cresceu (4,1 →
+     * 5,8 m), e ela ainda é de 1,2 m. Quem subir `blast.power` de novo confere
+     * este `raio > 7` antes: no dia em que a rajada passar dele, cada tiro numa
+     * encosta vira um naco de montanha.
      */
     if (enc > 0.15 && raio > 7) {
       nacoDeEncosta(

@@ -13,13 +13,15 @@
      impacto é grande e é errada: o golpe todo é "aquilo passou por mim", e uma
      bola de fogo apagaria a única leitura que ele tem.
    • **Corta de uma vez** — `damage` em `NAMEK.specials.disk`, não `dps`. Quem
-     encosta leva os 48 inteiros, uma vez só, e o disco continua o voo. Um
+     encosta leva os 40 inteiros, uma vez só, e o disco continua o voo. Um
      disco que morre no primeiro corpo seria uma bola de ki cara.
    • **Atravessa quem já cortou.** A tabela de cortados existe para isso: sem
      ela, ficar dentro do plano do disco por dois quadros custaria o dobro.
-   • **PERSEGUE, e dá para escapar.** Ver `perseguir` — a curva dele tem 86 m de
-     raio, o que quer dizer que ele acompanha quem foge em linha reta e perde
-     quem arranca de lado. As duas metades são o pedido.
+   • **PERSEGUE MAIS QUE TUDO, e dá para escapar de um jeito só.** Ver
+     `perseguir` — a curva dele tem 53 m de raio, a mais fechada do modo, e ele
+     corrige a vida inteira, sem teto de arco. Ele acompanha quem foge em linha
+     reta e perde quem arranca DE LADO COM O BURST, e só. As duas metades são o
+     pedido, e as duas foram medidas.
 
    O que o para é o CHÃO, como tudo neste modo — e ali ele abre a rasgadura de
    `power: 1.4`, que é uma cicatriz e não uma cratera.
@@ -145,8 +147,12 @@ class Disco {
 
   /* ---------------------------------------------------------------- disparo */
 
-  acender(field, { owner, kind, origem, dir, local, target = null }) {
-    const S = NAMEK.specials[kind];
+  acender(field, { owner, kind, origem, dir, local, target = null, info = null }) {
+    /* `info` é a definição do golpe COMO ELE É VISTA — dourada em Super
+       Saiyajin. Ver `PowerSystem.spawnSpecial`, que a escolhe, e o cabeçalho de
+       `character/ssj.js`, que explica por que a cor virou uma troca de objeto em
+       vez de doze `if`. */
+    const S = info ?? NAMEK.specials[kind];
     this.field = field;
     this.owner = owner;
     this.kind = kind;
@@ -333,11 +339,22 @@ class Disco {
    *
    * Um projétil que gira a `turnRate` graus por segundo enquanto voa a `speed`
    * descreve uma curva de raio `v / ω`. Com os números do `homing` do Kienzan
-   * (105 m/s e 70°/s) isso são **86 m** — ou seja: ele fecha em cima de quem se
-   * move em linha reta na frente dele, e não consegue acompanhar quem corta de
-   * lado a curta distância. Correr para trás não adianta (você continua no
-   * eixo); arrancar para o lado, sim. Que é exatamente a manobra que se queria
-   * cobrar.
+   * (105 m/s e 114°/s) isso são **53 m** — a curva mais fechada de todos os
+   * projéteis do modo. Ele fecha em cima de quem se move em linha reta na frente
+   * dele, e larga quem corta de lado no arranque. Correr para trás não adianta
+   * (você continua no eixo); arrancar para o lado, sim. Que é exatamente a
+   * manobra que se queria cobrar.
+   *
+   * Os 114°/s são MEDIDOS e não derivados, e é o único `turnRate` do jogo que
+   * não saiu da fórmula `v/ω`. O banco inteiro está em
+   * `NAMEK.specials.disk.homing`, e o resumo é: 114 é o maior giro que ainda
+   * deixa o arranque lateral escapar em toda a faixa de briga (22 a 55 m),
+   * mesmo com reflexo instantâneo. A 116 o teto de fuga cai para 54,5 m e a
+   * promessa quebra; a 140 cai para 43,5 m e o golpe vira uma sentença.
+   *
+   * Detalhe que só a medição mostra: **o voo normal nunca escapa**, em nenhum
+   * giro e em nenhuma distância. A metade "quem só voa não desvia" do pedido
+   * sai de graça — o que custa calibragem é deixar o burst funcionar.
    *
    * O alvo NÃO é reavaliado no voo: foi travado no disparo e viajou na
    * mensagem, como o da bola de ki (§6.1). Já quem CORTOU não é mais
@@ -449,6 +466,22 @@ class Disco {
       additive: true,
     });
     this.apagar();
+  }
+
+  /**
+   * O disco foi INTERCEPTADO por outro poder — o gancho do embate.
+   *
+   * Ver `powers/colisao.js`. Ele some sem estouro e sem o sopro de `sumir`: o
+   * disco continua sendo o golpe que NÃO explode (é a primeira regra do
+   * cabeçalho deste arquivo, e ela não tem exceção), e quem desenha o clarão do
+   * choque é o árbitro, uma vez para os dois lados. Duas emissões no mesmo
+   * ponto seriam a mesma coisa contada duas vezes — e, na única leitura que
+   * este golpe tem, a errada: uma bola de fogo saindo de onde a lâmina estava.
+   */
+  abortarPorEmbate() {
+    if (!this.viva) return false;
+    this.apagar();
+    return true;
   }
 
   apagar() {

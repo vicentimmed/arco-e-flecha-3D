@@ -79,7 +79,15 @@ class RemoteFighter {
       specialFraction: 0, specialIndex: -1,
       hurtBlend: 0, lastHand: 0, handPose: 0,
       down: false, invuln: false, tonto: false, defendendo: false,
+      /** Super Saiyajin — o bit 16 da pose. Ver `packFighter`. */
+      ssj: false,
     };
+  }
+
+  /** Está em Super Saiyajin? Atalho para quem só quer a pergunta — o laço, ao
+   *  escolher a cor de uma rajada alheia e o teto da barra de vida do alvo. */
+  get ssj() {
+    return this.pose.ssj === true;
   }
 
   /** Uma pose recebida, carimbada com o instante em que o dono a capturou. */
@@ -160,6 +168,7 @@ function copiarPose(a, out) {
   out.hurtBlend = a.hurtBlend; out.lastHand = a.lastHand; out.handPose = a.handPose;
   out.down = a.down; out.invuln = a.invuln;
   out.tonto = a.tonto; out.defendendo = a.defendendo;
+  out.ssj = a.ssj;
 }
 
 function interpolarPose(a, b, t, out) {
@@ -198,6 +207,10 @@ function interpolarPose(a, b, t, out) {
      meio quadro faria o adversário aparecer aparando o golpe que já passou. */
   out.tonto = b.tonto;
   out.defendendo = b.defendendo;
+  /* E o Super Saiyajin, pela mesma razão: não existe meio transformado. O valor
+     é o da amostra mais nova — atrasar o ouro em meio quadro faria o cabelo
+     mudar de cor depois do golpe dourado que já saiu da mão. */
+  out.ssj = b.ssj;
 }
 
 /* ------------------------------------------------------------- a coleção --- */
@@ -329,6 +342,14 @@ export class RemoteFighters {
       f.invuln = p.invuln;
       f.tonto = p.tonto;
       f.defendendo = p.defendendo;
+      /* O SUPER SAIYAJIN vem da POSE (bit 16) e não do `VITALS`, ao contrário do
+         `kiFull` logo abaixo, e a diferença é a mesma que separa o caído e o
+         defendendo do ki cheio: o ouro muda no meio de uma briga e precisa
+         chegar no ritmo dela, não a 10 Hz. É ele que sustenta o cabelo, a aura e
+         a cor dos poderes de um adversário transformado — inclusive na tela de
+         quem entrou na sala depois do grito dele, e que por isso nunca viu o
+         `NS2C.SSJ_ON`. */
+      f.ssj = p.ssj;
       /* A aura de barra cheia dos OUTROS sai do `VITALS`, não da pose: o ki de
          cada um já viaja lá a 10 Hz (`applyVitals`), e um canal a mais na pose
          seria pagar 20 Hz por um booleano que muda uma vez por briga. Ver
@@ -338,7 +359,12 @@ export class RemoteFighters {
          (Caído e defendendo vêm da POSE, logo acima, e a diferença é a
          frequência: os dois mudam no meio de uma troca de golpes e precisam
          chegar no ritmo dela, não a 10 Hz.) */
-      f.kiFull = r.ki >= NAMEK.ki.max * NAMEK.ki.specialThreshold - 1e-3;
+      /* O limiar acompanha o Super Saiyajin: quem está transformado solta um
+         especial com um terço da barra, e a aura de prontidão dele tem de
+         acender aí — senão ela mentiria para quem estivesse decidindo se dá
+         para chegar perto. Ver `NAMEK.ssj.limiar`. */
+      const limiar = p.ssj ? NAMEK.ssj.limiar : NAMEK.ki.specialThreshold;
+      f.kiFull = r.ki >= NAMEK.ki.max * limiar - 1e-3;
       f.update(dt, cameraPos);
     }
   }

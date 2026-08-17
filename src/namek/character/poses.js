@@ -412,6 +412,170 @@ export function poseCarga(p, ctx) {
   p.cabelo = -0.55 * c;
 }
 
+/* ------------------------------------------------- a TRANSFORMAÇÃO (SSJ)
+
+   Três segundos, três tempos, e o pedido descreve os três: *"o boneco faz a
+   animação clássica com os braços cruzados na cabeça depois ele coloca esses
+   braços na cintura e a aura dele fica amarela e mais intensa e tem uma
+   explosão de poder ali momentânea."*
+
+       0 ──────── cruzar (0,42) ──────── baixar (0,74) ──────── 1
+       braços SOBEM              braços DESCEM           o GRITO      ESTOURO
+       e cruzam acima            para a cintura,         (o corpo     (fora daqui:
+       da cabeça                 punhos cerrados          arqueia)     é do mundo)
+
+   Os dois marcos vêm do config (`NAMEK.ssj.cruzar`, `NAMEK.ssj.baixar`) e não
+   de números escritos aqui, pela mesma razão que a linha do tempo dos especiais
+   sai de `windup`/`sustain`: a AURA e a explosão precisam dos mesmos instantes,
+   e três cópias do mesmo 0,42 em três arquivos seria a primeira coisa a sair de
+   sincronia ao afinar o gesto.
+
+   ------------------------------------------------------------- o que carrega
+
+   **A silhueta, e só ela.** Esta pose é vista de longe metade das vezes (é o
+   aviso de que alguém do outro lado da arena acabou de mudar de patamar), e o
+   que se lê a cem metros são três coisas, nesta ordem:
+
+   • o X ACIMA DA LINHA DA CABEÇA. As mãos cruzam a 1,93 m — quinze centímetros
+     acima do alto do crânio —, e é essa folga que faz o gesto existir contra o
+     céu. Cruzar na altura do rosto daria a pose de DEFESA (`poseDefesa`), que é
+     o oposto do que se quer dizer aqui;
+   • a BASE PLANTADA. Pés a 34 cm do eixo, joelhos fundos e o corpo dezesseis
+     centímetros mais baixo: quem está se transformando está EMPURRANDO contra o
+     chão, e a diferença entre isso e alguém apenas de pé com os braços no ar é
+     inteiramente a altura do quadril;
+   • o CABELO EM PÉ, subindo ao longo dos três segundos até o talo (−1, contra
+     os −0,55 da carga de ki). É de graça — o penteado é um grupo só — e é o que
+     separa esta pose de qualquer outra à distância em que o rosto já não existe.
+
+   ---------------------------------------------------------------- o tremor
+
+   Dois senos de frequência alta e incomensurável, como em `poseCarga`, e por
+   isso mesmo com frequências DIFERENTES das dela (37 e 59,3 contra 41 e 53,7):
+   ninguém carrega ki e se transforma ao mesmo tempo, mas as duas poses se
+   misturam durante a troca, e dois pares harmônicos batendo juntos produziriam
+   uma oscilação periódica — que o olho lê como máquina, não como um corpo que
+   não aguenta mais segurar.
+
+   A amplitude sobe com `solto` (a fase do grito) e não com o tempo todo: os
+   primeiros dois terços do gesto são CONTROLE — ele está armando —, e o último
+   é o corpo perdendo. */
+export function poseTransformacao(p, ctx) {
+  zerar(p);
+  const u = clamp(ctx.ssjU, 0, 1);
+  const S = NAMEK.ssj;
+
+  /* As três rampas. `sobe` é o X se armando, `desce` são os braços caindo para
+     a cintura e `grito` é o terceiro tempo. `smoothstep` em todas: a passagem
+     de um tempo para o outro é onde a animação mais aparece, e uma rampa linear
+     ali dá a cotovelada de um boneco trocando de pose. */
+  const sobe = smoothstep(0, S.cruzar, u);
+  const desce = smoothstep(S.cruzar, S.baixar, u);
+  const grito = smoothstep(S.baixar, 1, u);
+
+  const tr = Math.sin(ctx.t * 37 + ctx.fase * 5) * (0.35 + 0.65 * grito);
+  const tr2 = Math.sin(ctx.t * 59.3 + ctx.fase * 11) * (0.35 + 0.65 * grito);
+
+  /* O CORPO. Ele desce e ARQUEIA PARA TRÁS ao longo dos três tempos: a
+     inclinação vira negativa (o peito abre para o céu) e o queixo sobe junto.
+     É a diferença entre um grito e um espirro. */
+  p.inclinacao = -0.06 * sobe - 0.16 * grito;
+  p.rootLift = -0.06 * sobe - 0.1 * desce + tr * 0.014;
+  p.rootSide = tr2 * 0.01;
+  p.spinePitch = -0.1 * sobe - 0.22 * grito - tr2 * 0.024;
+  p.spineRoll = tr * 0.026;
+  /* Ombros esquadrados: `spineYaw` fica em zero o gesto inteiro. Esta é uma
+     pose SIMÉTRICA, e a simetria é metade do que a torna reconhecível — girar
+     o tronco a transformaria numa pose de golpe. */
+  p.spineYaw = 0;
+  p.headPitch = -0.22 * sobe - 0.34 * grito;
+
+  /* A BASE. Larga e funda, e ela abre ao longo do primeiro tempo em vez de
+     nascer aberta: o lutador PLANTA os pés, e ver o plantio é o que anuncia que
+     o que vem não é um golpe. */
+  const largo = lerp(STANCE, 0.34, sobe);
+  v3(p.footR, largo, ANKLE, -0.03);
+  v3(p.footL, -largo, ANKLE, -0.03);
+  v3(p.kneeR, 0.66, 0.2, -1);
+  v3(p.kneeL, -0.66, 0.2, -1);
+  p.peGiro = 0.32 * sobe;
+  /* Um resto de ponta de pé, pelo mesmo motivo de `poseDefesa`: no chão são
+     poucos graus que ninguém vê, e NO AR — que é onde metade das transformações
+     acontece — é o que impede as duas botas de ficarem plantadas num chão que
+     não existe. */
+  p.pontaR = 0.14;
+  p.pontaL = 0.14;
+
+  /* ------------------------------------------------------------------ o X
+   *
+   * As mãos sobem e ATRAVESSAM: a direita vai para o lado esquerdo e a esquerda
+   * para o direito, cruzando sete centímetros além do eixo. A direita passa por
+   * FORA (4 cm à frente em Z e 4 cm mais alta), que é o mesmo truque de
+   * `poseDefesa` e pelo mesmo motivo: os 4 cm de diferença são o que dá
+   * profundidade ao X em vez de deixá-lo um traço só visto de frente.
+   *
+   * A altura é medida: 1,93 m contra um alto de crânio em ~1,78 m. Quinze
+   * centímetros de folga são o que faz o gesto acontecer ACIMA da cabeça, que é
+   * o pedido literal — e não sobre o rosto, que é a guarda.
+   *
+   * Alcance: do ombro direito (0,19; 1,46; −0,10) até a mão direita cruzada
+   * (−0,07; 1,93; −0,06) são 0,54 m, contra 0,595 m de braço com o `estica`
+   * abaixo. São 91 % — cotovelo dobrado o bastante para a junta existir, e é
+   * ela que aponta para fora e fecha a silhueta.
+   */
+  const cxR = lerp(0.3, -0.07, sobe);
+  const cxL = lerp(-0.3, 0.07, sobe);
+  const cy = lerp(0.98, 1.93, sobe);
+  const cz = lerp(-0.14, -0.06, sobe);
+
+  /* E DEPOIS ELAS DESCEM PARA A CINTURA. O segundo tempo leva as duas mãos do
+     alto para os quadris, punhos cerrados e cotovelos escancarados para trás —
+     que é a mesma ancoragem de `poseCarga`, de propósito: as duas poses dizem
+     "estou empurrando ki para fora do corpo", e o corpo faz isso de um jeito só.
+     A diferença é o que veio antes e o que vem depois. */
+  const hxR = lerp(cxR, 0.33, desce);
+  const hxL = lerp(cxL, -0.33, desce);
+  const hy = lerp(cy, 1.0, desce);
+  const hz = lerp(cz, 0.17, desce);
+
+  v3(p.handR, hxR, hy + 0.04 * sobe * (1 - desce) + tr * 0.008, hz);
+  v3(p.handL, hxL, hy - 0.01 * sobe * (1 - desce) - tr * 0.008, hz + 0.04 * sobe * (1 - desce));
+
+  /* O COTOVELO. Cruzado no alto ele aponta para FORA e um pouco para trás (é o
+     que o mantém na borda da silhueta — a lição medida em `poseDefesa`); na
+     cintura ele vai para trás e para baixo, como o da carga. O polo interpola
+     entre os dois junto com a mão, senão o braço trocaria de dobra num quadro
+     no meio da descida. */
+  v3(
+    p.poleR,
+    lerp(1.05, 0.8, desce),
+    lerp(-0.1, -0.3, desce),
+    lerp(0.2, 0.78, desce),
+  );
+  v3(
+    p.poleL,
+    lerp(-1.05, -0.8, desce),
+    lerp(-0.1, -0.3, desce),
+    lerp(0.2, 0.78, desce),
+  );
+
+  /* PUNHOS CERRADOS o tempo todo — "com os braços cruzados na cabeça" e depois
+     "esses braços na cintura", e nos dois é punho fechado. É o detalhe que
+     separa esta pose da Genki Dama, que também levanta os dois braços e tem as
+     mãos ABERTAS porque está recebendo em vez de empurrar. */
+  p.punhoR = 1;
+  p.punhoL = 1;
+  p.esticaR = 0.025 * sobe * (1 - desce);
+  p.esticaL = 0.025 * sobe * (1 - desce);
+
+  /* O CABELO SOBE E NÃO DESCE MAIS. Ele acompanha o gesto inteiro em vez de
+     acompanhar um dos tempos: é a única parte do corpo que já está no estado
+     final quando a animação termina, e é ele que emenda a pose no lutador
+     transformado sem um degrau no meio. Ver `Fighter.aplicar`, onde o mesmo
+     canal ganha o espeto permanente do Super Saiyajin. */
+  p.cabelo = -(0.4 * sobe + 0.35 * desce + 0.25 * grito);
+}
+
 /* ------------------------------------------------------------------- defesa
 
    Os dois antebraços cruzados à frente do rosto e o corpo se encolhendo atrás

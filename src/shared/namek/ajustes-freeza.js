@@ -398,6 +398,109 @@ export const FREEZA = {
     /** A rapidez com que o corpo dele gira para encarar você.
      *  Faixa: 0.5 a 12. Padrão: 3.4. */
     giro: 3.4,
+
+    /* =======================================================================
+       AS MANOBRAS — o que o tira do vaivém
+       =======================================================================
+
+       *"Com a dificuldade atual do Freeza, ele só fica indo de um lado para o
+       outro. Ele tem que ser mais dinâmico e voar mais pelo cenário, tentar
+       pegar o player de outros ângulos."*
+
+       ------------------------------------------------------------- o defeito
+
+       O diagnóstico está certo e a causa é de uma linha só: os quatro números
+       acima (`distanciaIdeal`, `degrau`, `perto`, `investirEm`) eram
+       CONSTANTES. Ele orbitava sempre a 78 m, sempre 22 m acima de você, e a
+       única coisa que mudava era o LADO da órbita, trocado a cada 2 a 5
+       segundos. Um círculo horizontal de raio fixo trocando de sentido é
+       exatamente o "de um lado para o outro" da queixa — e não era um defeito
+       de código, era o desenho: uma órbita perfeita é previsível por
+       construção.
+
+       ------------------------------------------------------------- o conserto
+
+       Os quatro números deixaram de ser constantes e viraram o REPOUSO de uma
+       tabela. A cada poucos segundos ele sorteia uma manobra desta lista, e ela
+       reescreve a distância, a altura e a pressa dele por um punhado de
+       segundos. Nada de novo entrou na física — é o mesmo voo com os alvos
+       mudando debaixo dele —, e é isso que faz a mudança caber em quatro campos
+       por linha.
+
+       O que cada coluna quer dizer:
+
+         `nome`     só para você saber o que está lendo. O jogo ignora.
+         `peso`     a chance relativa de ela ser sorteada. Peso 4 sai o dobro
+                    das vezes de um peso 2. Peso 0 desliga a manobra.
+         `raio`     multiplica `distanciaIdeal`. 0,5 é briga colada; 1,6 é ele
+                    metralhando de longe.
+         `altura`   substitui `degrau` — quantos metros ACIMA de você ele fica.
+                    **Negativo é ele vindo POR BAIXO**, e é dessa linha que sai
+                    metade do "outros ângulos" do pedido.
+         `giro`     o quanto ele circunda enquanto está nela. 0 é vir reto na
+                    sua cara; 2 é rodear depressa.
+         `rapido`   `true` faz a manobra inteira sair em `arranque` (64 m/s) em
+                    vez da velocidade de cruzeiro (42). É o que faz ele
+                    ATRAVESSAR o cenário em vez de deslizar por ele.
+
+       ---------------------------------------------------- e a dificuldade nisso
+
+       Nada aqui muda o DANO dele — as manobras são todas de posição. O que elas
+       mudam é quanto tempo você passa com ele parado na sua tela, e isso corta
+       nos dois sentidos: ele fica mais difícil de acertar quando corre, e mais
+       fácil quando mergulha para 35 m e enche a sua tela. Se você quiser o
+       comportamento antigo de volta, ponha peso 0 em todas menos `orbita`. */
+    manobras: {
+      /** Segundos que cada manobra dura — sorteado entre os dois números.
+       *  DIMINUIR: ele fica elétrico, trocando de ideia toda hora.
+       *  AUMENTAR: cada manobra vira um trecho longo e legível.
+       *  Faixa: 0.8 a 12. Padrão: [1.9, 3.8]. */
+      duracao: [1.9, 3.8],
+
+      /** A chance de ele TROCAR DE LADO ao começar uma manobra nova (0,55 =
+       *  55 %). Antes ele trocava sempre, no relógio, e é isso que fazia o
+       *  vaivém metrônomo. Faixa: 0 a 1. Padrão: 0.55. */
+      trocarLado: 0.55,
+
+      /** Quantos segundos ele leva para assumir a distância e a altura novas.
+       *  É uma suavização: sem ela a troca de manobra seria um tranco.
+       *  Faixa: 0.2 a 4. Padrão: 0.9. */
+      transicao: 0.9,
+
+      lista: [
+        /* A ÓRBITA de sempre — ele rodeando na distância de briga. Continua
+           sendo a manobra mais comum, e tem de ser: é ela que dá à luta um
+           estado de repouso reconhecível, do qual as outras são um desvio. */
+        { nome: "orbita", peso: 4, raio: 1.0, altura: 22, giro: 1.0, rapido: false },
+
+        /* DO ALTO. Ele sobe bem acima do teto de briga e atira de cima. É a
+           silhueta clássica dele contra o céu, e obriga você a levantar a mira
+           num plano em que a maioria dos jogadores não procura. */
+        { nome: "alto", peso: 3, raio: 0.9, altura: 76, giro: 0.7, rapido: false },
+
+        /* POR BAIXO. `altura` negativa: ele desce ABAIXO de você e ataca de
+           baixo para cima. É o ângulo que não existia antes em momento nenhum
+           da luta — o `degrau` fixo em +22 garantia que ele estivesse sempre
+           acima —, e é o mais desconcertante dos seis. */
+        { nome: "rasante", peso: 3, raio: 0.72, altura: -30, giro: 1.2, rapido: true },
+
+        /* O FLANCO. Órbita rápida e larga: ele varre um arco grande pela
+           lateral, em arranque, e reaparece num rumo completamente diferente.
+           É a manobra que mais "voa pelo cenário" das seis. */
+        { nome: "flanco", peso: 4, raio: 1.2, altura: 10, giro: 2.1, rapido: true },
+
+        /* O MERGULHO. Ele fecha para 35 m em arranque e quase não circunda —
+           vem para cima. É a manobra que dá a ele a cara de predador, e é a
+           mais perigosa para ele: colado, você acerta tudo. Ele paga por ela. */
+        { nome: "mergulho", peso: 3, raio: 0.45, altura: 34, giro: 0.4, rapido: true },
+
+        /* O RECUO. Ele abre para 120 m e respira. Serve para duas coisas: dar à
+           luta um vale entre as investidas (sem ele, seis manobras agressivas
+           seguidas viram ruído) e devolver a você a janela de carregar um
+           especial. Peso baixo — é a pausa, não o padrão. */
+        { nome: "recuo", peso: 2, raio: 1.55, altura: 40, giro: 0.8, rapido: false },
+      ],
+    },
   },
 
   /* =========================================================================
@@ -730,6 +833,134 @@ export const FREEZA = {
       cor: 0x7a0fc4,
       /* O quanto ela persegue. Ver a explicação no Death Beam, acima. */
       homing: { turnRate: 16, arcMax: 44, duration: 5.5, cone: 44, acquire: 800 },
+    },
+
+    /* --------------------------------------------------------- DEATH CANNON
+       =========================================================================
+
+       *"Adicione um poder no Freeza em que ele coloca a mão para cima e cresce
+       rapidamente uma bola de poder escuro na sua mão acima da cabeça, e depois
+       ele atira no player. Essa bola é teleguiada."*
+
+       ------------------------------------------------- e por que ela não é a Death Ball
+
+       As duas são esferas que ele levanta, e é fácil achar que sobra uma. Elas
+       fazem coisas opostas, e cada número abaixo existe para manter a distância
+       entre as duas:
+
+         DEATH BALL     duas mãos · 3,2 s parado no ar · 19 m de raio ·
+                        22 s de recarga · mata um GRUPO · quase não persegue
+                        (16°/s, e só 44° no total)
+
+         DEATH CANNON   uma mão   · 1,15 s manobrando  · 6 m de raio  ·
+                        8,5 s de recarga · caça UMA pessoa · persegue de
+                        verdade (52°/s, 190° no total)
+
+       A Death Ball é o golpe de área que se anuncia e do qual se FOGE; esta é a
+       perseguidora que se anuncia pouco e da qual se DESVIA. Uma pune ficar
+       agrupado, a outra pune ficar parado. É a diferença entre a Genki Dama e o
+       Galick Gun do lado do jogador, e é por isso que ela cabia no repertório.
+
+       -------------------------------------------------- a bola que cresce na mão
+
+       *"Cresce rapidamente"* é `carga`, e ela é curta de propósito: 1,15 s
+       contra os 3,2 da Death Ball. Quem DESENHA a bola crescendo é o corpo
+       (`FreezaBody`, a pose `canhao`), a partir da fração da pose que a sala já
+       manda vinte vezes por segundo em `FREEZA_STATE.s` — não há mensagem nova
+       no protocolo para isto, e não podia haver: a bola tem de estar do mesmo
+       tamanho nas quinze telas ao mesmo tempo, e a fração da pose é a única
+       coisa da carga que já viaja.
+
+       É também por isso que `windup` aqui é ZERO. Ver a nota dele, abaixo. */
+    canhaoDaMorte: {
+      nome: "Death Cannon",
+
+      /** **A CARGA** — segundos com a mão erguida e a bola crescendo acima da
+       *  cabeça, antes de ela sair. É o seu aviso.
+       *  AUMENTAR: mais tempo para se afastar ou quebrar a linha de tiro.
+       *  DIMINUIR: ele fica assustador (0,5 quase não dá para reagir).
+       *  Faixa: 0.4 a 4. Padrão: 1.15. */
+      carga: 1.15,
+
+      /** **NÃO MEXA — tem de ser 0.**
+       *
+       *  Este campo não é a carga (essa é `carga`, logo acima): é quanto tempo o
+       *  DESENHO do projétil passa crescendo parado no ar depois de a bola já
+       *  ter saído. Ele existe porque o mesmo pool de esferas desenha a Genki
+       *  Dama do jogador, que de fato cresce na mão dele por lá.
+       *
+       *  Aqui a bola já cresceu — na mão, durante a `carga`, desenhada pelo
+       *  corpo. Qualquer valor acima de zero faria a esfera nascer de novo do
+       *  tamanho de um grão e inflar no ar enquanto a versão que a sala simula
+       *  já está a meio caminho do jogador: o dano aconteceria num lugar e o
+       *  desenho em outro. */
+      windup: 0,
+
+      /** **DANO, de uma vez só.** Você tem 100 de vida. 26 são um quarto dela —
+       *  entre a rajada (3 por bolinha) e a Death Ball (35), que é onde um golpe
+       *  de 8,5 s de recarga tem de ficar.
+       *  Faixa: 5 a 200. Padrão: 26. */
+      damage: Math.round(26 * R.dano),
+
+      /** Segundos de espera até o próximo. Curto em relação à Death Ball (22 s):
+       *  é o golpe médio dele, e a luta é mais interessante quando existe um.
+       *  AUMENTAR: ele quase não usa.
+       *  Faixa: 2 a 60. Padrão: 8.5. */
+      recarga: 8.5,
+
+      /** Energia que custa a ele. Faixa: 0 a 300. Padrão: 42. */
+      ki: 42,
+
+      /** O RAIO DA EXPLOSÃO, em metros. Menos de um terço da Death Ball (19) —
+       *  ela é uma bala perseguidora, não uma bomba de área. Ainda assim 6 m
+       *  perdoam bastante erro: é quase o tamanho do corpo dele.
+       *  DIMINUIR: fica muito mais fácil de escapar.
+       *  Faixa: 2 a 20. Padrão: 6. */
+      hitRadius: 6,
+
+      /** Velocidade, em m/s. Mais que o dobro da Death Ball (30) e ainda abaixo
+       *  do seu arranque (64): **dá para fugir dela em linha reta, e é de
+       *  propósito** — o que ela cobra é que você se comprometa com a fuga, e
+       *  quem se compromete não está atirando nele.
+       *  Faixa: 20 a 120. Padrão: 62. */
+      speed: 62,
+
+      /** Alcance, em metros. Faixa: 50 a 1800. Padrão: 900. */
+      range: 900,
+
+      /** Quantos segundos ela fica voando antes de sumir sozinha. 9 s a 62 m/s
+       *  são 558 m — mais que a distância de qualquer briga.
+       *  Faixa: 2 a 40. Padrão: 9. */
+      sustain: 9,
+
+      /** Tamanho da cratera. Entre a do Death Beam (0,2) e a da Death Ball (46).
+       *  Faixa: 0 a 30. Padrão: 9. */
+      power: 9,
+
+      /** Cor. Violeta quase preto — é o *"poder escuro"* do pedido, e ele é
+       *  escuro pelo único caminho que a mistura aditiva da tela permite: pouca
+       *  LUMINOSIDADE, e não preto (preto somado não acende nada e a bola
+       *  sumiria). Quem a lê como escura é o contraste com o roxo aceso do
+       *  corpo dele. Padrão: 0x3a0a5e. */
+      cor: 0x3a0a5e,
+
+      /* **A PERSEGUIÇÃO — é ela o pedido** (*"essa bola é teleguiada"*), e os
+         números dizem quanto:
+
+           turnRate 52°/s   três vezes e meia a Death Ball (16)
+           arcMax   190°    ela pode dar quase meia-volta na vida inteira
+           duration 3.6 s   perseguindo por 223 m de voo
+           cone     70°     ela corrige de quase todo desalinhamento
+
+         A conta que decide se dá para desviar é a de sempre (`d = v/ω`): a
+         52°/s (0,908 rad/s) quem arranca de lado (64 m/s) vence a corrida
+         angular a menos de **70 m**. Ou seja: perto, o arranque lateral ganha
+         dela; longe, não ganha mais e é preciso quebrar o cone ou pôr relevo no
+         caminho. É o mesmo desenho que a bola de ki do jogador tem contra ele
+         — ver `NAMEK.blast.homing.ganhoNoFreeza` —, e a simetria não é
+         coincidência: os dois lados agora têm um tiro que persegue de verdade e
+         uma resposta que exige compromisso. */
+      homing: { turnRate: 52, arcMax: 190, duration: 3.6, cone: 70, acquire: 900 },
     },
   },
 

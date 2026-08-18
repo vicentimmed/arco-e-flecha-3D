@@ -418,6 +418,83 @@ const ESTILO = {
     tremor: 0.55,
     tremorT: 0.4,
   },
+
+  /* ------------------------------------------------- O DEATH CANNON DO BOSS
+   *
+   * *"Uma bola de poder escuro… e essa bola é teleguiada."*
+   *
+   * A terceira entrada da tabela, e a primeira que não é de um golpe do
+   * jogador. Ela existe porque o padrão (a Genki Dama, ver `estiloDe`) descreve
+   * uma LUA: redonda, branca por dentro, tombando devagar, sem rastro. Esta é o
+   * oposto em todas as quatro — e a mais importante das quatro é o miolo.
+   *
+   * A Death Ball dele continua sem entrada e continua caindo no padrão, e isso
+   * está certo: ela É uma lua, e do tamanho de uma. Este é o tiro.
+   *
+   * --------------------------------------------------------------- o "escuro"
+   *
+   * `miolo: 1` — **zero branco**. As três outras esferas do jogo puxam o núcleo
+   * para o branco (0,42 na Genki Dama, 0,94 no Galick Gun); esta não puxa nada,
+   * e o núcleo sai exatamente na cor do golpe. É o mais escuro que uma esfera
+   * pode ficar aqui, e o limite não é de gosto: a mistura é ADITIVA (ver o
+   * cabeçalho), e preto somado ao céu não acende nada — uma bola literalmente
+   * preta seria uma bola invisível.
+   *
+   * O que faz o olho ler "escura" mesmo assim é a companhia: o violeta de
+   * `NAMEK.freeza.poderes.canhaoDaMorte.cor` tem um terço da luminosidade do
+   * magenta do corpo dele, então ela sai da mão dele como uma mancha FUNDA
+   * contra uma criatura acesa. E quem carrega a leitura de verdade é a bola da
+   * CARGA, na mão, essa sim opaca e quase preta — ver `FreezaBody.montarCarga`.
+   *
+   * `alinhar: true` e o núcleo alongado (0,86 × 1,05) pelo motivo do Galick
+   * Gun: ela APONTA, e um projétil que persegue precisa mostrar para onde está
+   * virando. Sem o alinhamento, as curvas dela — que são o golpe inteiro — não
+   * apareceriam. */
+  canhaoDaMorte: {
+    /* Quase no punho: ela é pequena (6 m contra os 11 da Genki Dama) e a pose
+       de erguer UMA mão é o que a anuncia. Subir mais esconderia o gesto. */
+    subir: 0.1,
+    alinhar: true,
+    /* Ela ROLA enquanto voa, nos dois eixos e depressa. A Genki Dama tomba
+       (0,3–0,5 rad/s, peso); o Galick Gun rosca num eixo só (7 rad/s, bala).
+       Esta faz as duas coisas devagar demais para ser bala e rápido demais para
+       ser lua — é a leitura de uma coisa instável, que é o que ela é. */
+    giroX: 0.9,
+    giroY: 4.2,
+    /* A CASCA DE ARAME, como a Genki Dama e ao contrário do Galick Gun: é ela
+       que dá o crepitar, e é a mesma peça que a bola da carga usa na mão dele.
+       As duas metades do golpe têm de ser obviamente o mesmo objeto. */
+    arame: true,
+    cascaAlfa: 0.42,
+    nucleoR: 0.86,
+    nucleoL: 1.05,
+    nucleoAlfa: 0.95,
+    /** ZERO BRANCO. Ver o cabeçalho desta entrada — é a linha do "escuro". */
+    miolo: 1,
+    claro: 0,
+    respiro: 5.6,
+    amplitude: 0.05,
+    /* Rastro curto e denso, e a hélice do Galick Gun um pouco mais fechada: as
+       curvas dela são o que ela tem para contar, e uma fita que desenha a curva
+       é a única forma de o jogador VER que a bola está atrás dele. */
+    rastro: 0.05,
+    rastroN: 3,
+    atraso: 1.0,
+    perseguicao: 0.18,
+    espiral: 0.5,
+    giroEspiral: 1.15,
+    traco: 0.5,
+    /* Estouro um pouco acima do comum e bem abaixo do da Genki Dama: ela tira
+       um quarto da vida, não a partida. */
+    fagulhas: 1.2,
+    floco: 1.1,
+    duracao: 1.1,
+    abertura: ESTOURO_ESCALA,
+    estouroR: 1.1,
+    estouroL: 0.5,
+    tremor: 0.7,
+    tremorT: 0.55,
+  },
 };
 
 /** O estilo de um `kind`, com a Genki Dama como padrão para um golpe novo. */

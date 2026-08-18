@@ -1450,49 +1450,180 @@ export const NAMEK = {
     homing: {
       /** graus/s — teto de giro da direção. Era 52 (e 26 antes disso). */
       turnRate: 62,
-      /** s — depois disto ela segue reta, sempre. 62 × 0,75 = 46,5° no total. */
-      duration: 0.75,
+
+      /* s — depois disto ela segue reta, sempre.
+       *
+       * ------------------------------------- O PRAZO ESTAVA CURTO PARA A BRIGA
+       *
+       * Eram 0,75 s, e o defeito só apareceu quando ele foi investigado contra o
+       * Freeza: **o prazo é medido em SEGUNDOS e o problema é em METROS.** A
+       * 78 m/s, 0,75 s são 58,5 m de voo — e aí basta perguntar a que distância
+       * as pessoas de fato atiram umas nas outras.
+       *
+       * Medido, com oito bots por três minutos (1 421 rajadas com alvo travado):
+       *
+       *     p10 51 m   ·   mediana 63 m   ·   p90 84 m
+       *
+       * Ou seja: **dois em cada três tiros do jogo saíam para além do ponto em
+       * que a bola larga a curva.** Ela perseguia o trecho fácil do voo — o
+       * começo, quando o erro angular ainda é pequeno — e cruzava reta
+       * justamente o pedaço em que o alvo já teve tempo de sair do lugar. O
+       * perdão de mira que este bloco inteiro discute existia, na maioria dos
+       * disparos, só na metade do caminho.
+       *
+       * Não era um defeito de código: 58,5 m de perseguição contra um `acquire`
+       * de 50 m são coerentes entre si, e os dois foram escritos quando a briga
+       * era calibrada para 50 m. A briga é que mudou de lugar.
+       *
+       * ----------------------------------------------- e por que 0,85 e não 1,0
+       *
+       * 1,0 s cobriria 78 m — o p75 dos tiros — e é o número que a investigação
+       * apontou. **A regra que abre este bloco não deixa**, e ela não é de
+       * gosto: `turnRate × duration` (a correção total) tem de caber dentro do
+       * `cone`, senão todo alvo dentro do cone vira acerto garantido e o cone
+       * deixa de limitar coisa alguma — é o defeito de origem, documentado três
+       * parágrafos abaixo, e ele já foi consertado uma vez.
+       *
+       *     62°/s × 0,855 s = 53°  ←  o cone, exatamente
+       *
+       * 0,85 é o teto, com dois centésimos de folga: 52,7° de correção dentro
+       * de 53° de cone. Ele leva a perseguição a **66,3 m de voo**, o que passa
+       * a cobrir a mediana da briga em vez de ficar sete metros abaixo dela.
+       *
+       * Passar disso exige subir o `cone` junto (foi o que se fez quando o giro
+       * dobrou, e de novo quando ele subiu 20 %) — e aí a conversa deixa de ser
+       * "a bola acompanha o voo inteiro" e passa a ser "a bola perdoa uma mira
+       * pior", que é outra decisão e cobra do outro lado: quem está fugindo
+       * também fica mais fácil de acertar. Contra o FREEZA a regra é quebrada de
+       * propósito — ver `duracaoNoFreeza`, e o porquê em `ganhoNoFreeza`.
+       *
+       * **Isto vale para os bots também**, e não por acaso: `server/namek/
+       * bots.js` lê este mesmo bloco (`homing: NAMEK.blast.homing`) para as
+       * bolas deles, que é o que garante que a rajada de um bot e a de um humano
+       * curvem igual. Medido na bancada, a mudança sobe a letalidade deles — ver
+       * a nota no fim deste comentário. */
+      duration: 0.85,
+
       /** graus — meio-ângulo do cone. Fora dele, não corrige. Sobe com o giro
-       *  (era 44), senão a correção total passaria do cone. */
+       *  (era 44), senão a correção total passaria do cone. É ele que fixa o
+       *  teto do `duration`, logo acima: 62 × 0,855 = 53. */
       cone: 53,
-      /** m — alcance da escolha de alvo, no instante do disparo. */
-      acquire: 50,
+
+      /* m — alcance da escolha de alvo, no instante do disparo.
+       *
+       * Eram 50, e é o outro lado da mesma medida do `duration`: na briga
+       * medida acima, **91 % dos tiros saíam de mais de 50 m**. Fora desse raio
+       * a bola não travava em ninguém, ou seja saía reta por definição — a
+       * perseguição que este bloco descreve simplesmente não existia na quase
+       * totalidade dos disparos do jogo.
+       *
+       * O que salvava a partida era a MIRA ASSISTIDA (`NAMEK.lock.mira`), que
+       * trava em quem está sob o cursor e **não tem alcance nenhum** — uma
+       * ausência deliberada e documentada lá. Só que ela é o atalho, não a
+       * regra: quem atirasse sem o retículo em cima do adversário não tinha
+       * correção alguma, a qualquer distância acima de 50 m.
+       *
+       * 90 m cobrem o p90 da briga (84 m) e continuam MUITO abaixo do alcance
+       * da própria bola (78 m/s × 15 s = 1 170 m): tiro de longe continua sendo
+       * tiro de longe, e continua sendo reto.
+       *
+       * Este número é só de ESCOLHA DE ALVO — ele não faz a bola curvar mais um
+       * grau. Quem decide isso são `turnRate`, `duration` e `cone`, acima. */
+      acquire: 90,
 
       /* ================================ E MAIS UM TANTO CONTRA O FREEZA ====
        *
-       * *"O contra o Freeza: os poderes rápidos têm 40 % mais de perseguição,
-       * mas não deve ficar impossível para o Freeza desviar — se esse número
-       * for muito grande, ajuste."*
+       * *"Está muito difícil acertar o poder rápido no Freeza. Ajuste isso.
+       * Talvez para ele deixar o poder rápido ainda mais teleguiado."*
        *
-       * O pedido traz um número E uma condição, e a condição manda (é a mesma
-       * regra que o `turnRate` do Kienzan já documenta). A condição, escrita
-       * como aritmética: o boss tem de continuar vencendo a corrida angular
-       * dentro do alcance de aquisição, ou seja `v_boss / ω ≥ acquire`.
+       * ------------------------------------------------- o que estava errado
        *
-       *   ω com este fator .... 62 × 1,15 = 71,3°/s = 1,244 rad/s
-       *   v mínimo exigido .... 1,244 × 50 m = 62,2 m/s
-       *   v do boss (arranque 64 × `dificuldades.mover`)
-       *       tirano 0,98 → 62,7 ✓ · imperador 1,0 → 64 ✓ · absoluto 1,05 → 67 ✓
+       * O fator antigo era 1,15, e ele foi escolhido por uma conta que olhava
+       * para o lugar errado: `v_boss / ω ≥ acquire`, com `acquire` em 50 m. Só
+       * que **a briga não acontece a 50 m** — `NAMEK.freeza.voo.distanciaIdeal`
+       * são 78, e desde que o corpo dele triplicou de tamanho é lá que ele fica.
+       * A trava foi calibrada contra uma distância que não existe na luta.
        *
-       * Ou seja: **1,15 é o maior fator que ainda deixa o Freeza desviar com o
-       * arranque em qualquer dificuldade.** A 1,25 o mínimo exigido iria a
-       * 67,6 m/s — acima do arranque do próprio jogador —, e a rajada passaria
-       * a acertar o boss sem que ele tivesse resposta nenhuma.
+       * E a distância não era nem a metade do problema. A bola voa a 78 m/s
+       * (`blast.speed`), então 78 m de percurso são **1,0 s de voo** — contra
+       * `duration` de 0,75 s. Ou seja: a bola largava a perseguição a 58 m do
+       * cano e cruzava os últimos vinte metros EM LINHA RETA, e nesse quarto de
+       * segundo final um boss a 42 m/s anda dez metros. A mira estava certa, a
+       * curva estava certa, e mesmo assim ela chegava no lugar onde ele estava
+       * um pedaço da vida da bola atrás. Era um relógio vencendo, não uma
+       * esquiva.
        *
-       * E o 40 % do pedido está lá, medido do lugar certo: contra o Freeza o
-       * giro sai de 52 (o número de antes destes dois ajustes) para 71,3°/s, que
-       * são **+37 %**. Os dois pedidos se somam em vez de se sobreporem — o
-       * +20 % geral vale contra todo mundo, e este é o que sobra dos 40 %
-       * depois de descontá-lo.
+       * ------------------------------------------------------------- o conserto
        *
-       * O CONE acompanha pelo mesmo motivo de sempre (46,5 × 1,15 = 53,5° de
-       * correção precisam caber num cone de 53 × 1,15 = 61°), e quem aplica os
-       * dois é `Bolas.perseguir`, só quando o alvo travado é `NAMEK.freeza.id`.
+       * Três fatores em vez de um, porque as três travas do `perseguir` são
+       * independentes e a antiga mexia em duas delas amarradas:
        *
-       * Vale para a bola de ki e mais nada: "poder rápido" é como o jogo chama
-       * o tiro do botão esquerdo, e é o único golpe do modo que sai seis vezes
-       * por segundo. */
-      ganhoNoFreeza: 1.15,
+       *   `ganhoNoFreeza`    o GIRO — quão depressa ela vira
+       *   `duracaoNoFreeza`  o PRAZO — por quanto tempo ela ainda vira
+       *   `coneNoFreeza`     o CONE — de que desalinhamento ela ainda corrige
+       *
+       * O prazo é o que estava faltando e é o que mais devolve acerto: 0,75 ×
+       * 2,4 = **1,8 s**, ou 140 m de voo perseguindo. A bola agora acompanha o
+       * boss do disparo até o impacto em qualquer distância de briga real, que é
+       * exatamente o "ainda mais teleguiado" do pedido.
+       *
+       * O giro sobe a 62 × 1,45 = **89,9°/s** (1,569 rad/s). A corrida angular
+       * (`d = v/ω`) passa a ser vencida pelo boss só a menos de 62,7/1,569 =
+       * **40 m** — dentro disso ele ainda sai da frente com o arranque, e 40 m é
+       * metade da distância em que ele escolhe brigar.
+       *
+       * O CONE, ao contrário dos outros dois, ficou onde estava (1,15 → 61°), e
+       * isso é a decisão de desenho inteira: **a esquiva dele deixou de ser
+       * esperar o cronômetro e passou a ser SAIR DO CONE.** Uma quebrada lateral
+       * de verdade — o arranque de través, que é o gesto que ele já tem — tira
+       * o boss dos 61° e a bola segue reta, como sempre seguiu. O que acabou foi
+       * o desvio de graça, o que ele ganhava por a bola simplesmente desistir.
+       *
+       * Sim, a correção total (89,9 × 1,8 = 162°) passa do cone (61°), e isso
+       * quebra de propósito a regra que o resto deste bloco defende ("a correção
+       * total tem de caber no cone"). Ela vale contra GENTE, que é do tamanho de
+       * um poste e para quem "acerto garantido dentro do cone" seria o software
+       * jogando no lugar do jogador. Contra um alvo de 6,7 m que voa a 42 m/s e
+       * manobra o tempo todo (ver `voo.manobras`), a regra que sobra é a outra:
+       * quem manteve o retículo em cima dele acerta, quem não manteve, não.
+       *
+       * E o ALCANCE DE AQUISIÇÃO, que era o outro pé do defeito: ver
+       * `acquireNoFreeza`, logo abaixo.
+       *
+       * Os três valem para a bola de ki e mais nada — "poder rápido" é como o
+       * jogo chama o tiro do botão esquerdo —, e quem os aplica é
+       * `Bolas.perseguir`, só quando o alvo travado é `NAMEK.freeza.id`. */
+      ganhoNoFreeza: 1.45,
+
+      /** Multiplica `duration` contra o boss. 0,85 × 2,1 = 1,79 s = 139 m de
+       *  voo perseguindo, ou seja a bola acompanha ele do disparo ao impacto em
+       *  qualquer distância real de briga. É o fator que mais devolveu acerto —
+       *  ver a conta do quarto de segundo perdido, acima.
+       *  **Era 2,4 e virou 2,1 sem mudar nada na prática:** o `duration` de
+       *  base subiu de 0,75 para 0,85 (ver lá), e o fator foi baixado junto para
+       *  o produto continuar nos mesmos 1,79 s. Quem manda aqui é o produto, não
+       *  o fator. Faixa: 1 a 4. */
+      duracaoNoFreeza: 2.1,
+
+      /** Multiplica `cone` contra o boss. **Fica onde estava** (61°): é ele que
+       *  guarda a esquiva do Freeza, que agora é sair do cone em vez de esperar
+       *  o prazo vencer. AUMENTAR tira dele a última resposta que ele tem.
+       *  Faixa: 1 a 1.6. */
+      coneNoFreeza: 1.15,
+
+      /** m — o `acquire` que vale quando o candidato é o BOSS.
+       *
+       *  Ele continua existindo depois de o `acquire` comum subir para 90, e a
+       *  razão é que os dois medem brigas diferentes: 90 cobrem o p90 de uma
+       *  briga entre gente (84 m), e o Freeza tem manobras que o levam a 120 m
+       *  do alvo (`voo.manobras`, a linha `recuo`) sem parar de atirar. Com 90
+       *  ele teria um trecho do repertório em que a bola volta a não travar
+       *  nele — que é o defeito inteiro, de volta pela porta dos fundos.
+       *
+       *  260 m cobrem a manobra mais aberta com folga de duas vezes e ainda
+       *  estão bem abaixo do alcance da própria bola (78 m/s × 15 s = 1 170 m).
+       *  Quem lê isto é `NamekGame.escolherAlvoDaBola`. Faixa: 50 a 900. */
+      acquireNoFreeza: 260,
     },
   },
 

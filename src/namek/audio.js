@@ -2474,6 +2474,18 @@ export class NamekAudio {
       return;
     }
 
+    if (kind === "canhaoDaMorte") {
+      /* O ARREMESSO do Death Cannon, e só ele: a CARGA deste golpe não sai por
+         aqui, porque ela começa 1,15 s antes do disparo e este método é chamado
+         no disparo. Quem a toca é `cargaDoCanhao`, chamado da borda de subida da
+         pose — ver o comentário lá e o de `BossSystem.aplicarPose`.
+         O arremesso de esfera do Galick Gun, uma quarta abaixo (0,78): mesma
+         física, sem brilho, que é o eixo em que a família do boss inteira se
+         separa da dos jogadores. */
+      this.tocar(this.buf.arremessoEsfera, onde, 1.15, 0.78, "grande", 3);
+      return;
+    }
+
     /* Os dois que SAEM DA MÃO e voam sozinhos. Cada um com o timbre dele — ver
        `arremessoDeEsfera` e `zunidoDeDisco` para o porquê de não ser mais o
        mesmo buffer com três afinações.
@@ -2653,6 +2665,17 @@ export class NamekAudio {
           vol: 1.9,
           solene: true,
           taxa: () => 0.97 + Math.random() * 0.06,
+        };
+      /* O Death Cannon: um quarto do raio da Death Ball e um quarto do dano.
+         `estouroG` — a bomba comum — afinada para baixo, que é o mesmo desconto
+         de brilho que separa cada golpe dele do golpe equivalente do jogador. */
+      case "canhaoDaMorte":
+        return {
+          buf: "estouroG",
+          vol: 1.6,
+          classe: "grande",
+          prio: 3,
+          taxa: () => 0.76 + Math.random() * 0.1,
         };
       /* O Death Beam FURA (`power` 0,2 e `craterDeep` 3): ele não abre buraco,
          abre poço. O `estaloTerra` é o estouro mais curto e mais seco do banco e
@@ -3025,6 +3048,26 @@ export class NamekAudio {
        quem chama passa a posição corrente do corpo, e ela anda. */
     const onde = { x: p.x, y: p.y, z: p.z };
     this._agendar(1.55, () => this.risadaDoFreeza(onde, "entrada"));
+  }
+
+  /**
+   * **A BOLA ESCURA CRESCENDO NA MÃO DELE** — a carga do Death Cannon.
+   *
+   * Chamada da borda de subida da pose (`BossSystem.aplicarPose`) e não do
+   * `FREEZA_POWER`, e a distinção é a única coisa que este método tem de
+   * próprio: os outros golpes dele avisam o áudio no DISPARO e o windup é
+   * agendado para trás a partir dele; este avisa na CARGA, porque quem a
+   * desenha é o corpo e não o projétil, e não há windup nenhum viajando.
+   *
+   * O timbre é a `cargaMorte` da Death Ball uma quinta e meia acima (1,5) e sem
+   * a mistura solene: mesma família — é o mesmo tirano juntando energia —, e o
+   * agudo é o que diz que esta é a bola pequena e rápida, não a que apaga a
+   * arena. Duas cargas do mesmo timbre e da mesma altura seriam a confusão
+   * exata que o jogador não pode ter: as duas poses erguem o braço, e o som é
+   * metade do que separa uma da outra a duzentos metros.
+   */
+  cargaDoCanhao(p) {
+    this.tocar(this.buf.cargaMorte, p, 0.85, 1.5, "medio", 2);
   }
 
   /**

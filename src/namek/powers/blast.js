@@ -141,9 +141,17 @@ const TINTA_ALHEIA = [1.0, 0.9, 0.82];
  * literal aqui seria a primeira coisa a sair de sincronia se ele mudasse. */
 const ID_FREEZA = NAMEK.freeza.id;
 const GANHO_NO_FREEZA = NAMEK.blast.homing.ganhoNoFreeza ?? 1;
+/* O cone tem fator PRÓPRIO, e não o do giro. Ele era o mesmo número por uma
+   regra que só vale contra gente — a conta inteira, e por que ela deixou de
+   valer contra um alvo de 6,7 m, está em `NAMEK.blast.homing.ganhoNoFreeza`. */
 const COS_CONE_BOSS = Math.cos(
-  (NAMEK.blast.homing.cone * GANHO_NO_FREEZA * Math.PI) / 180,
+  (NAMEK.blast.homing.cone * (NAMEK.blast.homing.coneNoFreeza ?? GANHO_NO_FREEZA) * Math.PI) / 180,
 );
+/** s — o prazo de perseguição contra o boss. Ele era o mesmo de todo mundo
+ *  (0,75 s) e era o defeito: a 78 m/s, 0,75 s são 58 m, e o boss briga a 78 —
+ *  a bola largava a curva antes de chegar nele, todas as vezes. */
+const DURACAO_NO_FREEZA =
+  NAMEK.blast.homing.duration * (NAMEK.blast.homing.duracaoNoFreeza ?? 1);
 
 const comp = (x, y, z) => Math.sqrt(x * x + y * y + z * z);
 
@@ -416,7 +424,12 @@ export class BlastPool {
       }
 
       const i3 = i * 3;
-      if (this.alvo[i] !== null && this.idade[i] <= duracaoHoming) {
+      /* O PRAZO É POR ALVO, e não do pool: contra o boss ele é outro. Ver
+         `DURACAO_NO_FREEZA` — é a trava que estava vencendo antes de a bola
+         chegar, e a única das três que não dava para corrigir dentro de
+         `perseguir` (lá dentro a bola já teria sido dispensada). */
+      const prazo = this.alvo[i] === ID_FREEZA ? DURACAO_NO_FREEZA : duracaoHoming;
+      if (this.alvo[i] !== null && this.idade[i] <= prazo) {
         this.perseguir(i, i3, alvos, nAlvos, dt, cosCone, giroMax);
       }
 
@@ -603,16 +616,13 @@ export class BlastPool {
      * *"Contra o Freeza, os poderes rápidos têm mais perseguição — mas não deve
      * ficar impossível para ele desviar."*
      *
-     * O ganho multiplica as DUAS travas juntas, e ter de ser as duas é a regra
-     * que este arquivo já documenta em dois lugares: `turnRate × duration` (a
-     * correção total) precisa caber dentro do `cone`. Multiplicar só o giro
-     * devolveria o defeito de origem — todo alvo dentro do cone virando acerto
-     * garantido, e o cone deixando de limitar coisa alguma.
-     *
-     * O fator, a conta que o escolheu e o porquê de ele não ser os 40 % pedidos
-     * estão em `NAMEK.blast.homing.ganhoNoFreeza`. Em uma linha: 1,15 é o maior
-     * valor que ainda deixa o boss vencer a corrida angular com o arranque
-     * dentro dos 50 m em que uma bola pode travá-lo.
+     * O ganho multiplica o GIRO e o CONE por fatores separados, e o PRAZO é
+     * multiplicado por um terceiro, lá em `update` (ver `DURACAO_NO_FREEZA`).
+     * Três e não um porque as três travas falham de jeitos diferentes, e a que
+     * de fato tornava o boss quase inacertável era o prazo — a bola desistia da
+     * curva a 58 m e ele briga a 78. A conta inteira, e por que o cone é o único
+     * que NÃO subiu (é ele que sobrou como esquiva dele), está em
+     * `NAMEK.blast.homing.ganhoNoFreeza`.
      *
      * É lido do ALVO travado e não de uma bandeira no disparo, e isso importa:
      * a trava viaja na mensagem (`NC2S.BLAST.target`), então a bola de um bot,

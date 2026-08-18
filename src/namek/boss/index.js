@@ -427,8 +427,25 @@ export class BossSystem {
     this.alvo.pitch = msg.i ?? 0;
     this.alvo.roll = msg.r ?? 0;
     this.auraForca = msg.a ?? 0;
+    const poseAntes = this.pose;
     this.pose = msg.u ?? POSE.parado;
     this.fracao = msg.s ?? 0;
+    /* **O SOM DA CARGA DO DEATH CANNON, sem uma mensagem a mais.**
+     *
+     * Os outros golpes dele avisam o áudio pelo `FREEZA_POWER`, que chega no
+     * instante do DISPARO — e para este golpe isso seria tarde: o que precisa
+     * de som é a bola crescendo na mão, que acontece 1,15 s antes. A Death Ball
+     * não tem esse problema porque o `windup` dela viaja junto do disparo e o
+     * áudio o agenda para trás; aqui a carga é desenhada pelo corpo, e não pelo
+     * projétil, então não há windup nenhum a agendar.
+     *
+     * A borda de subida da pose responde por ela: `u` já chega vinte vezes por
+     * segundo, a transição para `POSE.canhao` acontece uma vez por golpe, e ela
+     * acontece no mesmo pacote em todas as telas. Zero campo novo no protocolo,
+     * que é a mesma economia que a risada da Death Ball faz. */
+    if (this.pose === POSE.canhao && poseAntes !== POSE.canhao) {
+      this.audio?.cargaDoCanhao?.(this.pontoDoPeito(this._pontoTmp));
+    }
     this.amostraEm = msg.w ?? 0;
     this.barra.setKi(msg.k ?? 1);
 
@@ -770,7 +787,13 @@ export class BossSystem {
    */
   matou(kind) {
     if (!this.ativo) return false;
-    if (kind !== "freeza" && kind !== "freezaOnda" && kind !== "raioDaMorte" && kind !== "esferaDaMorte") {
+    if (
+      kind !== "freeza" &&
+      kind !== "freezaOnda" &&
+      kind !== "raioDaMorte" &&
+      kind !== "esferaDaMorte" &&
+      kind !== "canhaoDaMorte"
+    ) {
       return false;
     }
     /* A gargalhada teatral, a mesma da entrada — este é o outro acontecimento

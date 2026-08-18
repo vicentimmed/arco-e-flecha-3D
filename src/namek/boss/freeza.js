@@ -360,6 +360,12 @@ export const POSE = {
    * intactos: eles são números na rede, e renumerá-los trocaria o Death Beam
    * pela Death Ball em qualquer cliente de uma versão diferente. */
   morte: 7,
+
+  /** **A CARGA DO DEATH CANNON** — a mão erguida e a bola escura crescendo
+   *  acima da cabeça. Esta VOLTA a ser uma pose de rede (o servidor a manda em
+   *  `FREEZA_STATE.u`), e o índice é 8 e não 7 pela mesma regra do parágrafo
+   *  acima: o 7 já está gasto com a morte, que é local mas ocupa lugar. */
+  canhao: 8,
 };
 
 export class FreezaBody {
@@ -427,12 +433,17 @@ export class FreezaBody {
        `NAMEK.freeza.cor` e não de um número escrito aqui. */
     this.aura = new Aura(this.auraPivo, NAMEK.freeza.cor);
 
+    /* --------------------------------------------- A BOLA QUE CRESCE NA MÃO
+     * O Death Cannon. Ver `montarCarga` para o que ela é e por que ela mora no
+     * CORPO em vez de sair do pool de esferas como os outros projéteis. */
+    this.carga = this.montarCarga();
+
     /* --------------------------------------------------------- os relógios */
     this._t = 0;
     /** 0…1 — o quanto a pose corrente está aplicada. Toda troca de pose é
      *  AMORTECIDA: o que faz parecer animação de verdade não é a quantidade de
      *  poses, é a interpolação entre elas nunca ser instantânea (§10 do plano). */
-    this._peso = new Float32Array(8);
+    this._peso = new Float32Array(9);
     this._peso[POSE.parado] = 1;
     this._poseAtual = POSE.parado;
     this._fracao = 0;
@@ -624,6 +635,118 @@ export class FreezaBody {
       // padrão o faria sumir de lado. Mesma decisão da aura.
       if (o.isMesh) o.frustumCulled = false;
     });
+  }
+
+  /**
+   * A BOLA ESCURA DA CARGA — o Death Cannon crescendo na mão dele.
+   *
+   * ------------------------------------------------- por que ela não é um projétil
+   *
+   * Todo o resto do que ele atira sai do pool de esferas (`powers/orb.js`), e
+   * aquele pool até sabe desenhar uma carga: a Genki Dama do jogador cresce na
+   * mão dele por lá. **Aqui isso não serviria**, e a razão é uma só: aquela
+   * carga é desenhada no PONTO em que o golpe nasceu, parada no ar. O Freeza
+   * continua manobrando enquanto forma esta bola (só a Death Ball o congela),
+   * então a esfera ficaria para trás no primeiro metro e ele voaria para longe
+   * de uma bola pendurada no céu.
+   *
+   * Pendurada na MÃO, ela vai junto de graça — é filha do osso, e o osso já é
+   * animado. E o tamanho dela sai da fração da pose, que a sala já manda vinte
+   * vezes por segundo em `FREEZA_STATE.s`: **nenhuma mensagem nova no protocolo
+   * para um golpe inteiro**, e a bola do mesmo tamanho nas quinze telas.
+   *
+   * -------------------------------------------------------------- e o "escuro"
+   *
+   * Duas malhas, e as duas existem porque "escuro" e "aceso" não cabem no mesmo
+   * material. O NÚCLEO é opaco e quase preto, desenhado normalmente: ele TAPA o
+   * que está atrás, e é isso — e não a cor — que faz o olho ler um buraco em vez
+   * de uma luz roxa. A CASCA é de arame, aditiva, na cor dele: é o que impede o
+   * buraco de virar uma bola de boliche, e é ela que dá o crepitar.
+   *
+   * A ordem entre as duas é o efeito inteiro: energia negra é uma coisa preta
+   * com fogo por fora.
+   */
+  montarCarga() {
+    const P = NAMEK.freeza.poderes.canhaoDaMorte;
+    if (!P) return null;
+
+    /* O raio, em unidades de MONTAGEM (a raiz é que cresce — ver `ESCALA`).
+       62 % do raio de MORTE, e a diferença é a regra de sempre deste jogo: a
+       área que mata é mais generosa que o desenho, nunca o contrário. */
+    const raioMax = ((P.hitRadius ?? 6) * 0.62) / ESCALA;
+
+    const grupo = new THREE.Group();
+    grupo.visible = false;
+    /* Na mão DIREITA — a mesma de onde sai o Death Beam (`maoEm(1)` no
+       servidor). Um golpe por mão seria arbitrário; a mão que aponta é a que
+       carrega. */
+    this.bracos[1].mao.add(grupo);
+
+    const gNucleo = new THREE.SphereGeometry(1, 16, 12);
+    const nucleo = new THREE.Mesh(
+      gNucleo,
+      new THREE.MeshBasicMaterial({ color: 0x120220 }),
+    );
+    nucleo.frustumCulled = false;
+    grupo.add(nucleo);
+    this._geos.push(gNucleo);
+
+    const gCasca = new THREE.IcosahedronGeometry(1, 1);
+    const casca = new THREE.Mesh(
+      gCasca,
+      new THREE.MeshBasicMaterial({
+        color: NAMEK.freeza.cor,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    casca.frustumCulled = false;
+    grupo.add(casca);
+    this._geos.push(gCasca);
+
+    return { grupo, nucleo, casca, raioMax };
+  }
+
+  /**
+   * A carga, por quadro. Some sozinha quando a pose sai de cena.
+   *
+   * O tamanho é `fração^0,45`, e o expoente é o *"cresce RAPIDAMENTE"* do
+   * pedido escrito como aritmética: com 0,45 a bola está com 73 % do tamanho na
+   * metade da carga e chega ao fim enchendo devagar. Linear daria um balão
+   * inflando em velocidade constante — é a mesma escolha que `powers/orb.js`
+   * faz na Genki Dama, com o expoente puxado para baixo porque este golpe tem
+   * um terço do tempo daquele.
+   *
+   * O peso da pose (`w`) multiplica o raio junto, e é ele que faz a bola
+   * MURCHAR na mão em vez de piscar quando o golpe sai ou é interrompido.
+   */
+  atualizarCarga(dt) {
+    const c = this.carga;
+    if (!c) return;
+    const w = this._peso[POSE.canhao];
+    if (w < 0.02) {
+      if (c.grupo.visible) c.grupo.visible = false;
+      return;
+    }
+    c.grupo.visible = true;
+
+    const f = this._fracao < 0 ? 0 : this._fracao > 1 ? 1 : this._fracao;
+    const r = Math.max(0.001, c.raioMax * Math.pow(f, 0.45) * w);
+    /* Ela flutua LOGO ADIANTE DA PALMA, e a posição é recalculada porque o raio
+       muda: com um deslocamento fixo, a bola pequena nasceria solta no ar e a
+       grande engoliria o antebraço. O eixo da mão é −Y (ver `montarBraco`: o
+       braço inteiro é desenhado descendo), então "adiante da palma" é −Y. */
+    c.grupo.position.y = -(0.2 + r);
+    c.nucleo.scale.setScalar(r);
+    c.casca.scale.setScalar(r * 1.22);
+    /* Dois eixos incomensuráveis, como a respiração do corpo: iguais, eles
+       baterem em fase e a casca vira um arame girando em torno de um eixo só. */
+    c.casca.rotation.y += dt * 2.6;
+    c.casca.rotation.x += dt * 1.7;
+    c.casca.material.opacity = 0.24 + 0.42 * f;
   }
 
   montarBraco(lado) {
@@ -865,6 +988,7 @@ export class FreezaBody {
     }
 
     this.posar(dt);
+    this.atualizarCarga(dt);
     this.animarCauda(dt);
     this.atualizarDetalhe(cameraPos);
     this.atualizarAura(dt, cameraPos);
@@ -969,6 +1093,44 @@ export class FreezaBody {
     cabeca += w4 * (-0.34 * carga);
     quadril += w4 * 0.3;
     joelho += w4 * -0.7;
+
+    /* ---- Death Cannon: UMA mão para cima, a bola crescendo nela ---------- *
+     *
+     * *"Ele coloca a mão para cima e cresce rapidamente uma bola de poder
+     * escuro na sua mão acima da cabeça."*
+     *
+     * O que separa esta pose da Death Ball, que também ergue os braços, é
+     * exatamente o que separa os dois golpes: lá são AS DUAS mãos e o corpo
+     * arqueado para trás em três segundos de oferenda; aqui é UMA mão, o outro
+     * braço recolhido à frente do peito e um segundo de gesto. De longe, a
+     * silhueta é a única coisa que o jogador tem para saber qual dos dois está
+     * vindo — e ela precisa dizer isso antes de a bola aparecer.
+     *
+     * `cresce` corre TRÊS VEZES mais rápido que a pose (`f × 3,2`), e o número
+     * foi medido e não escolhido: a bola nasce na mão, e a mão em repouso está
+     * na altura do quadril. Com o braço subindo na mesma velocidade da carga, o
+     * primeiro meio segundo do golpe era uma esfera de dois metros passando
+     * RASPANDO o corpo dele a caminho de cima — o pedido diz "acima da cabeça",
+     * e metade do gesto acontecia abaixo do peito.
+     *
+     * A 3,2 o braço chega em cima em 0,36 s de uma carga de 1,15 s, ou seja
+     * antes de a bola ter um terço do volume: o que se vê é a mão subir e a
+     * bola crescer LÁ, que é a ordem certa das duas coisas. Quem desenha a
+     * esfera é `atualizarCarga`. */
+    const w8 = p[POSE.canhao];
+    const cresce = Math.min(1, f * 3.2);
+    ombroXdir += w8 * (-2.95 * cresce - 0.12);
+    ombroZdir += w8 * (0.12 - cresce * 0.1);
+    cotoveloDir += w8 * (0.34 - cresce * 0.3);
+    ombroX += w8 * -0.44;
+    ombroZ += w8 * 0.48;
+    cotovelo += w8 * 0.95;
+    tronco += w8 * (-0.18 * cresce);
+    /* A cabeça acompanha a bola. É o detalhe que faz a pose ler como "ele está
+       formando aquilo" em vez de "ele está com o braço para cima". */
+    cabeca += w8 * (-0.52 * cresce);
+    quadril += w8 * 0.26;
+    joelho += w8 * -0.62;
 
     /* ---- onda: braços abertos em cruz, um empurrão para fora ------------- */
     const w5 = p[POSE.onda];
@@ -1292,6 +1454,11 @@ export class FreezaBody {
     for (const g of this._geos) g.dispose();
     this._geos.length = 0;
     for (const m of Object.values(this.mat)) m.dispose();
+    /* Os dois materiais da carga não estão em `this.mat` de propósito — aquela
+       tabela é a PELE dele, compartilhada por dezenas de malhas, e estes dois
+       são de uma peça só. Ficam de fora e são fechados à mão. */
+    this.carga?.nucleo.material.dispose();
+    this.carga?.casca.material.dispose();
     this.raiz.parent?.remove(this.raiz);
     this.raiz.clear();
   }

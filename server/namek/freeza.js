@@ -90,6 +90,13 @@ const POSE = {
   esfera: 4,
   onda: 5,
   dor: 6,
+  /* O 7 é a MORTE, e ela não sai daqui: o cliente a escreve sozinho quando o
+     `FREEZA_DOWN` chega (ver `POSE.morte` em `src/namek/boss/freeza.js`). O
+     índice fica reservado do mesmo jeito — ele é um número cru na rede, e
+     reaproveitá-lo faria um cliente desenhar a cena de morte no meio da luta. */
+  /** A carga do Death Cannon: a mão erguida e a bola crescendo acima da cabeça.
+   *  8 e não 7 por causa da reserva acima. */
+  canhao: 8,
 };
 
 /* s — de quanto em quanto tempo o acúmulo de dano vira um `FREEZA_HURT`.
@@ -236,7 +243,20 @@ export class NamekFreeza {
     this.raiva = new Map();
     /** +1 ou −1: de que lado ele circunda. */
     this.lado = 1;
-    this.tLado = 0;
+
+    /* ------------------------------------------------------- AS MANOBRAS ---
+     * A manobra em curso, o relógio dela e os três alvos que ela move. Ver
+     * `NAMEK.freeza.voo.manobras` para a tabela e para o pedido que a criou.
+     *
+     * Os três são SUAVIZADOS e não escritos de uma vez (`passoDaManobra`): uma
+     * troca instantânea de "brigo a 78 m, 22 acima" para "brigo a 35 m, 34
+     * acima" faria o rumo dele virar noventa graus num quadro, o que na tela
+     * lê como um erro de rede e não como uma decisão. */
+    this.manobra = null;
+    this.tManobra = 0;
+    this.raioAlvo = NAMEK.freeza.voo.distanciaIdeal;
+    this.degrauAlvo = NAMEK.freeza.voo.degrau;
+    this.giroAlvo = 1;
 
     /* --------------------------------------------------------- os relógios --
        Um por golpe, em segundos que faltam. Todos correm juntos em `passo` e é
@@ -244,6 +264,7 @@ export class NamekFreeza {
     this.tRajada = 0;
     this.tRaio = 0;
     this.tEsfera = 0;
+    this.tCanhao = 0;
     this.tOnda = 0;
     this.tTeleporte = 0;
 
@@ -256,8 +277,18 @@ export class NamekFreeza {
 
     /** As bolas da rajada em voo. Ver `passoDasBolas`. */
     this.bolas = [];
-    /** A Death Ball em voo, ou null. */
-    this.esfera = null;
+    /* AS ESFERAS EM VOO — a Death Ball e o Death Cannon, na mesma lista.
+     *
+     * Era um campo só (`this.esfera`, uma Death Ball ou null) e virou uma lista
+     * quando o segundo golpe de esfera entrou. A alternativa era um segundo
+     * campo com um segundo `passoDa…` e um segundo `detonar…` — noventa linhas
+     * de física de projétil copiadas, e a cópia é sempre a que esquece a
+     * barreira do relevo ou o teto de arco.
+     *
+     * Cada entrada carrega o próprio `kind`, e é ele que diz de qual golpe ler
+     * raio, velocidade, dano e perseguição. A regra de "uma Death Ball por vez"
+     * continua de pé e virou uma pergunta à lista — ver `soltarEsfera`. */
+    this.orbes = [];
     /** Id incremental das bolas, só para o pool do cliente não confundir. */
     this.seqBola = 1;
 
@@ -507,16 +538,27 @@ export class NamekFreeza {
 
     this.alvoId = null;
     this.tTroca = 0;
+    /* A manobra também recomeça: uma luta nova não herda o mergulho da
+       anterior, e sem isto o boss desceria do céu já colado em alguém. */
+    this.manobra = null;
+    this.tManobra = 0;
+    this.raioAlvo = NAMEK.freeza.voo.distanciaIdeal;
+    this.degrauAlvo = NAMEK.freeza.voo.degrau;
+    this.giroAlvo = 1;
     this.raiva.clear();
     this.pose = null;
     this.bolas.length = 0;
-    this.esfera = null;
+    this.orbes.length = 0;
     this.surto = 0;
     this.danoAcum = 0;
     this.danoJanela = 0;
     this.tRajada = 1.2;
     this.tRaio = 1.6;
     this.tEsfera = 12;
+    /* O Death Cannon é o primeiro golpe grande que ele mostra: 4,5 s contra os
+       12 da Death Ball. Ele é o golpe médio, e um chefe que abre com o maior de
+       todos não tem para onde subir depois. */
+    this.tCanhao = 4.5;
     this.tOnda = 6;
     this.tTeleporte = NAMEK.freeza.teleporte.recarga;
     /* A INVULNERABILIDADE COBRE A CENA INTEIRA, e não mais dois segundos e
@@ -546,7 +588,7 @@ export class NamekFreeza {
     this.vivo = false;
     this.corpo.alive = false;
     this.bolas.length = 0;
-    this.esfera = null;
+    this.orbes.length = 0;
     this.pose = null;
     this.caindo = false;
     this.cenaAte = 0;
@@ -798,7 +840,7 @@ export class NamekFreeza {
     this.vivo = false;
     this.corpo.alive = false;
     this.bolas.length = 0;
-    this.esfera = null;
+    this.orbes.length = 0;
     this.pose = null;
     this.caindo = false;
     this.cenaAte = 0;
@@ -924,7 +966,7 @@ export class NamekFreeza {
      * métodos abaixo. Sem alvo, `mover` e `decidirGolpe` já sabem não fazer
      * nada; o que estes dois métodos acrescentam é o percurso.
      *
-     * A ORDEM importa: os dois ainda passam por `passoDasBolas`, `passoDaEsfera`
+     * A ORDEM importa: os dois ainda passam por `passoDasBolas`, `passoDosOrbes`
      * e `transmitir`. Uma bola que ele soltou antes de ser derrubado continua
      * voando e continua machucando, que é a leitura certa — ela já saiu da mão.
      */
@@ -935,7 +977,7 @@ export class NamekFreeza {
     if (!conduzido) this.decidirGolpe(dt, agora, alvo);
     this.passoDaPose(dt, agora);
     this.passoDasBolas(dt, agora);
-    this.passoDaEsfera(dt, agora);
+    this.passoDosOrbes(dt, agora);
     this.despejarDano(agora, false);
     this.corpoNaLista(this.sala.corpos);
     this.transmitir(agora);
@@ -1055,20 +1097,17 @@ export class NamekFreeza {
     this.tRajada -= d;
     this.tRaio -= d;
     this.tEsfera -= d;
+    this.tCanhao -= d;
     this.tOnda -= d;
     this.tTeleporte -= dt;
     this.tBola -= dt;
-    this.tLado -= dt;
+    this.tManobra -= dt;
     this.tTroca -= dt;
 
     /* O ki sobe sempre — ele nunca para para carregar. Ver "o ki" no cabeçalho
        de `NAMEK.freeza`. */
     this.ki = Math.min(NAMEK.freeza.kiMax, this.ki + NAMEK.freeza.kiRegen * dt);
 
-    if (this.tLado <= 0) {
-      this.lado = -this.lado;
-      this.tLado = 2.2 + Math.random() * 2.4;
-    }
   }
 
   /** A raiva esfria. Ver `NAMEK.freeza.alvo.raivaMeiaVida`. */
@@ -1132,13 +1171,78 @@ export class NamekFreeza {
   /* ------------------------------------------------------------- o movimento */
 
   /**
+   * A MANOBRA DO MOMENTO — o que tira o voo dele do vaivém.
+   *
+   * *"Ele só fica indo de um lado para o outro. Ele tem que ser mais dinâmico e
+   * voar mais pelo cenário, tentar pegar o player de outros ângulos."*
+   *
+   * A tabela, o peso de cada manobra e a explicação de por que o defeito era de
+   * DESENHO e não de código estão em `NAMEK.freeza.voo.manobras`. O que este
+   * método faz é o mecanismo: sorteia uma linha da tabela a cada poucos
+   * segundos e persegue os três números dela — distância, altura e o quanto ele
+   * circunda — com amortecimento exponencial.
+   *
+   * A suavização é o que separa isto de um teleporte de intenção: `transicao`
+   * segundos para assumir a manobra nova, o que na tela lê como ele MUDANDO DE
+   * IDEIA. Sem ela, o rumo giraria noventa graus num quadro e o jogador leria
+   * uma falha de rede.
+   */
+  passoDaManobra(dt) {
+    const V = NAMEK.freeza.voo;
+    const M = V.manobras;
+    /* SEM TABELA, o comportamento antigo — e a guarda não é paranoia: o arquivo
+       de ajustes é feito para ser editado por quem não programa, e apagar o
+       bloco inteiro tem de deixar o boss orbitando, não travado. */
+    if (!M || !Array.isArray(M.lista) || !M.lista.length) {
+      this.raioAlvo = V.distanciaIdeal;
+      this.degrauAlvo = V.degrau;
+      this.giroAlvo = 1;
+      return;
+    }
+
+    if (!this.manobra || this.tManobra <= 0) {
+      this.manobra = this.sortearManobra(M.lista);
+      const [a, b] = Array.isArray(M.duracao) ? M.duracao : [2, 4];
+      this.tManobra = a + Math.random() * Math.max(0, b - a);
+      /* O LADO TROCA POR SORTEIO, e não no relógio. Era um `-this.lado` a cada
+         2 a 5 segundos, cravado — ou seja, um metrônomo, e um metrônomo é
+         exatamente o que a queixa descreve. Com 55 % de chance na troca de
+         manobra, ele às vezes insiste no mesmo flanco por dois trechos e às
+         vezes inverte duas vezes seguidas: o padrão deixa de existir. */
+      if (Math.random() < (M.trocarLado ?? 0.5)) this.lado = -this.lado;
+    }
+
+    const m = this.manobra;
+    const k = 1 / Math.max(0.05, M.transicao ?? 0.9);
+    this.raioAlvo = damp(this.raioAlvo, V.distanciaIdeal * (m.raio ?? 1), k, dt);
+    this.degrauAlvo = damp(this.degrauAlvo, m.altura ?? V.degrau, k, dt);
+    this.giroAlvo = damp(this.giroAlvo, m.giro ?? 1, k, dt);
+  }
+
+  /** Uma linha da tabela, sorteada por `peso`. Peso 0 nunca sai — é como se
+   *  desliga uma manobra sem apagá-la do arquivo. */
+  sortearManobra(lista) {
+    let total = 0;
+    for (const m of lista) total += Math.max(0, m.peso ?? 1);
+    if (!(total > 0)) return lista[0];
+    let r = Math.random() * total;
+    for (const m of lista) {
+      r -= Math.max(0, m.peso ?? 1);
+      if (r <= 0) return m;
+    }
+    return lista[lista.length - 1];
+  }
+
+  /**
    * Ele voa, e só voa. Não há pouso, não há caminhada, não há gravidade: o §1 do
    * pedido é explícito, e um boss que às vezes anda seria um boss que às vezes
    * está no alcance de um soco que este modo não tem.
    *
-   * A conduta é a de um caçador que briga DE CIMA: fica a `distanciaIdeal` do
-   * alvo, `degrau` metros acima dele, circundando pelo lado que `this.lado`
-   * diz. Perto demais, recua; longe demais, investe com `arranque`.
+   * A conduta é a de um caçador que briga DE CIMA — mas a distância, a altura e
+   * o quanto ele circunda **não são mais constantes**: eles vêm da manobra do
+   * momento (`passoDaManobra`), e é isso que o faz vir por baixo, mergulhar,
+   * abrir pelo flanco ou recuar em vez de descrever sempre o mesmo círculo.
+   * Perto demais, recua; longe demais, investe com `arranque`.
    */
   mover(dt, alvo, agora = this.sala.now()) {
     const V = NAMEK.freeza.voo;
@@ -1146,8 +1250,12 @@ export class NamekFreeza {
        Genki Dama entra (`NAMEK.freeza.lentidao`), multiplicando a dificuldade em
        vez de a substituir. Ver `fatorDeVelocidade`. */
     const mover = this.fatorDeVelocidade(agora);
+    /* A MANOBRA CORRE SEMPRE, com alvo ou sem — os três números precisam estar
+       assentados no instante em que alguém renasce, e não começar a assentar
+       ali. */
+    this.passoDaManobra(dt);
     const dv = { x: 0, y: 0, z: 0 };
-    let rapido = false;
+    let rapido = this.manobra?.rapido === true;
 
     if (this.pose && this.pose.tipo === POSE.esfera) {
       /* CARREGANDO A DEATH BALL ele fica PARADO — é a mesma troca que o modo
@@ -1159,17 +1267,19 @@ export class NamekFreeza {
       this.vel.z = damp(this.vel.z, 0, 4, dt);
     } else if (alvo) {
       const dx = alvo.x - this.pos.x;
-      const dy = alvo.y + V.degrau - this.pos.y;
+      const dy = alvo.y + this.degrauAlvo - this.pos.y;
       const dz = alvo.z - this.pos.z;
       const dh = Math.hypot(dx, dz) || 1e-3;
       const d = Math.hypot(dx, dy, dz);
 
       /* O rumo: a soma de um vetor RADIAL (aproximar ou afastar até a distância
-         ideal) com um TANGENTE (circundar). O peso do tangente cresce quando ele
-         já está na distância certa — é o que faz a órbita em vez do vaivém. */
-      const erro = d - V.distanciaIdeal;
+         da manobra) com um TANGENTE (circundar). O peso do tangente cresce
+         quando ele já está na distância certa — é o que faz a órbita em vez do
+         vaivém — e a manobra o multiplica: 0,4 no mergulho (ele vem reto na sua
+         cara), 2,1 no flanco (ele varre um arco largo). */
+      const erro = d - this.raioAlvo;
       const radial = clamp(erro / 40, -1, 1);
-      const tangente = 1 - Math.abs(radial) * 0.7;
+      const tangente = (1 - Math.abs(radial) * 0.7) * this.giroAlvo;
       const tx = (-dz / dh) * this.lado;
       const tz = (dx / dh) * this.lado;
 
@@ -1177,7 +1287,14 @@ export class NamekFreeza {
       dv.z = (dz / dh) * radial + tz * tangente;
       dv.y = clamp(dy / 30, -1, 1);
 
-      if (d < V.perto) {
+      /* O "COLADO DEMAIS" ACOMPANHA A MANOBRA. `voo.perto` são 40 m, e o
+         mergulho pede 35: com o número fixo ele chegaria a 40, recuaria, e o
+         mergulho nunca aconteceria — a manobra mais agressiva das seis seria a
+         única que o próprio código proibiria. 72 % da distância da manobra é o
+         que mantém a regra ("perto demais, sobe e sai") sem que ela vete a
+         intenção: no mergulho o piso vira 25 m, na órbita continua sendo 40. */
+      const perto = Math.min(V.perto, this.raioAlvo * 0.72);
+      if (d < perto) {
         // Colado demais: sobe e sai. Ele não briga de perto.
         dv.x = -dx / dh;
         dv.z = -dz / dh;
@@ -1189,7 +1306,10 @@ export class NamekFreeza {
          `NAMEK.freeza.voo.investirEm` para por que a constante é pequena: com
          uma grande, o alvo em fuga estabiliza logo abaixo do gatilho e ele nunca
          acelera. */
-      rapido = erro > V.investirEm * (2 - this.dif.agressividade);
+      /* `||=` e não `=`: a manobra já pode ter pedido arranque (o flanco, o
+         rasante e o mergulho pedem), e a investida por distância se SOMA a ela
+         em vez de a apagar. */
+      rapido = rapido || erro > V.investirEm * (2 - this.dif.agressividade);
 
       this.mirarEm(alvo.x, alvo.y + NAMEK.fighter.chest, alvo.z, dt);
     } else {
@@ -1302,6 +1422,18 @@ export class NamekFreeza {
       const juntos = this.quantosPerto(alvo, NAMEK.freeza.poderes.esferaDaMorte.hitRadius * 1.3);
       const chance = juntos >= 2 ? 1 : 0.45 * this.dif.agressividade;
       if (Math.random() < chance) {
+        /* A RECARGA É PAGA AQUI, na decisão, e não na soltura.
+         *
+         * Ela era paga em `soltarEsfera`, no fim do windup, e isso tinha um
+         * buraco: a pose pode ser INTERROMPIDA — a onda de choque de um jogador
+         * o derruba e `derrubar` zera `this.pose` — e uma pose interrompida
+         * nunca chegava a soltar. O relógio ficava em zero, e no quadro
+         * seguinte ao tombo ele recomeçava o golpe de graça. Quem cobrasse a
+         * queda dele com boa mira via a mesma Death Ball três vezes seguidas.
+         *
+         * Pagando na decisão, ela custa uma recarga tendo saído ou não — que é
+         * o mesmo contrato que o sorteio recusado já tinha, logo abaixo. */
+        this.tEsfera = NAMEK.freeza.poderes.esferaDaMorte.recarga;
         this.iniciarPose(POSE.esfera, NAMEK.freeza.poderes.esferaDaMorte.windup, alvo);
         return;
       }
@@ -1322,6 +1454,20 @@ export class NamekFreeza {
        * é 1 e nada disto se aplica — que é exatamente o desenho do golpe, e o
        * que faz dele a resposta dele a um cerco em vez de um martelo. */
       this.tEsfera = NAMEK.freeza.poderes.esferaDaMorte.recarga;
+    }
+
+    /* O DEATH CANNON. Ele não tem sorteio nem conta de aglomeração, ao
+       contrário da Death Ball, e a ausência é o desenho: ele caça UMA pessoa, e
+       a pessoa está sempre lá. O que o segura é a recarga (8,5 s) e o ki (42) —
+       o suficiente para ele não virar o golpe padrão e continuar sendo um
+       acontecimento. O alcance é o da bola menos uma folga: 62 m/s por 9 s de
+       `sustain` são 558 m, e disparar de mais longe que isso é mandar uma bola
+       para morrer de velhice no caminho. */
+    const C = NAMEK.freeza.poderes.canhaoDaMorte;
+    if (this.tCanhao <= 0 && this.ki >= C.ki && d < 520) {
+      this.tCanhao = C.recarga;
+      this.iniciarPose(POSE.canhao, C.carga, alvo);
+      return;
     }
 
     if (this.tRaio <= 0 && this.ki >= NAMEK.freeza.poderes.raioDaMorte.ki && d < 500) {
@@ -1364,7 +1510,8 @@ export class NamekFreeza {
     } else if (!p.saiu && p.t >= p.dur) {
       p.saiu = true;
       if (p.tipo === POSE.raio) this.soltarRaio(agora);
-      else if (p.tipo === POSE.esfera) this.soltarEsfera(agora);
+      else if (p.tipo === POSE.esfera) this.soltarOrbe("esferaDaMorte", agora);
+      else if (p.tipo === POSE.canhao) this.soltarOrbe("canhaoDaMorte", agora);
     }
 
     /* A soltura: um instante a mais depois de o golpe sair, para o corpo se
@@ -1658,27 +1805,48 @@ export class NamekFreeza {
     return alcance;
   }
 
-  /* ---------------------------------------------------------- DEATH BALL --
+  /* ------------------------------------------------- AS DUAS ESFERAS DELE --
    *
-   * O poder GRANDE. Uma esfera só, lenta, que persegue de leve e detona no
-   * primeiro corpo, no chão ou no fim do prazo — e a detonação varre TODO MUNDO
-   * dentro dos 19 m. É o golpe que cumpre "ele luta com todos ao mesmo tempo"
-   * sem depender de escolha de alvo nenhuma.
+   * A DEATH BALL e o DEATH CANNON, e **um código só para as duas**.
    *
-   * Uma só por vez, e o motivo é de jogo e não de custo: duas Death Balls no ar
-   * ao mesmo tempo são duas coisas de trinta e oito metros de diâmetro na tela,
-   * e a segunda não acrescenta ameaça — ela só esconde a primeira.
+   *   DEATH BALL     o poder GRANDE. Lenta, imensa, persegue de leve, detona no
+   *                  primeiro corpo, no chão ou no fim do prazo — e a detonação
+   *                  varre TODO MUNDO dentro dos 19 m. É o golpe que cumpre "ele
+   *                  luta com todos ao mesmo tempo" sem depender de escolha de
+   *                  alvo nenhuma. Uma por vez, e o motivo é de jogo e não de
+   *                  custo: duas Death Balls no ar são duas coisas de trinta e
+   *                  oito metros de diâmetro na tela, e a segunda não acrescenta
+   *                  ameaça — ela só esconde a primeira.
+   *
+   *   DEATH CANNON   o poder MÉDIO, e o único do repertório dele que de fato
+   *                  CAÇA. Um terço do raio, o dobro da velocidade, e três
+   *                  vezes e meia o giro: o que ela cobra não é sair de perto, é
+   *                  se comprometer com a fuga — e quem foge não está atirando
+   *                  nele. Ver `NAMEK.freeza.poderes.canhaoDaMorte`.
+   *
+   * As duas correm pela mesma lista (`this.orbes`) e pelo mesmo passo, e cada
+   * entrada carrega o `kind` de onde ler raio, velocidade, dano e perseguição.
+   * A alternativa era o mesmo bloco de física escrito duas vezes, e a segunda
+   * cópia é sempre a que esquece a barreira do relevo ou o teto de arco. */
+
+  /**
+   * Solta uma esfera. `kind` é a chave em `NAMEK.freeza.poderes`, e ela é a
+   * única coisa que separa os dois golpes deste método.
    */
-  soltarEsfera(agora) {
-    const P = NAMEK.freeza.poderes.esferaDaMorte;
-    if (this.ki < P.ki || this.esfera) return;
+  soltarOrbe(kind, agora) {
+    const P = NAMEK.freeza.poderes[kind];
+    if (!P || this.ki < P.ki) return;
+    /* **UMA DEATH BALL POR VEZ.** Ver o cabeçalho acima para por que a regra é
+       dela e não do Death Cannon: o que ela proíbe é a segunda esconder a
+       primeira, e a bola pequena não esconde nada. */
+    if (kind === "esferaDaMorte" && this.orbes.some((o) => o.kind === kind)) return;
     this.ki -= P.ki;
-    this.tEsfera = P.recarga;
 
     const alvo = this.pose?.alvo == null ? null : this.corpoDe(this.pose.alvo);
-    /* Ela sai de ACIMA da cabeça — é onde ele a segura na referência, e é
-       também o único lugar de onde uma esfera de 19 m de raio pode sair sem
-       engolir o próprio corpo dele. */
+    /* Ela sai de ACIMA DA CABEÇA — é onde ele a segura na referência (nas duas
+       mãos na Death Ball, numa mão só no Death Cannon), e é também o único lugar
+       de onde uma esfera desse tamanho pode sair sem engolir o próprio corpo
+       dele. */
     const o = {
       x: this.pos.x,
       y: this.pos.y + NAMEK.freeza.altura + P.hitRadius * 0.5,
@@ -1689,7 +1857,11 @@ export class NamekFreeza {
     let dz;
     if (alvo && alvo.alive) {
       dx = alvo.x - o.x;
-      dy = alvo.y - o.y;
+      /* O DEATH CANNON MIRA O PEITO, a Death Ball mira os pés. Não é capricho:
+         a bola grande tem 19 m de raio e detona no chão de qualquer jeito — a
+         mira baixa é o que faz a cratera dela cair EMBAIXO do alvo. A pequena
+         tem 6 m e precisa acertar o corpo. */
+      dy = (kind === "esferaDaMorte" ? alvo.y : alvo.y + NAMEK.fighter.chest) - o.y;
       dz = alvo.z - o.z;
     } else {
       dx = Math.sin(this.yaw);
@@ -1699,11 +1871,13 @@ export class NamekFreeza {
     const n = Math.hypot(dx, dy, dz) || 1;
     dx /= n; dy /= n; dz /= n;
 
-    this.esfera = { x: o.x, y: o.y, z: o.z, dx, dy, dz, t: 0, arco: 0, alvo: alvo?.id ?? null };
+    this.orbes.push({
+      kind, x: o.x, y: o.y, z: o.z, dx, dy, dz, t: 0, arco: 0, alvo: alvo?.id ?? null,
+    });
 
     this.sala.broadcastAll({
       t: NS2C.FREEZA_POWER,
-      kind: "esferaDaMorte",
+      kind,
       o: [round(o.x), round(o.y), round(o.z)],
       d: [round(dx), round(dy), round(dz)],
       target: alvo?.id ?? null,
@@ -1711,19 +1885,29 @@ export class NamekFreeza {
     });
   }
 
-  passoDaEsfera(dt, agora) {
-    const e = this.esfera;
-    if (!e) return;
-    const P = NAMEK.freeza.poderes.esferaDaMorte;
+  passoDosOrbes(dt, agora) {
+    if (!this.orbes.length) return;
+    const vivos = [];
+    for (const e of this.orbes) {
+      if (this.passoDeUmOrbe(e, dt, agora)) vivos.push(e);
+    }
+    this.orbes = vivos;
+  }
+
+  /** @returns {boolean} ela continua viva? */
+  passoDeUmOrbe(e, dt, agora) {
+    const P = NAMEK.freeza.poderes[e.kind];
     e.t += dt;
     if (e.t > P.sustain) {
-      this.detonarEsfera(agora);
-      return;
+      this.detonarOrbe(e, agora);
+      return false;
     }
 
     /* A perseguição, com teto TOTAL (`arcMax`) — a mesma trava da Genki Dama, e
        pelo mesmo motivo: um golpe que apaga um grupo e que persegue sem limite
-       não é um golpe, é uma sentença. */
+       não é um golpe, é uma sentença. O teto do Death Cannon é quatro vezes
+       maior (190° contra 44°) porque ele NÃO apaga um grupo: ele caça uma
+       pessoa, e caçar é a função dele. */
     const H = P.homing;
     if (e.t < H.duration && e.alvo != null && e.arco < (H.arcMax * Math.PI) / 180) {
       const a = this.corpoDe(e.alvo);
@@ -1755,30 +1939,28 @@ export class NamekFreeza {
     e.z += e.dz * passo;
 
     if (e.y <= this.sala.field.heightAt(e.x, e.z) + P.hitRadius * 0.35) {
-      this.detonarEsfera(agora);
-      return;
+      this.detonarOrbe(e, agora);
+      return false;
     }
-    if (Math.hypot(e.x, e.z) > NAMEK.world.flyRadius) {
-      this.esfera = null;
-      return;
-    }
+    /* Saiu do mundo: some sem estourar. Não há em que bater lá fora, e uma
+       explosão fora da arena é um estrondo vindo de lugar nenhum. */
+    if (Math.hypot(e.x, e.z) > NAMEK.world.flyRadius) return false;
+
     for (const c of this.sala.corpos) {
       if (c.boss || !c.alive || c.invuln) continue;
       const dx = c.x - e.x;
       const dy = c.y + NAMEK.fighter.chest - e.y;
       const dz = c.z - e.z;
       if (dx * dx + dy * dy + dz * dz <= P.hitRadius * P.hitRadius) {
-        this.detonarEsfera(agora);
-        return;
+        this.detonarOrbe(e, agora);
+        return false;
       }
     }
+    return true;
   }
 
-  detonarEsfera(agora) {
-    const e = this.esfera;
-    if (!e) return;
-    this.esfera = null;
-    const P = NAMEK.freeza.poderes.esferaDaMorte;
+  detonarOrbe(e, agora) {
+    const P = NAMEK.freeza.poderes[e.kind];
     const dano = P.damage * this.dif.dano;
     const r2 = P.hitRadius * P.hitRadius;
     for (const c of this.sala.corpos) {
@@ -1788,11 +1970,11 @@ export class NamekFreeza {
       const dz = c.z - e.z;
       if (dx * dx + dy * dy + dz * dz > r2) continue;
       const n = Math.hypot(dx, dy, dz) || 1;
-      this.bater(c, dano, "esferaDaMorte", [dx / n, dy / n, dz / n], { x: c.x, y: c.y, z: c.z });
+      this.bater(c, dano, e.kind, [dx / n, dy / n, dz / n], { x: c.x, y: c.y, z: c.z });
     }
-    /* A cratera máxima do jogo. `null` de dono: a cota por lutador de
-       `podeCravar` não se aplica a quem não é lutador, e o boss abre um buraco
-       a cada dezesseis segundos — não há spray a conter. */
+    /* A cratera. `null` de dono: a cota por lutador de `podeCravar` não se
+       aplica a quem não é lutador, e o boss abre um buraco a cada oito segundos
+       no pior caso — não há spray a conter. */
     this.sala.cratera(e.x, e.z, P.power, null);
   }
 
@@ -1960,7 +2142,12 @@ export class NamekFreeza {
     const rapidez = Math.hypot(this.vel.x, this.vel.y, this.vel.z);
     let aura = 0.28 + clamp(rapidez / NAMEK.freeza.voo.arranque, 0, 1) * 0.34;
     if (this.pose) {
-      aura = this.pose.tipo === POSE.esfera ? 1 : 0.78;
+      /* Os dois golpes de esfera acendem ele por INTEIRO — é o aviso de que uma
+         bola está se formando acima da cabeça dele, e é a única coisa da carga
+         que chega a quem está longe demais para ver a pose. Os outros ficam em
+         0,78. */
+      aura =
+        this.pose.tipo === POSE.esfera || this.pose.tipo === POSE.canhao ? 1 : 0.78;
     }
     this.tAura = damp(this.tAura, aura, 9, 1 / NAMEK.net.stateRate);
 

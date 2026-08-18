@@ -1905,6 +1905,13 @@ export class NamekGame {
     if (travado !== null) return travado;
     const H = NAMEK.blast.homing;
     const cosCone = Math.cos((H.cone * Math.PI) / 180);
+    /* O BOSS TEM ALCANCE DE AQUISIÇÃO PRÓPRIO, e sem ele nada do resto da
+       perseguição contra o Freeza chegava a rodar: os 50 m de `acquire` são a
+       régua da briga entre jogadores, e ele briga a 78 (`voo.distanciaIdeal`).
+       Fora da mira assistida — que é quem salvava o caso, por não ter alcance —
+       a bola simplesmente não travava nele e saía reta por definição. Ver
+       `NAMEK.blast.homing.acquireNoFreeza`. */
+    const alcanceBoss = H.acquireNoFreeza ?? H.acquire;
     let melhor = null;
     let melhorCos = cosCone;
     for (const r of this.mirados()) {
@@ -1913,7 +1920,7 @@ export class NamekGame {
       const dy = r.pose.y + NAMEK.fighter.chest - origem.y;
       const dz = r.pose.z - origem.z;
       const d = Math.hypot(dx, dy, dz);
-      if (d > H.acquire || d < 0.001) continue;
+      if (d > (r.boss === true ? alcanceBoss : H.acquire) || d < 0.001) continue;
       const cos = (dx * dir.x + dy * dir.y + dz * dir.z) / d;
       if (cos > melhorCos) {
         melhorCos = cos;

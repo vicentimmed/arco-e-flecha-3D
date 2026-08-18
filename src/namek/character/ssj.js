@@ -126,7 +126,29 @@ export const TINTA_SSJ = [
    escrevendo na definição do golpe de todo mundo. */
 const DOURADOS = Object.create(null);
 for (const kind of Object.keys(NAMEK.specials)) {
-  DOURADOS[kind] = Object.freeze({ ...NAMEK.specials[kind], cor: NAMEK.ssj.cor });
+  const S = NAMEK.specials[kind];
+  const dourado = { ...S, cor: NAMEK.ssj.cor };
+  /* ------------------------------------------ E A GENKI DAMA AINDA CRESCE
+   *
+   * *"Com o player Super Saiyajin, a Genki Dama, além de ficar dourada, fica
+   * maior do que ela já é."*
+   *
+   * O aumento entra no `hitRadius` e não numa escala de malha, e a distinção é a
+   * única coisa aqui que pode dar errado se for ignorada: em `powers/orb.js` o
+   * raio de morte É o desenho — a esfera é escalada por `hitRadius` e a
+   * detonação varre o mesmo número. Crescer só o visual produziria a
+   * reclamação que o comentário de `specials.genki.hitRadius` diz que nenhum
+   * ajuste de número conserta: morrer do lado de fora do que se vê.
+   *
+   * É o ÚNICO campo além da cor que a cópia dourada mexe, e a exceção é
+   * deliberada: a transformação muda a cor do golpe e a economia de quem o
+   * solta, não o golpe. Este é o pedido explícito de uma exceção, e ela fica
+   * escrita como exceção. Ver `NAMEK.ssj.genkiEscala` para a conta e para por
+   * que o servidor continua aceitando o acerto. */
+  if (kind === "genki" && NAMEK.ssj.genkiEscala > 1) {
+    dourado.hitRadius = S.hitRadius * NAMEK.ssj.genkiEscala;
+  }
+  DOURADOS[kind] = Object.freeze(dourado);
 }
 
 /**
@@ -164,11 +186,24 @@ export function corDoGolpe(kind, ssj) {
  * existe: enquanto `NAMEK.ssj.exigeFreeza` estiver ligado, sem Freeza em campo
  * não há transformação — que é o contexto que o pedido descreve.
  *
- * @param {object} ctx `{ vida, freeza, vivo, caido, ssj }`
+ * ------------------------------------------- e depois que o chefe cai, NENHUMA
+ *
+ * `ctx.derrotado` é "o Freeza já foi derrubado nesta partida", e com ele ligado
+ * as duas condições de MÉRITO somem — o limiar de vida e a presença do chefe. É
+ * o `NAMEK.ssj.livreAposOFreeza`, gêmeo de `transformacaoLivre` na sala, e o
+ * pedido é literal: *"após destruir o Freeza, ele pode virar Super Saiyajin
+ * sempre que ele quiser, não precisa mais estar com aquele volume de vida
+ * específico… se ele morrer e voltar, mas o Freeza tem que estar morto."*
+ *
+ * As duas condições de CORPO (estar vivo e não estar caído) continuam: elas não
+ * perguntam se ele merece, perguntam se ele consegue.
+ *
+ * @param {object} ctx `{ vida, freeza, derrotado, vivo, caido, ssj }`
  */
 export function podeAcender(ctx) {
   if (!ctx || ctx.ssj) return false;
   if (!ctx.vivo || ctx.caido) return false;
+  if (NAMEK.ssj.livreAposOFreeza && ctx.derrotado) return true;
   if (NAMEK.ssj.exigeFreeza && !ctx.freeza) return false;
   /* Contra o teto BASE, e não contra `vidaMaxima(ctx.ssj)`: quem ainda não se
      transformou tem teto 100 por definição, e escrever a conta com o teto

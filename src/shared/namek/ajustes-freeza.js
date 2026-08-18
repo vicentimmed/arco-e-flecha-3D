@@ -87,6 +87,39 @@ const R = RECEITAS[RECEITA] ?? RECEITAS.normal;
    OS NÚMEROS
    =========================================================================== */
 
+/* ===========================================================================
+   O TAMANHO DELE — uma alavanca só
+   ===========================================================================
+
+   *"O personagem do Freeza deve ser bem maior. Ele deve ser o triplo do tamanho
+   que ele é. Ajuste essa proporção com a velocidade dele, para que a proporção
+   não atrapalhe o desvio dos poderes, etc."*
+
+   `ESCALA` multiplica de uma vez a altura, a grossura de acerto, a altura do
+   peito e a cauda — os quatro números que descrevem o corpo. Ele existe como
+   constante e não como quatro edições porque o CORPO DESENHADO
+   (`src/namek/boss/freeza.js`) é montado a partir de uma antropometria fixa de
+   2,24 m: aquele arquivo lê `altura / alturaBase` e escala a raiz inteira do
+   boneco. Mexer só em `altura` faria a cápsula de acerto crescer e o boneco
+   continuar do mesmo tamanho — tiro morrendo no ar a metros do corpo.
+
+   ----------------------------------------------------- e a conta da velocidade
+
+   Um corpo três vezes mais alto tem uma cápsula três vezes mais grossa (1,1 →
+   3,3 m de raio), ou seja **nove vezes a área de acerto**. Sem compensação, a
+   luta viraria um alvo de treino que voa. As duas compensações estão no bloco
+   `voo`, e as duas são de POSIÇÃO e não de dano:
+
+     • ele voa mais rápido (34 → 42 de cruzeiro, 58 → 64 de arranque);
+     • e briga de mais longe (`distanciaIdeal` 62 → 78, `perto` 26 → 40) — o que
+       é também a leitura certa de uma criatura desse tamanho.
+
+   A distância é o que de fato devolve a dificuldade: o raio de acerto é
+   constante em metros, mas o que a mira sente é o ÂNGULO que ele ocupa. A 62 m
+   um corpo de 1,1 m abria 2,0°; a 78 m um corpo de 3,3 m abre 4,8°. Ainda é mais
+   fácil de acertar que antes — e tem de ser, porque agora ele desvia melhor. */
+const ESCALA = 3;
+
 export const FREEZA = {
   /* -------------------------------------------------------------------------
      IDENTIDADE
@@ -112,30 +145,38 @@ export const FREEZA = {
      O TAMANHO DELE
      ------------------------------------------------------------------------- */
 
-  /** Altura do corpo, em metros (um jogador tem 1,78 m).
+  /** **NÃO MEXA.** A altura da ANTROPOMETRIA com que o boneco dele foi
+   *  desenhado. Ela não é o tamanho dele em campo — é a régua contra a qual
+   *  `altura` (logo abaixo) é dividida para o corpo inteiro ser escalado.
+   *  Mudar isto desmonta as proporções do boneco. Ver `ESCALA`, no topo. */
+  alturaBase: 2.24,
+
+  /** Altura do corpo, em metros (um jogador tem 1,78 m). **6,72 m** — o triplo
+   *  do original, e o comprimento de um ônibus em pé.
    *  AUMENTAR: ele fica maior e mais fácil de acertar.
    *  DIMINUIR: fica menor e mais difícil de acertar.
-   *  Faixa que faz sentido: 1.6 a 4. Padrão: 2.24. */
-  altura: 2.24,
+   *  O jeito certo de mexer é pela `ESCALA` no topo do arquivo, que move este
+   *  número e os outros três do corpo juntos.
+   *  Faixa que faz sentido: 1.6 a 9. */
+  altura: 2.24 * ESCALA,
 
   /** A "grossura" do corpo para efeito de acerto, em metros — o quanto os seus
    *  tiros perdoam de erro de mira.
    *  AUMENTAR: fica muito mais fácil de acertar (é o jeito mais direto de
    *  facilitar a luta sem mexer em dano nenhum).
    *  DIMINUIR: fica mais difícil.
-   *  **Cuidado:** tem de ser sempre MENOR que a metade da `altura` acima. Com
-   *  a altura em 2.24, não passe de 1.12, senão a área de acerto embaralha.
-   *  Faixa: 0.6 a 1.12. Padrão: 1.1. */
-  raio: 1.1,
+   *  **Cuidado:** tem de ser sempre MENOR que a metade da `altura` acima —
+   *  3,3 contra 3,36, que é justamente por isso que os dois são escalados
+   *  juntos. Escrever um sem o outro embaralha a área de acerto. */
+  raio: 1.1 * ESCALA,
 
   /** A que altura do corpo dele os golpes são marcados, em metros do pé para
-   *  cima. Serve para a mira apontar para o peito e não para os pés.
-   *  Faixa: 0.8 a 1.8. Padrão: 1.36. */
-  peito: 1.36,
+   *  cima. Serve para a mira apontar para o peito e não para os pés — e é de lá
+   *  que os poderes dele saem. */
+  peito: 1.36 * ESCALA,
 
-  /** Comprimento da cauda, em metros. É só enfeite: ela não machuca ninguém.
-   *  Faixa: 0 a 5. Padrão: 2.6. */
-  cauda: 2.6,
+  /** Comprimento da cauda, em metros. É só enfeite: ela não machuca ninguém. */
+  cauda: 2.6 * ESCALA,
 
   /* -------------------------------------------------------------------------
      A VIDA DELE
@@ -294,34 +335,49 @@ export const FREEZA = {
      ------------------------------------------------------------------------- */
 
   voo: {
-    /** Velocidade normal de voo dele, em metros por segundo.
+    /** Velocidade normal de voo dele, em metros por segundo. **42**, e eram 34:
+     *  é a compensação do corpo três vezes maior (ver `ESCALA`, no topo).
      *  AUMENTAR: ele fica mais difícil de acompanhar e de acertar.
      *  DIMINUIR: fica fácil de perseguir.
      *  **Não passe de 46**: a Genki Dama voa a 46 m/s, e se ele for mais rápido
-     *  que ela, ela nunca alcança ele.
-     *  Faixa: 10 a 46. Padrão: 34. */
-    velocidade: Math.round(34 * R.velocidade),
+     *  que ela, ela nunca alcança ele. (No nível mais difícil, 42 × 1,05 = 44,1
+     *  — ainda abaixo dela, e de propósito.)
+     *  Faixa: 10 a 46. */
+    velocidade: Math.round(42 * R.velocidade),
 
-    /** A velocidade da INVESTIDA — quando ele resolve fechar a distância.
-     *  **Não passe de 64**, que é a sua velocidade de arranque: acima disso
-     *  você não consegue mais escapar dele de jeito nenhum.
-     *  Faixa: 15 a 64. Padrão: 58. */
-    arranque: Math.round(58 * R.velocidade),
+    /** A velocidade da INVESTIDA — quando ele resolve fechar a distância. **64**,
+     *  e eram 58.
+     *
+     *  Este número tem DUAS travas agora, e as duas vêm de fora deste arquivo:
+     *  • **Não passe de 64**, que é a sua velocidade de arranque: acima disso
+     *    você não consegue mais escapar dele de jeito nenhum;
+     *  • e ele não pode ficar MENOR do que 62,2, porque é ele que faz o Freeza
+     *    continuar conseguindo desviar da rajada agora que ela persegue mais.
+     *    A conta inteira está em `NAMEK.blast.homing.ganhoNoFreeza` — em uma
+     *    linha: o boss escapa da bola de ki se `v ≥ 1,244 × 50 m`.
+     *  Ou seja, 64 é praticamente o único valor que satisfaz as duas.
+     *  Faixa: 15 a 64. */
+    arranque: Math.round(64 * R.velocidade),
 
     /** O quanto ele muda de direção depressa. Alto = ele vira igual a um
-     *  inseto; baixo = ele "derrapa" e fica previsível.
-     *  Faixa: 1 a 20. Padrão: 7.5. */
-    aceleracao: 7.5,
+     *  inseto; baixo = ele "derrapa" e fica previsível. Subiu de 7,5 para 9 com
+     *  o tamanho: um corpo maior parece mais lento com a mesma aceleração,
+     *  porque o olho compara o deslocamento com a silhueta.
+     *  Faixa: 1 a 20. */
+    aceleracao: 9,
 
-    /** A que distância, em metros, ele gosta de ficar de você.
+    /** A que distância, em metros, ele gosta de ficar de você. **78**, e eram
+     *  62 — ver a conta do ângulo em `ESCALA`: é a distância, e não o dano, que
+     *  devolve a dificuldade de acertar um corpo três vezes maior.
      *  AUMENTAR: ele briga de longe.
      *  DIMINUIR: ele cola em você.
-     *  Faixa: 15 a 200. Padrão: 62. */
-    distanciaIdeal: 62,
+     *  Faixa: 15 a 200. */
+    distanciaIdeal: 78,
 
-    /** Se você chegar mais perto que isto (metros), ele recua.
-     *  Faixa: 5 a 60. Padrão: 26. */
-    perto: 26,
+    /** Se você chegar mais perto que isto (metros), ele recua. **40**, e eram
+     *  26: com 6,7 m de altura, 26 m é encostado nele.
+     *  Faixa: 5 a 60. */
+    perto: 40,
 
     /** Quantos metros ALÉM da distância ideal ele aceita antes de sair em
      *  investida atrás de você.
@@ -331,7 +387,8 @@ export const FREEZA = {
     investirEm: 14,
 
     /** A altura mínima que ele mantém do chão, em metros. Ele voa e nunca
-     *  aterrissa. Faixa: 2 a 100. Padrão: 14. */
+     *  aterrissa — **exceto derrubado**, que é o único caso em que este piso é
+     *  ignorado (ver `queda`, mais abaixo). Faixa: 2 a 100. */
     alturaMin: 14,
 
     /** Quantos metros ACIMA do alvo ele fica. Positivo = ele briga de cima.
@@ -341,6 +398,172 @@ export const FREEZA = {
     /** A rapidez com que o corpo dele gira para encarar você.
      *  Faixa: 0.5 a 12. Padrão: 3.4. */
     giro: 3.4,
+  },
+
+  /* =========================================================================
+     A CHEGADA — a cena de apresentação
+     =========================================================================
+
+     *"Quando o Freeza chega, ele deve chegar voando lá do início do céu até a
+     terra. Quando ele aparece, a câmera deve dar um close nele, acompanhando ele
+     com a câmera, fazendo um 360 por uns 5 segundos, para o player ver que
+     realmente ele chegou. Então, todos os players veem a câmera com foco no
+     Freeza e a câmera sai de foco dos players, como se fosse uma apresentação de
+     um jogo. Nesse momento, a câmera está mostrando ele, ele dá risada duas
+     vezes e é apresentado o nome Freeza. Após essa cena cinemática, a câmera
+     volta ao normal do player."*
+
+     ------------------------------------------------------- quem faz o quê
+
+     A SALA decide (§8 do plano): ela põe o corpo lá em cima, faz a descida,
+     mantém a invulnerabilidade e proíbe qualquer golpe enquanto a cena corre —
+     e manda o `duracao` junto no `FREEZA_IN`. O CLIENTE só desenha: a lente
+     orbitando (`src/namek/boss/cine.js`), o nome na tela e as duas risadas.
+
+     É essa divisão que faz a cena acontecer JUNTO nas quinze telas sem uma
+     mensagem a mais: todo mundo recebe o mesmo `FREEZA_IN`, com o mesmo
+     carimbo, e a cena inteira é função dele.
+
+     ------------------------------------------------------ e o jogador nisso
+
+     Ele continua no controle do próprio corpo — o que sai de cena é a LENTE, e
+     não o comando. Prendê-lo seria pior: quinze pessoas congeladas no ar durante
+     seis segundos e meio, algumas delas caindo. O que garante que ninguém apanhe
+     de graça nesse tempo é o boss estar invulnerável E mudo (ele não escolhe
+     alvo nem solta golpe enquanto `descida + orbita` não termina). */
+  chegada: {
+    /** m — a que altura ele APARECE. É o "início do céu": bem acima do teto de
+     *  voo do jogador (520 m), para a descida ser vista de baixo como uma coisa
+     *  entrando na atmosfera. Faixa: 200 a 1200. */
+    alto: 900,
+
+    /** m — onde a descida TERMINA, medido do relevo. Daí em diante ele volta a
+     *  voar normalmente (`voo.degrau` sobre o alvo). Faixa: 20 a 300. */
+    baixo: 70,
+
+    /** s — quanto dura a descida do céu até lá. 2,2 s para 830 m são 377 m/s:
+     *  é uma entrada, não um voo — ele CAI sobre o planeta. Faixa: 0.5 a 8. */
+    descida: 2.2,
+
+    /** s — o giro de 360° com a câmera colada nele. É o "por uns 5 segundos"
+     *  literal, e a cena inteira dura `descida + orbita`. Faixa: 0 a 15. */
+    orbita: 5,
+
+    /** m — a que distância a lente fica dele durante a órbita. Medida em
+     *  ALTURAS DELE e não em metros absolutos, para a cena continuar enquadrada
+     *  se alguém mexer na `ESCALA`: 2,6 alturas com 6,72 m dão 17,5 m. */
+    lente: 2.6,
+
+    /** s — quando cada uma das duas risadas sai, contado do começo da cena. A
+     *  primeira no meio da descida (ele chega rindo), a segunda com o nome. */
+    risadas: [1.5, 4.2],
+
+    /** s — quando o nome aparece na tela, e por quanto tempo ele fica. */
+    nome: 4,
+    nomeDur: 3,
+  },
+
+  /* =========================================================================
+     A MORTE — a outra cena
+     =========================================================================
+
+     *"Quando o Freeza é derrotado, a câmera vai para ele antes de ele sair de
+     cena. Aparece ele com a cabeça erguida, com os braços esticados e as pernas
+     esticadas. Ele começa a sair raios dele e luzes, e ele explode. A câmera,
+     depois dessa explosão, passa alguns segundos para a explosão se dissipar e a
+     câmera volta ao normal para os players."*
+
+     Esta cena é INTEIRAMENTE do cliente, ao contrário da chegada, e a diferença
+     não é de gosto: a morte já é uma mensagem (`NS2C.FREEZA_DOWN`, com o ponto e
+     o carimbo), o corpo já não é mais simulado por ninguém depois dela, e a
+     contagem do fim do planeta (`fim.contagem`, 60 s) começa no mesmo instante
+     em todas as telas por conta do `aoMorrer` da sala. Não há nada a decidir —
+     só a desenhar. */
+  fim: {
+    /** s — a pose aberta com os raios saindo, antes do estouro. */
+    abertura: 2.4,
+    /** s — o estouro e a poeira baixando, depois dele. */
+    dissipar: 2.6,
+    /** m — a distância da lente, em ALTURAS dele. Um pouco mais longe que a da
+     *  chegada: o que se enquadra aqui é a explosão, não o corpo. */
+    lente: 3.4,
+    /** Quantos raios saem do corpo no auge. Faixa: 0 a 64. */
+    raios: 18,
+  },
+
+  /* =========================================================================
+     A GENKI DAMA O DEIXA LENTO
+     =========================================================================
+
+     *"Uma Genki Dama contra o Freeza: quando a Genki Dama é atirada, o Freeza
+     anda mais lento. Ele não anda tão rápido, para dar chance da Genki Dama
+     acertar ele. Mas tem chances da Genki Dama acertar ele, e também não é que
+     acerta."*
+
+     A última frase é a especificação: o golpe passa a ter chance, e não passa a
+     ser garantido. A conta que decide isso é a de sempre — a Genki Dama voa a
+     46 m/s e persegue a 40°/s, e o boss escapa dela enquanto `v > ω·d`. Com o
+     fator abaixo:
+
+         v do boss em fuga ... 64 × 0,5 = 32 m/s
+         ω da Genki Dama ..... 0,698 rad/s
+         ele escapa a ........ d < 32 / 0,698 = 45,8 m
+
+     Ou seja: perto ele ainda sai da frente (e sair da frente de uma bola de
+     41 m de diâmetro a 45 m é uma manobra apertada), longe ele não ganha mais a
+     corrida angular — mas a bola tem só 75° de `arcMax` para gastar, então uma
+     mudança de rumo dele no meio do voo ainda a faz passar de lado. É
+     exatamente "tem chances, e não é que acerta".
+
+     A lentidão começa quando a bola SAI da mão (depois do `windup` de 5,2 s) e
+     não quando o gesto começa: o pedido diz "quando a Genki Dama é atirada", e
+     antes disso não há nada no ar de que ele precise fugir devagar. */
+  lentidao: {
+    /** Fração da velocidade dele enquanto a bola está no ar. 0,5 = metade.
+     *  Faixa: 0.2 a 1 (1 desliga). */
+    fator: 0.5,
+    /** s — quanto ela dura, contados da soltura. 12 s a 46 m/s são 552 m de voo
+     *  da bola: mais que a arena inteira, ou seja, ela cobre o golpe todo sem
+     *  precisar que a sala acompanhe o projétil. Faixa: 0 a 30. */
+    duracao: 12,
+  },
+
+  /* =========================================================================
+     A ONDA DE CHOQUE DERRUBA ELE
+     =========================================================================
+
+     *"Se esse flash pegar, além de afastar, o player é derrubado. Inclusive o
+     Freeza pode ser derrubado se esse flash pegar. Derrubado é igual acontece
+     quando o player leva cinco ataques consecutivos: ele cai no chão, abre a
+     cratera e tudo mais."*
+
+     É a única coisa do modo que derruba o boss, e ela desmente de propósito o
+     "ele não é atordoável" do cabeçalho de `server/namek/freeza.js`. A
+     justificativa de lá continua valendo para o que ela cobria — um boss que cai
+     a cada cinco bolinhas não é um boss —, e é por isso que esta queda tem um
+     gatilho único e caro: a onda custa 25 de ki, tem catorze metros de raio e
+     exige estar COLADO nele, que é o lugar mais perigoso do mapa (`voo.perto`
+     manda ele recuar de lá, e a onda dele mesmo empurra de volta).
+
+     O que ela compra é a janela: enquanto ele está no chão, ele não escolhe
+     alvo, não atira e não desvia. É o mesmo contrato do atordoamento entre
+     jogadores — ver `NAMEK.fighter.stagger`. */
+  queda: {
+    /** s — quanto ele fica no chão depois de tocar o solo. Mais que os 2,4 s de
+     *  um lutador porque chegar lá de 78 m já leva tempo, e o que se quer é a
+     *  janela DEPOIS do baque. Faixa: 0.5 a 12. */
+    tempo: 3.2,
+    /** m/s — a velocidade com que ele despenca. Ele não tem gravidade (ele
+     *  voa); esta é a queda inteira, escrita como um número. Faixa: 10 a 200. */
+    velocidade: 62,
+    /** s — carência até ele poder ser derrubado de novo. Sem ela, dois
+     *  jogadores revezando ondas o manteriam no chão para sempre — é a mesma
+     *  trava de `stagger.immune`. Faixa: 1 a 60. */
+    carencia: 9,
+    /** Potência da cratera que o corpo dele abre ao bater. Ver `craterFor`: 14
+     *  dão 3,2 + 7,6·√14 = 31,6 m de boca, entre a do Galick Gun (26 m) e a da
+     *  Death Ball dele (54 m). Faixa: 0 a 60. */
+    cratera: 14,
   },
 
   /* -------------------------------------------------------------------------
@@ -637,7 +860,17 @@ export const FREEZA = {
       dano: 0.26,
       cadencia: 0.5,
       agressividade: 0.4,
-      mover: 0.72,
+      /* 0,98 e não 0,72. **Este número deixou de ser de dificuldade e passou a
+         ser de física.** Ele multiplica `voo.arranque`, e é o arranque que
+         decide se o boss consegue desviar da rajada agora que ela persegue
+         15 % mais contra ele: 64 × 0,98 = 62,7 m/s, contra os 62,2 exigidos (a
+         conta está em `NAMEK.blast.homing.ganhoNoFreeza`). A 0,72 ele ficaria
+         com 46 m/s e a bola de ki nunca mais erraria o chefe — o nível "fácil"
+         viraria, sem que ninguém notasse, o nível em que ele não tem resposta.
+         O que continua fazendo deste o nível fácil são as outras cinco colunas:
+         metade da vida, um quarto do dano, metade dos golpes e o triplo do erro
+         de mira. */
+      mover: 0.98,
       erro: 3,
     },
 
@@ -660,7 +893,13 @@ export const FREEZA = {
       dano: 1.35,
       cadencia: 1.35,
       agressividade: 1.3,
-      mover: 1.12,
+      /* 1,05 e não 1,12: com `voo.arranque` em 64, este multiplicador é o que
+         decide se o boss passa da velocidade de arranque do JOGADOR (64 m/s), e
+         passar dela é a única forma de tornar impossível fugir dele. 1,05 dá
+         67 m/s — acima do jogador, sim, mas por 5 %, o que é a diferença entre
+         "ele alcança quem foge em linha reta" e "ninguém escapa nunca". A 1,12
+         seriam 72 m/s, e aí a fuga deixaria de existir como opção. */
+      mover: 1.05,
       erro: 0.55,
     },
   },

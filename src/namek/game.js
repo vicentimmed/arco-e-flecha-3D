@@ -30,7 +30,7 @@
 
 import * as THREE from "three";
 
-import { NAMEK, specialInfo, duracaoDaPose } from "../shared/namek/config.js";
+import { NAMEK, specialInfo, duracaoDaPose, qualidadeNamek } from "../shared/namek/config.js";
 import { NamekField } from "../shared/namek/field.js";
 import { NC2S, NS2C, packFighter, vecFrom } from "../shared/namek/protocol.js";
 import { gameEvents, EventType } from "../core/events.js";
@@ -72,15 +72,40 @@ const PINO_CHEIO = 150;
  *  `sort` a recebe uma vez por quadro e um literal ali é lixo por quadro. */
 const ordemDoPino = (a, b) => a.dist - b.dist;
 
+/** A lista vazia que o HUD recebe durante as cenas cinemáticas do boss.
+ *  Congelada e de módulo: ela é passada em todo quadro de cena, e um `[]` novo
+ *  ali seriam quatrocentos arrays por cena para dizer "nada". */
+const VAZIO = Object.freeze([]);
+
 export class NamekGame {
   constructor(canvas, uiRoot) {
     /* --------------------------------------------------------- desenho --- */
+    /* ================================================== A QUALIDADE =========
+     *
+     * **Esta é a maior diferença de custo entre Namekusei e a fase do Vale**, e
+     * ela não era de cenário: o modo tinha `min(devicePixelRatio, 2)` chumbado e
+     * IGNORAVA o preset que o jogador escolheu no lobby. Numa tela de razão 2 com
+     * a qualidade em "baixa", isso são quatro vezes mais fragmentos por quadro
+     * que o Vale desenha na mesma máquina — e nenhuma otimização de cenário
+     * compensa um fator quatro.
+     *
+     * O preset sai de `qualidadeNamek()`, que lê a MESMA chave de `localStorage`
+     * que o lobby grava. Ver `NAMEK.render` para por que ele não importa
+     * `src/config.js` e para a lista do que a qualidade pode e não pode mexer —
+     * o resumo é: custo por pixel, sim; **distância de visão, nunca**, porque
+     * este é um jogo de voo e o que se vê de longe é o jogo. */
+    this.qualidade = qualidadeNamek();
+
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      /* O antisserrilhado (MSAA) sai no `low`. Ele é o segundo item mais caro
+         do quadro depois da resolução, e a razão de pixel 1 já é o cenário em
+         que ele custa mais: cada amostra a mais é um quadro-buffer inteiro a
+         mais na memória da placa. Nas outras duas ele fica. */
+      antialias: this.qualidade.antialias,
       powerPreference: "high-performance",
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.qualidade.pixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -145,6 +170,21 @@ export class NamekGame {
      * como ele era antes desta feature, e é o lado seguro para falhar.
      */
     this.freezaVivo = false;
+    /**
+     * **O Freeza já foi DERRUBADO nesta partida?**
+     *
+     * Espelho local de `NamekFreeza.derrotado`, e ele é uma segunda pergunta e
+     * não o contrário de `freezaVivo`: fora de campo o chefe pode estar por
+     * nunca ter entrado, por ter sido retirado (o clima voltando para `dia`) ou
+     * por ter caído — e só a última destrava o Super Saiyajin livre. Ver
+     * `NAMEK.ssj.livreAposOFreeza`.
+     *
+     * Ele chega por três caminhos, e os três precisam existir: o `welcome` (para
+     * quem entra depois da batalha), o `FREEZA_DOWN` com `derrotado` (para quem
+     * estava lá) e o `FREEZA_IN` (que o apaga, porque uma batalha nova recomeça
+     * a conta).
+     */
+    this.freezaDerrotado = false;
     this.me = new Fighter(this.scene, 0xff7a1a, true);
     this.cam = new NamekCamera(this.camera3, this.field);
     this.input = new NamekInput(canvas);
@@ -204,6 +244,12 @@ export class NamekGame {
       hudEl: this.hud.el,
       net: this.net,
       meuId: () => this.myId,
+      /* A CÂMERA e o HUD, para as duas cenas dele — a chegada e a morte. Ele é
+         quem sabe quando elas acontecem (as duas mensagens são dele), então é
+         ele quem as conduz; o laço só pergunta, uma vez por quadro, se a lente
+         ainda é do jogador. Ver `BossSystem.passoDaCine` e o §1 de `boss/cine.js`. */
+      camera: this.camera3,
+      hud: this.hud,
     });
 
     /** Meu id na sala. Vem no `welcome`. */
@@ -445,6 +491,19 @@ export class NamekGame {
          outros. Vem `null` entre um salto e outro, e aí o próximo `NS2C.FISH`
          chega pelo caminho normal. */
       if (msg.fish) this.world.peixe?.agendar(msg.fish);
+
+      /* O SOL, com as feridas que ele já levou. Mesmo argumento das crateras e
+         do peixe: quem entra numa partida em que o sol já apanhou dois
+         Kamehamehas tem de ver o mesmo disco vermelho que os outros — e não um
+         sol amarelo que fica laranja de repente no terceiro tiro. */
+      this.world.sky?.setSolFeridas(msg.sol?.feridas ?? 0, true);
+
+      /* E SE O FREEZA JÁ FOI DERRUBADO NESTA PARTIDA. É o que destrava o Super
+         Saiyajin livre (ver `contextoSSJ`), e quem entra depois da batalha tem o
+         mesmo direito de quem lutou — a marca é da SALA, não de quem estava lá.
+         Sem esta linha, um jogador que entrasse durante a fuga do planeta
+         apertaria `R` e ouviria "só na batalha contra o Freeza" para sempre. */
+      this.freezaDerrotado = msg.freezaMorto === true;
 
       /* `.id` — o `welcome` traz o clima como `{ id, w }`, não como a string
          que o `NS2C.WEATHER` de cada troca manda. Passar o objeto inteiro não
@@ -792,6 +851,35 @@ export class NamekGame {
       );
     });
 
+    /**
+     * O SOL LEVOU UM KAMEHAMEHA — e, no terceiro, morreu.
+     *
+     * A sala é a autoridade sobre as três vidas dele (§8), como é sobre todo o
+     * resto: este cliente mandou o `NC2S.SUN_HIT` e não sabe se ele contou até
+     * esta mensagem chegar. O que ele faz aqui é pintar o disco um degrau mais
+     * vermelho — que é a barra de vida deste alvo — e, no último, a explosão.
+     *
+     * A VIRADA DE CLIMA NÃO VEM POR AQUI. O `NS2C.WEATHER` sai por conta
+     * própria logo atrás (a sala chama `pedirClima` dentro de `NamekSol.pedido`)
+     * e é ele que fecha o céu, chama o Freeza e liga a máquina do fim do
+     * planeta. Ver o comentário de `NS2C.SUN` no protocolo para por que as duas
+     * coisas não viajam juntas.
+     */
+    if (NS2C.SUN) {
+      net.on(NS2C.SUN, (msg) => {
+        const ceu = this.world.sky;
+        if (!ceu) return;
+        ceu.setSolFeridas(msg?.feridas ?? 0);
+        if (!msg?.morto) {
+          this.hud.toast(
+            `${this.nomeDe(msg?.by)} acertou o sol (${msg?.feridas ?? 0}/${NAMEK.sol.vidas})`,
+          );
+          return;
+        }
+        this.explodirSol();
+      });
+    }
+
     net.on(NS2C.DIFFICULTY, (msg) => {
       this.dificuldade = msg.id;
       this.menu.setDificuldade(msg.id);
@@ -971,6 +1059,12 @@ export class NamekGame {
     if (NS2C.FREEZA_IN) {
       net.on(NS2C.FREEZA_IN, () => {
         this.freezaVivo = true;
+        /* UMA BATALHA NOVA APAGA A MARCA DA ANTERIOR. Sem esta linha, uma sala
+           que virasse o clima para `dia` e de volta para `tempestade` começaria
+           a segunda luta com todo mundo já podendo se transformar de graça — o
+           prêmio da primeira valendo para sempre. A sala pensa o mesmo
+           (`NamekFreeza.entrar` zera `derrotado`); isto é o espelho local. */
+        this.freezaDerrotado = false;
       });
     }
     if (NS2C.FREEZA_STATE) {
@@ -985,13 +1079,31 @@ export class NamekGame {
       });
     }
     if (NS2C.FREEZA_DOWN) {
-      net.on(NS2C.FREEZA_DOWN, () => {
+      net.on(NS2C.FREEZA_DOWN, (msg) => {
         this.freezaVivo = false;
-        /* A BATALHA ACABOU, A TRANSFORMAÇÃO ACABA JUNTO — ver o §"quando ela
-           ACABA" em `NAMEK.ssj`. A sala manda um `SSJ_OFF` logo atrás
-           (`server/namek/ssj.js: manutencao`); desligar aqui é previsão, e ela é
-           a que faz o ouro sair da tela no mesmo quadro em que o chefe cai em
-           vez de um décimo de segundo depois. */
+        /* **DERRUBADO É DIFERENTE DE RETIRADO**, e a mesma mensagem conta as
+         * duas coisas: `NamekFreeza.morrer` manda `derrotado: 1`, e `sair()` —
+         * o caminho do clima voltando para `dia` — não manda nada. Sem essa
+         * distinção, desistir da luta pelo menu daria o mesmo prêmio de a ter
+         * vencido.
+         *
+         * A marca destrava o Super Saiyajin livre (ver `contextoSSJ` e
+         * `NAMEK.ssj.livreAposOFreeza`) e sobrevive à morte do jogador, que é o
+         * pedido: *"se ele morrer e voltar, mas o Freeza tem que estar morto."* */
+        if (msg?.derrotado) {
+          this.freezaDerrotado = true;
+          this.hud.toast("O Freeza caiu — a transformação é sua (R)");
+          /* E A TRANSFORMAÇÃO **NÃO** ACABA JUNTO, ao contrário do que este
+             bloco fazia. Ver a inversão argumentada em `SSJ.manutencao`: existe
+             jogo depois da queda dele (a contagem, a fuga, a briga no espaço), e
+             apagar o ouro no primeiro quadro desse trecho é o oposto do que o
+             pedido descreve. */
+          return;
+        }
+        /* A LUTA FOI CANCELADA. Aí sim a transformação some, e pelo argumento
+           original do §"quando ela ACABA" em `NAMEK.ssj`: ninguém está atirando,
+           e a poda de vida não custa nada neste instante. A sala manda um
+           `SSJ_OFF` logo atrás; desligar aqui é previsão. */
         if (this.ssj.aceso) this.desligarSSJ();
       });
     }
@@ -1093,6 +1205,47 @@ export class NamekGame {
     });
   }
 
+  /**
+   * **O SOL EXPLODIU.** O terceiro Kamehameha.
+   *
+   * *"Ele explode, ativando várias partículas, pegando fogo em Namekusei."*
+   *
+   * Três coisas, e cada uma cobre uma distância de leitura:
+   *
+   * • o CLARÃO do céu (`NamekSky.explodirSol`), que lava a tela inteira e
+   *   acende o relevo por baixo — é o que se vê de qualquer lugar do mapa, e é
+   *   ele que dá a escala de uma estrela morrendo;
+   * • as PARTÍCULAS no lugar do sol, a três quilômetros: elas não são o
+   *   espetáculo (a essa distância cada uma tem meio pixel), são a confirmação
+   *   de ONDE aconteceu, para quem estava olhando para lá no instante do tiro;
+   * • e o TREMOR da lente, que é o que dá peso ao clarão.
+   *
+   * *"Pegando fogo em Namekusei"* é a virada de clima, e ela não acontece aqui:
+   * o `NS2C.WEATHER` que a sala manda logo atrás fecha o céu, incendeia o
+   * horizonte e escurece o planeta ao longo dos oito segundos de
+   * `NAMEK.weather.fade` — o cenário inteiro pegando fogo, que é bem mais do que
+   * qualquer emissão de partícula daria.
+   */
+  explodirSol() {
+    const ceu = this.world.sky;
+    if (!ceu) return;
+    ceu.explodirSol();
+    this.hud.banner("O SOL SE APAGOU", 3.4);
+    this.cam.shake(1, 2.2);
+
+    const p = ceu.pontoDoSol(this._pontoSol ?? (this._pontoSol = { x: 0, y: 0, z: 0 }));
+    /* O clarão do `fx` além do do céu: o do céu é o CÉU lavando, e este é a
+       bola de fogo no lugar onde o disco estava. Raio enorme porque ele está a
+       três quilômetros — o que importa é o ângulo que ele ocupa, não o metro. */
+    this.fx.clarao(p.x, p.y, p.z, 900, 0xffd9a0, 1);
+    this.fx.fagulhas(p.x, p.y, p.z, 260, 0xffb14a, 64, 900);
+    /* O estouro é AUDÍVEL, e pela receita de detonação no ar que o modo já tem —
+       não há som próprio de estrela morrendo, e inventar um por causa de um
+       acontecimento que acontece uma vez por partida seria um buffer a mais na
+       carga do jogo para tocar uma vez. */
+    this.audio.detonouNoAr?.(p, 44, "genki");
+  }
+
   /** Desfaz o Super Saiyajin nas quatro peças que o carregam: o estado, o corpo,
    *  a barra e o HUD. Um caminho só — morte, fim da batalha e recusa da sala
    *  passam todos por aqui. */
@@ -1149,6 +1302,10 @@ export class NamekGame {
     const c = this._ctxSSJ ?? (this._ctxSSJ = {});
     c.vida = this.health;
     c.freeza = this.freezaVivo;
+    /* A CONQUISTA: o Freeza já foi derrubado nesta partida. Com ela, `podeAcender`
+       ignora o limiar de vida e a presença do chefe — ver
+       `NAMEK.ssj.livreAposOFreeza`. */
+    c.derrotado = this.freezaDerrotado === true;
     c.vivo = !this.down;
     c.caido = this.controller.caido === true;
     c.ssj = this.ssj.aceso;
@@ -1904,6 +2061,27 @@ export class NamekGame {
     if (kind === "kamehameha") {
       const planeta = this.world.planetaNaMira(origem, dir);
       if (planeta) this.net.send(NC2S.PLANET_HIT, { id: planeta });
+
+      /* ------------------------------------------------------- E O SOL ----
+       *
+       * *"Esse modo Namekusei também é ativado se 3 Kamehamehas atingirem o
+       * sol."*
+       *
+       * Mesma pergunta, mesmo instante e mesmo motivo dos planetas: a direção
+       * que vale é a TRAVADA no disparo, o feixe nunca chega lá (ele alcança
+       * 1 860 m e o sol é uma direção, não um lugar), e a sala confere contra
+       * este mesmo vetor. Ver `NamekSky.solNaMira` e `server/namek/sol.js`.
+       *
+       * Quem responde é o CÉU e não o mundo: o sol é dele — a direção, o raio e
+       * o disco desenhado saem de `world/sky.js` —, e responder de outro lugar
+       * seria a primeira oportunidade de a coisa que se vê e a coisa que conta
+       * discordarem.
+       *
+       * Nada acontece na tela agora, nem deve: a sala é quem sabe se este era o
+       * terceiro tiro, e a resposta dela chega pelo `NS2C.SUN`. */
+      if (this.world.sky?.solNaMira?.(origem, dir)) {
+        this.net.send(NC2S.SUN_HIT, {});
+      }
     }
   }
 
@@ -2124,6 +2302,13 @@ export class NamekGame {
       this.net.send(NC2S.SLAM, {
         p: [pouso.p.x, pouso.p.y, pouso.p.z],
         speed: pouso.speed,
+        /* **`"pouso"` NÃO MACHUCA, `"queda"` SIM.** O campo existia no evento do
+           controlador desde sempre e nunca chegava à sala, então o dano de queda
+           saía igual nos dois casos — e o `F` no ar, que é um mergulho de
+           propósito, se pagava com vida. Ver `NamekRoom.registrarQueda`, que é
+           quem lê isto, e o `@returns` de `FighterController.update`, que é quem
+           decide qual dos dois foi. A cratera e a poeira continuam nos dois. */
+        tipo: pouso.tipo,
       });
       // Cair de cem metros no meio da vila derruba a vila. Mesma regra do
       // estouro, mesma autoridade: aqui só se pede, quem confirma é a sala.
@@ -2312,6 +2497,41 @@ export class NamekGame {
        sala mandou, move o corpo e caminha a barra do HUD. Sem boss em campo é
        uma comparação e um `return`. */
     this.boss.update(dt, this.camera3.position);
+
+    /* ------------------------------------------------- AS CENAS DO BOSS ----
+     *
+     * *"Todos os players veem a câmera com foco no Freeza e a câmera sai de foco
+     * dos players, como se fosse uma apresentação de um jogo… Após essa cena
+     * cinemática, a câmera volta ao normal do player."*
+     *
+     * Uma linha, e a câmera do jogo continua não sabendo que isto existe — ver o
+     * §1 de `boss/cine.js` para por que a cena não virou um modo dela.
+     *
+     * **A POSIÇÃO NA FILA É O DETALHE QUE IMPORTA**, e ela custou uma medição
+     * para ficar certa. A cena precisa acontecer entre duas coisas:
+     *
+     * • DEPOIS de `boss.update`, porque é ele que move o corpo interpolado. Com
+     *   a cena antes, a lente enquadrava a posição do QUADRO ANTERIOR e o corpo
+     *   era desenhado na deste — medido, o boss saía 30 % da tela fora do centro
+     *   durante a chegada, que é justamente quando ele voa mais rápido;
+     * • e ANTES de `world.update` e do HUD, que leem `camera3.position` para
+     *   decidir nível de detalhe e projeção — deixá-los com a lente do jogador
+     *   enquanto se renderiza da lente da cena faria o cenário perto do boss
+     *   aparecer no detalhe de duzentos metros.
+     *
+     * A `NamekCamera` continua rodando normalmente lá em cima: é dela que a
+     * mistura da cena parte, e é para ela — viva, já acompanhando o jogador —
+     * que a rampa de saída volta. */
+    const emCena = this.boss.passoDaCine(dt, this.cam);
+    if (this._emCena && !emCena) {
+      /* A CENA DEVOLVEU A LENTE. `invalidarLente` existe por causa de um cache:
+         a câmera do jogo só reescreve o campo de visão quando o número que ELA
+         calcula muda, e a cena fechou a lente para 46° pelas costas dela. Sem
+         esta linha o jogo continuaria com a teleobjetiva da apresentação. */
+      this.cam.invalidarLente();
+    }
+    this._emCena = emCena;
+
     /* O fim ANTES do mundo: `setFim` decide se o planeta ainda é desenhado, se o
        céu é o de estrelas e quanto o chão já rachou — e `world.update` é quem
        caminha tudo isso. Invertido, o cenário mostraria a fase anterior. */
@@ -2324,14 +2544,31 @@ export class NamekGame {
        na prática a rigidez de toda constante de suavização da lente. */
 
     /* ------------------------------------------------------------- HUD ---- */
+    /* **DURANTE UMA CENA, O HUD DE MIRA SAI DA TELA.**
+     *
+     * A bússola, os anéis de alvo, o retículo e o painel de vida do alvo são
+     * todos desenhados a partir de uma projeção — e a projeção é a da câmera,
+     * que durante a chegada e a morte do boss está a dezessete metros dele, do
+     * outro lado da arena. Deixá-los ligados produz o pior tipo de defeito
+     * visual: elementos que PARECEM corretos, apontando para lugares que não
+     * têm nada a ver com o que está na tela.
+     *
+     * E o pedido é explícito sobre o que a cena tem de ser: *"como se fosse uma
+     * apresentação de um jogo"*. Apresentação de jogo não tem retículo.
+     *
+     * O que FICA é a barra de vida do boss, a do jogador e o placar: eles não
+     * projetam nada, são canto de tela, e sumir com a barra do chefe justamente
+     * no quadro em que ele é apresentado seria o contrário do que a cena quer
+     * dizer. */
+    const cena = this._emCena === true;
     /* A BÚSSOLA vem depois da câmera e antes do resto do HUD: ela projeta pela
        lente deste quadro, e a lente acabou de ser resolvida lá em cima. */
-    this.hud.setMarcas(this.bussola());
+    this.hud.setMarcas(cena ? VAZIO : this.bussola());
     /* Os círculos de todo mundo, e o aceso é para onde o tiro vai. A lista é a
        MESMA projeção que escolheu o alvo da assistência — ver
        `LockOn.naTelaTodos`, que existe justamente para o anel aceso e o alvo do
        tiro nunca discordarem. */
-    this.hud.setAneis(this.lock.naTelaTodos);
+    this.hud.setAneis(cena ? VAZIO : this.lock.naTelaTodos);
 
     /* O TETO DE VIDA É VARIÁVEL desde o Super Saiyajin: 100 normalmente, 160
        transformado (`NAMEK.ssj.vidaBonus`). Passá-lo em vez de `maxHealth` é o
@@ -2342,11 +2579,11 @@ export class NamekGame {
     this.hud.setSpecials(this.specialIndex, this.ki.podeEspecial());
     /* O retículo tem dois estados agora, e não três: o "travado" era o do alvo
        preso pela tecla `R`. Ver `NamekHud.setCrosshair`. */
-    this.hud.setCrosshair(this.ki.carregando ? "carregando" : "livre");
+    this.hud.setCrosshair(cena ? "oculto" : this.ki.carregando ? "carregando" : "livre");
     /* O PAINEL DE VIDA DO ALVO — um widget, duas razões (você acertou alguém, ou
        o cursor está em cima de alguém). Quem escolhe é `LockOn.noPainel`; aqui
        só se traduz o id em nome, cor e vida. Ver `dadosDoAlvo`. */
-    this.hud.setTarget(this.dadosDoAlvo());
+    this.hud.setTarget(cena ? null : this.dadosDoAlvo());
     this.hud.update(dt);
 
     /* --------------------------------------------------- a tela do fim ---- */

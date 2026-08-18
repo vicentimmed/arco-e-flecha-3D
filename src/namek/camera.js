@@ -367,6 +367,25 @@ export class NamekCamera {
     this._tremorTotal = this._tremorT;
   }
 
+  /**
+   * **ALGUÉM MEXEU NA LENTE POR FORA.** Invalida o cache do campo de visão.
+   *
+   * `_aplicar` só escreve `camera.fov` quando o valor que ELE calcula muda — a
+   * matriz de projeção é refeita em CPU e este é um caminho de todo quadro. O
+   * cache torna isso barato e cria uma armadilha: se outra coisa escreve
+   * `camera.fov` (a lente cinemática do boss fecha para 46° durante as cenas de
+   * chegada e de morte, ver `boss/cine.js`), esta câmera não percebe — o valor
+   * dela continua igual ao que ela acha que já escreveu, e o jogo fica com a
+   * teleobjetiva da cena para sempre.
+   *
+   * Uma linha, chamada quando a cena devolve o controle. `NaN` e não um número:
+   * qualquer comparação com `NaN` é falsa, então o `if` de `_aplicar` passa no
+   * quadro seguinte sem precisar saber o que a cena deixou lá.
+   */
+  invalidarLente() {
+    this._fov = NaN;
+  }
+
   /** A direção para onde a mira aponta, em espaço de mundo. */
   aimDirection(out = { x: 0, y: 0, z: 0 }) {
     out.x = this._aim.x;

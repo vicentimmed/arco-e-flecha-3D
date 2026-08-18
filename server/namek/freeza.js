@@ -147,6 +147,18 @@ export class NamekFreeza {
     /** Está em campo E vivo? É o `vivo` do contrato. */
     this.vivo = false;
     /**
+     * **Ele foi DERRUBADO nesta partida?** Parte do contrato público, e a marca
+     * que destrava o Super Saiyajin livre (ver `NAMEK.ssj.livreAposOFreeza` e
+     * `server/namek/ssj.js: freezaDerrotado`).
+     *
+     * Ela é diferente de `!vivo` de propósito, e a diferença é a regra inteira:
+     * fora de campo ele pode estar por nunca ter entrado, por ter CAÍDO ou por
+     * ter sido RETIRADO — `sair()` é o caminho do clima voltando para `dia`, e
+     * desistir da luta não pode pagar o mesmo prêmio de a ter vencido. Só
+     * `morrer` acende esta marca; `entrar` e `sair` a apagam.
+     */
+    this.derrotado = false;
+    /**
      * Chamado quando ele morre: `sala.freeza.aoMorrer = (agora) => {…}`.
      *
      * Propriedade e não lista de ouvintes: só há um interessado por vez (quem
@@ -266,6 +278,153 @@ export class NamekFreeza {
     this._nUltimo = 0;
     /** Aceso no quadro de um teleporte, lido e apagado por `transmitir`. */
     this._teleportou = false;
+
+    /* ------------------------------------------------------- A CHEGADA -----
+       Três relógios em ms para a cena de apresentação (`NAMEK.freeza.chegada`).
+       `chegadaDe` é o instante em que ele apareceu no alto e `descidaAte` o
+       instante em que os pés dele chegam à cota de briga; `cenaAte` é o fim da
+       cena inteira (descida + os cinco segundos de órbita da câmera), e é ele
+       que proíbe qualquer golpe.
+
+       Dois relógios e não um porque as duas coisas terminam em momentos
+       diferentes: **ele volta a voar sozinho antes de a câmera devolver o jogo
+       ao jogador**, e é isso que faz a última meia volta da órbita mostrar o
+       boss já manobrando em vez de um boneco parado no ar. */
+    this.chegadaDe = 0;
+    this.descidaAte = 0;
+    this.cenaAte = 0;
+    /** m — a cota em que a descida termina. Calculada na entrada, contra o
+     *  relevo do ponto de queda: o meio da arena pode ser encosta. */
+    this.chegadaY = 0;
+
+    /* ----------------------------------------------- A LENTIDÃO DA GENKI ---
+       ms — a janela em que ele voa a `NAMEK.freeza.lentidao.fator` da
+       velocidade. Ver `avisarGenkiDama`. */
+    this.lentoDe = 0;
+    this.lentoAte = 0;
+
+    /* ------------------------------------------------------- A QUEDA -------
+       ms. `quedaAte` é o fim da tonteira NO CHÃO e só começa a correr quando o
+       corpo toca o relevo — é o mesmo desenho de `FighterController.derrubar`,
+       e pelo mesmo motivo: ele é derrubado a 78 m de altura e a punição é o
+       tempo no chão, não o tempo caindo. `quedaLivreEm` é a carência contra
+       dois jogadores revezando ondas. */
+    this.caindo = false;
+    this.quedaAte = 0;
+    this.quedaLivreEm = 0;
+    /** Já cavou a cratera desta queda? Uma por tombo. */
+    this._cravou = false;
+  }
+
+  /* ================================================= a cena e os estados ==
+   *
+   * Três perguntas que o resto do arquivo faz o tempo todo, escritas uma vez
+   * cada. Elas moram juntas porque as três respondem à mesma coisa vista de
+   * ângulos diferentes: **ele está disponível para lutar agora?** */
+
+  /** A cena de apresentação ainda está correndo? Nela ele não escolhe alvo, não
+   *  atira e não pode ser ferido. */
+  emCena(agora) {
+    return agora < this.cenaAte;
+  }
+
+  /** Ele ainda está DESCENDO do céu? Só a descida move o corpo; a órbita da
+   *  câmera continua depois dela, com ele já voando normalmente. */
+  descendo(agora) {
+    return agora < this.descidaAte;
+  }
+
+  /** Está caído no chão (ou a caminho dele)? */
+  derrubado() {
+    return this.caindo;
+  }
+
+  /**
+   * O multiplicador de velocidade do quadro.
+   *
+   * Duas coisas o mexem e elas se MULTIPLICAM em vez de uma vencer a outra: a
+   * dificuldade (o eixo permanente) e a lentidão da Genki Dama (a janela). Um
+   * boss em `absoluto` sob uma Genki Dama voa a 1,05 × 0,5 = 52,5 % — ou seja, a
+   * lentidão continua sendo lentidão no nível mais difícil, que é onde ela mais
+   * precisa valer.
+   */
+  fatorDeVelocidade(agora) {
+    const base = Math.max(0.2, this.dif.mover);
+    if (agora < this.lentoDe || agora >= this.lentoAte) return base;
+    return base * NAMEK.freeza.lentidao.fator;
+  }
+
+  /**
+   * **"Uma Genki Dama foi atirada contra ele."** Chamada por
+   * `NamekRoom.registrarEspecial` quando o golpe é `genki` e há boss em campo.
+   *
+   * A janela começa depois do `windup` porque o pedido fala da bola no AR
+   * ("quando a Genki Dama é atirada"), e porque antes disso não há nada de que
+   * ele precise fugir devagar — os 5,2 s de carga são justamente o tempo em que
+   * ele deveria estar correndo para cima de quem carrega.
+   *
+   * Sobreposições ESTENDEM em vez de somar: duas Genki Damas no ar não o deixam
+   * duas vezes mais lento (isso seria uma trava), mas a segunda empurra o fim da
+   * janela para a frente, que é o que o jogador espera de duas bolas no céu.
+   *
+   * @param {number} agora ms da sala, no instante do disparo
+   * @param {number} windup s de carga do golpe, lido do config pela sala
+   */
+  avisarGenkiDama(agora, windup = 0) {
+    if (!this.vivo) return;
+    const L = NAMEK.freeza.lentidao;
+    if (!(L?.fator < 1)) return;
+    const de = agora + Math.max(0, windup) * 1000;
+    /* O começo é o MAIS CEDO dos dois: uma bola já solta não pode ter o efeito
+       adiado pelo windup de outra que acabou de começar a carregar. */
+    this.lentoDe = this.lentoAte > agora ? Math.min(this.lentoDe, de) : de;
+    this.lentoAte = Math.max(this.lentoAte, de + L.duracao * 1000);
+  }
+
+  /**
+   * **A ONDA DE CHOQUE O DERRUBOU.**
+   *
+   * *"Inclusive o Freeza pode ser derrubado se esse flash pegar. Derrubado é
+   * igual acontece quando o player leva cinco ataques consecutivos: ele cai no
+   * chão, abre a cratera e tudo mais."*
+   *
+   * Ela é a única coisa do modo que o põe no chão, e é por isso que o §1 do
+   * cabeçalho — "ele não é atordoável" — continua verdadeiro no que ele queria
+   * dizer: não há CONTAGEM de golpes contra o boss, um Kienzan não o derruba, e
+   * cinco bolinhas menos ainda. O que derruba é um gesto único, caro e de
+   * catorze metros de raio, que exige estar colado num corpo que empurra e
+   * recua de propósito.
+   *
+   * O tombo em si é resolvido em `mover`: enquanto `caindo` for verdade ele
+   * despenca a `queda.velocidade`, ignora o piso de voo, e ao tocar o relevo
+   * abre a cratera e começa a contar `queda.tempo`.
+   *
+   * @param {number} agora ms
+   * @returns {boolean} se ele foi de fato derrubado (falso na carência, na cena
+   *   de chegada, e se ele já estava caído)
+   */
+  derrubar(agora) {
+    if (!this.vivo || this.caindo) return false;
+    if (this.emCena(agora)) return false;
+    if (agora < this.quedaLivreEm) return false;
+    const Q = NAMEK.freeza.queda;
+    this.caindo = true;
+    this._cravou = false;
+    /* O relógio nasce ZERADO e só é armado quando os pés tocam o chão — ver o
+       campo. Aqui ele guarda apenas o teto de segurança, para o caso de o corpo
+       nunca chegar ao relevo (sobre o mar da borda, por exemplo): oito segundos
+       são a queda de 520 m a 62 m/s com folga. */
+    this.quedaAte = agora + 8000;
+    this.quedaLivreEm = agora + (Q.tempo + Q.carencia) * 1000;
+    /* O golpe em curso morre junto, pela mesma razão que o especial de um
+       lutador morre em `NamekRoom.derrubar`: um Death Beam saindo de um corpo
+       que está despencando é o golpe cobrando por alguém que já não está lá. */
+    this.pose = null;
+    this.surto = 0;
+    this.vel.x = 0;
+    this.vel.z = 0;
+    this.vel.y = -Q.velocidade;
+    return true;
   }
 
   /* ======================================================== a API pública == */
@@ -298,17 +457,50 @@ export class NamekFreeza {
     this.vivo = true;
     this._nUltimo = n;
 
-    /* A ENTRADA É DE CIMA, no meio da arena e alto. Não é encenação: é o único
-       ponto do mapa que está à vista de todo mundo ao mesmo tempo, e um boss que
-       aparece atrás de uma montanha é um boss que metade da sala descobre
-       apanhando. */
+    /* ======================================================= A CHEGADA =====
+     *
+     * *"Quando o Freeza chega, ele deve chegar voando lá do início do céu até a
+     * terra."*
+     *
+     * A entrada sempre foi de cima e no meio da arena, e a razão continua: é o
+     * único ponto do mapa à vista de todo mundo ao mesmo tempo, e um boss que
+     * aparece atrás de uma montanha é um boss que metade da sala descobre
+     * apanhando. O que mudou é que ela deixou de ser uma POSIÇÃO e virou um
+     * PERCURSO — 900 m de altura até 70 m acima do relevo, em 2,2 s.
+     *
+     * Ele nasce ACIMA do teto de voo do jogador (520 m) de propósito: a descida
+     * tem de começar num lugar aonde ninguém pode ir, senão ela seria "um boss
+     * apareceu ali em cima" em vez de "uma coisa está entrando na atmosfera".
+     *
+     * A interpolação do corpo pelo cliente é cortada no primeiro `FREEZA_STATE`
+     * (o `BossSystem` copia a posição da mensagem de entrada), então os 830 m de
+     * queda são desenhados como queda e não como um tranco.
+     */
+    const C = NAMEK.freeza.chegada;
     this.pos.x = 0;
     this.pos.z = 0;
-    this.pos.y = Math.max(
-      this.sala.field.heightAt(0, 0) + 90,
-      NAMEK.world.ceiling * 0.62,
+    this.chegadaY = Math.max(
+      this.sala.field.heightAt(0, 0) + C.baixo,
+      NAMEK.world.ceiling * 0.28,
     );
-    this.vel.x = this.vel.y = this.vel.z = 0;
+    this.pos.y = C.alto;
+    this.vel.x = this.vel.z = 0;
+    /* A velocidade vertical é escrita, e não deixada em zero, porque ela é o que
+       a aura e o rastro do cliente leem para saber que ele está vindo depressa —
+       `FREEZA_STATE` manda `v`, e `rapidez` alimenta a chama da aura. */
+    this.vel.y = -(C.alto - this.chegadaY) / Math.max(0.05, C.descida);
+    this.chegadaDe = agora;
+    this.descidaAte = agora + C.descida * 1000;
+    this.cenaAte = agora + (C.descida + C.orbita) * 1000;
+    this.caindo = false;
+    this.quedaAte = 0;
+    this.quedaLivreEm = 0;
+    this.lentoDe = 0;
+    this.lentoAte = 0;
+    /* UMA BATALHA NOVA ZERA A MARCA DA ANTERIOR. Sem isto, uma sala que virasse
+       o clima para `dia` e de volta para `tempestade` começaria a segunda luta
+       com todo mundo já podendo se transformar de graça — ver `derrotado`. */
+    this.derrotado = false;
     this.yaw = 0;
     this.pitch = 0;
     this.roll = 0;
@@ -327,7 +519,12 @@ export class NamekFreeza {
     this.tEsfera = 12;
     this.tOnda = 6;
     this.tTeleporte = NAMEK.freeza.teleporte.recarga;
-    this.invulnAte = agora + ENTRADA_INVULN * 1000;
+    /* A INVULNERABILIDADE COBRE A CENA INTEIRA, e não mais dois segundos e
+       pouco: enquanto a câmera de todo mundo está presa nele, ninguém pode nem
+       machucá-lo nem ser machucado por ele. `ENTRADA_INVULN` continua sendo o
+       piso — ele é o tempo de a barra subir na tela —, e a cena é o que manda
+       quando ela é maior, que é sempre. */
+    this.invulnAte = agora + Math.max(ENTRADA_INVULN * 1000, this.cenaAte - agora);
 
     this.sala.broadcastAll(this.mensagemEntrada(agora));
     this.sala.log?.(
@@ -351,6 +548,16 @@ export class NamekFreeza {
     this.bolas.length = 0;
     this.esfera = null;
     this.pose = null;
+    this.caindo = false;
+    this.cenaAte = 0;
+    this.descidaAte = 0;
+    /* **SAIR NÃO É MORRER**, e é esta linha que impede o menu de virar um atalho
+       para o prêmio da batalha: `derrotado` destrava o Super Saiyajin livre (ver
+       o campo, e `NAMEK.ssj.livreAposOFreeza`), e desistir da luta virando o
+       clima para `dia` não pode pagá-lo. */
+    this.derrotado = false;
+    /* E o `FREEZA_DOWN` daqui sai SEM a marca `derrotado`, que é como o cliente
+       distingue os dois caminhos com uma mensagem só — ver `morrer`. */
     this.sala.broadcastAll({ t: NS2C.FREEZA_DOWN, by: null, p: this.pontoRede(), w: this.sala.now() });
   }
 
@@ -455,6 +662,22 @@ export class NamekFreeza {
       vida: Math.round(this.vida),
       vidaMax: this.vidaMax,
       p: this.pontoRede(),
+      /* ------------------------------------------------ A CENA, em dois campos
+       *
+       * `cena` são os MILISSEGUNDOS QUE FALTAM dela, e não a duração total — a
+       * distinção existe porque esta mesma mensagem é reenviada a quem chega no
+       * meio (`apresentar`) e a cada troca de dificuldade. Mandar a duração faria
+       * quem entrasse no quarto segundo da apresentação assistir a ela inteira
+       * de novo, sozinho, com o boss já lutando.
+       *
+       * Zero (ou ausente) quer dizer "não há cena": é o caso da reapresentação
+       * normal, e o cliente simplesmente não prende a câmera de ninguém.
+       *
+       * `desce` são os milissegundos que faltam só da DESCIDA, e ele existe
+       * porque a lente enquadra as duas metades de jeitos diferentes — acompanha
+       * a queda na primeira e orbita na segunda. Ver `src/namek/boss/cine.js`. */
+      cena: Math.max(0, Math.round(this.cenaAte - agora)),
+      desce: Math.max(0, Math.round(this.descidaAte - agora)),
       w: agora,
     };
   }
@@ -577,10 +800,24 @@ export class NamekFreeza {
     this.bolas.length = 0;
     this.esfera = null;
     this.pose = null;
+    this.caindo = false;
+    this.cenaAte = 0;
+    this.descidaAte = 0;
+    /* **A MARCA DA VITÓRIA.** Ela sobrevive à saída dele de campo e é o que
+       destrava o Super Saiyajin livre para a sala inteira, inclusive para quem
+       entrar depois (ver `derrotado`, `server/namek/ssj.js: freezaDerrotado` e o
+       campo `freezaMorto` do `welcome`). */
+    this.derrotado = true;
     this.sala.broadcastAll({
       t: NS2C.FREEZA_DOWN,
       by: por?.id ?? null,
       p: this.pontoRede(),
+      /* **DERRUBADO, e não retirado.** O mesmo `FREEZA_DOWN` sai pelos dois
+         caminhos (aqui e em `sair`), e este bit é a única coisa que os separa
+         do lado do cliente: ele decide se a cena de morte acontece, se o Super
+         Saiyajin fica aceso e se a tecla `R` passa a ser de graça. Sem ele,
+         cancelar a luta pelo menu daria o mesmo prêmio de a ter vencido. */
+      derrotado: 1,
       w: agora,
     });
     this.sala.log?.(`namek — FREEZA caiu (${this.dificuldadeId})`);
@@ -679,16 +916,133 @@ export class NamekFreeza {
     }
 
     this.decairRaiva(dt);
-    const alvo = this.escolherAlvo(dt, agora);
-    this.mover(dt, alvo);
+    /* ------------------------------------------------- OS DOIS ESTADOS MUDOS
+     *
+     * A cena de chegada e a queda pela onda têm a mesma forma — o corpo é
+     * conduzido por uma linha de código só e a máquina de estados fica calada —,
+     * e por isso as duas saem por aqui em vez de espalharem `if`s pelos cinco
+     * métodos abaixo. Sem alvo, `mover` e `decidirGolpe` já sabem não fazer
+     * nada; o que estes dois métodos acrescentam é o percurso.
+     *
+     * A ORDEM importa: os dois ainda passam por `passoDasBolas`, `passoDaEsfera`
+     * e `transmitir`. Uma bola que ele soltou antes de ser derrubado continua
+     * voando e continua machucando, que é a leitura certa — ela já saiu da mão.
+     */
+    const conduzido = this.passoDaChegada(dt, agora) || this.passoDaQueda(dt, agora);
+    const alvo = conduzido ? null : this.escolherAlvo(dt, agora);
+    if (!conduzido) this.mover(dt, alvo, agora);
     this.relogios(dt);
-    this.decidirGolpe(dt, agora, alvo);
+    if (!conduzido) this.decidirGolpe(dt, agora, alvo);
     this.passoDaPose(dt, agora);
     this.passoDasBolas(dt, agora);
     this.passoDaEsfera(dt, agora);
     this.despejarDano(agora, false);
     this.corpoNaLista(this.sala.corpos);
     this.transmitir(agora);
+  }
+
+  /**
+   * A DESCIDA DO CÉU. Devolve `true` enquanto ela estiver conduzindo o corpo.
+   *
+   * *"Ele deve chegar voando lá do início do céu até a terra."*
+   *
+   * Uma interpolação e não uma integração: `u` vai de 0 a 1 ao longo de
+   * `chegada.descida` e a altura é lida DELE. É a mesma escolha do salto do
+   * peixe (`NamekPeixeSim.posicao`) e pelo mesmo motivo — uma trajetória fechada
+   * chega exatamente onde prometeu, e a cena que vem depois dela depende de o
+   * corpo estar na cota certa no instante certo.
+   *
+   * A curva é `u²`: ele ACELERA descendo. Linear leria como um elevador; com o
+   * quadrado, os primeiros 400 m passam devagar (a coisa ainda é um ponto no
+   * céu) e os últimos 200 chegam de uma vez, que é a leitura de queda.
+   *
+   * O corpo GIRA durante a queda — meia volta em dois segundos — para a órbita
+   * da câmera não começar com ele parado de frente para a arena. E o `yaw`
+   * continua sendo escrito depois, por `mirarEm`, assim que houver alvo.
+   *
+   * Ele NÃO devolve `true` durante a órbita da câmera: passada a descida, o boss
+   * volta a manobrar sozinho e é o `invulnAte` (que cobre a cena inteira) que
+   * continua proibindo os golpes. É isso que faz a última meia volta da
+   * apresentação mostrar uma criatura viva em vez de um boneco pendurado.
+   */
+  passoDaChegada(dt, agora) {
+    if (!this.descendo(agora)) return false;
+    const C = NAMEK.freeza.chegada;
+    const dur = Math.max(0.05, C.descida) * 1000;
+    const u = clamp(1 - (this.descidaAte - agora) / dur, 0, 1);
+    const antes = this.pos.y;
+    this.pos.y = C.alto + (this.chegadaY - C.alto) * (u * u);
+    /* A velocidade É a derivada medida, e não a nominal: ela alimenta a aura e o
+       rastro do cliente (`FREEZA_STATE.v`), e uma velocidade escrita à mão
+       discordaria da posição justamente no trecho em que ele mais acelera. */
+    this.vel.y = dt > 1e-4 ? (this.pos.y - antes) / dt : this.vel.y;
+    this.vel.x = this.vel.z = 0;
+    this.yaw = u * Math.PI;
+    /* Nariz para baixo enquanto cai, endireitando no fim. `pitch` viaja para o
+       cliente e é ele que inclina o tronco (ver `FreezaBody.aplicar`). */
+    this.pitch = -0.9 * (1 - u);
+    this.roll = 0;
+    return true;
+  }
+
+  /**
+   * O TOMBO, quando a onda de choque de alguém o pegou. Ver `derrubar`.
+   *
+   * Devolve `true` enquanto ele estiver caindo ou no chão — e enquanto isso ele
+   * não escolhe alvo, não mira, não atira e não desvia. É a janela inteira, e
+   * ela é o que o gesto compra.
+   *
+   * O relógio da tonteira **só começa a correr quando os pés tocam o relevo**,
+   * exatamente como o de um lutador (ver `FighterController.derrubar`, que
+   * explica por quê): ele é derrubado a 78 m de altura, e a punição é o tempo no
+   * chão — não o tempo caindo. Sem isso, um tombo de cima do teto de voo
+   * terminaria ainda no ar e não haveria queda nenhuma.
+   */
+  passoDaQueda(dt, agora) {
+    if (!this.caindo) return false;
+    const Q = NAMEK.freeza.queda;
+    const chao = this.sala.field.heightAt(this.pos.x, this.pos.z);
+
+    if (this.pos.y > chao) {
+      this.vel.x = damp(this.vel.x, 0, 3, dt);
+      this.vel.z = damp(this.vel.z, 0, 3, dt);
+      this.vel.y = -Q.velocidade;
+      this.pos.x += this.vel.x * dt;
+      this.pos.z += this.vel.z * dt;
+      this.pos.y += this.vel.y * dt;
+      /* O corpo TOMBA enquanto desce. `roll` é o que o cliente lê para deitar a
+         raiz do boneco — é o mesmo canal do tombo de morte, e é ele que
+         diferencia "está caindo" de "está mergulhando". */
+      this.roll = clamp(this.roll + dt * 2.2, 0, 1.45);
+      this.pitch = damp(this.pitch, 0.5, 3, dt);
+      if (this.pos.y > chao) return true;
+    }
+
+    /* ------------------------------------------------------------- o baque */
+    this.pos.y = chao;
+    this.vel.x = this.vel.y = this.vel.z = 0;
+    if (!this._cravou) {
+      this._cravou = true;
+      /* A CRATERA, pelo `NamekRoom.cratera` de sempre — é o que faz o buraco
+         dele ser o mesmo buraco em todas as telas e entrar na lista de quem
+         chegar depois. `null` de dono pela mesma razão de todos os buracos do
+         boss: a cota por lutador de `podeCravar` não se aplica a quem não é
+         lutador. */
+      this.sala.cratera(this.pos.x, this.pos.z, Q.cratera, null);
+      /* O relógio da tonteira começa AQUI. */
+      this.quedaAte = agora + Q.tempo * 1000;
+    }
+
+    if (agora >= this.quedaAte) {
+      this.caindo = false;
+      this._cravou = false;
+      this.roll = 0;
+      /* Ele levanta VOANDO, com um empurrão para cima: o piso de `voo.alturaMin`
+         o tiraria do chão sozinho no quadro seguinte, mas em um solavanco. */
+      this.vel.y = 26;
+      return false;
+    }
+    return true;
   }
 
   relogios(dt) {
@@ -786,9 +1140,12 @@ export class NamekFreeza {
    * alvo, `degrau` metros acima dele, circundando pelo lado que `this.lado`
    * diz. Perto demais, recua; longe demais, investe com `arranque`.
    */
-  mover(dt, alvo) {
+  mover(dt, alvo, agora = this.sala.now()) {
     const V = NAMEK.freeza.voo;
-    const mover = Math.max(0.2, this.dif.mover);
+    /* O FATOR DE VELOCIDADE, e não `dif.mover` cru: é por ele que a lentidão da
+       Genki Dama entra (`NAMEK.freeza.lentidao`), multiplicando a dificuldade em
+       vez de a substituir. Ver `fatorDeVelocidade`. */
+    const mover = this.fatorDeVelocidade(agora);
     const dv = { x: 0, y: 0, z: 0 };
     let rapido = false;
 
@@ -1121,11 +1478,19 @@ export class NamekFreeza {
     const c = Math.cos(this.yaw);
     const s = Math.sin(this.yaw);
     /* O eixo lateral do corpo é (cos yaw, 0, −sin yaw): a mesma convenção do
-       `handOffset` do lutador, com a largura de ombro do boss. */
+       `handOffset` do lutador, com a largura de ombro do boss.
+       Os DOIS deslocamentos são multiplicados pela escala do corpo, e essa
+       multiplicação não é enfeite: com o boss no triplo do tamanho
+       (`NAMEK.freeza.altura / alturaBase`), 78 cm de ombro deixariam os dois
+       golpes saindo de dentro do esterno de uma criatura de 6,7 m — o clarão do
+       cliente sai da mão desenhada e o projétil da sala sairia do meio do peito,
+       e o jogador veria os dois em lugares diferentes. `peito` já vem escalado
+       do config; o que falta escalar é o que está escrito aqui. */
+    const k = NAMEK.freeza.altura / NAMEK.freeza.alturaBase;
     return {
-      x: this.pos.x + c * 0.78 * lado,
-      y: this.pos.y + NAMEK.freeza.peito + 0.16,
-      z: this.pos.z - s * 0.78 * lado,
+      x: this.pos.x + c * 0.78 * k * lado,
+      y: this.pos.y + NAMEK.freeza.peito + 0.16 * k,
+      z: this.pos.z - s * 0.78 * k * lado,
     };
   }
 

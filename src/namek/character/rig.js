@@ -31,20 +31,39 @@
 
    ------------------------------------------------------------- draw calls
 
-   Um lutador são 49 malhas até 12 m, 43 entre 12 e 40 m e 31 além disso (ver
-   `nivelDeDetalhe`), mais até três da aura quando ela está acesa. Quinze deles
-   ao longe são ~465 chamadas, que é o teto de "15 × ~30 primitivas" do §3 do
-   plano. Dois truques seguram esse número, e os dois valem mais que qualquer
-   corte de qualidade:
+   Um lutador são 47 malhas até 12 m, 41 entre 12 e 40 m, 29 entre 40 e 90 m e
+   19 além disso (ver `nivelDeDetalhe`), mais até três da aura quando ela está
+   acesa.
+
+   O último degrau é o mais novo e ele nasceu de uma conta que estava errada:
+   com três níveis, quinze lutadores espalhados por uma arena de 920 m de
+   diâmetro custavam ~465 chamadas de desenho — contra 23 do mundo INTEIRO e ~6
+   de todo o cenário da fase do Vale. O teto de "15 × ~30 primitivas" do §3 do
+   plano não estava sendo respeitado, estava sendo raspado, e a diferença entre
+   as duas fases numa sala cheia era essa e só essa. Com o quarto nível são
+   ~285.
+
+   Três truques seguram esse número, e os três valem mais que qualquer corte de
+   qualidade — porque nenhum deles é um corte de qualidade:
 
    • **`fundir()`** — o cabelo espetado são catorze cones mais a calota, e cada
      um seria uma chamada de desenho: quinze por lutador só no penteado. Fundidos
      numa geometria só, são UMA. O mesmo vale para dedos, orelhas, olhos,
      sobrancelhas, peitoral, lapelas e o nó da faixa — sem as fusões este corpo
-     teria 77 malhas em vez de 49.
+     teria 77 malhas em vez de 47.
+   • **fusões PERMANENTES** — a fusão acima é sempre a mesma peça repetida, mas
+     ela também serve para peças DIFERENTES que nunca se mexem uma em relação à
+     outra e usam o mesmo material. O tronco e os dois ombros são o caso: três
+     malhas de `mat.gi` presas ao mesmo `spine`, três chamadas de desenho, e a
+     imagem resultante é bit a bit a mesma de uma malha só. Isto não é um nível
+     de detalhe — é desconto em TODAS as distâncias, inclusive na do lutador
+     local, e custa zero pixel.
    • **detalhe por distância** — nada que some é estrutural, a mesma regra que
      `Player.setDetailLevel` documenta: a peça que desaparece sempre tinha outra
-     forma embaixo dela.
+     forma embaixo dela. E quando não tinha — o pé, cuja sola é a única coisa
+     que encosta no chão —, o que se faz é FUNDIR em vez de esconder: a silhueta
+     continua idêntica e só a cor creme da sola vira azul, num pedaço de 0,32 px
+     de altura (ver `montarPerna`).
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -81,31 +100,96 @@ export const OSSO = {
   stanceWidth: 0.2,
 };
 
-/* Distâncias (m) em que o corpo perde detalhe. Os mesmos cortes do arqueiro
-   (12 e 40 m), e pela mesma aritmética: a 12 m uma íris tem meio pixel e a 40 m
-   um dedo tem menos que isso. O plano do modo pede explicitamente o corte de
-   40 m — ver §"pontos de atenção". */
+/* Distâncias (m) em que o corpo perde detalhe. Os dois primeiros são os mesmos
+   cortes do arqueiro (12 e 40 m), e pela mesma aritmética: a 12 m uma íris tem
+   meio pixel e a 40 m um dedo tem menos que isso. O plano do modo pede
+   explicitamente o corte de 40 m — ver §"pontos de atenção".
+
+   ---------------------------------------------------- a régua de pixel, escrita
+
+   Todo corte aqui sai da mesma conta, e ela vale a pena estar por extenso porque
+   é ela que separa "otimização" de "perda gráfica". Com campo de visão vertical
+   de 68° e uma tela de 1080 px, uma coisa de `s` metros a `d` metros da câmera
+   ocupa
+
+       px = s / (2 · d · tan 34°) × 1080 = s × 1080 / (1,34886 · d)
+          = 800,7 · s / d
+
+   O lutador tem 1,78 m, então ele mede 1 425/d pixels de altura: 119 px a 12 m,
+   36 px a 40 m, 15,8 px a 90 m, 7,1 px a 200 m e 3,6 px a 400 m.
+
+   ------------------------------------------------------------ o corte de 90 m
+
+   90 m é onde 1 metro do corpo vale 8,90 px, e onde as cinco últimas miudezas
+   que ainda estavam sendo desenhadas caem TODAS abaixo do pixel — não em tamanho
+   absoluto (a bota tem 25 cm), mas na única medida que importa num corte de
+   detalhe: **quanto elas mudam do que já estava desenhado embaixo delas.**
+
+     • munhequeira — raio 0,052 sobre um antebraço que ali tem raio 0,0398.
+       Sobra 0,0122 m de raio, 0,0244 m de largura → 0,22 px. O antebraço
+       atravessa a peça inteira: some sem abrir um buraco de um único pixel.
+     • cano da bota — raio 0,077…0,097 sobre uma canela de 0,055…0,0756.
+       Sobra ~0,022 m de raio, 0,044 m de largura → 0,39 px, e de novo a canela
+       corre por dentro dele de ponta a ponta.
+     • cotovelo — a esfera tem Ø 0,100 contra Ø 0,090 e Ø 0,096 dos dois ossos
+       que ela liga, e os dois se encontram no MESMO ponto: em largura ela soma
+       0,004 a 0,010 m, ou 0,04 a 0,09 px. O que ela tapa de verdade é a fresta
+       da dobra, e a pior delas — braço a 90° — mede 2 × 0,045 × sen 45° =
+       0,064 m = 0,57 px. Meio pixel de entalhe no contorno de um braço que a
+       essa distância tem 0,80 px de largura.
+     • palma da mão — 0,043 m de mão além do punho → 0,38 px de braço mais
+       curto, e a boca do antebraço que ela tampa tem Ø 0,068 m = 0,60 px e só
+       se enxerga olhando pelo eixo do braço.
+     • sola da bota — não some: FUNDE com o pé (ver `montarPerna`). A silhueta
+       fica idêntica e o que se perde é o creme dela virando azul, numa faixa de
+       0,036 m = 0,32 px de altura.
+
+   O JOELHO FICOU DE FORA e o motivo é a mesma conta: a esfera dele tem raio
+   0,088 e a fresta que ela tapa com a perna dobrada a 90° mede 2 × 0,086 ×
+   sen 45° = 0,122 m = **1,08 px**, acima de um pixel numa perna que ali tem
+   1,53 px de largura. Um entalhe de 70 % da largura da perna não é detalhe que
+   sumiu, é buraco. Ele custa quinze chamadas de desenho por quadro e elas estão
+   pagas.
+
+   E nada que carrega a LEITURA do lutador a 200-400 m entra nesta lista: o gi
+   (que é a cor do jogador), o tronco, os ombros, a cabeça, o cabelo e a aura
+   atravessam os quatro níveis inteiros. Quem voa vê tudo de longe, e o que se
+   vê de longe é silhueta e cor — as duas coisas que nenhum degrau daqui toca. */
 export const LOD_PERTO = 12;
 export const LOD_MEDIO = 40;
+export const LOD_LONGE = 90;
 /** Subir de nível exige 12 % a mais de distância que descer: sem histerese, um
- *  lutador parado exatamente no limite pisca entre dois níveis a cada quadro. */
+ *  lutador parado exatamente no limite pisca entre dois níveis a cada quadro.
+ *  No degrau de 90 m isso importa MAIS que nos outros dois, e não menos: 12 m e
+ *  40 m são distâncias de briga, onde ninguém fica parado; 90 m é distância de
+ *  VOO DE CRUZEIRO, e um companheiro voando em formação ao lado passa minutos
+ *  inteiros oscilando em torno de uma distância só. 90 × 1,12 = 100,8 m de
+ *  subida contra 90 m de descida — 10,8 m de folga, mais que o corpo inteiro de
+ *  seis lutadores enfileirados. */
 const HISTERESE = 1.12;
 
 /**
  * Em que nível de detalhe um corpo a `dist` metros deve estar.
- * 0 = tudo · 1 = sem rosto · 2 = silhueta e cor.
+ * 0 = tudo · 1 = sem rosto · 2 = silhueta e cor · 3 = silhueta e cor, sem as
+ * miudezas que já não valem um pixel (ver a régua acima).
  *
  * Escrita sem a função auxiliar que a versão do arqueiro usa (`utils/lod.js`)
  * por um motivo medido: uma arrow function criada dentro daqui é um contexto
  * alocado por chamada, e esta função roda uma vez por lutador por quadro. São
  * quinze alocações a cada 16 ms para economizar duas linhas.
+ *
+ * A cascata é escrita do MAIS LONGE para o mais perto de propósito: quinze
+ * lutadores numa arena de 460 m de raio estão quase sempre no último degrau, e
+ * assim o caso comum sai na primeira comparação.
  */
 export function nivelDeDetalhe(dist, atual = 0) {
+  if (dist >= (atual < 3 ? LOD_LONGE_H : LOD_LONGE)) return 3;
   if (dist >= (atual < 2 ? LOD_MEDIO_H : LOD_MEDIO)) return 2;
   return dist >= (atual < 1 ? LOD_PERTO_H : LOD_PERTO) ? 1 : 0;
 }
 const LOD_PERTO_H = LOD_PERTO * HISTERESE;
 const LOD_MEDIO_H = LOD_MEDIO * HISTERESE;
+const LOD_LONGE_H = LOD_LONGE * HISTERESE;
 
 /* ----------------------------------------------------------------- material */
 
@@ -523,15 +607,34 @@ const PERFIL_MANGA = [
   [0.55, 0.062],
 ];
 
-function montarBraco(mat, medio) {
+function montarBraco(mat, medio, longe) {
   const group = new THREE.Group();
   const manga = torneado(PERFIL_MANGA, mat.gi, 12);
   const upper = torneado(PERFIL_BRACO, mat.pele, 12);
   const fore = torneado(PERFIL_ANTEBRACO, mat.pele, 12);
   const elbow = makeJoint(0.05, mat.pele, 10);
+  /* O COTOVELO SOME ALÉM DE 90 M, e ele é a peça mais delicada dessa lista
+     porque não é uma camada por cima de outra coisa: é o tampão da dobra.
+
+     O que autoriza é a aritmética da régua lá em cima. `upper` e `fore` são
+     orientados para o MESMO ponto (`_junta`, em `Fighter.poseBraco`), então em
+     LARGURA a esfera soma 0,04 a 0,09 px sobre os dois ossos — nada. O que ela
+     tapa é a fresta que a dobra abre, e a pior possível (braço a 90°, que só
+     acontece na pose de carregar ki) mede 0,57 px. Meio pixel de entalhe num
+     braço de 0,80 px de largura, a 90 m; a 200 m, um quinto de pixel.
+
+     O joelho, que é a mesma peça na perna, NÃO entra — a fresta dele dá 1,08 px
+     e isso já é buraco. Ver a régua. */
+  longe.push(elbow);
 
   const band = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.05, 0.08, 10), mat.munheca);
   band.castShadow = true;
+  /* A munhequeira é o caso LIMPO do degrau de 90 m: o antebraço atravessa o
+     cilindro inteiro, de modo que esconder a peça não abre fresta em ângulo
+     nenhum e em pose nenhuma. O que se perde são 0,22 px de largura e um anel
+     claro de 0,71 px de altura — e a cor dele é a do jogador clareada (ver
+     `tingir`), que continua pintada no gi inteiro, que é 3,4 px de largura. */
+  longe.push(band);
 
   /* A mão: palma + dedos. Os dedos são UMA malha fundida com a origem na linha
      dos nós — girá-la em X fecha os cinco de uma vez, e é assim que o punho
@@ -541,6 +644,20 @@ function montarBraco(mat, medio) {
   const palma = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.086, 0.04), mat.peleEscura);
   palma.castShadow = true;
   hand.add(palma);
+  /* A MÃO INTEIRA ACABA AQUI ALÉM DE 90 M — dedos e polegar já tinham sumido aos
+     40 m, e a palma é o que restava dela.
+
+     A palma tem 0,086 m e some 0,043 m além do punho: o braço encurta 0,38 px.
+     É a única peça desta lista que mexe no comprimento da silhueta, e ela entra
+     mesmo assim porque 0,38 px é menos de meio pixel num corpo de 15,8 px — e
+     porque o antebraço não termina em corte reto, ele afina de 0,048 para 0,034
+     de raio, o que a essa distância lê exatamente como um punho.
+
+     O que o `hand` deixa de ser é só DESENHO. O grupo continua sendo posicionado
+     e girado todo quadro, porque `Fighter.handPoint` lê a `matrixWorld` dele
+     para saber de onde nasce a bola de ki — e uma malha invisível não muda a
+     matriz do pai. Um lutador a 300 m atira do lugar certo. */
+  longe.push(palma);
 
   const partesDedo = [];
   for (let i = 0; i < 4; i++) {
@@ -596,12 +713,24 @@ const PERFIL_BOTA = [
   [1.0, 0.077],
 ];
 
-function montarPerna(mat, medio) {
+function montarPerna(mat, medio, longe, soLonge) {
   const group = new THREE.Group();
   const thigh = torneado(PERFIL_COXA, mat.calca, 12);
   const shin = torneado(PERFIL_CANELA, mat.calca, 12);
+  /* O JOELHO NÃO ENTRA EM NENHUMA LISTA, e a decisão está medida na régua do
+     topo: a fresta que ele tapa com a perna dobrada a 90° dá 1,08 px, contra
+     0,57 px da mesma peça no cotovelo. A perna dobra muito mais que o braço
+     (correr, pousar, cair, a pose de carga) e ela é o dobro da grossura, então
+     as duas coisas empurram na mesma direção. Quinze chamadas de desenho por
+     quadro para não abrir buraco em nenhuma pose: pagas. */
   const knee = makeJoint(0.088, mat.calca, 10);
   const cano = torneado(PERFIL_BOTA, mat.bota, 12);
+  /* O cano da bota é o gêmeo da munhequeira no degrau de 90 m: a canela corre
+     por dentro dele de ponta a ponta (perfis de 0,055…0,0756 contra
+     0,077…0,097), então esconder o cano não abre fresta em pose nenhuma e a
+     perna afina 0,39 px. O que se perde é o azul do cano — e o azul continua no
+     pé, que é a peça que ainda tem forma a essa distância. */
+  longe.push(cano);
 
   /* A banda vermelha da boca da bota. Cilindro curto, e ele é o único ponto de
      vermelho do corpo inteiro — some aos 40 m sem deixar buraco, porque o cano
@@ -616,13 +745,52 @@ function montarPerna(mat, medio) {
      estivesse olhando para o norte. */
   const shoe = new THREE.Group();
   shoe.rotation.order = "YXZ";
-  const sola = new THREE.Mesh(new THREE.BoxGeometry(0.108, 0.036, 0.27), mat.botaSola);
+  const geoSola = new THREE.BoxGeometry(0.108, 0.036, 0.27);
+  const geoPe = new THREE.BoxGeometry(0.104, 0.078, 0.2);
+  const sola = new THREE.Mesh(geoSola, mat.botaSola);
   sola.position.set(0, 0.018, -0.03);
   sola.castShadow = true;
-  const pe = new THREE.Mesh(new THREE.BoxGeometry(0.104, 0.078, 0.2), mat.bota);
+  const pe = new THREE.Mesh(geoPe, mat.bota);
   pe.position.set(0, 0.07, 0.0);
   pe.castShadow = true;
   shoe.add(sola, pe);
+
+  /* O PÉ DE LONGE: as duas caixas acima FUNDIDAS numa malha só.
+   *
+   * Este é o único lugar do corpo em que o degrau de 90 m não esconde nada — e
+   * é o único em que esconder era proibido. A regra do arquivo é que a peça que
+   * some tinha outra forma embaixo dela, e a sola NÃO tem: ela vai de y = 0 a
+   * y = 0,036 e o `pe` só começa em y = 0,031, de modo que escondê-la levantaria
+   * o lutador 3,1 cm do chão (0,28 px de flutuação, que é pouco, mas é
+   * flutuação) e encurtaria a biqueira em 0,065 m — 0,58 px de um pé que a
+   * essa distância tem 2,4 px de comprimento, ou seja, um quarto dele.
+   *
+   * A saída é a que o próprio `fundir` já existe para dar: duas caixas, uma
+   * geometria, UMA chamada de desenho. A silhueta sai idêntica ao milímetro,
+   * porque é literalmente a mesma geometria; o único preço é o material, que
+   * passa a ser um só. Escolhido o AZUL da bota e não o creme da sola, por dois
+   * motivos: o azul é a cor de identidade do personagem (é ele que sobra quando
+   * a cor do jogador toma o gi — ver `tingir`), e a área é dele, 0,078 m de
+   * altura contra 0,036 m. O creme que se perde é uma faixa de 0,32 px de
+   * altura rente ao chão, e a 90 m ela está encostada na sombra do próprio pé.
+   *
+   * Não lança sombra, e isso é para IGUALAR e não para economizar: `podarSombras`
+   * já tira `sola` (raio 0,147) e `pe` (raio 0,119) do passe de sombra por serem
+   * menores que `RAIO_MINIMO_DE_SOMBRA`, mas a caixa envolvente da fusão mede
+   * 0,155 e passaria pelo critério. Sem esta linha, o pé de um lutador ganharia
+   * sombra ao se AFASTAR — o oposto exato de um nível de detalhe. */
+  const peLonge = new THREE.Mesh(
+    fundir([
+      { geo: geoSola, matriz: em(0, 0.018, -0.03) },
+      { geo: geoPe, matriz: em(0, 0.07, 0) },
+    ]),
+    mat.bota,
+  );
+  peLonge.castShadow = false;
+  peLonge.visible = false;
+  shoe.add(peLonge);
+  longe.push(sola, pe);
+  soLonge.push(peLonge);
 
   group.add(thigh, shin, knee, cano, shoe, banda);
   return { group, thigh, shin, knee, cano, banda, shoe };
@@ -640,6 +808,8 @@ function montarPerna(mat, medio) {
 export function montarCorpo(mat) {
   const perto = [];
   const medio = [];
+  const longe = [];
+  const soLonge = [];
 
   const root = new THREE.Group();
   root.name = "kakarot";
@@ -661,20 +831,61 @@ export function montarCorpo(mat) {
   /* O tronco é um TORNEADO, não um cilindro: cintura fina e peito largo é o que
      diz "lutador" antes de qualquer detalhe. 0,38 m de ombro a ombro por 0,26 m
      de profundidade — a proporção de um atleta de verdade, achatada como todo
-     tórax é. */
+     tórax é.
+
+     ------------------------------------------ e ele vem com os OMBROS DENTRO
+
+     As duas esferas de ombro eram duas malhas separadas, e eram três chamadas
+     de desenho com o tronco: 45 por quadro numa sala de quinze. São UMA agora, e
+     a troca não custou um pixel — as três peças usam o MESMO material (`mat.gi`,
+     o que recebe a cor do jogador), estão presas ao MESMO `spine` e nenhuma
+     delas se move em relação às outras em pose nenhuma. Nada aqui é um nível de
+     detalhe: o desconto vale a 4 m e a 400 m, inclusive para o lutador local,
+     que nunca perde detalhe nenhum.
+
+     A escala do tronco (1 · altoTronco · 0,7) entra na MATRIZ da fusão em vez de
+     ficar no `mesh.scale`, e isso é obrigatório e não estilo: `fundir` assa a
+     matriz dentro da geometria, e um `scale` na malha depois disso achataria
+     também os dois ombros — que estão em `x = ±0,205` e virariam `±0,205` num
+     corpo 30 % mais raso, ou seja, dois caroços fora do lugar. `applyMatrix4`
+     corrige as normais pela inversa transposta, que é exatamente o que a GPU
+     faria com o `scale` da malha: a imagem sai igual.
+
+     O efeito colateral é uma sombra a MAIS, não a menos: `podarSombras` tirava
+     as esferas de ombro do passe de sombra por terem raio 0,077 (abaixo de
+     `RAIO_MINIMO_DE_SOMBRA`), e agora elas viajam junto com o tronco, que é
+     desenhado ali de qualquer jeito. Ombro que projeta sombra de graça. */
   const altoTronco = OSSO.shoulderY - OSSO.hipY;
-  const tronco = torneado(
-    [
-      [0.0, 0.15],
-      [0.22, 0.144],
-      [0.52, 0.178],
-      [0.82, 0.191],
-      [1.0, 0.166],
-    ],
-    mat.gi,
-    16,
-  );
-  tronco.scale.set(1, altoTronco, 0.7);
+  /* As `Mesh` criadas por `torneado` e `makeJoint` aqui são LIXO DE MONTAGEM: o
+     que se aproveita delas é a geometria já sombreada por `shadeSegment`, e o
+     invólucro morre no primeiro coletor. Vale mais que reescrever as duas
+     funções para devolverem geometria — duas cópias delas sairiam de sincronia
+     na primeira vez que o degradê de vértice mudasse. */
+  const partesTronco = [
+    {
+      geo: torneado(
+        [
+          [0.0, 0.15],
+          [0.22, 0.144],
+          [0.52, 0.178],
+          [0.82, 0.191],
+          [1.0, 0.166],
+        ],
+        mat.gi,
+        16,
+      ).geometry,
+      matriz: new THREE.Matrix4().makeScale(1, altoTronco, 0.7),
+    },
+  ];
+  for (const lado of [-1, 1]) {
+    partesTronco.push({
+      geo: makeJoint(0.077, mat.gi, 12).geometry,
+      matriz: em(lado * OSSO.shoulderX, altoTronco, 0),
+    });
+  }
+  const tronco = new THREE.Mesh(fundir(partesTronco), mat.gi);
+  tronco.castShadow = true;
+  tronco.receiveShadow = true;
   spine.add(tronco);
 
   // Peitoral: duas massas achatadas por cima do gi. Some aos 40 m, e o tronco
@@ -751,11 +962,7 @@ export function montarCorpo(mat) {
   pescoco.castShadow = true;
   spine.add(pescoco);
 
-  for (const lado of [-1, 1]) {
-    const ombro = makeJoint(0.077, mat.gi, 12);
-    ombro.position.set(lado * OSSO.shoulderX, altoTronco, 0);
-    spine.add(ombro);
-  }
+  /* (Os ombros não estão aqui: eles foram fundidos no `tronco` acima.) */
 
   /* Âncora do peito: um objeto vazio na cota do centro de massa que
      `NAMEK.fighter.chest` declara. É dele que saem o número de dano e a etiqueta
@@ -786,10 +993,10 @@ export function montarCorpo(mat) {
   cabeloRaiz.add(montarCabelo(mat));
 
   /* membros ------------------------------------------------------------ */
-  const bracoR = montarBraco(mat, medio);
-  const bracoL = montarBraco(mat, medio);
-  const pernaR = montarPerna(mat, medio);
-  const pernaL = montarPerna(mat, medio);
+  const bracoR = montarBraco(mat, medio, longe);
+  const bracoL = montarBraco(mat, medio, longe);
+  const pernaR = montarPerna(mat, medio, longe, soLonge);
+  const pernaL = montarPerna(mat, medio, longe, soLonge);
   root.add(bracoR.group, bracoL.group, pernaR.group, pernaL.group);
 
   preencherCoresNeutras(root);
@@ -805,7 +1012,12 @@ export function montarCorpo(mat) {
     bracoL,
     pernaR,
     pernaL,
-    detalhe: { perto, medio },
+    /* As quatro listas do detalhe por distância. As três primeiras SOMEM quando
+       o nível sobe; a última é a única invertida do arquivo — ela APARECE, e
+       existe porque o pé de longe é uma fusão e não uma omissão (ver
+       `montarPerna`). Quem as veste é `Fighter.atualizarDetalhe`, e só na
+       virada de nível. */
+    detalhe: { perto, medio, longe, soLonge },
   };
 }
 

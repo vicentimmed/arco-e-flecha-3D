@@ -228,29 +228,55 @@ export const DETALHE_GLSL = {
     varying vec3 vWorldPos;
     varying vec3 vWorldNrm;
 
-    vec2 girarUV(vec2 uv, float a) {
-      float s = sin(a), c = cos(a);
-      return mat2(c, -s, s, c) * uv;
+    /* O giro entra como (sen, cos) JA RESOLVIDO, e não como ângulo.
+     *
+     * Com um ângulo por parâmetro, cada chamada carregava um 'sin' e um 'cos' —
+     * e são sete chamadas por fragmento do terreno, que é a superfície que
+     * cobre a maior parte da tela. Os três ângulos usados (zero, o áureo e o da
+     * macro) são constantes de compilação, então em placa boa o compilador
+     * dobrava isso sozinho; em ANGLE e em GPU integrada, nem sempre — e "às
+     * vezes o driver resolve" é uma otimização que não se pode contar.
+     * Recebendo o par pronto, são três senos e três cossenos por fragmento no
+     * pior caso, calculados uma vez em 'fragmentColor' em vez de catorze aqui
+     * dentro.
+     *
+     * O resultado é o mesmo número: a matriz montada é idêntica. */
+    vec2 girarUV(vec2 uv, vec2 sc) {
+      return mat2(sc.y, -sc.x, sc.x, sc.y) * uv;
     }
 
-    vec4 triplanarUma(sampler2D m, vec3 p, vec3 w, float s, float ang) {
-      return texture2D(m, girarUV(p.zy, ang) * s) * w.x
-           + texture2D(m, girarUV(p.xz, ang) * s) * w.y
-           + texture2D(m, girarUV(p.xy, ang) * s) * w.z;
+    vec4 triplanarUma(sampler2D m, vec3 p, vec3 w, float s, vec2 sc) {
+      return texture2D(m, girarUV(p.zy, sc) * s) * w.x
+           + texture2D(m, girarUV(p.xz, sc) * s) * w.y
+           + texture2D(m, girarUV(p.xy, sc) * s) * w.z;
     }
 
     /* Duas grades, a segunda girada 2,399 rad (137,5°, o ângulo áureo). É a
        mistura delas que impede o ladrilho de aparecer como padrão. */
-    vec4 triplanarAT(sampler2D m, vec3 p, vec3 w, float s1, float s2) {
-      return mix(triplanarUma(m, p, w, s1, 0.0), triplanarUma(m, p, w, s2, 2.399), 0.5);
+    vec4 triplanarAT(sampler2D m, vec3 p, vec3 w, float s1, float s2, vec2 sc1, vec2 sc2) {
+      return mix(triplanarUma(m, p, w, s1, sc1), triplanarUma(m, p, w, s2, sc2), 0.5);
     }`,
 
   /** Vai depois de `<color_fragment>`, que é onde a cor de vértice já entrou. */
   fragmentColor: `
-    vec3 triW = pow(abs(vWorldNrm), vec3(4.0));
+    /* Os três giros, resolvidos UMA vez por fragmento — ver 'girarUV'. */
+    vec2 scA = vec2(sin(0.0),   cos(0.0));
+    vec2 scB = vec2(sin(2.399), cos(2.399));
+    vec2 scM = vec2(sin(0.7),   cos(0.7));
+    /* A normal elevada à QUARTA por duas elevações ao quadrado, em vez de 'pow'.
+     *
+     * 'pow(x, 4.0)' é 'exp2(4 * log2(x))' na placa: dois transcendentais por
+     * componente, seis por fragmento do terreno — e o terreno é a superfície de
+     * maior área da tela do modo. Elevar ao quadrado duas vezes dá o MESMO
+     * valor com quatro multiplicações, e sem o caso especial de 'pow' com base
+     * zero, que algumas placas devolvem como NaN (o 'abs' garante base >= 0,
+     * então a equivalência é exata em todo o domínio que chega aqui). */
+    vec3 triA = abs(vWorldNrm);
+    triA *= triA;
+    vec3 triW = triA * triA;
     triW /= (triW.x + triW.y + triW.z + 1e-5);
-    vec4 detalhe = triplanarAT(detailMap, vWorldPos, triW, detailScale, detailScale2);
-    float macro = texture2D(detailMap, girarUV(vWorldPos.xz, 0.7) * macroScale).a;
+    vec4 detalhe = triplanarAT(detailMap, vWorldPos, triW, detailScale, detailScale2, scA, scB);
+    float macro = texture2D(detailMap, girarUV(vWorldPos.xz, scM) * macroScale).a;
     /* MULTIPLICA a cor de vértice, não a substitui: a cor de vértice continua
        mandando na REGIÃO (campo, rocha, praia, fundo do mar) e o detalhe só
        diz o que acontece dentro de um metro quadrado dela. */

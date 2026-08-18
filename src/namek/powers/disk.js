@@ -18,10 +18,11 @@
    • **Atravessa quem já cortou.** A tabela de cortados existe para isso: sem
      ela, ficar dentro do plano do disco por dois quadros custaria o dobro.
    • **PERSEGUE MAIS QUE TUDO, e dá para escapar de um jeito só.** Ver
-     `perseguir` — a curva dele tem 53 m de raio, a mais fechada do modo, e ele
-     corrige a vida inteira, sem teto de arco. Ele acompanha quem foge em linha
-     reta e perde quem arranca DE LADO COM O BURST, e só. As duas metades são o
-     pedido, e as duas foram medidas.
+     `perseguir` — a curva dele tem 56 m de raio (105 m/s sobre 108°/s) e ele
+     corrige a VIDA INTEIRA, sem teto de arco: 486° de orçamento, contra os 176°
+     do Galick Gun. Ele acompanha quem foge em linha reta e perde quem arranca DE
+     LADO COM O BURST, e só. As duas metades são o pedido, e as duas foram
+     medidas — e remedidas quando o disco cresceu.
 
    O que o para é o CHÃO, como tudo neste modo — e ali ele abre a rasgadura de
    `power: 1.4`, que é uma cicatriz e não uma cratera.
@@ -38,6 +39,50 @@
    invisível (um anel é simétrico à rotação: girá-lo não muda um pixel). Com a
    precessão ele mostra a face de vez em quando, e o clarão em arco no gume
    corre pela borda dando a leitura do giro.
+
+   ------------------------------------------------ ENXERGAR ISSO A 300 METROS
+
+   *"Aumente o tamanho do Kinzan e também deixe mais fácil de enxergar ele."* O
+   tamanho é um número e ele mora no config (`specials.disk.hitRadius`, que subiu
+   de 3,4 para 4,8 m — e que É o raio desenhado, ver `orientar`). A LEITURA é
+   este arquivo, e ela é um problema de pixels e de fundo.
+
+   A régua: a câmera do modo tem 68° verticais, então a `d` metros um metro de
+   mundo vale ~800/d pixels de altura numa tela de 1080. O disco inteiro, de
+   frente, mede 77 px a 100 m, 38 px a 200 m e 26 px a 300 m. O que se via antes
+   dessa passagem, nessas mesmas distâncias, era pior que isso em três frentes —
+   e as três foram atacadas SEM MALHA NOVA, porque a fase está em passe de
+   desempenho e um terceiro `Mesh` por disco seriam seis draw calls a mais:
+
+   1. **O GUME ERA FINO DEMAIS PARA EXISTIR DE LONGE.** `TUBO` é fração do raio,
+      então o tubo media 0,085 · 3,4 = 0,29 m — 0,8 px a 300 m, ou seja MENOS DE
+      UM PIXEL: o gume desaparecia por amostragem, não por opacidade. Com 0,115 ·
+      4,8 = 0,55 m ele vale 1,5 px a 300 m e 4,4 px a 100 m. É a diferença entre
+      uma linha que o rasterizador às vezes desenha e uma que ele sempre desenha.
+   2. **O MIOLO ERA QUASE NADA.** A chapa do anel estava a 0,3 de opacidade —
+      contra montanha ela sumia. Subiu para 0,55: de longe, quando o gume já é
+      uma linha de um pixel e meio, é a CHAPA que dá a mancha que o olho pega, e
+      é ela que faz o disco ler como disco em vez de como risco.
+   3. **VERDE ADITIVO CONTRA CÉU VERDE É INVISÍVEL**, e essa é a que nenhum
+      ajuste de tamanho resolveria. O céu de Namekusei é verde-claro e o material
+      é `AdditiveBlending`: somar verde a um fundo que já é verde-claro quase não
+      muda o pixel. Por isso o gume ficou mais BRANCO (mistura de 0,3 para 0,15
+      da cor do golpe) — branco aditivo satura os três canais e vence qualquer
+      fundo, inclusive o céu. A cor do golpe continua inteira na chapa, que é
+      quem carrega a identidade verde do Kienzan.
+
+   E a quarta, que é a que se vê primeiro: **o RASTRO** (ver `rastro`). Fagulhas
+   soltas na trilha, pelo barramento de partículas que já existe — zero draw call
+   nova, o pool é compartilhado. Elas vivem ~0,4 s, e a 105 m/s isso desenha uma
+   linha pontilhada de uns 40 m atrás do disco: a 300 m, 105 px de risco atrás de
+   um alvo de 26 px. O que o olho pega à distância não é o disco, é o rastro dele
+   — e, como as fagulhas ficam PARADAS onde nasceram, o rastro mostra a curva por
+   onde ele passou, que é a informação que decide se dá para desviar.
+
+   Isso não briga com "quem morre para ele morreu porque não viu": o rastro é
+   curto e some em meio segundo, então de perto ele continua sendo uma lâmina, e
+   não um cometa. O que ele conserta é o outro extremo — a distância em que o
+   golpe era invisível e o jogador não tinha o que ver.
    --------------------------------------------------------------------------- */
 
 import * as THREE from "three";
@@ -80,8 +125,30 @@ const ARCO = 0.62;
  * lâmina que pisca. Agora o gume é um TORO: um tubo em volta da borda, com
  * volume de verdade, que continua sendo uma linha de luz vista de frente e
  * continua existindo visto de lado. É a mesma peça que a referência desenha —
- * o disco tem uma borda acesa e grossa, e o miolo é que é fino. */
-const TUBO = 0.085;
+ * o disco tem uma borda acesa e grossa, e o miolo é que é fino.
+ *
+ * 0,115 e não 0,085 desde o pedido de legibilidade. O número é FRAÇÃO DO RAIO,
+ * então ele já tinha crescido junto com o disco (0,085 · 3,4 = 0,29 m viraram
+ * 0,085 · 4,8 = 0,41 m sozinhos); o que a fração a mais compra é o gume passar
+ * de 1,1 para 1,5 px A 300 METROS — ou seja, deixar de cair abaixo de um pixel,
+ * que é onde uma linha some por AMOSTRAGEM e não por brilho, e onde nenhuma
+ * opacidade a traz de volta. A 100 m são 4,4 px de gume contra os 2,3 de antes:
+ * o dobro de traço. O teto é a leitura da forma — passando de ~0,15 o tubo
+ * começa a comer o vazado e o anel vira uma moeda. */
+const TUBO = 0.115;
+
+/* O RASTRO: segundos entre um sopro de fagulhas e o outro, e quantas por sopro.
+ *
+ * 0,06 s × 2 são 33 fagulhas por segundo por disco — um terço da cadência do
+ * Galick Gun (0,06 s × 3, em dois braços), que é o rastro mais denso do modo. O
+ * orçamento é o argumento: seis discos no ar no pior caso pedem 200 por segundo,
+ * e o pool de brilho é o MESMO da poeira de impacto, que é informação e não
+ * decoração (ver o comentário de ordem em `NamekFx.groundImpact`). Denso o
+ * bastante para virar uma linha — a 105 m/s cada sopro nasce 6,3 m adiante do
+ * anterior, e a fagulha vive ~0,4 s, então são sete pontos vivos cobrindo uns
+ * 40 m —, ralo o bastante para não esvaziar o pool de ninguém. */
+const RASTRO = 0.06;
+const RASTRO_N = 2;
 
 /* ------------------------------------------------------------- rascunhos --- */
 const _Z = new THREE.Vector3(0, 0, 1);
@@ -108,8 +175,17 @@ class Disco {
     this.group = new THREE.Group();
     this.group.visible = false;
 
-    this.corpo = this.folha(geos.corpo, 0.3, 1);
-    this.gume = this.folha(geos.gume, 0.95, 2);
+    /* A CHAPA a 0,55 e não a 0,3 — ver a seção "enxergar isso a 300 metros" no
+       cabeçalho. A 0,3, contra a encosta de Namekusei, ela era um véu; e é ela,
+       não o gume, quem dá a MANCHA que o olho acha de longe, porque a partir de
+       uns 250 m o gume já é uma linha de um pixel e meio e uma linha de um pixel
+       e meio compete mal com uma montanha texturizada. Não vai a 1: o vazado e a
+       transparência são o que impedem o disco de ler como bola de energia, que é
+       o outro golpe — a primeira regra da forma continua valendo.
+       O GUME a 1 e não a 0,95: cinco centésimos de opacidade num traço de quatro
+       pixels não são um efeito, são um desperdício de dúvida. */
+    this.corpo = this.folha(geos.corpo, 0.55, 1);
+    this.gume = this.folha(geos.gume, 1, 2);
 
     scene.add(this.group);
 
@@ -123,6 +199,8 @@ class Disco {
        lugar. Um objeto por disco, criado uma vez — o pool não aloca nada em
        voo. */
     this.dir = { x: 0, y: 0, z: 1 };
+    /** Conta-gotas do rastro. Ver `rastro`. */
+    this._fag = 0;
   }
 
   folha(geo, opacidade, ordem) {
@@ -162,6 +240,11 @@ class Disco {
     this.t = 0;
     this.percorrido = 0;
     this.nCortados = 0;
+    /* Zerado no disparo, e não só no construtor: o pool RECICLA discos, e um
+       `_fag` herdado de meio sopro atrás faria o rastro começar torto — irrele-
+       vante em um quadro, mas é o tipo de estado que sobrevive a reciclagem e
+       depois ninguém acha. */
+    this._fag = 0;
     /* O alvo foi travado NO DISPARO e viaja na mensagem — a mesma regra da bola
        de ki (§6.1). Um disco que escolhesse a vítima sozinho, em cada tela,
        voaria para lados diferentes em cada tela. */
@@ -197,7 +280,16 @@ class Disco {
 
     _cor.set(S.cor);
     this.corpo.material.color.copy(_cor);
-    this.gume.material.color.set(0xffffff).lerp(_cor, 0.3);
+    /* O GUME QUASE BRANCO — 0,15 da cor do golpe e não 0,3.
+     *
+     * O material é aditivo e o céu de Namekusei é VERDE-CLARO: somar o verde do
+     * Kienzan a um fundo que já é verde-claro quase não muda pixel nenhum, e é
+     * por isso que o disco sumia contra o céu enquanto lia bem contra a rocha.
+     * Branco aditivo satura os três canais e aparece contra qualquer fundo, e é
+     * exatamente o que um gume tem de ser: a parte quente. A identidade verde
+     * não se perde porque ela mora na chapa, que continua com a cor cheia — e em
+     * Super Saiyajin as duas peças viram douradas juntas, pelo `info`. */
+    this.gume.material.color.set(0xffffff).lerp(_cor, 0.15);
     this.group.visible = true;
     this.group.position.set(this.x, this.y, this.z);
 
@@ -243,8 +335,12 @@ class Disco {
 
     /* O AVANÇO, subdividido pelo raio de acerto quando o quadro estica — a
        mesma trava de `blast.js`, e pelo mesmo motivo: a 105 m/s um quadro de
-       30 Hz anda 3,5 m e o raio de corte é 2,2. Sem isto, o disco atravessaria
-       gente sem nunca ter estado perto dela num quadro só. */
+       30 Hz anda 3,5 m, e num quadro de 10 Hz (a aba que voltou do fundo) anda
+       10,5 — mais que os 4,8 m do raio de corte. Sem isto, o disco atravessaria
+       gente sem nunca ter estado perto dela num quadro só. A trava afrouxou
+       sozinha quando o disco cresceu (com 4,8 m ela só entra a partir de 22 Hz,
+       contra os 31 Hz de quando o raio era 3,4): disco maior, menos subdivisão,
+       menos laço — o aumento saiu de graça aqui. */
     /* A PERSEGUIÇÃO, antes de andar: o disco corrige o rumo e SÓ ENTÃO avança.
        Na ordem contrária ele daria o passo do quadro na direção velha e viraria
        depois — meio metro de atraso por quadro, que a 105 m/s é o bastante para
@@ -291,8 +387,60 @@ class Disco {
     }
 
     this.orientar(S.hitRadius);
+    /* O rastro sai DEPOIS de andar e de orientar, e em toda tela: ele é desenho,
+       e desenhar é de todos (a mesma divisão do talho — ver o laço acima). */
+    this.rastro(dt);
     if (this.local) relato.luz(this.x, this.y, this.z, S.cor, 0.3);
     return false;
+  }
+
+  /**
+   * O RASTRO — a peça que faz o disco existir a 300 metros.
+   *
+   * Ver a seção "enxergar isso a 300 metros" no cabeçalho para o porquê. A
+   * mecânica é a mais barata que existe neste modo: o barramento de partículas
+   * que o arquivo já usa para o talho e para a pose (`EventType.PARTICLES`), que
+   * cai no pool compartilhado de brilho — **nenhuma malha, nenhuma draw call
+   * nova**, que é o que a fase em passe de desempenho pode pagar.
+   *
+   * As fagulhas nascem na BORDA DE TRÁS (0,9 raio atrás do centro, sobre o eixo
+   * do voo) e quase paradas — `speed` baixo de propósito. Um rastro que sai
+   * correndo atrás do disco vira fumaça de escapamento; um que fica ONDE NASCEU
+   * é a trilha do voo, e num golpe que persegue essa diferença é informação: o
+   * pontilhado desenha a CURVA que a lâmina fez, que é o que diz a quem está
+   * fugindo se o disco ainda está corrigindo para cima dele.
+   *
+   * `direction` é o voo invertido com `spread` estreito — o barramento deste
+   * modo honra os dois desde que `NamekGame.bindParticles` passou a repassá-los
+   * —, então o sopro abre para trás em vez de virar uma bolinha isotrópica.
+   */
+  rastro(dt) {
+    this._fag -= dt;
+    if (this._fag > 0) return;
+    this._fag = RASTRO;
+    const S = this.info;
+    const r = S.hitRadius * 0.9;
+    gameEvents.emit(EventType.PARTICLES, {
+      position: {
+        x: this.x - this.dir.x * r,
+        y: this.y - this.dir.y * r,
+        z: this.z - this.dir.z * r,
+      },
+      count: RASTRO_N,
+      color: S.cor,
+      speed: 2.4,
+      direction: { x: -this.dir.x, y: -this.dir.y, z: -this.dir.z },
+      spread: 0.45,
+      /* Proporcional ao raio para o dia em que o disco crescer de novo: a
+         fagulha de um disco de 9,6 m de diâmetro não é a de um de 4,4. */
+      size: S.hitRadius * 0.06,
+      grow: 0.6,
+      life: 0.4,
+      gravity: 0,
+      drag: 1.6,
+      alpha: 0.9,
+      additive: true,
+    });
   }
 
   /**
@@ -339,18 +487,23 @@ class Disco {
    *
    * Um projétil que gira a `turnRate` graus por segundo enquanto voa a `speed`
    * descreve uma curva de raio `v / ω`. Com os números do `homing` do Kienzan
-   * (105 m/s e 114°/s) isso são **53 m** — a curva mais fechada de todos os
-   * projéteis do modo. Ele fecha em cima de quem se move em linha reta na frente
-   * dele, e larga quem corta de lado no arranque. Correr para trás não adianta
-   * (você continua no eixo); arrancar para o lado, sim. Que é exatamente a
-   * manobra que se queria cobrar.
+   * (105 m/s e 108°/s) isso são **56 m**. Ele fecha em cima de quem se move em
+   * linha reta na frente dele, e larga quem corta de lado no arranque. Correr
+   * para trás não adianta (você continua no eixo); arrancar para o lado, sim.
+   * Que é exatamente a manobra que se queria cobrar.
    *
-   * Os 114°/s são MEDIDOS e não derivados, e é o único `turnRate` do jogo que
+   * Os 108°/s são MEDIDOS e não derivados, e é o único `turnRate` do jogo que
    * não saiu da fórmula `v/ω`. O banco inteiro está em
-   * `NAMEK.specials.disk.homing`, e o resumo é: 114 é o maior giro que ainda
-   * deixa o arranque lateral escapar em toda a faixa de briga (22 a 55 m),
-   * mesmo com reflexo instantâneo. A 116 o teto de fuga cai para 54,5 m e a
-   * promessa quebra; a 140 cai para 43,5 m e o golpe vira uma sentença.
+   * `NAMEK.specials.disk.homing`, e o resumo é: com o disco de 4,8 m, 108 é o
+   * giro que devolve a fuga que 114 dava com o disco de 3,4 m — o arranque
+   * lateral escapa em toda a faixa de briga (22 a 55 m), mesmo com reflexo
+   * instantâneo, e ainda sobra meio metro. A 110 a folga acaba (56,5 m); a 114,
+   * com o disco novo, o teto cai para 54,5 m e a promessa quebra.
+   *
+   * **O RAIO E O GIRO SÃO UM NÚMERO SÓ.** É a armadilha deste golpe e ela já
+   * pegou uma vez: o critério de escapar é o disco passar a mais de um
+   * `hitRadius` do eixo do alvo, então aumentar o disco é encolher a fuga sem
+   * tocar em `turnRate` nenhum. Quem mexer num tem de remedir o outro.
    *
    * Detalhe que só a medição mostra: **o voo normal nunca escapa**, em nenhum
    * giro e em nenhuma distância. A metade "quem só voa não desvia" do pedido

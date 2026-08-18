@@ -984,6 +984,38 @@ export class Fighter {
 
   /* ---------------------------------------------------------- lod e piscar */
 
+  /**
+   * QUATRO NÍVEIS DE DETALHE — 0 perto, 1 médio, 2 longe, 3 muito longe.
+   *
+   * Eram três, e o que faltava era justamente o degrau que a arena pede. Os
+   * cortes de 12 e 40 m são distâncias de BRIGA; a arena tem 460 m de raio e o
+   * teto de voo está em 520 m, de modo que a distância normal entre dois
+   * lutadores num modo em que todo mundo voa não é 40 m, é duzentos e tantos.
+   * Com três níveis, quinze corpos custavam ~465 chamadas de desenho POR QUADRO
+   * a qualquer distância — contra 23 do mundo inteiro. Com o quarto, ~285.
+   *
+   * Os números por corpo, e eles moram em `rig.js` porque é lá que as peças são
+   * repartidas nas listas:
+   *
+   *   0 · ≤ 12 m (e sempre o lutador local) — 47 malhas: rosto, dedos, faixa
+   *   1 · 12–40 m — 41: sem rosto
+   *   2 · 40–90 m — 29: sem peitoral, gola, decote, lapelas, faixa, nó, dedos,
+   *       polegar e a banda vermelha da bota
+   *   3 · > 90 m — 19: sem munhequeira, cano da bota, cotovelo e palma, e com o
+   *       pé virando uma malha fundida em vez de duas
+   *
+   * A REGRA QUE TORNA ISTO SEGURO é a mesma dos outros três degraus, e ela é
+   * dura porque o pedido do usuário é duro: *"a questão de enxergar de longe é
+   * necessária, pois é um jogo em que os players voam e veem tudo de longe"*.
+   * Nenhuma peça estrutural some, e o que dá a leitura de um lutador a 200-400 m
+   * — a silhueta larga de ombro, a cor do gi, o penteado e a aura — atravessa os
+   * quatro níveis sem encolher um pixel. A conta que autoriza cada peça está
+   * escrita por extenso em `rig.js`, na régua acima de `LOD_LONGE`.
+   *
+   * Quem calcula o nível é `nivelDeDetalhe`, COM histerese — o corpo pisca se
+   * dois quadros seguidos discordarem, e a 90 m um companheiro voando em
+   * formação passa minutos em cima da fronteira.
+   */
   atualizarDetalhe(cameraPos) {
     if (!cameraPos) return;
     /* O lutador local nunca perde detalhe: ele está a quatro metros da câmera o
@@ -1000,8 +1032,14 @@ export class Fighter {
     /* Escrito só na VIRADA. `visible` é uma propriedade simples, mas são dezenas
        de objetos por corpo vezes quinze corpos, e fazer isso todo quadro troca
        desenho por trabalho de CPU — que é o pior negócio possível. */
-    for (const o of this.corpo.detalhe.perto) o.visible = nivel <= 0;
-    for (const o of this.corpo.detalhe.medio) o.visible = nivel <= 1;
+    const d = this.corpo.detalhe;
+    for (const o of d.perto) o.visible = nivel <= 0;
+    for (const o of d.medio) o.visible = nivel <= 1;
+    for (const o of d.longe) o.visible = nivel <= 2;
+    /* A lista INVERTIDA, e ela é uma só: o pé fundido. Ele existe para o degrau
+       de 90 m não precisar esconder a sola — a única peça do corpo que não tem
+       outra forma embaixo, porque embaixo dela é o chão. Ver `montarPerna`. */
+    for (const o of d.soLonge) o.visible = nivel >= 3;
     this.aura.setDetalhe(nivel);
   }
 

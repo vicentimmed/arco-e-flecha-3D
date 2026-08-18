@@ -428,6 +428,9 @@ const _cor = new THREE.Color();
 const _miolo = new THREE.Color();
 const _dirv = new THREE.Vector3();
 const _UP = new THREE.Vector3(0, 1, 0);
+/** O ponto de nascimento de cada fagulha da coroa dourada. Um literal por
+ *  partícula seriam cem objetos por segundo por Genki Dama — ver `orbitar`. */
+const _orbe = { x: 0, y: 0, z: 0 };
 const MAX_VITIMAS = NAMEK.net.maxPlayers + 1;
 
 /* ============================================================================
@@ -546,7 +549,7 @@ class Esfera {
 
   /* ---------------------------------------------------------------- disparo */
 
-  acender(field, { owner, kind, origem, dir, local, target = null, info = null }) {
+  acender(field, { owner, kind, origem, dir, local, target = null, info = null, ssj = false }) {
     /* `info` é a definição do golpe COMO ELE É VISTA — dourada em Super
        Saiyajin. Ver `PowerSystem.spawnSpecial`, que a escolhe, e o cabeçalho de
        `character/ssj.js`, que explica por que a cor virou uma troca de objeto em
@@ -570,6 +573,24 @@ class Esfera {
        (§6.1). Vale para as duas: desde que "todos os poderes devem perseguir",
        a Genki Dama também tem `homing` — a mais mansa do jogo. Ver `perseguir`. */
     this.alvo = target;
+    /* ---------------------------------------- A COROA DA GENKI DAMA DOURADA
+     *
+     * *"Com o player Super Saiyajin, a Genki Dama… tem partículas em volta dela
+     * que ficam rodeando ela, que dão a impressão de que ela é ainda mais
+     * poderosa."*
+     *
+     * Só a Genki Dama, e só transformado. A tabela de estilo dela zera `espiral`
+     * de propósito — *"uma hélice de fagulhas em torno de uma bola de 32 m de
+     * diâmetro cabe DENTRO da bola"* —, e esta coroa é a resposta a esse mesmo
+     * problema pelo lado de fora: ela nasce a 1,22 raios do centro, ou seja
+     * FORA da esfera, e é por isso que ela se lê como uma coroa em vez de sumir
+     * dentro do brilho. Ver `NAMEK.ssj.genkiOrbe`.
+     *
+     * O Galick Gun não recebe nada: ele já tem a hélice dupla dele, e somar uma
+     * segunda órbita a um golpe que já gira faria ruído em vez de leitura. */
+    this.coroa = ssj === true && kind === "genki";
+    this._tCoroa = 0;
+    this._faseCoroa = 0;
     /* Radianos já gastos do teto total (`arcMax`). Zera aqui, e não no
        construtor, porque o mesmo slot do pool é reciclado a cada disparo. */
     this.arco = 0;
@@ -646,6 +667,7 @@ class Esfera {
       const u = this.t / S.windup;
       this.raio = S.hitRadius * Math.pow(u, 0.72);
       this.recolher(dt, u);
+      this.orbitar(dt);
       this.desenhar(dt);
       if (this.local) relato.luz(this.x, this.y, this.z, S.cor, 0.45 + 0.4 * u);
       return false;
@@ -699,10 +721,75 @@ class Esfera {
     }
 
     this.rastro(dt);
+    this.orbitar(dt);
     this.desenhar(dt);
     this.atualizarTraco(dt);
     if (this.local) relato.luz(this.x, this.y, this.z, S.cor, 1);
     return false;
+  }
+
+  /**
+   * A COROA DE FAGULHAS da Genki Dama dourada. Ver `coroa`, em `acender`.
+   *
+   * Um anel de partículas girando em torno da esfera, e ele é desenhado do jeito
+   * mais barato que este modo tem: o barramento de partículas que o rastro já
+   * usa (`EventType.PARTICLES`), sem uma malha nova, sem uma chamada de desenho
+   * nova e sem alocar nada por quadro além do literal que a ponte exige.
+   *
+   * ------------------------------------------------------------------ a forma
+   *
+   * As fagulhas nascem espalhadas num anel de `orbe.raio` raios, **no plano
+   * horizontal**, e não em torno do eixo do voo. A escolha é a mesma que faz a
+   * Genki Dama não ter alinhamento (`ESTILO.genki.alinhar: false`): uma lua não
+   * aponta para lugar nenhum, e um anel amarrado ao rumo do tiro giraria junto
+   * com a trajetória — o que leria como um projétil, que é exatamente o que ela
+   * não é.
+   *
+   * Elas nascem quase PARADAS (`speed` baixo) e com arrasto alto: o que se quer
+   * é que fiquem onde nasceram enquanto a bola avança, deixando o anel para
+   * trás por um instante e desenhando o caminho dela. Uma velocidade tangencial
+   * de verdade exigiria uma direção por partícula, e a ponte deste modo só honra
+   * POSIÇÃO — o mesmo limite que o comentário do `rastro` já documenta.
+   *
+   * A FASE avança a cada sopro, então dois sopros seguidos não caem no mesmo
+   * lugar: 0,9 rad é primo o bastante de 2π/n para o anel parecer contínuo em
+   * vez de piscar nas mesmas seis marcas.
+   */
+  orbitar(dt) {
+    if (!this.coroa) return;
+    const O = NAMEK.ssj.genkiOrbe;
+    this._tCoroa -= dt;
+    if (this._tCoroa > 0) return;
+    this._tCoroa = O.intervalo;
+    this._faseCoroa += O.giro;
+
+    const raio = this.raio * O.raio;
+    const n = Math.max(1, O.n | 0);
+    for (let i = 0; i < n; i++) {
+      /* O anel é INCLINADO, e a inclinação vem do índice: metade das fagulhas
+         num plano e metade noutro, cruzados. Um anel plano só se lê de lado; dois
+         cruzados dão a impressão de uma casca girando, que é o "rodeando ela" do
+         pedido. */
+      const a = this._faseCoroa + (i / n) * Math.PI * 2;
+      const inclina = (i & 1) === 0 ? 0.22 : -0.22;
+      _orbe.x = this.x + Math.cos(a) * raio;
+      _orbe.y = this.y + Math.sin(a) * raio * inclina;
+      _orbe.z = this.z + Math.sin(a) * raio;
+      gameEvents.emit(EventType.PARTICLES, {
+        position: _orbe,
+        count: 1,
+        color: NAMEK.ssj.cor,
+        speed: 2.5,
+        spread: 1,
+        size: this.raio * O.tamanho,
+        grow: -0.4,
+        life: O.vida,
+        gravity: 0,
+        drag: 2.2,
+        alpha: 1,
+        additive: true,
+      });
+    }
   }
 
   /**

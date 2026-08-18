@@ -973,7 +973,15 @@ function aplicarBalanco(material, uniforms, alturaRef, folha = 0) {
                 ou 2 a mata inteira brilha e o resultado não é contraluz, é uma
                 folhagem fluorescente. */
              vec3 olhoParaFolha = normalize(vMundoFolha - cameraPosition);
-             float atravessa = pow(max(dot(olhoParaFolha, normalize(solDirFolha)), 0.0), 4.0);
+             /* Expoente 4 por duas elevações ao quadrado. 'pow' na placa é um
+                'exp2' sobre um 'log2', e com base garantidamente >= 0 (o 'max')
+                e expoente inteiro o valor é o mesmo por duas multiplicações. A
+                folhagem ocupa pouco da tela, mas são quatrocentas ajisas com
+                sobreposição de copa — a mesma troca já foi feita no terreno e no
+                mar, e vale por coerência tanto quanto por custo. */
+             float aoSolFolha = max(dot(olhoParaFolha, normalize(solDirFolha)), 0.0);
+             float atravessa = aoSolFolha * aoSolFolha;
+             atravessa *= atravessa;
              totalEmissiveRadiance += diffuseColor.rgb * (atravessa * folhaForca * solLuz);
            }`,
         );

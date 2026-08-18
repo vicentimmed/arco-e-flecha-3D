@@ -70,6 +70,7 @@ import { NAMEK } from "../../shared/namek/config.js";
 import { NC2S, NS2C, vecFrom } from "../../shared/namek/protocol.js";
 import { FreezaBody, POSE } from "./freeza.js";
 import { BossBar } from "../ui/boss.js";
+import { BossCine } from "./cine.js";
 
 /** O id reservado do boss. Ver `NAMEK.freeza.id` para por que ele é negativo. */
 export const FREEZA_ID = NAMEK.freeza.id;
@@ -160,16 +161,25 @@ export class BossSystem {
    * @param {() => (number|null)} o.meuId o id local, que só existe depois do
    *   `welcome` — daí ser uma função e não um número
    */
-  constructor({ scene, powers, fx, audio, hudEl, net, meuId }) {
+  constructor({ scene, powers, fx, audio, hudEl, net, meuId, camera, hud }) {
     this.scene = scene;
     this.powers = powers;
     this.fx = fx;
     this.audio = audio;
     this.net = net;
     this.meuId = meuId ?? (() => null);
+    /** O HUD, só para o nome e o aviso das duas cenas. Opcional: sem ele o boss
+     *  entra e morre em silêncio na tela, e nada mais quebra. */
+    this.hud = hud ?? null;
 
     this.corpo = new FreezaBody(scene);
     this.barra = new BossBar(hudEl);
+    /* A LENTE DAS DUAS CENAS. Ela mora aqui e não no laço principal porque as
+       duas cenas são acontecimentos DO BOSS: quem sabe que ele chegou e que ele
+       morreu é este módulo, e é ele que recebe as duas mensagens. O laço só
+       pergunta, uma vez por quadro, se a cena está mandando na câmera. Ver o §1
+       de `boss/cine.js` para por que ela não é um modo da `NamekCamera`. */
+    this.cine = camera ? new BossCine(camera) : null;
 
     /** Está em campo? */
     this.ativo = false;
@@ -307,6 +317,37 @@ export class BossSystem {
        estouro no ar, que contava a história errada — uma detonação diz que
        alguma coisa arrebentou, e o que aconteceu foi uma chegada. */
     this.audio?.bossEntrou?.(this.mostrado);
+
+    /* ============================================== A CENA DE APRESENTAÇÃO ==
+     *
+     * Ela só abre se a sala disser que ainda há cena a mostrar (`msg.cena` são
+     * os MILISSEGUNDOS QUE FALTAM, não a duração — ver `NamekFreeza.mensagemEntrada`).
+     * Essa distinção é o que impede a apresentação de acontecer duas vezes: esta
+     * mesma mensagem é reenviada a quem chega no meio da luta e a cada troca de
+     * dificuldade, e nesses casos `cena` vem zero.
+     *
+     * A pose que a lente do jogo tinha AGORA é passada junto porque a cena parte
+     * dela — sem isso, a entrada seria um corte de um lugar para outro. Quem a
+     * fornece é o laço, em `NamekGame.step`, que é quem tem a `NamekCamera`. */
+    this._cenaPedida = Number(msg?.cena) || 0;
+    this._descidaPedida = Number(msg?.desce) || 0;
+  }
+
+  /**
+   * O laço abre a cena, e não este método — porque abrir depende da pose que a
+   * lente do jogo tem NESTE quadro, e `entrar` roda no meio da fila de rede, um
+   * quadro antes.
+   *
+   * @param {object} lente `{ position, lookAt }` da `NamekCamera`
+   * @returns {boolean} se uma cena foi aberta neste quadro
+   */
+  abrirCenaPendente(lente) {
+    if (!this._cenaPedida || !this.cine) return false;
+    const ms = this._cenaPedida;
+    const desce = this._descidaPedida;
+    this._cenaPedida = 0;
+    this._descidaPedida = 0;
+    return this.cine.chegada(ms, desce, lente);
   }
 
   cair(msg) {
@@ -314,17 +355,59 @@ export class BossSystem {
     this.ativo = false;
     this._capsula.vivo = false;
     this.barra.cair();
+    /* **SÓ QUEM FOI DERRUBADO TEM CENA DE MORTE.** O mesmo `FREEZA_DOWN` chega
+     * pelos dois caminhos — a queda (`NamekFreeza.morrer`, com `derrotado: 1`) e
+     * a retirada (`sair()`, quando alguém vira o clima de volta para `dia`) —, e
+     * dar a cena aos dois seria desenhar uma explosão triunfal toda vez que
+     * alguém desistisse da luta pelo menu.
+     *
+     * Sem a marca, ele simplesmente some: `esconder()` no próximo quadro, sem
+     * corpo, sem raios e sem lente presa em ninguém. */
+    if (!msg?.derrotado) {
+      this.corpo.esconder();
+      this.cine?.cortar();
+      return;
+    }
+
     this.corpo.morrer();
+    this._cenaDeMorte = true;
+    this._cinePedidaMorte = true;
     if (Array.isArray(msg?.p)) {
       const p = vecFrom(msg.p);
-      /* O estouro da queda: a maior emissão que o pool de efeitos entrega, no
-         ponto em que ele estava. É o fim da luta e ele precisa ocupar a tela. */
-      this.fx?.groundImpact?.(p.x, p.y, p.z, 12);
       /* O gemido que desce de 190 a 22 Hz, solene como a chegada. Ver
          `NamekAudio.bossCaiu`: o que separa a queda dele da morte de um lutador
-         não é o volume, é ir mais fundo e durar o dobro. */
+         não é o volume, é ir mais fundo e durar o dobro.
+         O ESTOURO NÃO SAI AQUI, e é a diferença para a versão anterior: a
+         explosão acontece `fim.abertura` segundos depois, no fim da pose aberta,
+         e disparar o `groundImpact` no instante da mensagem punha a bola de fogo
+         antes dos raios que a anunciam. Ver `explodir`. */
       this.audio?.bossCaiu?.(p);
     }
+  }
+
+  /**
+   * O ESTOURO — o instante em que o corpo some.
+   *
+   * *"Ele começa a sair raios dele e luzes, e ele explode."*
+   *
+   * Ele é disparado do `update`, na borda em que o relógio do corpo cruza
+   * `fim.abertura`, e não da mensagem de morte: o que dita o instante é a
+   * ANIMAÇÃO (a pose abrindo, os raios crescendo, o corpo acendendo), e ela é
+   * local. Amarrá-lo ao pacote poria a explosão antes do gesto que a anuncia.
+   */
+  explodir() {
+    const p = this.pontoDoPeito(this._pontoTmp);
+    /* Três emissões e não uma, e cada uma cobre um sentido: o CLARÃO (que se vê
+       da arena inteira, e é o que diz "aconteceu"), as FAGULHAS na cor dele (que
+       dão volume ao clarão de perto e são a carcaça indo embora) e o
+       `groundImpact`, que é a maior emissão que o pool entrega — ele é a bola de
+       fogo. Um corpo de 6,7 m arrebentando precisa dos três; um só leria como
+       mais um golpe. */
+    this.fx?.clarao?.(p.x, p.y, p.z, NAMEK.freeza.altura * 14, FAGULHA, 1);
+    this.fx?.fagulhas?.(p.x, p.y, p.z, NAMEK.freeza.altura, FAGULHA, 90, 120);
+    this.fx?.groundImpact?.(p.x, p.y, p.z, 12);
+    this.audio?.detonouNoAr?.(p, 44, "genki");
+    this.hud?.banner?.("FREEZA DERROTADO", 3.2);
   }
 
   /** A pose que veio da sala. 20 Hz. */
@@ -487,8 +570,31 @@ export class BossSystem {
 
   update(dt, cameraPos) {
     this.barra.update(dt);
-    if (!this.ativo && !this.corpo.caindo) {
+
+    /* ------------------------------------------------------ A CENA DE MORTE
+     *
+     * Ela é o único caso em que o corpo continua sendo atualizado com o boss já
+     * fora de campo — e ele NÃO passa por `aplicar`. A distinção é o conserto de
+     * um defeito silencioso da versão anterior: `aplicar` reescreve a posição, a
+     * pose e a visibilidade da raiz a partir do último pacote da sala, e chamá-lo
+     * durante a morte apagava, todo quadro, a subida e a pose aberta que
+     * `atualizarMorte` acabara de escrever. O corpo ficava tremendo entre as
+     * duas verdades e a raiz piscava.
+     *
+     * Aqui a sala já não manda nada (`NamekFreeza.passo` sai na primeira linha
+     * com ele morto), então não há o que aplicar: o que sobra é a animação. */
+    if (!this.ativo && this.corpo.caindo) {
+      this.corpo.update(dt, cameraPos);
+      if (this._cenaDeMorte && this.corpo.estourou) {
+        this._cenaDeMorte = false;
+        this.explodir();
+      }
+      return;
+    }
+
+    if (!this.ativo) {
       this.corpo.esconder();
+      this._cenaDeMorte = false;
       return;
     }
 
@@ -543,6 +649,54 @@ export class BossSystem {
   /** Está em campo? O laço principal e o menu leem isto. */
   get vivo() {
     return this.ativo;
+  }
+
+  /* ========================================================= as duas cenas ==
+   *
+   * A porta ÚNICA entre o laço principal e a lente cinemática. `NamekGame.step`
+   * chama isto uma vez por quadro, depois de já ter montado a pose normal da
+   * câmera, e usa o retorno para decidir se ainda vale escrever o retículo, a
+   * bússola e os anéis do HUD — que não fazem sentido nenhum enquanto a lente
+   * está em outro lugar.
+   *
+   * Ela abre as cenas PENDENTES aqui, e não onde as mensagens chegam, por uma
+   * razão só: as duas precisam da pose que a lente do jogo tem NESTE quadro
+   * (é dela que a mistura parte, ver `BossCine._abrir`), e as mensagens chegam
+   * na fila de rede, antes de a câmera do quadro existir.
+   *
+   * @param {number} dt
+   * @param {object} lente a `NamekCamera` — `{ position, lookAt }`
+   * @returns {boolean} a cena está mandando na câmera?
+   */
+  passoDaCine(dt, lente) {
+    const cine = this.cine;
+    if (!cine) return false;
+
+    if (this._cinePedidaMorte) {
+      this._cinePedidaMorte = false;
+      cine.morte(lente);
+    } else {
+      this.abrirCenaPendente(lente);
+    }
+
+    /* O ponto enquadrado é o `mostrado` — a posição INTERPOLADA, que é a que
+       todo mundo vê. Usar o `alvo` cru (o último pacote) faria a lente orbitar
+       um ponto e o corpo estar noutro, a até onze metros de distância durante a
+       descida, que é justamente quando ele é mais rápido. */
+    const marco = cine.update(dt, this.mostrado, lente);
+    if (marco === "risada") {
+      /* A risada TEATRAL da entrada. `"entrada"` passa por cima da carência de
+         6,5 s (ver `NamekAudio.risadaDoFreeza`), e é por isso que as duas do
+         pedido conseguem sair com 2,7 s de intervalo — com qualquer outro motivo
+         a segunda seria engolida em silêncio. */
+      this.audio?.risadaDoFreeza?.(this.pontoDoPeito(this._pontoTmp), "entrada");
+    } else if (marco === "nome") {
+      /* O NOME, e é literalmente *"é apresentado o nome Freeza"*. Ele sai de
+         `NAMEK.freeza.nome` e não escrito aqui: quem trocar o nome dele no
+         arquivo de ajustes troca também o que a apresentação anuncia. */
+      this.hud?.banner?.(NAMEK.freeza.nome.toUpperCase(), NAMEK.freeza.chegada.nomeDur);
+    }
+    return cine.ativa;
   }
 
   /**

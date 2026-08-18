@@ -212,7 +212,15 @@ const MAR_FRAG = /* glsl */ `
     vec3 H = normalize(L + V);
     float nh = clamp(dot(N, H), 0.0, 1.0);
     col += corSol * pow(nh, 120.0) * 1.9;
-    col += corSol * pow(nh, 14.0) * 0.30;
+    /* 'nh' à décima quarta por três elevações ao quadrado e duas
+       multiplicações, em vez de um segundo 'pow'. O valor é o mesmo
+       (14 = 8+4+2) e a base é garantidamente >= 0 pelo 'clamp' acima. O lobo
+       apertado continua com 'pow' porque 120 não cabe em quadrados sem virar
+       uma corrente mais longa que a própria função. */
+    float nh2 = nh * nh;
+    float nh4 = nh2 * nh2;
+    float nh8 = nh4 * nh4;
+    col += corSol * (nh8 * nh4 * nh2) * 0.30;
 
     /* ESPUMA. Só no topo da crista, e mais na tempestade: no dia calmo ela é um
        fiapo, e um mar de espuma constante lê como corredeira, não como oceano. */
@@ -248,7 +256,12 @@ const MAR_FRAG = /* glsl */ `
      * apareceriam exatamente ali. */
     #ifdef USE_FOG
       float aoSol = max(dot(normalize(vMundo - olho), normalize(solDir)), 0.0);
-      gl_FragColor.rgb += corBruma * (pow(aoSol, 3.0) * fogFactor * brumaForca);
+      /* Ao cubo por multiplicação, exatamente como em 'terrain.js' — ver a nota
+         de lá. Os dois trechos têm de continuar iguais número a número: mar e
+         montanha se encontram numa linha, e é justamente ali que uma diferença
+         de arredondamento apareceria como uma costura. */
+      float aoSol3 = aoSol * aoSol * aoSol;
+      gl_FragColor.rgb += corBruma * (aoSol3 * fogFactor * brumaForca);
     #endif
   }
 `;

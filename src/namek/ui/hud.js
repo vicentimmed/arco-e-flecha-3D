@@ -1334,13 +1334,23 @@ export class NamekHud {
    * `if` a menos aqui não paga arrancar uma classe de CSS que já está escrita —
    * mas quem procurar por onde ele acende em jogo não vai achar, e não é bug.
    *
-   * @param {"livre"|"travado"|"carregando"} estado
+   * `"oculto"` é o quarto e ele não é um estado de mira: é a mira SAINDO da
+   * tela, e existe para as cenas cinemáticas do boss (a chegada e a morte). Ali
+   * a câmera está a dezessete metros dele, do outro lado da arena, e um retículo
+   * no meio do quadro apontaria para um lugar que não quer dizer nada — além de
+   * ser exatamente o que uma apresentação de jogo não tem. Ver `NamekGame.step`.
+   *
+   * @param {"livre"|"travado"|"carregando"|"oculto"} estado
    */
   setCrosshair(estado) {
     if (estado === this._mira) return;
     this._mira = estado;
     this.miraEl.classList.toggle("nk-travado", estado === "travado");
     this.miraEl.classList.toggle("nk-carregando", estado === "carregando");
+    /* `visibility` e não `display`: o retículo é posicionado por CSS no centro
+       da tela e tirá-lo do fluxo faria os irmãos dele se moverem por um quadro
+       ao voltar. */
+    this.miraEl.style.visibility = estado === "oculto" ? "hidden" : "";
   }
 
   /**

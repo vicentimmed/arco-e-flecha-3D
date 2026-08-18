@@ -99,6 +99,57 @@ const PASSADA = 1.75;
 /** Passada 50 % mais longa correndo — também igual à do arqueiro. */
 const PASSADA_CORRIDA = 0.5;
 
+/* --------------------------------------------------- engolido pelo relevo ---
+ *
+ * O relato do usuário: *"em algumas vezes, quando o player está caindo e
+ * abrindo cratera no chão, ele está ficando meio dentro da terra. Está ficando
+ * um pouco difícil dele sair às vezes."*
+ *
+ * A causa não é o contato — o contato PLANTA o corpo em `chao` e, sozinho, ele
+ * nunca deixaria ninguém abaixo do relevo. A causa é que **o relevo se mexe**.
+ * Uma cratera é assada no campo de altura compartilhado (`bakeCrater`), e a
+ * cratera tem BORDA LEVANTADA: `craterDelta` soma, no terço externo do disco,
+ * um anel de `0,2 × fundura`. Para o buraco de um Kamehameha (19,5 m de fundo)
+ * são **3,9 m de chão que sobem de uma vez**; para uma queda forte na clareira,
+ * uns 2,4 m. Quem estiver de pé nessa faixa no quadro em que o buraco abre
+ * amanhece com a cota dele metros abaixo do chão novo — enterrado até o peito,
+ * que é literalmente o "meio dentro da terra" do relato.
+ *
+ * O que acontecia daí em diante é o resto da queixa: o contato tratava aquilo
+ * como um POUSO. Ele pegava a normal de dentro da parede da cratera (muito
+ * inclinada), cancelava contra ela a velocidade que tiraria o corpo de lá,
+ * derrubava o `flying` — de modo que apertar `F` de dentro do chão religava e
+ * desligava o voo no mesmo quadro — e ainda deixava o teste de `ESCORREGA`
+ * empurrar o corpo ladeira abaixo, ou seja, mais para dentro do buraco.
+ *
+ * A saída é separar as duas coisas: quem CAIU no chão pousa; quem foi ENGOLIDO
+ * pelo chão é expulso. */
+/** m — penetração a partir da qual isto deixou de ser um pouso e virou um
+ *  enterro. Ela só é medida em quem já estava com os pés no chão, e é por isso
+ *  que 1,2 m é folgado o bastante: correndo a 13,5 m/s um subpasso de 18 ms
+ *  avança 0,24 m, e para 0,24 m de passada valerem 1,2 m de subida a rampa
+ *  teria de ter 79° — inclinação em que o corpo ESCORREGA (o corte é 44°) em
+ *  vez de subir. Ou seja: 1,2 m de chão acima dos pés é chão que se mexeu. */
+const ENTERRO_MIN = 1.2;
+/** m/s — com que velocidade o corpo é cuspido de volta para a superfície.
+ *
+ *  Não é um teleporte e não é um passeio: 40 m/s são o dobro da subida a
+ *  `climbSpeed` e uns dois terços da arrancada, de modo que a pior borda que o
+ *  jogo constrói (3,9 m) sai em 0,1 s — uns seis quadros de EMPURRÃO, que o
+ *  olho lê como o chão devolvendo o corpo. Plantar em `chao` de uma vez, que é
+ *  o que o contato faz, seria o corpo saltando quatro metros entre dois quadros
+ *  sem nada na tela explicando o salto. */
+const DESENTERRAR = 40;
+/** m — abaixo disto o empurrão vira plantio seco.
+ *
+ *  A rampa existe para ser vista; a 12 m de profundidade não há nada a ver, só
+ *  seis décimos de segundo de corpo atravessando rocha. Nenhuma borda de
+ *  cratera do jogo chega perto disto (a maior é a do Kamehameha, 3,9 m), então
+ *  na prática esta linha é a rede de segurança para o caso absurdo — um
+ *  empurrão de fora, uma sequência de crateras somadas — e não o caminho
+ *  comum. */
+const DESENTERRO_SECO = 12;
+
 /* -------------------------------------------------------------- rolagem ---- */
 /** rad ≈ 36°. Mais que isso e o lutador vira um avião de caça. */
 const ROLL_MAX = 0.62;
@@ -266,6 +317,40 @@ export class FighterController {
     /** Entrada lateral já filtrada pelo controle — alimenta a rolagem. */
     this._ladoEfetivo = 0;
 
+    /** O MERGULHO DE `F` ESTÁ EM CURSO.
+     *
+     *  É a bandeira que responde ao pedido: *"quando o player está no ar, ele
+     *  aperta F. O impacto dele no chão, devido ao F, não deve sugar vida do
+     *  player."*
+     *
+     *  O `F` no ar desliga o voo e atira o corpo para baixo a `MERGULHO_F` (ver
+     *  `_bordas`). No instante do contato, portanto, `this.flying` já é falso —
+     *  e era só isso que o evento de pouso olhava para decidir entre `"pouso"`
+     *  e `"queda"`. Resultado: o mergulho MAIS deliberado do jogo era
+     *  classificado como queda e cobrado como queda.
+     *
+     *  A bandeira guarda a INTENÇÃO, que é o que `tipo` sempre disse medir: ela
+     *  é levantada só pelo `F` do jogador, é apagada em todo lugar em que o voo
+     *  volta a engatar (religar no ar, decolar, arrancar com ki, entrar no
+     *  espaço), em `derrubar` — quem apanhou não escolheu descer — e no pouso
+     *  que ela mesma descreveu. `teleport` a zera junto com o resto.
+     *
+     *  Ela NÃO desliga a cratera nem a poeira: o buraco é do impacto, e o
+     *  impacto aconteceu. O que ela muda é uma palavra num evento, e essa
+     *  palavra é o que a sala lê para não cobrar vida. */
+    this._mergulhoF = false;
+
+    /** O corpo está ABAIXO do relevo e sendo empurrado para fora.
+     *
+     *  Uma trava, e ela precisa ser uma trava: o enterro é reconhecido no
+     *  quadro em que o chão sobe (com os pés apoiados, ver `ENTERRO_MIN`), mas
+     *  a saída leva alguns quadros — e no meio deles o jogador pode apertar `F`
+     *  e deixar de estar apoiado. Sem a trava, o primeiro quadro de voo cairia
+     *  no contato comum, que planta o corpo de volta e desliga o voo: o `F`
+     *  seria recusado justamente por quem mais precisa dele. Ela cai sozinha
+     *  quando os pés chegam à superfície. */
+    this._enterrado = false;
+
     /** Destino reaproveitado da normal do terreno.
      *
      *  Chamamos `field.normalAt(x, z, eps, ESTE)` em vez de `field.slopeAt`, que
@@ -298,10 +383,12 @@ export class FighterController {
    * @param {object} ki `{ valor, max, gastar(n)->bool, carregando }`
    * @returns {object|null} `{ tipo, speed, p }` quando o pouso foi forte o
    *   bastante para virar cratera (`NAMEK.destruction.slamSpeed`). `tipo` é
-   *   `"pouso"` quando ele veio VOANDO (mergulho de propósito) e `"queda"`
-   *   quando ele veio caindo — sem voo, atordoado, arremessado. Os dois abrem
-   *   cratera; o segundo é o que também machuca (`NAMEK.fighter.fallSafe`), e
-   *   quem cobra o dano é quem chamou, com o `speed` que volta aqui.
+   *   `"pouso"` quando a descida foi ESCOLHIDA — voando até o chão, ou
+   *   mergulhando com o `F` (ver `_mergulhoF`) — e `"queda"` quando ela não
+   *   foi: derrubado, arremessado, atordoado, ou voo perdido sem querer. Os
+   *   dois abrem cratera e levantam poeira, sempre; o segundo é o único que
+   *   também machuca (`NAMEK.fighter.fallSafe`), e quem cobra o dano é quem
+   *   chamou — este arquivo só diz de que espécie foi o baque.
    */
   update(dt, acoes, ki) {
     const a = acoes ?? SEM_ACAO;
@@ -417,6 +504,12 @@ export class FighterController {
     this.flying = false;
     this.boosting = false;
     this.defendendo = false;
+    /* O MERGULHO DEIXA DE SER MERGULHO. Levar cinco golpes no meio de um
+       mergulho de `F` transforma a descida em tombo — e o pouso lá embaixo tem
+       de doer, porque a partir daqui quem manda no corpo é quem bateu. Sem esta
+       linha, um lutador que apertasse `F` e fosse derrubado no caminho pousaria
+       de graça, e a punição inteira de `derrubar` viraria opcional. */
+    this._mergulhoF = false;
     this.velocity.y = Math.min(this.velocity.y, -S.drop);
   }
 
@@ -444,6 +537,8 @@ export class FighterController {
     this.defendendo = false;
     this.travado = false;
     this._espaco = 0;
+    this._mergulhoF = false;
+    this._enterrado = false;
     this._vAntX = 0;
     this._vAntZ = 0;
     this.boostBlend = 0;
@@ -531,6 +626,12 @@ export class FighterController {
     if (a.flyPressed) {
       this.flying = !this.flying;
       if (this.flying) {
+        /* O VOO ENGATOU: o mergulho acabou, tenha ele terminado no chão ou
+           não. É o "a bandeira tem de ser limpa quando o voo volta a engatar" —
+           quem freia a 10 m do solo e volta a subir não está mais mergulhando,
+           e se um empurrão o jogar no chão meio segundo depois aquilo é uma
+           queda como qualquer outra. */
+        this._mergulhoF = false;
         if (this.grounded) {
           this.grounded = false;
           this.velocity.y = Math.max(this.velocity.y, SALTO_F);
@@ -541,6 +642,17 @@ export class FighterController {
         }
       } else if (!this.grounded) {
         this.velocity.y = Math.min(this.velocity.y, -MERGULHO_F);
+        /* AQUI, e em nenhum outro lugar, nasce o mergulho voluntário.
+         *
+         * É a única porta do arquivo em que o próprio jogador escolhe descer
+         * depressa: a tecla desligou o voo e o corpo foi atirado para baixo a
+         * 30 m/s por decisão dele. O pouso que vier disto não é queda, e a
+         * diferença entre as duas palavras é a vida que o servidor cobra — ver
+         * `_mergulhoF` e o `tipo` do evento em `_integrar`.
+         *
+         * O `!this.grounded` que guarda este ramo é o que impede o `F` no chão
+         * (que é o salto, logo acima) de armar um mergulho parado. */
+        this._mergulhoF = true;
       }
     }
 
@@ -555,6 +667,9 @@ export class FighterController {
     }
     if (!this.flying && !this.grounded && this._espaco >= TEMPO_DECOLAGEM) {
       this.flying = true;
+      /* Mesma limpeza do `F`: decolar segurando o espaço no meio de um mergulho
+         cancela o mergulho. É o jeito de abortar a manobra sem tocar o chão. */
+      this._mergulhoF = false;
       this.velocity.y = Math.max(this.velocity.y, IMPULSO_DECOLAGEM);
     }
   }
@@ -580,6 +695,12 @@ export class FighterController {
     if (bolha) {
       this.flying = true;
       this.grounded = false;
+      /* Sem chão não há pouso, e sem pouso não há mergulho a classificar. O
+         `F` continua alternando a bandeira lá em `_bordas` (ele não sabe onde
+         está), e deixá-la acesa aqui seria guardar uma intenção que não pode
+         mais virar evento nenhum — e que sobreviveria à volta ao planeta. */
+      this._mergulhoF = false;
+      this._enterrado = false;
     }
 
     if (this._stun > 0) {
@@ -594,8 +715,51 @@ export class FighterController {
      * relógio do atordoamento anda. Quando ele zera, o voo NÃO volta sozinho: o
      * lutador está caído na grama, e voltar ao ar é uma decisão dele, com a
      * tecla. É o que dá ao outro lado a janela para carregar o golpe. */
+    /* ------------------------------------- E NO ESPAÇO O RELÓGIO CORRE SÓ ---
+     *
+     * `|| bolha` é uma condição de três letras e ela desfaz o pior efeito
+     * colateral que a bolha tinha sobre a briga. Vale escrever por quê.
+     *
+     * A regra "o relógio só anda com os pés apoiados" tem uma razão MEDIDA, e
+     * ela está inteira no comentário de `derrubar`: com um relógio único,
+     * derrubado a 120 m o lutador chegava ao chão em 2,85 s e os 2,4 s de
+     * atordoamento já tinham vencido 0,45 s ANTES, no meio do tombo — ele
+     * recuperava o controle no ar, voltava a voar e nunca encostava. Ou seja: a
+     * regra existe para **esperar a queda terminar**, porque no planeta a queda
+     * é um percurso com duração própria e é o chão que é *"o lugar onde a
+     * punição ACONTECE"*.
+     *
+     * Nada disso sobrevive à bolha. Aqui **não há chão em que se deitar** — é a
+     * primeira coisa que esta função declara, oito linhas acima, ao forçar
+     * `grounded = false` — e, sem chão, não há percurso nenhum a esperar: a
+     * gravidade está desligada e o `airDrag` come a velocidade de queda, de
+     * modo que um derrubado no meio da bolha afunda uns dezoito metros e PARA.
+     * Ele não está caindo para lugar nenhum; está boiando. E como o relógio do
+     * chão nunca começava, quem mandava era o outro — `_caidoAr`, os nove
+     * segundos de `QUEDA_MAX`, que nunca foram uma duração de jogo: são o teto
+     * de segurança para o caso em que o chão não chega (derrubado sobre o
+     * oceano, rente ao teto de voo). O resultado era a punição mais longa do
+     * modo aplicada por acidente, no único lugar onde a briga é o modo inteiro.
+     * O pedido do usuário é o contrário disso: *"ele chega nesse limite e
+     * volta"*, e nove segundos flutuando não é voltar.
+     *
+     * Com o `|| bolha` o atordoamento no espaço dura o que dura para todo mundo
+     * no planeta: os `stagger.time` que a sala mandou. **A AUTORIDADE NÃO
+     * MUDOU** — quem decide quanto tempo alguém fica caído continua sendo a
+     * sala, pelo `s` do `NS2C.STAGGER` que chega em `derrubar(segundos)`;
+     * contar golpes e arbitrar punição é decisão de partida e nunca deste
+     * arquivo. O que esta linha muda é só QUANDO o relógio dela começa a andar,
+     * que é uma pergunta sobre onde estão os pés — e essa é a pergunta que este
+     * controlador responde.
+     *
+     * O fundo da bolha (lá embaixo, `NAMEK.fim.espaco.fundoQueda`) continua
+     * sendo o outro jeito de a queda acabar, e os dois não brigam porque não se
+     * encontram: um é um relógio, o outro é uma cota. Vale o que vencer
+     * primeiro — o derrubado no meio do vazio sai pelo relógio, o que foi
+     * arremessado para baixo com força sai ao bater no fundo, e quem sair por
+     * um caminho já não está `caido` para sair pelo outro. */
     if (this.caido) {
-      if (this.grounded) {
+      if (this.grounded || bolha) {
         this._caido -= h;
         if (this._caido <= 0) this._caido = 0;
       } else {
@@ -704,6 +868,9 @@ export class FighterController {
        corrida rápida, é o momento em que o lutador sai do chão. */
     if (impulso && !this.flying) {
       this.flying = true;
+      /* Arrancar com ki é engatar o voo, e engatar o voo apaga o mergulho —
+         a mesma regra das duas portas de `_bordas`, aplicada na terceira. */
+      this._mergulhoF = false;
       if (this.grounded) {
         this.grounded = false;
         v.y = Math.max(v.y, IMPULSO_DECOLAGEM * 0.6);
@@ -972,7 +1139,15 @@ export class FighterController {
        espaço. Quem chega VOANDO calcula a sua, e essa é a que importa — é a que
        decide a força da cratera. */
     let temNormal = false;
-    if (this.grounded) {
+    /* `!this._enterrado` é a metade do conserto do enterro que age ANTES do
+       contato, e ela é indispensável: a normal de um ponto que está dentro da
+       parede de uma cratera é quase deitada, o teste abaixo lê isso como
+       "ladeira íngreme demais" e empurra o corpo NA DIREÇÃO DA DESCIDA — que,
+       dentro de um buraco, é para o fundo dele. Ou seja, o escorregamento
+       estava cavando o corpo para dentro no mesmo quadro em que o contato
+       tentava plantá-lo. Quem foi engolido pelo chão não escorrega em nada:
+       ele está sendo expulso, e só. */
+    if (this.grounded && !this._enterrado) {
       const n = this.field.normalAt(p.x, p.z, 0.8, this._normal);
       temNormal = true;
       if (n.y < ESCORREGA) {
@@ -1008,19 +1183,141 @@ export class FighterController {
        o relevo do planeta (a função é pura em (x, z) e não sabe que o planeta
        explodiu), e todo mundo estaria voando a 2 250 m sobre um chão fantasma
        que só se manifestaria ao alguém descer até ele. */
-    if (bolha) return null;
+    if (bolha) {
+      /* ------------------------------------------------- O FUNDO DA QUEDA ---
+       *
+       * O pedido, literal: *"no espaço, se os players continuarem jogando e
+       * lutando um contra o outro, caso o player for derrubado, ele tem um
+       * limite: ele cai no espaço. Como não vai ter chão pra fazer colisão, ele
+       * chega nesse limite e volta, pois senão ele vai ficar caindo infinito."*
+       *
+       * Sem esta cota o buraco era real e era grande. `derrubar` monta DOIS
+       * relógios de propósito (o comentário de lá tem a medida): `_caido` é o
+       * tempo no chão e **só anda com os pés apoiados**, e `_caidoAr` é o teto
+       * de segurança de nove segundos. No planeta o corpo encontra o chão em
+       * dois ou três segundos e a punição é a que foi combinada. Aqui não há
+       * chão: `grounded` é falso por definição (ver o topo desta função), então
+       * `_caido` nunca começava a correr e o lutador ficava os NOVE SEGUNDOS
+       * inteiros sem controle, afundando pela bolha o tempo todo — a punição
+       * mais longa do jogo aplicada por acidente, e num lugar onde a briga é o
+       * modo inteiro.
+       *
+       * O fundo é o chão que faltava. Ele faz as três coisas que o chão faz: o
+       * corpo para de descer, a velocidade para baixo zera e a QUEDA ENCERRA.
+       *
+       * ------------------------------------------- por que ele fica DENTRO
+       *
+       * `fundoQueda` são 0,86 do raio, e não 1: com a bolha a 2 900 m e 560 m
+       * de raio, o fundo assenta em 2 900 − 481,6 = **2 418 m**, uns oitenta
+       * metros ACIMA da parede da esfera. É de propósito, e a razão é o freio
+       * macio esférico lá de cima.
+       *
+       * O freio começa em `freioInicio` (0,82 do raio) e é uma força que cresce
+       * com o excesso: ele INTEGRA velocidade, quadro a quadro, empurrando o
+       * corpo de volta para o centro. O fundo é a coisa oposta — um grampo de
+       * POSIÇÃO, que reescreve `p.y` depois de a integração já ter acontecido.
+       * Pôr os dois no mesmo lugar seria pôr um corpo permanentemente parado
+       * exatamente onde o freio está no dobro da força (`d > bolha.raio`),
+       * com o grampo apagando a cada quadro o trabalho que a força acabou de
+       * fazer: uma briga silenciosa, todo quadro, pelo mesmo corpo. Oitenta
+       * metros para dentro, o freio ali vale um quinto da faixa e aponta para
+       * CIMA — o mesmo sentido do grampo. Eles se ajudam em vez de brigar, e o
+       * corpo parado no fundo é um corpo que o freio devolve devagar para o
+       * meio da bolha, que é onde o jogo acontece. */
+      const fundo = bolha.y - bolha.raio * NAMEK.fim.espaco.fundoQueda;
+      if (p.y < fundo) {
+        p.y = fundo;
+        if (v.y < 0) v.y = 0;
+        /* ENCERRA A QUEDA, como encostar no chão encerraria — e encerra de vez
+           em vez de começar a contar. No planeta o lutador fica deitado na
+           grama os `stagger.time` segundos combinados porque HÁ grama para
+           ficar deitado; aqui não há em que se deitar, e o que sobraria seria
+           um corpo boiando sem controle no vazio até o relógio vencer. Bateu no
+           fundo, acabou: os dois relógios zeram junto com a bandeira, e o
+           `flying` forçado lá em cima já devolve o voo no mesmo quadro.
+           O `_stun` de um golpe comum NÃO é tocado — ele é de décimos de
+           segundo e some sozinho, e apagá-lo aqui faria do fundo da bolha uma
+           cura de graça para quem levasse um soco no caminho. */
+        if (this.caido) {
+          this.caido = false;
+          this._caido = 0;
+          this._caidoAr = 0;
+        }
+      }
+      return null;
+    }
 
     const chao = this._chao(p.x, p.z);
 
     if (p.y > chao) {
-      /* Acima do relevo. Descendo uma ladeira, o corpo COLA nela em vez de
-         decolar em cada lombada — o mesmo `enableSnapToGround` que o arqueiro
-         pede ao Rapier, escrito à mão. */
+      /* Acima do relevo — e, portanto, DESENTERRADO. A trava do enterro cai
+         aqui e em nenhum outro lugar: ela existe para durar exatamente enquanto
+         houver chão acima dos pés. */
+      this._enterrado = false;
+      /* Descendo uma ladeira, o corpo COLA nela em vez de decolar em cada
+         lombada — o mesmo `enableSnapToGround` que o arqueiro pede ao Rapier,
+         escrito à mão. */
       if (this.grounded && !this.flying && v.y <= 0 && p.y - chao <= COLA_CHAO) {
         p.y = chao;
         v.y = 0;
       } else {
         this.grounded = false;
+      }
+      return null;
+    }
+
+    /* ------------------------------------------- ENGOLIDO PELO RELEVO ------
+     *
+     * Chegar abaixo do relevo com os pés já apoiados é impossível pela física
+     * daqui — o contato planta o corpo em `chao` todo subpasso. Só existe um
+     * jeito de acontecer, e ele acontece: **o chão subiu**. Ver `ENTERRO_MIN`
+     * para a cadeia inteira (é a borda levantada da cratera, `craterDelta`,
+     * assada no campo de altura no quadro em que o buraco abre).
+     *
+     * A diferença entre este ramo e o contato lá embaixo é a diferença entre
+     * duas frases: *"o corpo encontrou o chão"* e *"o chão encontrou o corpo"*.
+     * O contato existe para a primeira, e cada uma das coisas que ele faz vira
+     * defeito quando aplicada à segunda:
+     *
+     * • plantar em `chao` de uma vez é um salto de metros sem causa na tela;
+     * • cancelar a velocidade contra a normal de dentro de uma parede de
+     *   cratera é apagar justamente o movimento que tiraria o corpo de lá;
+     * • desligar o `flying` é recusar o `F` de quem está soterrado — e o `F` é
+     *   a saída óbvia, a que o jogador tenta primeiro;
+     * • cobrar o impacto seria cobrar uma queda que ninguém caiu.
+     *
+     * Então nada disso acontece. O corpo é EMPURRADO para a superfície a
+     * `DESENTERRAR`, a velocidade para baixo é zerada (o chão abaixo dele é
+     * chão de verdade), e todo o resto — voo, apoio, controle — fica como
+     * estava. Andar continua funcionando porque `grounded` não é mexido; voar
+     * continua funcionando porque `flying` não é mexido; e o escorregamento não
+     * arrasta ninguém para o fundo porque ele foi desligado lá em cima pela
+     * mesma trava. */
+    const fundo = chao - p.y;
+    /* A trava, nos dois sentidos. ENTRAR exige os pés apoiados, e isso não é
+       detalhe: é o que separa "o chão subiu debaixo de mim" de "eu voei contra
+       um paredão a 64 m/s". O segundo é um corpo NO AR encontrando rocha —
+       impacto, cratera, evento —, e classificá-lo como enterro tiraria da
+       montanha o direito de doer. SAIR é chegar à superfície, e só. */
+    if (this._enterrado) {
+      if (fundo <= 0) this._enterrado = false;
+    } else if (this.grounded && fundo > ENTERRO_MIN) {
+      this._enterrado = true;
+    }
+
+    if (this._enterrado) {
+      /* A rampa, com o plantio seco como rede de segurança para o absurdo. O
+         `Math.min` é o que impede o empurrão de passar da superfície e cuspir o
+         corpo para cima como um trampolim: ele sobe até `chao` e para. */
+      p.y += fundo > DESENTERRO_SECO ? fundo : Math.min(fundo, DESENTERRAR * h);
+      if (v.y < 0) v.y = 0;
+      /* Chegou. A trava cai já, e não no quadro seguinte, para que o subpasso
+         seguinte deste mesmo quadro volte a ter escorregamento, normal e
+         contato de verdade — um quadro inteiro de física suspensa depois de o
+         corpo já estar fora seria um quadro em que ele atravessa uma encosta. */
+      if (p.y >= chao) {
+        p.y = chao;
+        this._enterrado = false;
       }
       return null;
     }
@@ -1037,6 +1334,10 @@ export class FighterController {
     const impacto = vn < 0 ? -vn : 0;
     const caindo = !this.grounded;
     const veioVoando = this.flying;
+    /* Lido ANTES de qualquer coisa mexer no estado, pelo mesmo motivo de
+       `veioVoando`: daqui para baixo o corpo já pousou, e a pergunta que o
+       evento faz é sobre o instante ANTERIOR ao pouso. */
+    const mergulhou = this._mergulhoF;
 
     p.y = chao;
     if (vn < 0) {
@@ -1054,6 +1355,13 @@ export class FighterController {
     }
     this.flying = false;
     this.grounded = true;
+    /* O mergulho acabou no chão, que é onde ele existia para acabar. A bandeira
+       morre AQUI, e não no quadro seguinte: deixá-la acesa com os pés no chão
+       faria o próximo empurrão que jogasse o corpo para cima e de volta ao solo
+       — uma onda de ki, uma explosão perto — pousar de graça, herdando um `F`
+       que o jogador apertou há dez segundos. `mergulhou` já guardou o valor
+       para o evento lá embaixo. */
+    this._mergulhoF = false;
 
     /* O baque planta o corpo: quanto mais forte, menos sobra de velocidade
        horizontal. Sem isto, um mergulho a 90 m/s vira um patinho deslizando
@@ -1067,7 +1375,29 @@ export class FighterController {
     if (!caindo || impacto < NAMEK.destruction.slamSpeed) return null;
 
     const e = this._evento;
-    e.tipo = veioVoando && !this.stunned ? "pouso" : "queda";
+    /* ------------------------------------------------ POUSO OU QUEDA -------
+     *
+     * A palavra que o servidor lê para decidir se este baque custa vida.
+     *
+     * `veioVoando` responde pelo mergulho que termina COM o voo ligado: descer
+     * de propósito e encostar. `mergulhou` responde pelo outro mergulho, o do
+     * `F`, e é o conserto do pedido — *"quando o player está no ar, ele aperta
+     * F. O impacto dele no chão, devido ao F, não deve sugar vida do player."*
+     * Aquele `F` DESLIGA o voo (é o que dá o tranco de 30 m/s, ver `_bordas`),
+     * de modo que no instante do contato `this.flying` já é falso: com
+     * `veioVoando` sozinho, a manobra mais deliberada do jogo era a única que o
+     * jogo classificava como acidente.
+     *
+     * `!this.stunned` continua guardando as duas, e é ele que impede a bandeira
+     * de virar imunidade: quem apertou `F` e levou um golpe no caminho chega ao
+     * chão atordoado, e um pouso atordoado é queda — `derrubar` ainda apaga a
+     * bandeira por conta própria, porque uma queda de cinco golpes não é uma
+     * escolha nem quando começou como uma.
+     *
+     * A cratera e a poeira saem NOS DOIS casos: quem consome este evento não
+     * olha o `tipo` para cavar o buraco, e não deve — o chão não sabe se o
+     * corpo quis cair. O que muda é uma palavra. */
+    e.tipo = (veioVoando || mergulhou) && !this.stunned ? "pouso" : "queda";
     e.speed = impacto;
     e.p.x = p.x;
     e.p.y = p.y;

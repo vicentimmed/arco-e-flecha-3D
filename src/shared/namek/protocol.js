@@ -120,6 +120,22 @@ export const NC2S = {
   /** Muda o clima da sala: `{ id: "dia"|"tempestade" }`. Vale para todos. */
   WEATHER: "weather",
 
+  /**
+   * "O meu Kamehameha está apontado para o SOL": `{}` — sem carga nenhuma.
+   *
+   * Ela é gêmea de `PLANET_HIT` e o desenho é o mesmo dele, de propósito (ver
+   * §2 de `server/namek/planetas.js`): o cliente declara, a sala confere a
+   * direção TRAVADA no disparo (`player.especial.d`) contra `NAMEK.sol.dir` com
+   * a folga de `NAMEK.sol.folga` graus, e o registro do especial — que já custou
+   * a barra cheia — é o que dá dentes à mensagem.
+   *
+   * Sem campo nenhum porque não há o que escolher: existe UM sol. `PLANET_HIT`
+   * manda `id` porque lá são dois corpos.
+   *
+   * Três acertos derrubam o sol e ligam o fim do planeta (`NAMEK.sol.vidas`).
+   */
+  SUN_HIT: "sunHit",
+
   /** Muda a dificuldade dos bots: `{ id }`, um de `NAMEK.bot.dificuldadeOrdem`.
    *
    *  É da SALA, como o clima, e pelo mesmo motivo: os bots são de todos. Quem
@@ -342,6 +358,26 @@ export const NS2C = {
 
   /** Clima: `{ id, w }`. `w` é o instante em que a transição começou. */
   WEATHER: "weather",
+
+  /**
+   * O ESTADO DO SOL: `{ feridas, morto, by, w }`.
+   *
+   * `feridas` são quantos Kamehamehas ele já levou (0 a `NAMEK.sol.vidas`), e o
+   * cliente pinta o disco um degrau mais vermelho a cada um — é o *"cada vez que
+   * Kamehameha o sol, ele muda um pouco de cor, ficando cada vez mais vermelho"*
+   * do pedido. `morto` é 1 só na mensagem do TERCEIRO acerto, e é ela que dispara
+   * a explosão na tela.
+   *
+   * Ela sai em broadcast e vem também no `welcome` (campo `sol`), pelo mesmo
+   * motivo que a lista de crateras vem: quem entra no meio de uma partida em que
+   * o sol já apanhou duas vezes tem de ver o mesmo céu que os outros.
+   *
+   * O que ela NÃO carrega é a virada de clima. O terceiro acerto chama
+   * `pedirClima("tempestade")` na sala, e o `NS2C.WEATHER` sai por conta própria
+   * logo atrás — dizer as duas coisas na mesma mensagem daria ao cliente duas
+   * verdades sobre o mesmo estado, e a que chegasse por último ganharia.
+   */
+  SUN: "sun",
 
   /** Dificuldade dos bots: `{ id }`. Retransmitida a todos para o menu de cada
    *  um mostrar o nível que de fato está valendo — e não o que aquela pessoa

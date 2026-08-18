@@ -69,6 +69,7 @@ import { NamekPeixeSim } from "./peixe.js";
    funções (cratera, dano, envio). Ele não conhece a sala; ela não conhece a
    chuva. */
 import { NamekPlanetas } from "./planetas.js";
+import { NamekSol } from "./sol.js";
 /* O FIM DO PLANETA — a máquina de estados inteira mora lá, e a sala só a
    alimenta. Ver `server/namek/fim.js`: Freeza, contagem, explosão e espaço. */
 import { NamekFim } from "./fim.js";
@@ -214,6 +215,10 @@ export class NamekRoom {
     /* Os dois corpos celestes e a chuva de meteoros. Nascem com a sala e
        voltam ao começo quando ela esvazia — ver `handleClose`. */
     this.planetas = new NamekPlanetas();
+    /* E O SOL, que virou alvo: três Kamehamehas nele acendem o fim do planeta
+       pelo MESMO caminho do botão do menu. Ver `server/namek/sol.js`, que é onde
+       está o argumento de por que ele não inventa fase nenhuma. */
+    this.sol = new NamekSol(this);
 
     /* O FIM DO PLANETA. Ele nasce com a sala e vive nela inteira — a fase
        `calmo` não custa nada e não faz nada, e é o que permite o resto do
@@ -1417,11 +1422,12 @@ export class NamekRoom {
    */
   onda(dono, p) {
     const K = NAMEK.ki;
+    const agora = this.now();
     this.broadcastAll({
       t: NS2C.BURST,
       owner: dono.id,
       p: [round(p.x), round(p.y), round(p.z)],
-      w: this.now(),
+      w: agora,
     });
 
     for (const c of this.corpos) {
@@ -1431,6 +1437,42 @@ export class NamekRoom {
       const dz = c.z - p.z;
       const d = Math.hypot(dx, dy, dz);
       if (d > K.burstRadius) continue;
+
+      /* ================================================ E ELA DERRUBA ======
+       *
+       * *"Se esse flash pegar, além de afastar, o player é derrubado. Inclusive
+       * o Freeza pode ser derrubado se esse flash pegar. Derrubado é igual
+       * acontece quando o player leva cinco ataques consecutivos: ele cai no
+       * chão, abre a cratera e tudo mais."*
+       *
+       * É o pedido mudando a natureza do gesto: a onda era uma DEFESA de
+       * pressão — empurra, tira pouco, compra espaço — e vira também uma
+       * abertura. E a queda é a MESMA de sempre, pelo mesmo caminho
+       * (`this.derrubar`), o que significa que ela traz tudo junto de graça: o
+       * `NS2C.STAGGER` para todas as telas, os 2,4 s no chão, a cratera que o
+       * corpo abre ao bater, a imunidade de 6 s contra ser derrubado de novo, o
+       * especial em curso da vítima morrendo — e a barra de ki de quem derrubou
+       * enchendo, que é o prêmio que fecha o ciclo do modo.
+       *
+       * Ela é chamada ANTES do dano de propósito. `aplicarDano` pode matar, e
+       * `derrubar` num cadáver escreveria relógios num corpo que `nascer` vai
+       * zerar meio segundo depois — o `STAGGER` sairia atrás do `DEATH`, e a
+       * tela da vítima mostraria o tombo de um corpo que já explodiu.
+       *
+       * O que a mantém equilibrada é o preço, e ele não mudou: 25 de ki, catorze
+       * metros de raio, e é preciso estar COLADO em alguém. A carência de
+       * `stagger.immune` continua valendo, então duas pessoas revezando ondas
+       * não prendem ninguém no chão. */
+      if (c.boss) {
+        /* **O BOSS, pelo caminho dele.** Ele não passa por `aplicarDano` (o
+           `ref` dele é um espantalho morto, ver `NamekFreeza.corpoNaLista`) e
+           não podia passar por `derrubar` tampouco — aquele método escreve
+           `tontoAte`, `golpes` e `especial` num objeto que o boss não tem. O
+           tombo dele é resolvido lá dentro, com o relógio dele e a cratera dele.
+           Ver `NamekFreeza.derrubar`. */
+        this.freeza?.derrubar?.(agora);
+        continue;
+      }
       /* Queda linear do centro à borda: quem está no olho da onda leva tudo,
          quem está raspando leva um empurrãozinho. */
       const f = 1 - d / K.burstRadius;
@@ -1441,6 +1483,14 @@ export class NamekRoom {
         c.ref.velocity.x += dx * inv * v;
         c.ref.velocity.y += dy * inv * v + v * 0.35;
         c.ref.velocity.z += dz * inv * v;
+      }
+      /* A GUARDA AINDA VALE CONTRA A QUEDA, e ela é a única defesa que existe
+         contra este golpe: `contarGolpe` já ignora golpe aparado ("é a razão de
+         existir do botão — quem lê a investida a tempo não vai ao chão"), e
+         seria incoerente que a onda passasse por cima disso. Quem está de
+         braços cruzados é empurrado menos, leva 22 % do dano e fica de pé. */
+      if (!this.defendendo(c.ref) && this.now() >= (c.ref.tontoLivreEm ?? 0)) {
+        this.derrubar(c.ref, dono, agora);
       }
       this.aplicarDano(c.ref, K.burstDamage * f, {
         por: dono,
@@ -1652,6 +1702,19 @@ export class NamekRoom {
          `null` entre um salto e outro — nesse caso o próximo `NS2C.FISH` chega
          pelo caminho normal. */
       fish: this.peixe.view(agora),
+      /* AS FERIDAS DO SOL. Mesmo argumento das crateras e do peixe: quem entra
+         numa partida em que o sol já levou dois Kamehamehas tem de ver o mesmo
+         disco vermelho que os outros — e não um sol amarelo que fica laranja de
+         repente no terceiro tiro de outra pessoa. */
+      sol: this.sol.resumo(),
+      /* **O FREEZA JÁ FOI DERRUBADO NESTA PARTIDA?** É o que destrava o Super
+         Saiyajin livre (ver `NAMEK.ssj.livreAposOFreeza`), e a marca é da SALA,
+         não de quem estava lá quando ele caiu: quem entra durante a fuga do
+         planeta tem o mesmo direito. Sem esta linha, esse jogador apertaria `R`
+         e ouviria "só na batalha contra o Freeza" pelo resto da partida — e a
+         sala, que confere a mesma coisa por conta própria em `podeAcender`,
+         aceitaria a transformação que o HUD dele diz ser impossível. */
+      freezaMorto: this.freeza?.derrotado === true,
       scores: this.scores(),
     });
 
@@ -1731,6 +1794,11 @@ export class NamekRoom {
          as crateras: quem chega numa sala vazia não herda nem uma coisa nem a
          outra. */
       this.peixe.reset();
+      /* E O SOL VOLTA INTEIRO, pelo mesmo argumento: as feridas dele são estado
+         da partida que acabou, como as crateras. Sem esta linha, quem entrasse
+         numa sala recém-esvaziada veria um sol já vermelho de dois
+         Kamehamehas que ninguém daquela partida deu. */
+      this.sol.zerar();
       /* O FIM ZERA JUNTO — o planeta voltou inteiro, então a contagem, o Freeza
          e a lista de quem estava no espaço não descrevem mais nada. Sem esta
          linha, quem recarregasse a página cairia numa sala em fase `espaco` sem
@@ -1858,6 +1926,13 @@ export class NamekRoom {
          acabou de criar. Recusa em silêncio, como todo o resto. */
       case NC2S.PLANET_HIT:
         this.planetas.pedido(player, msg, this.now());
+        break;
+
+      /* "O meu Kamehameha está apontado para o SOL." Mesma conferência, mesmo
+         modelo de confiança e mesma recusa em silêncio — ver
+         `server/namek/sol.js`. Sem `msg`: não há o que escolher, existe um sol. */
+      case NC2S.SUN_HIT:
+        this.sol.pedido(player, this.now());
         break;
 
       default:
@@ -2070,6 +2145,31 @@ export class NamekRoom {
       d: msg.d,
       target: msg.target,
     });
+
+    /* ================================ A GENKI DAMA DEIXA O FREEZA LENTO =====
+     *
+     * *"Uma Genki Dama contra o Freeza: quando a Genki Dama é atirada, o Freeza
+     * anda mais lento. Ele não anda tão rápido, para dar chance da Genki Dama
+     * acertar ele. Mas tem chances da Genki Dama acertar ele, e também não é que
+     * acerta."*
+     *
+     * O aviso sai daqui — do REGISTRO do especial — e não do impacto, e é o
+     * único lugar de onde ele poderia sair: a sala não simula projétil de
+     * jogador (quem atira julga o próprio acerto, §8 do plano), então ela não
+     * tem uma bola para acompanhar. O que ela tem é o instante em que o golpe
+     * foi pago, e a lentidão é uma janela contada a partir dele.
+     *
+     * O `windup` vai junto porque a lentidão começa quando a bola SAI da mão, e
+     * não quando o gesto começa: os 5,2 s de carga são exatamente o tempo em que
+     * o boss deveria estar indo para cima de quem carrega, e deixá-lo lento ali
+     * inverteria o sentido do golpe. Ver `NamekFreeza.avisarGenkiDama`.
+     *
+     * `?.` na chamada e não um `if` no tipo: quem sabe o que fazer com esta
+     * notícia é o boss, e uma sala sem boss instalado tem de continuar aceitando
+     * Genki Damas. */
+    if (msg.kind === "genki") {
+      this.freeza?.avisarGenkiDama?.(agora, info.windup ?? 0);
+    }
   }
 
   /**
@@ -2429,6 +2529,32 @@ export class NamekRoom {
     if (speed > D.slamSpeed) {
       this.cratera(msg.p[0], msg.p[2], Math.min((speed - D.slamSpeed) * D.slamPower, 16), player);
     }
+
+    /* ======================== O MERGULHO DE PROPÓSITO NÃO MACHUCA ===========
+     *
+     * *"Quando o player está no ar, ele aperta F. O impacto dele no chão, devido
+     * ao F, não deve sugar vida do player."*
+     *
+     * `tipo` separa as duas coisas que este mesmo baque pode ser, e a distinção
+     * já existia DOCUMENTADA no cliente desde sempre (ver o `@returns` de
+     * `FighterController.update`: *"`pouso` quando ele veio VOANDO, mergulho de
+     * propósito, e `queda` quando ele veio caindo — sem voo, atordoado,
+     * arremessado; os dois abrem cratera, o segundo é o que também machuca"*).
+     * O campo simplesmente nunca chegava até aqui, e o dano saía igual nos dois
+     * casos — o que fazia do `F` no ar uma tecla que se paga com vida.
+     *
+     * A CRATERA continua acontecendo nos dois, e ela é o ponto: o gesto continua
+     * arrebentando o chão, levantando poeira e derrubando o cenário em volta. O
+     * que ele deixa de fazer é cobrar do próprio corpo por uma manobra que o
+     * jogador escolheu.
+     *
+     * A validação é a de sempre — nada vindo da rede vale sem ser conferido: só
+     * a string exata `"pouso"` isenta, e qualquer outra coisa (ausente, lixo,
+     * `"queda"`) cai no caminho que machuca. O teto do abuso é um cliente
+     * mentiroso que nunca leva dano de queda, o que não tira vida de ninguém e
+     * não dá vantagem nenhuma contra quem quer que seja: cair de duzentos metros
+     * de propósito continua sendo mais lento que voar. */
+    if (msg.tipo === "pouso") return;
     if (speed <= F.fallSafe) return;
     this.aplicarDano(player, (speed - F.fallSafe) * F.fallDamage, {
       kind: "queda",

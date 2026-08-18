@@ -160,27 +160,59 @@ const NUVEM_ALTA = 980;
    O azimute NÃO mudou (33,7° a partir de +x): mexer nele giraria o rastro do
    mar e a orientação de todo o sombreamento assado no terreno de uma vez, e não
    há nada a ganhar com isso. */
+/* A DIREÇÃO E O RAIO SAEM DO CONFIG COMPARTILHADO, e não são mais escritos aqui.
+ *
+ * Eles subiram para `NAMEK.sol` no dia em que o sol virou ALVO: três Kamehamehas
+ * nele acendem o fim do planeta (ver `server/namek/sol.js`), e o teste do acerto
+ * acontece no SERVIDOR — que não pode importar um módulo que faz
+ * `import * as THREE`. Com os números no config, os dois lados medem o mesmo
+ * ângulo contra o mesmo vetor, e a folga de 3° do teste continua querendo dizer
+ * a mesma coisa nos dois.
+ *
+ * O que continua morando aqui é o que é só desenho: a cor.
+ *
+ * ------------------------------------------------------------------- o raio
+ *
+ * A escada deste número conta a história inteira do arquivo:
+ *   0,028 rad → 3,2° de diâmetro,  51 px a 1080p — um furo de alfinete;
+ *   0,068 rad → 7,8°,             124 px — um corpo celeste, mas discreto;
+ *   0,105 rad → 12,0°,            190 px — grande demais, e foi o que se pediu
+ *                                 para reduzir ("ele está muito grande");
+ *   0,078 rad →  8,9°,            131 px — o de hoje. Ver `NAMEK.sol.raio`.
+ *
+ * A conta é `diâmetro angular / campo vertical × altura da tela`. Para comparar
+ * com o que já existe no céu, Kuraia tem 16,1° e Rubel 11,2°: o sol voltou a ser
+ * o MENOR dos três corpos, que é a proporção certa para uma fonte distante — e
+ * continua sendo o único que estoura em branco no miolo, que é o que diz ao olho
+ * qual deles é a luz. */
 const SOL = {
-  dir: new THREE.Vector3(0.705, 0.53, 0.471),
+  dir: new THREE.Vector3(NAMEK.sol.dir[0], NAMEK.sol.dir[1], NAMEK.sol.dir[2]),
   cor: new THREE.Color("#ffa53c"),
-  /* O raio é ANGULAR, em radianos, e é o "maior" do pedido.
-   *
-   * A escada deste número conta a história inteira do arquivo:
-   *   0,028 rad → 3,2° de diâmetro,  51 px a 1080p — um furo de alfinete;
-   *   0,068 rad → 7,8°,             124 px — um corpo celeste, mas discreto;
-   *   0,105 rad → 12,0°,            190 px — O sol daquele céu.
-   *
-   * A conta é `diâmetro angular / campo vertical × altura da tela`: 12° de 68°
-   * são 17,6 % da altura do quadro. Para comparar com o que já existe no céu,
-   * Kuraia tem 16,1° e Rubel 11,2° — ou seja, o sol passou a ser maior que uma
-   * das duas luas e da ordem da outra, que é exatamente onde ele precisava
-   * estar para ninguém confundir qual dos três corpos é a fonte de luz.
-   *
-   * O teto está em não virar obstáculo: acima de uns 15° o disco começa a cobrir
-   * um adversário inteiro a distância de briga, e um golpe que sai de dentro do
-   * sol é um golpe que não se vê chegar. */
-  raio: 0.105,
+  /** rad, ANGULAR. Do config — ver acima. */
+  raio: NAMEK.sol.raio,
 };
+
+/* ------------------------------------------------------------ o sol FERIDO
+ *
+ * *"Cada vez que Kamehameha o sol, ele muda um pouco de cor, ficando cada vez
+ * mais vermelho."*
+ *
+ * A ferida NÃO tem paleta própria: ela reaproveita a paleta da TEMPESTADE, que
+ * já descreve exatamente o sol que se quer — *"o disco continua lá, agora
+ * vermelho-sangue, inchado e de borda desfeita"*. Uma segunda tabela de cores
+ * de sol vermelho seria uma tabela que envelhece separado da primeira, e as duas
+ * aparecem na mesma tela no minuto em que o terceiro tiro vira tempestade.
+ *
+ * O que a ferida faz, então, é ANDAR NO MESMO DIAL do clima — só que sem levar
+ * junto o céu, a névoa e as nuvens. Daí `TINTA_FERIDA` ser menor que 1: com 0,3
+ * por ferida, dois Kamehamehas deixam o disco a 60 % do caminho até a brasa (bem
+ * vermelho, ainda claramente um sol) e o terceiro não chega a fechá-lo — porque
+ * quem o fecha é a explosão, e logo atrás dela a tempestade de verdade.
+ *
+ * E o disco INCHA com a ferida (`INCHA_FERIDA`), pelo mesmo motivo que ele incha
+ * na tempestade: uma estrela machucada é uma estrela que perdeu a borda. */
+const TINTA_FERIDA = 0.3;
+const INCHA_FERIDA = 0.14;
 
 /**
  * A direção do sol PRINCIPAL, normalizada. Exportada porque o mar precisa dela
@@ -740,6 +772,12 @@ export class NamekSky {
     this.storm = 0;
     this.flash = 0;
     this.relogio = 0;
+    /* 0…1 — o quanto o sol já apanhou, em fração das `NAMEK.sol.vidas`. Ele é um
+       segundo dial, independente do clima, e `aplicar` compõe os dois. Ver
+       `setSolFeridas`. */
+    this.solDano = 0;
+    /** 0…1 — o clarão da explosão do sol, decaindo. Ver `explodirSol`. */
+    this.solEstouro = 0;
     this.rnd = makeRandom(NAMEK.world.seed ^ 0x1337beef);
     this.raios = [];
     this.proximoRaio = 0;
@@ -815,12 +853,39 @@ export class NamekSky {
     });
     this.domo = new THREE.Mesh(geo, this.domoMat);
     this.domo.name = "namek-domo";
-    /* Nunca é abatido pelo frustum (ele CERCA a câmera, e a caixa envolvente
-       dele não ajuda em nada) e é sempre o primeiro a desenhar, sem escrever
-       profundidade: assim tudo o mais passa por cima independentemente de
-       distância, inclusive o mar, que está além do raio do domo. */
+    /* Nunca é abatido pelo frustum: ele CERCA a câmera, e a caixa envolvente
+       dele não ajuda em nada. */
     this.domo.frustumCulled = false;
-    this.domo.renderOrder = -1000;
+
+    /* ================================== E ELE DESENHA POR ÚLTIMO, NÃO PRIMEIRO
+     *
+     * Isto era `-1000`, e a mudança é a **segunda maior economia da fase**.
+     *
+     * O argumento antigo estava escrito aqui e ele era sobre CORREÇÃO: "é sempre
+     * o primeiro a desenhar, sem escrever profundidade, assim tudo o mais passa
+     * por cima independentemente de distância". A primeira metade era
+     * desnecessária e a segunda continua verdadeira sem ela — quem garante que o
+     * mar (a 3 200 m, além do domo) apareça por cima não é a ordem, é o
+     * `depthWrite: false`: o domo não deixa marca no buffer de profundidade, e
+     * nada que venha depois é recusado por ele.
+     *
+     * O que a ordem antiga custava: este é o fragmento mais caro do modo — sol
+     * com limbo, granulação, cromosfera, duas camadas de dispersão, bruma e
+     * ruído — e ele cobre **cem por cento da tela**. Desenhado primeiro, ele
+     * sombreava todos os pixels do quadro; o relevo, o mar e o cenário
+     * chegavam em seguida e apagavam 50 a 80 % daquele trabalho.
+     *
+     * Desenhado por último entre os opacos, o `depthTest` (que continua ligado)
+     * descarta o domo em cada pixel que já tem alguma coisa mais perto —
+     * **antes do fragmento**, que é onde o custo está. A imagem é idêntica em
+     * todo pixel: ele é o opaco mais distante da cena (2 600 m) e não escreve
+     * profundidade, então nunca havia um caso em que ele ganhasse de alguém.
+     *
+     * As nuvens (`transparent: true`) continuam por cima dele de graça: o three
+     * desenha a fila transparente inteira depois da opaca, e `renderOrder` só
+     * ordena DENTRO de cada fila. É a mesma nota que `world/planetas.js` já
+     * carrega. */
+    this.domo.renderOrder = 1000;
     this.root.add(this.domo);
   }
 
@@ -1060,9 +1125,100 @@ export class NamekSky {
    * arquivos, e o resultado seria a névoa terminando de virar dois segundos
    * depois do céu.
    */
+  /* ------------------------------------------------------------- o sol ferido
+   *
+   * As três coisas que o sol-alvo precisa do céu, e só elas: contar quantos
+   * tiros ele levou, dizer se um tiro está apontado para ele, e onde ele está.
+   *
+   * Elas moram aqui e não em `NamekWorld` porque é ESTE arquivo o dono do sol —
+   * a direção, o raio e o disco desenhado saem daqui, e uma pergunta sobre mira
+   * respondida em outro lugar seria a primeira oportunidade de a coisa que se vê
+   * e a coisa que conta discordarem. É a mesma decisão que `NamekPlanetas.naMira`
+   * já toma para os dois planetas. */
+
+  /**
+   * "O sol levou o `n`-ésimo Kamehameha." Vem da sala (`NS2C.SUN`) e do
+   * `welcome` — o cliente nunca decide isto sozinho.
+   *
+   * @param {number} feridas 0 … `NAMEK.sol.vidas`
+   * @param {boolean} [instantaneo] sem o clarão, para quem acabou de entrar
+   */
+  setSolFeridas(feridas, instantaneo = false) {
+    const n = clamp(Number(feridas) || 0, 0, NAMEK.sol.vidas);
+    const antes = this.solDano;
+    this.solDano = NAMEK.sol.vidas > 0 ? n / NAMEK.sol.vidas : 0;
+    if (this.solDano === antes) return;
+    /* Reaplica o dial inteiro: a cor do sol é a composição do clima com a
+       ferida, e as duas passam pelo mesmo lugar de propósito (ver `aplicar`). */
+    this.aplicar(this.storm);
+    void instantaneo;
+  }
+
+  /** O clarão da morte dele. Zero quando o clima já o apagou. */
+  explodirSol() {
+    this.solEstouro = 1;
+  }
+
+  /**
+   * O Kamehameha está apontado para o sol?
+   *
+   * A conta é a mesma de `NamekPlanetas.naMira` e a mesma que a sala refaz em
+   * `NamekSol.pedido`: o cosseno entre a direção travada no disparo e a direção
+   * do sol, contra o raio angular do disco mais a folga. Fazer as duas iguais é
+   * o que impede o caso irritante — o cliente desenhar o acerto e a sala recusá-lo.
+   *
+   * A ORIGEM não entra na conta, e não entra de propósito: o sol está a uma
+   * distância em que os poucos metros entre a mão de quem atirou e a origem do
+   * mundo valem centésimos de grau. É a mesma aproximação dos planetas, que
+   * estão mil vezes mais perto que ele.
+   *
+   * @returns {boolean}
+   */
+  solNaMira(origem, dir) {
+    if (this.solMorto) return false;
+    if (!dir) return false;
+    const n = Math.hypot(dir.x, dir.y, dir.z) || 1;
+    const cos = (dir.x * SOL.dir.x + dir.y * SOL.dir.y + dir.z * SOL.dir.z) / n;
+    return cos >= Math.cos(SOL.raio + (NAMEK.sol.folga * Math.PI) / 180);
+  }
+
+  /** Já explodiu? */
+  get solMorto() {
+    return this.solDano >= 1;
+  }
+
+  /**
+   * Onde pôr o clarão e as fagulhas da explosão dele, em espaço de MUNDO.
+   *
+   * O sol não é um objeto (ver o §1 do cabeçalho: ele é um punhado de contas
+   * dentro do fragmento do domo), então não há uma posição para consultar — o
+   * que existe é uma direção. O ponto é ela vezes uma distância escolhida para
+   * caber no tronco de visão: 3 000 m ficam dentro do `far` da câmera (3 600) e
+   * bem além de tudo o que é sólido no cenário, o que faz o clarão aparecer
+   * ATRÁS de qualquer montanha em vez de dentro dela.
+   */
+  pontoDoSol(out = { x: 0, y: 0, z: 0 }, dist = 3000) {
+    out.x = SOL.dir.x * dist;
+    out.y = SOL.dir.y * dist;
+    out.z = SOL.dir.z * dist;
+    return out;
+  }
+
   aplicar(t) {
     const s = clamp(t, 0, 1);
     this.storm = s;
+    /* ------------------------------------------------------- as DUAS feridas
+     *
+     * `s` é o clima (0 = dia, 1 = planeta indo embora) e `d` é o quanto o sol
+     * apanhou. Os dois andam no MESMO dial e o que vale é o MAIOR dos dois, não
+     * a soma: eles descrevem a mesma coisa (o disco indo para a brasa) por
+     * caminhos diferentes, e somá-los faria o terceiro Kamehameha — que vira
+     * tempestade no mesmo segundo — empurrar o sol para além do fim da escala.
+     *
+     * O máximo também é o que dá a leitura certa na ordem inversa: um sol já
+     * vermelho de dois tiros não CLAREIA quando a tempestade começa. */
+    const d = this.solDano * TINTA_FERIDA;
+    const sol = Math.max(s, d);
 
     const u = this.domoMat.uniforms;
     u.zenith.value.lerpColors(DIA.zenith, TEMPESTADE.zenith, s);
@@ -1084,16 +1240,28 @@ export class NamekSky {
          raio/borda crescem: o disco INCHA 55 % e a borda se desfaz. É o que a
                     fumaça faz com uma fonte pontual, e é o que separa "sol
                     vermelho" de "sol atrás de fumaça".                        */
+    /* Estes DOIS continuam no dial do CLIMA e não no do sol, e a distinção é a
+       diferença entre "o sol está machucado" e "não dá mais para ver o sol":
+       quem fecha o disco e mata o halo é a FUMAÇA, e um sol que apanhou três
+       Kamehamehas num céu limpo continua sendo um disco nítido — vermelho, mas
+       nítido — até a tempestade chegar. */
     u.solBrilho.value = 1 - smoothstep(0.04, 0.42, s);
     u.solDisco.value = 1 - smoothstep(0.4, 0.95, s);
-    u.solCor.value.lerpColors(DIA.solLimbo, TEMPESTADE.solLimbo, s);
-    u.solNucleo.value.lerpColors(DIA.solNucleo, TEMPESTADE.solNucleo, s);
-    u.solHalo.value.lerpColors(DIA.solHalo, TEMPESTADE.solHalo, s);
-    u.solDisp.value.lerpColors(DIA.solDisp, TEMPESTADE.solDisp, s);
-    u.solHoriz.value.lerpColors(DIA.solHoriz, TEMPESTADE.solHoriz, s);
-    u.solForca.value = DIA.solForca + (TEMPESTADE.solForca - DIA.solForca) * s;
-    u.solBorda.value = DIA.solBorda + (TEMPESTADE.solBorda - DIA.solBorda) * s;
-    u.solRaio.value = SOL.raio * (1 + 0.55 * s);
+    /* E estes seguem o dial COMPOSTO: são a cor e a forma do corpo, que é o que
+       a ferida muda. Ver `TINTA_FERIDA`. */
+    u.solCor.value.lerpColors(DIA.solLimbo, TEMPESTADE.solLimbo, sol);
+    u.solNucleo.value.lerpColors(DIA.solNucleo, TEMPESTADE.solNucleo, sol);
+    u.solHalo.value.lerpColors(DIA.solHalo, TEMPESTADE.solHalo, sol);
+    u.solDisp.value.lerpColors(DIA.solDisp, TEMPESTADE.solDisp, sol);
+    u.solHoriz.value.lerpColors(DIA.solHoriz, TEMPESTADE.solHoriz, sol);
+    u.solForca.value = DIA.solForca + (TEMPESTADE.solForca - DIA.solForca) * sol;
+    u.solBorda.value = DIA.solBorda + (TEMPESTADE.solBorda - DIA.solBorda) * sol;
+    /* O disco INCHA por dois motivos somados: a fumaça da tempestade (+55 %) e a
+       ferida (+14 % por Kamehameha). Aqui eles SOMAM em vez de o maior vencer,
+       ao contrário da cor — inchar é acúmulo de causa física, e uma estrela
+       ferida vista através de fumaça está inchada duas vezes. */
+    u.solRaio.value =
+      SOL.raio * (1 + 0.55 * s + INCHA_FERIDA * NAMEK.sol.vidas * this.solDano);
 
     /* A CROMOSFERA caminha junto com o resto e some CEDO, junto com o halo: ela
        é a camada mais fina do corpo e a primeira que a fumaça engole. Ela não
@@ -1104,7 +1272,7 @@ export class NamekSky {
        Saiu com eles; ver o bloco `SOL`, no topo, para o pedido do usuário que
        tirou os dois. O planeta morrendo continua tendo UM foco — só que agora
        ele tem um foco o tempo todo, e não só na tempestade.) */
-    u.solCromo.value.lerpColors(DIA.solCromo, TEMPESTADE.solCromo, s);
+    u.solCromo.value.lerpColors(DIA.solCromo, TEMPESTADE.solCromo, sol);
 
     this.nevoa.color.lerpColors(DIA.nevoa, TEMPESTADE.nevoa, s);
     this.nevoa.density = DIA.nevoaDens + (TEMPESTADE.nevoaDens - DIA.nevoaDens) * s;
@@ -1169,9 +1337,33 @@ export class NamekSky {
       this.flash = Math.max(0, this.flash - dt / NAMEK.weather.tempestade.raioFlash);
     }
     const f = this.flash * this.flash; // decai rápido: descarga não tem cauda longa
-    this.domoMat.uniforms.flash.value = f * 0.85;
-    this.sol.intensity = this.solIntensidade + f * 2.6;
-    this.hemi.intensity = this.hemiIntensidade + f * 1.4;
+
+    /* ------------------------------------------------- O SOL EXPLODINDO ----
+     *
+     * *"No último Kamehameha, depois dos três, ele explode, ativando várias
+     * partículas, pegando fogo em Namekusei."*
+     *
+     * O clarão dele entra pelo MESMO canal do relâmpago — o `flash` do domo e o
+     * salto de intensidade das duas luzes —, e reaproveitá-lo não é economia: é
+     * a única forma honesta de desenhar isto. O sol não é um objeto (§1 do
+     * cabeçalho), então não há uma malha para explodir; o que uma estrela
+     * morrendo faz é lavar o céu inteiro de branco e acender o relevo de baixo,
+     * que é literalmente o que estas três linhas fazem.
+     *
+     * A diferença para o raio é o TEMPO: o relâmpago dura 0,18 s e este dura
+     * `NAMEK.sol.estouro` (6 s), com um decaimento cúbico em vez de quadrático —
+     * ele estoura de uma vez e vai baixando por segundos, que é a leitura de
+     * uma coisa enorme e distante. E é por isso que os dois somam em vez de um
+     * substituir o outro: eles podem acontecer no mesmo quadro (o terceiro
+     * Kamehameha acende a tempestade, e a tempestade tem raios). */
+    if (this.solEstouro > 0) {
+      this.solEstouro = Math.max(0, this.solEstouro - dt / NAMEK.sol.estouro);
+    }
+    const e = this.solEstouro * this.solEstouro * this.solEstouro;
+
+    this.domoMat.uniforms.flash.value = f * 0.85 + e * 0.95;
+    this.sol.intensity = this.solIntensidade + f * 2.6 + e * 3.4;
+    this.hemi.intensity = this.hemiIntensidade + f * 1.4 + e * 2.2;
 
     for (const r of this.raios) {
       if (!r.mesh.visible) continue;

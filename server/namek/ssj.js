@@ -55,6 +55,35 @@ export function freezaEmCampo(sala) {
   return (f.vivo ?? f.alive ?? false) === true;
 }
 
+/**
+ * **O Freeza já foi DERRUBADO nesta partida?**
+ *
+ * A pergunta que destrava a transformação livre — *"após destruir o Freeza, o
+ * Goku pode voltar a ser Super Saiyajin sempre que ele quiser… mas o Freeza tem
+ * que estar morto"* —, e ela não é o contrário de `freezaEmCampo`: fora de campo
+ * ele pode estar por nunca ter entrado, ou por ter sido RETIRADO (o clima
+ * voltando para `dia` chama `sair()`, que não é morte). Só a queda conta.
+ *
+ * Quem guarda a marca é o boss (`NamekFreeza.derrotado`) e não este arquivo, pelo
+ * mesmo motivo de sempre: é ele que sabe a diferença entre morrer e sair, e essa
+ * diferença é a regra inteira. Lida com `?.` e com padrão conservador, como todo
+ * o resto deste módulo — sem boss instalado, ninguém derrotou ninguém.
+ */
+export function freezaDerrotado(sala) {
+  return sala?.freeza?.derrotado === true;
+}
+
+/**
+ * A transformação está LIVRE — sem limiar de vida, sem chefe em campo?
+ *
+ * Uma função porque a mesma composição de duas chaves e um estado é feita em
+ * três lugares (`podeAcender`, `manutencao` e a resposta ao `welcome`), e três
+ * cópias de um `&&` é onde uma delas fica para trás.
+ */
+export function transformacaoLivre(sala) {
+  return NAMEK.ssj.livreAposOFreeza === true && freezaDerrotado(sala);
+}
+
 /* ============================================================== a economia == */
 
 /** Está transformado? Uma função e não `f.ssj === true` espalhado por aí: é o
@@ -192,11 +221,26 @@ export function resistenciaAoFreeza(vitima) {
  * • o Freeza em campo, enquanto `NAMEK.ssj.exigeFreeza` estiver ligado;
  * • vida ≤ 30 % do teto BASE. Contra o teto base e não contra `vidaMaxima(f)`
  *   porque quem ainda não se transformou tem teto 100 por definição.
+ *
+ * ------------------------------------------- E DEPOIS QUE O CHEFE CAI, NENHUMA
+ *
+ * As duas últimas somem no instante em que o Freeza é derrubado — é o
+ * `NAMEK.ssj.livreAposOFreeza`, e o pedido é literal: *"após destruir o Freeza,
+ * ele pode virar Super Saiyajin sempre que ele quiser, não precisa mais estar
+ * com aquele volume de vida específico… se ele morrer e voltar, mas o Freeza tem
+ * que estar morto."*
+ *
+ * As DUAS primeiras continuam valendo, e continuam por serem de outra natureza:
+ * elas não perguntam se ele merece a transformação, perguntam se o corpo está em
+ * condição de fazer o gesto. Um cadáver e um corpo caído no chão não gritam.
  */
 export function podeAcender(sala, f) {
   if (!f?.alive) return false;
   if (ativo(f)) return false;
   if (sala?.atordoado?.(f)) return false;
+  /* A CONQUISTA. Uma linha, e ela responde por Namekusei e pelo espaço de uma
+     vez — a pergunta é sobre o BOSS, não sobre onde o lutador está. */
+  if (transformacaoLivre(sala)) return true;
   if (NAMEK.ssj.exigeFreeza && !freezaEmCampo(sala)) return false;
   return f.health <= NAMEK.fighter.maxHealth * NAMEK.ssj.gatilho;
 }
@@ -212,8 +256,13 @@ export function podeAcender(sala, f) {
  *    como um instante e não como um contador porque é assim que a sala já
  *    guarda a invulnerabilidade de nascimento (`invulnUntil`), e um segundo
  *    formato para a mesma ideia seria um segundo lugar para errar;
- * 3. a VIDA ganha o bônus — no teto E na vida atual. Ver o §"a vida no INSTANTE
- *    da virada" em `NAMEK.ssj`.
+ * 3. a VIDA VAI AO TETO NOVO. *"Quando o player vira Super Saiyajin, toda a vida
+ *    dele é recuperada."* São 220 cheios (`vidaMaxima`), e não mais os 30 + 120
+ *    da regra antiga — ver `NAMEK.ssj.curaTotal`, que tem o argumento.
+ *
+ *    A chave existe porque a regra anterior ("soma o bônus na vida atual") tinha
+ *    um motivo próprio e bem escrito, e apagá-la sem deixar o interruptor
+ *    apagaria também a possibilidade de voltar atrás numa linha.
  *
  * O ki NÃO é enchido. A transformação não é um prêmio de recurso: ela muda o
  * preço das coisas, e encher a barra por cima disso daria três especiais de
@@ -224,7 +273,9 @@ export function acender(sala, f) {
   const agora = sala.now();
   f.ssj = true;
   f.ssjAte = agora + NAMEK.ssj.duracao * 1000;
-  f.health = Math.min(vidaMaxima(f), f.health + NAMEK.ssj.vidaBonus);
+  f.health = NAMEK.ssj.curaTotal
+    ? vidaMaxima(f)
+    : Math.min(vidaMaxima(f), f.health + NAMEK.ssj.vidaBonus);
 
   sala.broadcastAll({
     t: NS2C.SSJ_ON,
@@ -297,6 +348,22 @@ export function pedir(sala, f) {
 export function manutencao(sala) {
   if (!NAMEK.ssj.exigeFreeza) return;
   if (freezaEmCampo(sala)) return;
+  /* **ELE CAIU: A TRANSFORMAÇÃO FICA.** É a inversão que `livreAposOFreeza`
+   * traz, e ela desmenta de propósito o §"quando ela ACABA" de `NAMEK.ssj`, que
+   * dizia "até morrer, ou até o Freeza cair".
+   *
+   * A metade do argumento que morreu era a de que o fim pelo Freeza é "de graça"
+   * — a batalha acabou, ninguém está atirando, a barra volta ao normal sem
+   * custar nada. A metade que continua viva é a outra: a poda de vida (o teto
+   * caindo de 220 para 100) só é aceitável num instante em que ninguém está
+   * atirando. Só que agora existe jogo DEPOIS da queda dele — a contagem do
+   * planeta, a fuga e a briga no espaço —, e apagar a transformação no começo
+   * desse trecho é justamente o oposto do que o pedido descreve.
+   *
+   * Sobra, portanto, um caminho só para desligar: a MORTE (`NamekRoom.matar` →
+   * `apagar`), que já devolve vida e ki cheios e não precisa de poda nenhuma.
+   * E logo depois dela a tecla está livre outra vez, que é o pedido inteiro. */
+  if (transformacaoLivre(sala)) return;
   for (const f of sala.todos()) {
     if (ativo(f)) apagar(sala, f);
   }

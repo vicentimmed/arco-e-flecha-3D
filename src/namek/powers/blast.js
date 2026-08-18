@@ -125,6 +125,26 @@ const TINTA_ALHEIA = [1.0, 0.9, 0.82];
  * são 600, e 600 vezes a diferença é meio milissegundo de quadro comprado de
  * volta por uma linha.
  */
+/* ------------------------------------------------- a perseguição no BOSS ----
+ *
+ * Contra o Freeza a bola de ki persegue mais, e as três constantes abaixo são
+ * essa exceção pré-calculada. Ver `perseguir`, e `NAMEK.blast.homing.ganhoNoFreeza`
+ * para a conta que escolheu o fator e para por que ele não é o 40 % pedido.
+ *
+ * Elas são resolvidas na CARGA DO MÓDULO e não por quadro pelo mesmo motivo que
+ * `cosCone` já é resolvido uma vez por `update` em vez de uma vez por bola: um
+ * `Math.cos` a cada bola viva a cada quadro são milhares de chamadas por segundo
+ * para devolver sempre o mesmo número.
+ *
+ * `ID_FREEZA` é lido do config e não escrito à mão pela razão de sempre: ele é o
+ * mesmo id negativo que o boss usa para entrar na lista de alvos, e um segundo
+ * literal aqui seria a primeira coisa a sair de sincronia se ele mudasse. */
+const ID_FREEZA = NAMEK.freeza.id;
+const GANHO_NO_FREEZA = NAMEK.blast.homing.ganhoNoFreeza ?? 1;
+const COS_CONE_BOSS = Math.cos(
+  (NAMEK.blast.homing.cone * GANHO_NO_FREEZA * Math.PI) / 180,
+);
+
 const comp = (x, y, z) => Math.sqrt(x * x + y * y + z * z);
 
 /* ------------------------------------------------------------- rascunhos ----
@@ -577,6 +597,32 @@ export class BlastPool {
     tx /= dist;
     ty /= dist;
     tz /= dist;
+
+    /* ================================ E MAIS UM TANTO CONTRA O FREEZA ======
+     *
+     * *"Contra o Freeza, os poderes rápidos têm mais perseguição — mas não deve
+     * ficar impossível para ele desviar."*
+     *
+     * O ganho multiplica as DUAS travas juntas, e ter de ser as duas é a regra
+     * que este arquivo já documenta em dois lugares: `turnRate × duration` (a
+     * correção total) precisa caber dentro do `cone`. Multiplicar só o giro
+     * devolveria o defeito de origem — todo alvo dentro do cone virando acerto
+     * garantido, e o cone deixando de limitar coisa alguma.
+     *
+     * O fator, a conta que o escolheu e o porquê de ele não ser os 40 % pedidos
+     * estão em `NAMEK.blast.homing.ganhoNoFreeza`. Em uma linha: 1,15 é o maior
+     * valor que ainda deixa o boss vencer a corrida angular com o arranque
+     * dentro dos 50 m em que uma bola pode travá-lo.
+     *
+     * É lido do ALVO travado e não de uma bandeira no disparo, e isso importa:
+     * a trava viaja na mensagem (`NC2S.BLAST.target`), então a bola de um bot,
+     * a de um jogador remoto e a minha perseguem o boss exatamente igual em
+     * todas as telas — sem um campo novo no protocolo. */
+    const contraOBoss = idAlvo === ID_FREEZA;
+    if (contraOBoss) {
+      cosCone = COS_CONE_BOSS;
+      giroMax *= GANHO_NO_FREEZA;
+    }
 
     const dx = this.dir[i3];
     const dy = this.dir[i3 + 1];

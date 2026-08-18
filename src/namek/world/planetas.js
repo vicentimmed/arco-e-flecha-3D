@@ -135,8 +135,41 @@ const SEG_V = 28;
  * a posição não é estética: desenhados depois das nuvens, eles apareceriam por
  * cima da camada de tempestade — um corpo celeste na frente da nuvem que
  * deveria estar cobrindo ele. Antes, a nuvem (transparente, desenhada depois)
- * borra por cima dele, que é o que uma nuvem faz. */
-const ORDEM = -950;
+ * borra por cima dele, que é o que uma nuvem faz.
+ *
+ * ------------------------------------------- e por que o CORPO saiu de −950
+ *
+ * O raciocínio acima continua inteiro para o HALO, que é transparente. Para o
+ * corpo — que é OPACO e escreve profundidade — ele custava caro e não comprava
+ * nada, porque o three.js mantém DUAS filas: tudo o que é opaco desenha antes
+ * de qualquer coisa transparente, e `renderOrder` só ordena DENTRO da fila. A
+ * nuvem (`transparent: true`) passaria por cima do planeta mesmo que ele fosse
+ * o último opaco do quadro.
+ *
+ * O que −950 fazia, então, era só uma coisa: mandar sombrear os dois discos
+ * ANTES do relevo. Cada um deles ocupa 16° de céu (~200 k fragmentos a 1080p
+ * com `devicePixelRatio` 2) e o fragmento deles é o mais caro do modo depois do
+ * sol — 27 células de ruído celular por oitava, duas oitavas, mais três oitavas
+ * de ruído de valor: ~54 hashes por pixel. Com o buraco de profundidade vazio,
+ * TODOS esses pixels eram sombreados, e o anel de montanhas (que fica na frente
+ * deles em boa parte do campo de visão) os apagava logo em seguida.
+ *
+ * Desenhados DEPOIS do mundo opaco, o teste de profundidade descarta esses
+ * mesmos pixels antes de o fragmento rodar. A imagem é idêntica em todo pixel
+ * — quem estava na frente continua na frente, é o mesmo teste de profundidade
+ * decidindo —, e o que se deixa de pagar é o sombreamento do que já ia ser
+ * coberto. Contra o céu aberto (voando alto) nada muda, nem para melhor nem
+ * para pior: lá não há o que os cubra e eles custam o mesmo de sempre.
+ *
+ * `+950` e não `0` para eles ficarem depois do relevo, do cenário e do mato,
+ * que são os grandes ocultadores; o número exato é indiferente desde que seja
+ * maior que o 0 do resto do mundo. */
+const ORDEM_CORPO = 950;
+/* O HALO fica onde sempre esteve, e é a metade do comentário acima que continua
+   valendo palavra por palavra: ele é transparente, e na fila dos transparentes
+   a nuvem de tempestade (−900) tem de vir DEPOIS dele. Um halo em +952 seria um
+   clarão de detonação por cima da nuvem que devia estar encobrindo o planeta. */
+const ORDEM_HALO = -948;
 
 /* ------------------------------------------------------------------- shaders */
 
@@ -521,7 +554,10 @@ export class NamekPlanetas {
        frustum aqui só produziria pedaços sumindo na borda da tela. */
     this.cacos.frustumCulled = false;
     this.cacos.visible = false;
-    this.cacos.renderOrder = ORDEM + 1;
+    /* Os cacos são opacos como o corpo de que saíram, e acompanham a mudança
+       pelo mesmo motivo: eles nascem no lugar exato onde o planeta estava, ou
+       seja, atrás do mesmo anel de montanhas. */
+    this.cacos.renderOrder = ORDEM_CORPO + 1;
     this.root.add(this.cacos);
 
     /* TODA vaga nasce com escala zero, inclusive as do planeta que ainda está
@@ -588,7 +624,7 @@ export class NamekPlanetas {
       const malha = new THREE.Mesh(geo, mat);
       malha.name = `namek-planeta-${def.id}`;
       malha.scale.setScalar(def.raio);
-      malha.renderOrder = ORDEM;
+      malha.renderOrder = ORDEM_CORPO;
       pivo.add(malha);
       this.root.add(pivo);
 
@@ -611,7 +647,7 @@ export class NamekPlanetas {
       );
       halo.name = `namek-planeta-halo-${def.id}`;
       halo.visible = false;
-      halo.renderOrder = ORDEM + 2;
+      halo.renderOrder = ORDEM_HALO;
       this.root.add(halo);
 
       this.corpos.push({

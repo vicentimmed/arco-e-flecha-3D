@@ -86,9 +86,37 @@ import { Aura } from "../character/index.js";
    grande, pernas curtas e grossas, ombros muito largos por causa da carapaça,
    cabeça pequena. É a silhueta que faz o corpo ser lido como "outra espécie"
    antes de qualquer detalhe aparecer. */
+/* ============================================================== A ESCALA ====
+
+   **O boneco é montado em 2,24 m e depois CRESCE.** É o pedido do triplo de
+   tamanho (*"o personagem do Freeza deve ser bem maior, ele deve ser o triplo do
+   tamanho que ele é"*), e a forma como ele foi atendido merece estar escrita
+   porque a alternativa óbvia é uma armadilha.
+
+   A alternativa óbvia seria multiplicar cada número de `OSSO` por três. Ela
+   está errada por dois motivos: os números deste arquivo não são só o
+   esqueleto — há dezenas de literais soltos ao longo da montagem (o raio de cada
+   dedo, a espessura da braçadeira, a abertura do capacete, o perfil de cada
+   torneado) —, e a `Aura` reaproveitada dos lutadores tem um `PIVO` constante,
+   calibrado para um corpo de 1,78 m, que não faz ideia de nada disso.
+
+   O que se faz é o oposto: **a antropometria não muda**, e a RAIZ inteira é
+   escalada uma vez. Com isso todo literal do arquivo — inclusive os que
+   ninguém lembra que existem — cresce junto e de graça, a aura continua
+   funcionando na escala que ela conhece (o grupo dela é filho da raiz), e a
+   única coisa que precisa saber do assunto é `pontoDaMao`, que já lê posição de
+   MUNDO e portanto já vem escalada.
+
+   `alturaBase` é a régua e mora no config junto com `altura` justamente para
+   este quociente existir: quem mexer na escala mexe em um número, e o servidor
+   faz a mesma divisão para escalar o ombro de onde os golpes saem (ver
+   `NamekFreeza.maoEm`). */
+const ESCALA = NAMEK.freeza.altura / (NAMEK.freeza.alturaBase || NAMEK.freeza.altura);
+
 const OSSO = {
-  /** m — do pé ao topo do capacete. O mesmo de `NAMEK.freeza.altura`. */
-  altura: NAMEK.freeza.altura,
+  /** m — do pé ao topo do capacete, **na escala de montagem**. É
+   *  `NAMEK.freeza.alturaBase`, e não `altura`: quem cresce é a raiz. */
+  altura: NAMEK.freeza.alturaBase ?? NAMEK.freeza.altura,
   quadrilY: 0.96,
   cinturaY: 1.12,
   peitoY: 1.44,
@@ -116,7 +144,10 @@ const OSSO = {
  *  lisos e custariam um terço a mais de chamadas de desenho por uma diferença
  *  que só aparece a cinco metros. */
 const CAUDA_ELOS = 9;
-const CAUDA_COMP = NAMEK.freeza.cauda;
+/** Na escala de MONTAGEM, como todo o resto do `OSSO` — a raiz é que cresce.
+ *  Ver `ESCALA`: dividir aqui é o que mantém a cauda proporcional ao corpo em
+ *  qualquer escala, sem um segundo lugar para errar. */
+const CAUDA_COMP = NAMEK.freeza.cauda / ESCALA;
 
 /* Distâncias (m) de corte do detalhe. Os mesmos 12 e 40 do `rig.js`, e pela
    mesma aritmética: a 12 m uma íris tem meio pixel e a 40 m um dedo tem menos
@@ -209,6 +240,28 @@ const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const _s = new THREE.Vector3(1, 1, 1);
 
+/* Rascunhos DA MORTE, separados dos quatro de cima porque aqueles rodam só na
+   montagem (`em`) e estes rodam por quadro durante a cena. Dois bancos em vez de
+   um é o que impede alguém, um dia, de chamar `em()` no laço e descobrir que ele
+   reescreve o quaternion que os raios estavam usando. */
+const _m4 = new THREE.Matrix4();
+const _q2 = new THREE.Quaternion();
+const _s2 = new THREE.Vector3(1, 1, 1);
+const _corMorte = new THREE.Color();
+/** O eixo de nascimento de uma lasca de raio: a `ConeGeometry` cresce em +Y. */
+const _UP_RAIO = new THREE.Vector3(0, 1, 0);
+
+/** Clareia 0xRRGGBB em direção ao branco. Os raios são a cor DELE lavada — roxo
+ *  puro sobre um corpo roxo aceso não se vê, e é a mesma razão pela qual a
+ *  fagulha de acerto é clareada em `boss/index.js`. */
+function clarearCor(cor, k) {
+  const n = cor >>> 0;
+  const r = Math.round(((n >> 16) & 255) + (255 - ((n >> 16) & 255)) * k);
+  const g = Math.round(((n >> 8) & 255) + (255 - ((n >> 8) & 255)) * k);
+  const b = Math.round((n & 255) + (255 - (n & 255)) * k);
+  return (r << 16) | (g << 8) | b;
+}
+
 /** Matriz de posição/rotação/escala para uma peça a fundir. Aloca, e pode: roda
  *  uma vez na montagem, nunca dentro do laço de quadro (§3 do plano). */
 function em(x, y, z, rx = 0, ry = 0, rz = 0, s = 1) {
@@ -292,6 +345,21 @@ export const POSE = {
   esfera: 4,
   onda: 5,
   dor: 6,
+  /* **A MORTE, e ela é a única pose que a sala NÃO manda.**
+   *
+   * As sete de cima são um índice cru na rede e a tabela é espelho da do
+   * servidor (`POSE`, em `server/namek/freeza.js`); esta é a oitava e ela nasce
+   * aqui, escrita pelo próprio corpo quando `morrer()` é chamado. A distinção
+   * importa e é o motivo de ela poder existir sem tocar no protocolo: quando o
+   * boss morre a sala PARA de mandar pose (`NamekFreeza.passo` sai na primeira
+   * linha com ele morto), então não há nada com que discordar — o que sobra na
+   * tela é uma animação local de cinco segundos, igual em todas as telas porque
+   * todas receberam o mesmo `FREEZA_DOWN` com o mesmo carimbo.
+   *
+   * Acrescentá-la no FIM da lista é o que mantém os sete índices anteriores
+   * intactos: eles são números na rede, e renumerá-los trocaria o Death Beam
+   * pela Death Ball em qualquer cliente de uma versão diferente. */
+  morte: 7,
 };
 
 export class FreezaBody {
@@ -302,6 +370,13 @@ export class FreezaBody {
     this.raiz = new THREE.Group();
     this.raiz.name = "namek:freeza";
     this.raiz.visible = false;
+    /* **AQUI O BONECO CRESCE.** Uma linha para o corpo inteiro — osso, casca,
+       dedos, cauda e aura —, e ver `ESCALA`, no topo, para por que ela é uma
+       linha e não cinquenta multiplicações. As distâncias de LOD são medidas em
+       espaço de mundo (`raiz.position.distanceTo`), então elas continuam
+       corretas sem tocar em nada: um corpo três vezes maior aos 40 m ocupa três
+       vezes mais tela, e é isso que se quer — o detalhe some mais tarde. */
+    this.raiz.scale.setScalar(ESCALA);
     pai.add(this.raiz);
 
     /* O PIVÔ DE INCLINAÇÃO. O corpo inteiro arfa e rola em torno do centro de
@@ -357,7 +432,7 @@ export class FreezaBody {
     /** 0…1 — o quanto a pose corrente está aplicada. Toda troca de pose é
      *  AMORTECIDA: o que faz parecer animação de verdade não é a quantidade de
      *  poses, é a interpolação entre elas nunca ser instantânea (§10 do plano). */
-    this._peso = new Float32Array(7);
+    this._peso = new Float32Array(8);
     this._peso[POSE.parado] = 1;
     this._poseAtual = POSE.parado;
     this._fracao = 0;
@@ -695,31 +770,84 @@ export class FreezaBody {
     this.raiz.visible = true;
   }
 
-  /** Ele caiu: o corpo tomba e apaga. Um relógio só, lido em `update`. */
+  /**
+   * **ELE CAIU** — e o corpo entra na cena de morte. Um relógio só, lido em
+   * `atualizarMorte`.
+   *
+   * *"Quando o Freeza é derrotado, a câmera vai para ele antes de ele sair de
+   * cena. Aparece ele com a cabeça erguida, com os braços esticados e as pernas
+   * esticadas. Ele começa a sair raios dele e luzes, e ele explode."*
+   *
+   * O que havia aqui era um TOMBO: o corpo girava em `z`, afundava catorze
+   * metros por segundo e sumia em 2,6 s. Ele descrevia a coisa errada — um corpo
+   * que tomba é um corpo que foi desligado, e o que o pedido descreve é um corpo
+   * que arrebenta de dentro para fora.
+   *
+   * O relógio corre em `atualizarMorte`, que é onde as duas fases estão
+   * escritas. `NAMEK.freeza.fim` tem os segundos.
+   */
   morrer() {
     this._morto = 0.0001;
+    this._poseAtual = POSE.morte;
+    this._fracao = 0;
+    /* A aura VAI AO TALO em vez de apagar. Ela era zerada por
+       `atualizarAura` durante o tombo (`_morto > 0 ? 0 : …`) — o corpo apagava
+       enquanto caía, que é a leitura certa de um tombo e a errada de uma
+       explosão. Agora ela é o próprio golpe: ver `atualizarAura`. */
+    this.raiz.rotation.z = 0;
+    if (this.raios) this.raios.visible = true;
   }
 
   reviver() {
     this._morto = 0;
     this.raiz.rotation.z = 0;
     this.raiz.visible = true;
+    this._poseAtual = POSE.parado;
+    if (this.raios) this.raios.visible = false;
+    for (const m of Object.values(this.mat)) m.emissive?.setHex?.(0x000000);
   }
 
   esconder() {
     this.raiz.visible = false;
   }
 
-  /** Está no meio do tombo? Quem chama precisa saber que o corpo ainda tem o
-   *  que desenhar depois de o boss já não estar mais em campo. */
+  /** Está no meio da cena de morte? Quem chama precisa saber que o corpo ainda
+   *  tem o que desenhar depois de o boss já não estar mais em campo. Ela
+   *  continua verdadeira durante a DISSIPAÇÃO, quando já não há corpo nenhum:
+   *  é ela que segura a câmera cinemática em cima da explosão. */
   get caindo() {
-    return this._morto > 0;
+    const F = NAMEK.freeza.fim;
+    return this._morto > 0 && this._morto < F.abertura + F.dissipar;
+  }
+
+  /** s desde o começo da cena de morte. A câmera cinemática lê isto. */
+  get tempoDeMorte() {
+    return this._morto;
+  }
+
+  /** Já estourou? (o corpo sumiu, a poeira ainda não) */
+  get estourou() {
+    return this._morto >= NAMEK.freeza.fim.abertura;
   }
 
   /* ================================================================ o quadro */
 
   update(dt, cameraPos) {
-    if (!this.raiz.visible) return;
+    /* **O RELÓGIO DA MORTE CORRE MESMO COM O CORPO INVISÍVEL**, e esta é a única
+     * razão de ele estar acima da guarda de visibilidade.
+     *
+     * Depois do estouro não há mais boneco — `atualizarMorte` apagou a raiz —,
+     * mas a cena não acabou: faltam os segundos de dissipação, e é o avanço
+     * deste contador que faz `caindo` virar falso no fim deles. Com a guarda
+     * antes, o contador congelava no instante do estouro e a cena de morte não
+     * terminaria nunca: a câmera cinemática ficaria presa numa explosão que já
+     * apagou, para sempre. */
+    if (this._morto > 0) {
+      this.atualizarMorte(dt);
+      if (!this.raiz.visible) return;
+    } else if (!this.raiz.visible) {
+      return;
+    }
     this._t += dt;
 
     /* --------------------------------------------------------- a mistura ---
@@ -738,7 +866,6 @@ export class FreezaBody {
 
     this.posar(dt);
     this.animarCauda(dt);
-    this.atualizarMorte(dt);
     this.atualizarDetalhe(cameraPos);
     this.atualizarAura(dt, cameraPos);
   }
@@ -863,6 +990,40 @@ export class FreezaBody {
     ombroZdir += w6 * -0.2;
     cabeca += w6 * 0.4;
 
+    /* ---- MORTE: o corpo ABERTO ----------------------------------------- *
+     *
+     * *"Aparece ele com a cabeça erguida, com os braços esticados e as pernas
+     * esticadas."*
+     *
+     * É o oposto exato da pose de dor, e a oposição é deliberada: a dor encolhe
+     * (tronco à frente, ombros para dentro, cabeça baixa) e esta ABRE. O que se
+     * lê nisso não é sofrimento, é a energia saindo — o corpo já não está sendo
+     * controlado por ninguém, está sendo esvaziado.
+     *
+     * Os quatro membros vão para o mesmo lugar: braços em cruz e um pouco acima
+     * da horizontal (`ombroZ` grande, `ombroX` negativo), cotovelos e joelhos em
+     * ZERO (é o "esticados" literal — todas as outras sete poses têm alguma
+     * dobra), pernas juntas e para baixo, tronco arqueado para trás e a cabeça
+     * jogada para o céu.
+     *
+     * O `w7` chega a 1 em cerca de um quinto de segundo pela mistura de sempre,
+     * então a passagem da última pose para esta é uma abertura visível e não um
+     * corte — que é o que dá a ela o peso de um fim. */
+    const w7 = p[POSE.morte];
+    ombroX += w7 * -0.34;
+    ombroXdir += w7 * -0.34;
+    ombroZ += w7 * 1.62;
+    ombroZdir += w7 * 1.62;
+    /* **`cotovelo` e `joelho` NÃO recebem nada, e a ausência é a pose.** Zero é
+       o membro reto, e as outras sete poses todas dobram alguma coisa — a de
+       parado dobra o cotovelo em 0,34 e o joelho em −0,5. Somar um zero
+       explícito aqui seria escrever uma linha que não faz nada; o que faz a
+       perna e o braço esticarem é justamente o peso das outras caindo a zero
+       enquanto este sobe a 1. */
+    quadril += w7 * 0.14;
+    tronco += w7 * -0.42;
+    cabeca += w7 * -0.9;
+
     /* ------------------------------------------------------- e a escrita -- */
     const be = this.bracos[0];
     const bd = this.bracos[1];
@@ -916,14 +1077,143 @@ export class FreezaBody {
     }
   }
 
-  /** O tombo. Ele cai girando, apaga e some — a barra do HUD conta o resto. */
+  /**
+   * A MORTE, em duas fases — e a segunda é o corpo já não existir.
+   *
+   *   0 … `fim.abertura`   ele abre, sobe, acende e os raios crescem
+   *   `fim.abertura`       o corpo SOME. Este é o instante do estouro; quem
+   *                        desenha a explosão é `BossSystem.cair`, com o pool de
+   *                        efeitos, porque uma explosão daquele tamanho não é
+   *                        assunto de um corpo articulado
+   *   … `+ fim.dissipar`   nada aqui: a poeira é do `fx`, e o que este relógio
+   *                        continua fazendo é segurar o `caindo` (é ele que diz
+   *                        a quem chama que a cena ainda não acabou)
+   *
+   * A SUBIDA é o detalhe que faz a pose ler como morte e não como pose: 40 % da
+   * altura dele em 2,4 s, desacelerando. Um corpo que abre os braços PARADO no
+   * ar lê como quem está se preparando para atacar; um que abre os braços
+   * subindo devagar lê como quem já não decide para onde vai.
+   */
   atualizarMorte(dt) {
     if (this._morto <= 0) return;
+    const F = NAMEK.freeza.fim;
+    const antes = this._morto;
     this._morto += dt;
-    const u = Math.min(1, this._morto / 2.6);
-    this.raiz.rotation.z = u * 1.5;
-    this.raiz.position.y -= dt * 14 * u;
-    if (u >= 1) this.raiz.visible = false;
+    const u = Math.min(1, this._morto / Math.max(0.05, F.abertura));
+
+    if (this._morto < F.abertura) {
+      /* `Math.sqrt` na subida: rápido no começo e freando no fim, que é a curva
+         de uma coisa lançada para cima. Escrito como DELTA e não como posição
+         absoluta porque a raiz continua sendo escrita por `aplicar` a partir da
+         última pose que a sala mandou — somar é o que sobrevive a isso. */
+      const antesU = Math.min(1, antes / Math.max(0.05, F.abertura));
+      this.raiz.position.y += (Math.sqrt(u) - Math.sqrt(antesU)) * NAMEK.freeza.altura * 0.4;
+      this.atualizarRaios(dt, u);
+      /* O CORPO ACENDE. `emissive` e não uma luz: uma luz a mais é a terceira do
+         cenário inteiro (ver o §3 de `world/sky.js`), e o que se quer aqui é a
+         PELE brilhando de dentro — que é exatamente o que emissivo faz e uma luz
+         externa não faria. Ela sobe com `u²` para o clarão acontecer no último
+         terço, junto com os raios no talo. */
+      const brilho = u * u;
+      _corMorte.setHex(NAMEK.freeza.cor).multiplyScalar(brilho * 1.4);
+      for (const m of Object.values(this.mat)) {
+        if (m.emissive) m.emissive.copy(_corMorte);
+      }
+      return;
+    }
+
+    /* O ESTOURO. O corpo some inteiro no mesmo quadro — não há corpo caindo
+       depois de uma explosão, e um cadáver descendo por trás da bola de fogo
+       seria a única coisa da cena que contaria outra história. */
+    if (this.raiz.visible) {
+      this.raiz.visible = false;
+      if (this.raios) this.raios.visible = false;
+      for (const m of Object.values(this.mat)) m.emissive?.setHex?.(0x000000);
+    }
+  }
+
+  /**
+   * OS RAIOS que saem do corpo — *"ele começa a sair raios dele e luzes"*.
+   *
+   * Uma `InstancedMesh` só, montada preguiçosamente no primeiro tombo: o boss
+   * morre uma vez por partida e não há por que carregar dezoito matrizes de
+   * lasca durante os cem segundos de briga. Ela é filha da RAIZ, então ela
+   * cresce com a escala do corpo e acompanha a posição dele de graça.
+   *
+   * Cada raio é uma lasca fina apontando para fora a partir do peito, distribuída
+   * pela espiral de Fibonacci — que é o jeito barato de espalhar N direções numa
+   * esfera sem elas se alinharem em anéis, e o mesmo truque que a `Aura` já usa.
+   * Elas ESTICAM com o tempo (a lasca cresce em comprimento, não em grossura) e
+   * giram devagar em torno do próprio eixo de nascimento.
+   *
+   * Aditiva e sem escrita de profundidade porque é luz, não matéria: os raios
+   * atravessam o corpo e um ao outro, que é o que separa "energia saindo" de
+   * "espetos cravados".
+   */
+  atualizarRaios(dt, u) {
+    if (!this.raios) this.montarRaios();
+    const n = this.raios.count;
+    const comp = 1 + u * u * 9;
+    this._giroRaios += dt * 1.6;
+    for (let i = 0; i < n; i++) {
+      const d = this._dirRaios[i];
+      _v.set(d.x, d.y, d.z);
+      /* A lasca nasce em +Y por construção (é uma `ConeGeometry` deitada), então
+         orientá-la é levar +Y até a direção sorteada. `setFromUnitVectors` já
+         resolve o caso antiparalelo, que aqui acontece uma vez em dezoito. */
+      _q.setFromUnitVectors(_UP_RAIO, _v);
+      /* O giro em torno do próprio eixo, para as lascas não parecerem coladas. */
+      _q2.setFromAxisAngle(_v, this._giroRaios + i);
+      _q.premultiply(_q2);
+      /* Elas saem do PEITO, e o pé de cada uma fica um pouco para dentro do
+         corpo: uma lasca que começa exatamente na pele deixa uma emenda visível
+         de onde a luz "nasce", e o que se quer é ela vindo de dentro. */
+      _v.multiplyScalar(OSSO.peitoY * 0.3);
+      _v.y += OSSO.peitoY;
+      _s2.set(1, comp, 1);
+      _m4.compose(_v, _q, _s2);
+      this.raios.setMatrixAt(i, _m4);
+    }
+    this.raios.instanceMatrix.needsUpdate = true;
+    this.raiosMat.opacity = Math.min(1, 0.25 + u * 0.9);
+  }
+
+  montarRaios() {
+    const N = Math.max(0, NAMEK.freeza.fim.raios | 0);
+    /* Cone de base larguinha e altura 1: a escala em Y é o comprimento, e as
+       outras duas ficam em 1 — é isso que faz o raio ESTICAR em vez de inflar.
+       Seis lados bastam: a lasca tem dois pixels de grossura na tela. */
+    const geo = new THREE.ConeGeometry(OSSO.cabecaR * 0.16, 1, 6, 1, true);
+    geo.translate(0, 0.5, 0);
+    this._geos.push(geo);
+    this.raiosMat = new THREE.MeshBasicMaterial({
+      color: clarearCor(NAMEK.freeza.cor, 0.55),
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    this.raios = new THREE.InstancedMesh(geo, this.raiosMat, Math.max(1, N));
+    this.raios.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.raios.frustumCulled = false;
+    this.raios.renderOrder = 8;
+    this.raiz.add(this.raios);
+
+    /* As direções, pela espiral de Fibonacci — N pontos espalhados numa esfera
+       sem se alinharem em anéis. Calculadas UMA vez e guardadas: elas não mudam,
+       e recomputá-las por quadro seria dezoito raízes e dezoito trigonometrias
+       para chegar sempre no mesmo lugar. */
+    this._dirRaios = [];
+    const dourado = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < N; i++) {
+      const y = 1 - (i / Math.max(1, N - 1)) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const a = dourado * i;
+      this._dirRaios.push({ x: Math.cos(a) * r, y, z: Math.sin(a) * r });
+    }
+    this._giroRaios = 0;
   }
 
   /**
@@ -956,7 +1246,18 @@ export class FreezaBody {
 
   /** A aura, com o contexto que a `Aura` dos lutadores espera. */
   atualizarAura(dt, cameraPos) {
-    _ctxAura.intensidade = this._morto > 0 ? 0 : this._auraForca;
+    /* **NA MORTE ELA VAI AO TALO**, e não a zero — que é o que ela fazia no
+       tombo antigo. Um corpo que apaga enquanto cai é a leitura de um
+       desligamento; o que o pedido descreve é o contrário, energia saindo dele
+       até ele não aguentar. A aura acompanha os raios (`u²`, o mesmo clarão no
+       último terço) e some junto com o corpo no instante do estouro. */
+    if (this._morto > 0) {
+      const F = NAMEK.freeza.fim;
+      const u = Math.min(1, this._morto / Math.max(0.05, F.abertura));
+      _ctxAura.intensidade = this._morto >= F.abertura ? 0 : 0.6 + u * u * 0.9;
+    } else {
+      _ctxAura.intensidade = this._auraForca;
+    }
     _ctxAura.voo = 1;
     _ctxAura.rapidez = this._rapidez;
     _vel.set(0, 0, 0);

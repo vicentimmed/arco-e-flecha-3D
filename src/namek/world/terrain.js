@@ -1006,7 +1006,15 @@ export class NamekTerrain {
               * preta que ninguém liga a este trecho. */
              float aoSol = max(dot(normalize(vMundoChao - cameraPosition), normalize(solDirMundo)), 0.0);
              vec3 bruma = mix(brumaDia, brumaBrasa, storm);
-             gl_FragColor.rgb += bruma * (pow(aoSol, 3.0) * fogFactor * mix(0.62, 0.20, storm));
+             /* 'aoSol' ao cubo escrito como duas multiplicações e não como
+                'pow': com expoente inteiro e base garantidamente >= 0 (o 'max'
+                acima), o valor é o mesmo e o que se deixa de pagar é um
+                'exp2'/'log2' por pixel de terreno — a superfície de maior área
+                da tela. O mesmo trecho existe em 'water.js' e mudou junto,
+                porque a montanha e o mar se encontram numa linha e dois
+                cálculos diferentes apareceriam exatamente ali. */
+             float aoSol3 = aoSol * aoSol * aoSol;
+             gl_FragColor.rgb += bruma * (aoSol3 * fogFactor * mix(0.62, 0.20, storm));
            }
            #endif`,
         );

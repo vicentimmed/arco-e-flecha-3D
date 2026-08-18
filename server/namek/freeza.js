@@ -223,6 +223,27 @@ export class NamekFreeza {
       isBot: false,
       /** A marca que os bots leem para o preferirem. Ver `escolherAlvo`. */
       boss: true,
+
+      /* **AS MEDIDAS DELE, E ELAS FALTAVAM.**
+       *
+       * A lista uniforme de corpos da sala não as carregava: quem a varria
+       * assumia um lutador e lia `NAMEK.fighter.radius` (0,46 m) e
+       * `NAMEK.fighter.chest` (1,15 m) direto do config. Contra um corpo de
+       * 6,72 m com 3,3 m de raio isso não é uma imprecisão, é outro alvo — os
+       * projéteis dos bots eram testados contra uma bolinha na altura do
+       * TORNOZELO dele, e passavam pelo peito sem que nada acontecesse.
+       * Medido: 5 % de acerto nas rajadas e ZERO nos especiais, com 98 % dos
+       * tiros deles mirados nele.
+       *
+       * Elas viajam no CORPO e não num `if (c.boss)` na hora de varrer porque a
+       * lista é varrida em cinco lugares diferentes (`bots.js`: as bolas, os
+       * feixes, a mira, a antecipação e a esquiva), e um `if` por lugar é
+       * quatro lugares para esquecer do quinto — que foi exatamente o que
+       * aconteceu. Constantes: o corpo dele não muda de tamanho durante a
+       * partida. */
+      raio: NAMEK.freeza.raio,
+      peito: NAMEK.freeza.peito,
+
       x: 0, y: 0, z: 0,
       vx: 0, vy: 0, vz: 0,
       alive: false,

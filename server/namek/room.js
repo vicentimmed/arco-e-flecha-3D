@@ -424,6 +424,11 @@ export class NamekRoom {
         alive: p.alive,
         invuln: agora < p.invulnUntil,
         health: p.health,
+        /* AS MEDIDAS DO CORPO, e elas viajam na lista porque **nem todo corpo
+           desta lista é um lutador**. Ver a nota em `NamekFreeza.corpoNaLista`
+           para o defeito que a ausência delas causava. */
+        raio: NAMEK.fighter.radius,
+        peito: NAMEK.fighter.chest,
       });
     }
     for (const b of this.bots.list) {
@@ -436,6 +441,8 @@ export class NamekRoom {
         alive: b.alive,
         invuln: agora < b.invulnUntil,
         health: b.health,
+        raio: NAMEK.fighter.radius,
+        peito: NAMEK.fighter.chest,
       });
     }
     for (const c of this.corpos) this.corpoPorId.set(c.id, c);
@@ -1391,8 +1398,15 @@ export class NamekRoom {
           p: { x: ev.p[0], y: ev.p[1], z: ev.p[2] },
           d: ev.d,
           /* O feixe cobra por quadro; a bola cobra de uma vez. É o mesmo
-             critério do `SPECIAL_HIT` que chega dos humanos. */
-          continuo: ev.kind !== "blast",
+             critério do `SPECIAL_HIT` que chega dos humanos — e agora quem
+             responde é o EMISSOR, em vez de ser deduzido do nome do golpe.
+             A dedução funcionava por acidente: tudo o que voava saía daqui
+             chamado de `"blast"`, então "não é blast" e "é feixe" davam o mesmo
+             resultado. No dia em que o Galick Gun de um bot passou a viajar com
+             o próprio nome (era preciso, senão o boss o cobrava como bolinha —
+             ver `passoDasBolas`), a dedução passaria a chamar de contínuo um
+             golpe que acontece uma vez só. */
+          continuo: ev.continuo === true,
         });
         break;
       }

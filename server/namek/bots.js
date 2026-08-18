@@ -494,10 +494,12 @@ export class NamekBotSquad {
       dano: 0,
       poder: 0,
       fantasma: true,
+      kind: "blast",
       /* O BLOCO DE PERSEGUIÇÃO DO PRÓPRIO GOLPE, e não um "sim/não" — ver
          `passoDasBolas`, que antes aplicava os números da rajada a tudo o que
-         voava. Aqui é uma rajada de verdade, então é o da rajada mesmo. */
-      homing: NAMEK.blast.homing,
+         voava. Aqui é uma rajada de verdade, então é o da rajada mesmo — e
+         contra o BOSS é o dela com os fatores dele. Ver `homingPara`. */
+      homing: homingPara(Number.isFinite(target) ? target : null),
       arco: 0,
     });
   }
@@ -1350,7 +1352,7 @@ export class NamekBotSquad {
     let pitchAlvo = 0;
     if (alvo && (bot.estado === "atacar" || bot.estado === "carregar")) {
       const dx = alvo.x - bot.position.x;
-      const dy = alvo.y + NAMEK.fighter.chest - (bot.position.y + NAMEK.fighter.chest);
+      const dy = alvo.y + peitoDe(alvo) - (bot.position.y + NAMEK.fighter.chest);
       const dz = alvo.z - bot.position.z;
       yawAlvo = Math.atan2(-dx, -dz);
       pitchAlvo = Math.atan2(dy, Math.max(1e-3, Math.hypot(dx, dz)));
@@ -1406,7 +1408,7 @@ export class NamekBotSquad {
     if (!alvo.alive || alvo.invuln) return;
 
     const dx = alvo.x - bot.position.x;
-    const dy = alvo.y + NAMEK.fighter.chest - (bot.position.y + NAMEK.fighter.chest);
+    const dy = alvo.y + peitoDe(alvo) - (bot.position.y + NAMEK.fighter.chest);
     const dz = alvo.z - bot.position.z;
     const d = Math.hypot(dx, dy, dz);
     /* Alcance útil da bola: velocidade × vida. Atirar além disso é gastar ki
@@ -1455,7 +1457,7 @@ export class NamekBotSquad {
   atirar(bot, alvo, d, ctx) {
     const voo = d / NAMEK.blast.speed;
     const ax = alvo.x + alvo.vx * voo;
-    const ay = alvo.y + NAMEK.fighter.chest + alvo.vy * voo;
+    const ay = alvo.y + peitoDe(alvo) + alvo.vy * voo;
     const az = alvo.z + alvo.vz * voo;
 
     const ox = bot.position.x + Math.cos(bot.yaw) * NAMEK.blast.handOffset * (bot.lastHand ? 1 : -1);
@@ -1480,7 +1482,12 @@ export class NamekBotSquad {
       dano: NAMEK.blast.damage,
       poder: NAMEK.blast.power,
       fantasma: false,
-      homing: NAMEK.blast.homing,
+      /* Contra o boss, o mesmo bloco com os fatores dele — o que o cliente já
+         fazia com a bola do humano e este arquivo não fazia com a do bot. Ver
+         `homingPara` e `HOMING_NO_FREEZA`. */
+      homing: homingPara(alvo.id),
+      /** O QUE ESTA BOLA É. Ver a nota do `kind` em `passoDasBolas`. */
+      kind: "blast",
       arco: 0,
     };
     this.bolas.push(bola);
@@ -1522,7 +1529,15 @@ export class NamekBotSquad {
      * um lutador fraco só tenta o golpe grande quando o adversário está bem na
      * frente dele. No fácil a janela fecha em 53 m — abaixo dos 55 m em que ele
      * orbita —, então ele só arrisca quando a briga fecha de verdade. */
-    const janela = 90 * (0.5 + 0.5 * this.dif.especial);
+    /* A JANELA, e o BOSS tem a dele.
+     *
+     * A conta comum descreve uma briga entre lutadores, e o Freeza briga fora
+     * dela por desenho — ver `JANELA_NO_BOSS`, que tem a medida e o estrago.
+     * O `Math.max` e não a substituição: no nível difícil a janela comum já é
+     * 90 m, e um boss nunca pode ser mais fácil de alvejar que uma pessoa. */
+    const janela = alvo.boss === true
+      ? Math.max(90 * (0.5 + 0.5 * this.dif.especial), JANELA_NO_BOSS)
+      : 90 * (0.5 + 0.5 * this.dif.especial);
     if (d > janela || d < 12) return false;
     /* A CARÊNCIA ENTRE ESPECIAIS, pela dificuldade — e ela é um RELÓGIO, não um
      * sorteio. A primeira versão sorteava `Math.random() < dif.especial` aqui, e
@@ -1549,7 +1564,7 @@ export class NamekBotSquad {
     const oy = bot.position.y + NAMEK.fighter.chest;
     const oz = bot.position.z;
     const ax = alvo.x;
-    const ay = alvo.y + NAMEK.fighter.chest;
+    const ay = alvo.y + peitoDe(alvo);
     const az = alvo.z;
     if (bloqueadoPeloRelevo(ctx.field, ox, oy, oz, ax, ay, az)) return false;
 
@@ -1571,7 +1586,7 @@ export class NamekBotSquad {
     const voo = d / info.speed;
     let dir = versor(
       alvo.x + alvo.vx * voo - ox,
-      alvo.y + NAMEK.fighter.chest + alvo.vy * voo - oy,
+      alvo.y + peitoDe(alvo) + alvo.vy * voo - oy,
       alvo.z + alvo.vz * voo - oz,
     );
     dir = desviar(dir, bot.erroMira * 0.4 * this.dif.erro * RAD);
@@ -1675,6 +1690,8 @@ export class NamekBotSquad {
           poder: e.info.power,
           fantasma: false,
           homing: e.info.homing ?? null,
+          /** **O QUE ESTA BOLA É** — e ele faltava. Ver `passoDasBolas`. */
+          kind: e.kind,
           arco: 0,
         });
       }
@@ -1762,7 +1779,7 @@ export class NamekBotSquad {
             b,
             b.homing,
             alvo.x,
-            alvo.y + NAMEK.fighter.chest,
+            alvo.y + peitoDe(alvo),
             alvo.z,
             b.x,
             b.y,
@@ -1790,7 +1807,28 @@ export class NamekBotSquad {
             dano: b.dano,
             p: [nx, ny, nz],
             d: [b.dx, b.dy, b.dz],
-            kind: "blast",
+            /* **O GOLPE DE VERDADE, e aqui estava escrito `"blast"` sempre.**
+             *
+             * Esta lista carrega três coisas — a rajada, o Galick Gun e o
+             * Kienzan —, porque um integrador só serve para tudo que se
+             * desloca. Só que o acerto saía sempre com o nome da rajada.
+             *
+             * Contra um lutador isso passava quase despercebido: o DANO vem de
+             * `b.dano`, que já é o do golpe certo, e o `kind` só escolhia o som
+             * e a cor. Contra o BOSS não: `NamekFreeza.acertoDeBot` reencontra
+             * o dano pela TABELA (`danoNoFreeza`), e a tabela dizia 9 — o valor
+             * da bolinha — para um Galick Gun que vale 280 e um Kienzan que
+             * vale 190. Trinta e uma vezes menos, e vinte e uma. Era isto, e
+             * não a mira, que fazia o especial de um bot não se sentir na barra
+             * dele. */
+            kind: b.kind ?? "blast",
+            /* E O `continuo` EXPLÍCITO, junto — sem ele a linha de cima seria
+               um conserto que quebra outra coisa. A sala derivava "é feixe?" de
+               `kind !== "blast"`, o que era verdade enquanto tudo daqui saía
+               como rajada; com o nome certo viajando, um Galick Gun passaria a
+               ser cobrado como golpe contínuo. Nada que voa é contínuo: só o
+               feixe é, e ele sai do outro emissor. */
+            continuo: false,
           });
           continue;
         }
@@ -1822,16 +1860,19 @@ export class NamekBotSquad {
 
   /** Quem esta bola atravessou neste passo. Ver `distSeg` para a conta. */
   varrer(b, nx, ny, nz, ctx) {
-    const alcance = b.raio + NAMEK.fighter.radius;
     let melhor = null;
     let melhorD = Infinity;
     for (const c of ctx.corpos) {
       if (c.id === b.dono || !c.alive || c.invuln) continue;
+      /* O ALCANCE É POR CORPO, e não do projétil: ele é a soma do raio da bola
+         com o raio DE QUEM ela pode encostar, e os dois corpos deste jogo têm
+         raios que diferem por sete vezes. Ver `raioDe`. */
+      const alcance = b.raio + raioDe(c);
       /* Rejeição barata antes da conta cara: quem está a 200 m não precisa de
          distância ponto-segmento para ser descartado. */
       if (Math.abs(c.x - b.x) > 250 || Math.abs(c.z - b.z) > 250) continue;
       const d = distSeg(
-        c.x, c.y + NAMEK.fighter.chest, c.z,
+        c.x, c.y + peitoDe(c), c.z,
         b.x, b.y, b.z,
         nx, ny, nz,
       );
@@ -1884,10 +1925,10 @@ export class NamekBotSquad {
           f.crateraFeita = true;
           ctx.emitir({ tipo: "chao", dono: f.dono, p: [f.hx, f.hy, f.hz], poder: f.info.power });
         }
-        const alcance = f.info.hitRadius + NAMEK.fighter.radius;
         for (const c of ctx.corpos) {
           if (c.id === f.dono || !c.alive || c.invuln) continue;
-          if (this.distanciaAoFeixe(f, c.x, c.y + NAMEK.fighter.chest, c.z, alcance) > alcance) {
+          const alcance = f.info.hitRadius + raioDe(c);
+          if (this.distanciaAoFeixe(f, c.x, c.y + peitoDe(c), c.z, alcance) > alcance) {
             continue;
           }
           ctx.emitir({
@@ -1895,7 +1936,9 @@ export class NamekBotSquad {
             dono: f.dono,
             vitima: c.id,
             dano: f.info.dps * dt,
-            p: [c.x, c.y + NAMEK.fighter.chest, c.z],
+            /** Feixe: cobra por quadro. Ver a nota em `passoDasBolas`. */
+            continuo: true,
+            p: [c.x, c.y + peitoDe(c), c.z],
             /* A direção do EMPURRÃO é a da cabeça, não a do disparo: quem toma
                um feixe que contornou é jogado para onde ele estava indo. */
             d: [f.dx, f.dy, f.dz],
@@ -1929,7 +1972,7 @@ export class NamekBotSquad {
         f.alvo = null;
       } else {
         const tx = alvo.x;
-        const ty = alvo.y + NAMEK.fighter.chest;
+        const ty = alvo.y + peitoDe(alvo);
         const tz = alvo.z;
         /* PASSOU: o alvo ficou para trás do plano da cabeça, e a perseguição
            acabou para sempre. É a mesma trava definitiva do cliente — ver
@@ -2030,6 +2073,93 @@ const QUEDA_MAX = 9;
 
 /** m — folga de cruzeiro sobre o relevo. É onde o bot QUER voar. */
 const FOLGA_VOO = 9;
+/* ---------------------------------------------- AS MEDIDAS DE UM ALVO -------
+ *
+ * **Nem todo corpo da lista uniforme da sala é um lutador.** O Freeza entra
+ * nela como mais um (é o que faz os bots o enxergarem), e ele tem 6,72 m de
+ * altura contra 1,78 m e 3,3 m de raio contra 0,46.
+ *
+ * Este arquivo lia `NAMEK.fighter.chest` e `NAMEK.fighter.radius` direto do
+ * config em onze lugares, e nos que falam do ALVO isso era simplesmente o corpo
+ * errado: os projéteis eram testados contra uma esfera de 1,96 m centrada a
+ * 1,15 m do chão — o tornozelo do boss — e atravessavam o peito dele sem tocar
+ * em nada. Medido antes do conserto: **5 % de acerto nas rajadas e ZERO nos
+ * especiais**, com 98 % dos tiros deles mirados nele.
+ *
+ * As duas leem do CORPO (`montarCorpos`, em `room.js`, e `corpoNaLista`, em
+ * `freeza.js`) e caem nos números do lutador quando o campo não vier — a folga
+ * existe para o `avisarRajada` de um humano, que monta um alvo de fora da lista.
+ *
+ * O que NÃO passa por aqui são os usos que falam do PRÓPRIO BOT (a boca do
+ * golpe, o piso do voo, a altura do peito de quem atira): um bot é sempre um
+ * lutador, e trocá-los por estas funções seria pagar uma indireção para ler a
+ * mesma constante. */
+
+/* ------------------------------- A PERSEGUIÇÃO DA RAJADA CONTRA O BOSS ------
+ *
+ * O bloco de `NAMEK.blast.homing` com os três fatores do Freeza já aplicados.
+ *
+ * **Ele existia só no CLIENTE**, e a documentação do config afirmava o
+ * contrário em letras claras: *"a bola de um bot, a de um jogador remoto e a
+ * minha perseguem o boss exatamente igual em todas as telas"*. Não perseguiam:
+ * o cliente aplica os fatores em `Bolas.perseguir`, e as bolas de bot são
+ * simuladas AQUI, que lia o bloco cru. O bot atirava com o giro e o prazo
+ * calibrados para um lutador de 1,78 m contra um corpo que voa a 42 m/s e briga
+ * a 78 — e a bola largava a curva a 66 m, antes de chegar nele.
+ *
+ * Congelado e montado uma vez na carga do módulo: os fatores não mudam durante
+ * a partida, e um objeto novo por disparo seria alocação em regime.
+ *
+ * Ver `NAMEK.blast.homing.ganhoNoFreeza` para os números e para a conta que os
+ * escolheu. O ganho dos BOTS (`ganhoNosBots`) não entra aqui de propósito — ele
+ * é assistência ao jogador humano, e um bot não precisa de assistência para
+ * acertar outro bot. */
+const HOMING_NO_FREEZA = Object.freeze({
+  ...NAMEK.blast.homing,
+  turnRate: NAMEK.blast.homing.turnRate * (NAMEK.blast.homing.ganhoNoFreeza ?? 1),
+  duration: NAMEK.blast.homing.duration * (NAMEK.blast.homing.duracaoNoFreeza ?? 1),
+  cone: NAMEK.blast.homing.cone * (NAMEK.blast.homing.coneNoFreeza ?? 1),
+});
+
+/** O bloco certo para uma bola travada em `id`. */
+function homingPara(id) {
+  return id === NAMEK.freeza.id ? HOMING_NO_FREEZA : NAMEK.blast.homing;
+}
+
+/** m — até onde um bot ainda tenta o golpe grande CONTRA O BOSS.
+ *
+ * A janela comum (90 m, apertada pelo nível) foi calibrada para uma briga entre
+ * lutadores. O Freeza briga de propósito para além dela: medido, a distância
+ * dele a um bot tem mediana de **89 m**, e no nível padrão a janela são 53 —
+ * resultado, 39 de 40 oportunidades de especial eram barradas pela distância e
+ * **um único especial saía em quatro minutos de luta**.
+ *
+ * O número não é escrito à mão: é o ENVELOPE DE VOO dele, tirado das próprias
+ * manobras — a mais aberta delas na horizontal, com a mais alta na vertical.
+ * Assim ele acompanha sozinho quem mexer em `voo.manobras` ou em
+ * `distanciaIdeal`, que é justamente o que ninguém lembraria de fazer aqui. */
+const JANELA_NO_BOSS = (() => {
+  const V = NAMEK.freeza.voo;
+  const lista = V.manobras?.lista ?? [];
+  let raio = 1;
+  let alto = Math.abs(V.degrau);
+  for (const m of lista) {
+    if ((m.raio ?? 1) > raio) raio = m.raio ?? 1;
+    if (Math.abs(m.altura ?? 0) > alto) alto = Math.abs(m.altura ?? 0);
+  }
+  return Math.hypot(V.distanciaIdeal * raio, alto);
+})();
+
+/** m — a que altura do pé deste corpo os golpes são marcados. */
+function peitoDe(c) {
+  return c?.peito ?? NAMEK.fighter.chest;
+}
+
+/** m — a grossura deste corpo para efeito de acerto. */
+function raioDe(c) {
+  return c?.raio ?? NAMEK.fighter.radius;
+}
+
 /** m — folga que ele nunca fura. É a colisão de verdade. */
 const FOLGA_DURA = 2.4;
 

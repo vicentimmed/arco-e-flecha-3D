@@ -1624,6 +1624,81 @@ export const NAMEK = {
        *  estão bem abaixo do alcance da própria bola (78 m/s × 15 s = 1 170 m).
        *  Quem lê isto é `NamekGame.escolherAlvoDaBola`. Faixa: 50 a 900. */
       acquireNoFreeza: 260,
+
+      /* ==================================== E UM TANTO CONTRA OS BOTS ======
+       *
+       * *"Essa mesma forma de pegar o poder rápido mais facilmente no Freeza —
+       * complementa que também seja mais fácil de pegar esses poderes nos bots
+       * de IA quando estiver lutando contra eles."*
+       *
+       * ------------------------------------------- por que ele não é o do boss
+       *
+       * Contra o Freeza os fatores CONSERTAM UMA GEOMETRIA: um corpo de 6,7 m
+       * que briga a 78 m e manobra o tempo todo tinha quebrado a régua com que
+       * a bola foi calibrada. Aqui não há nada quebrado — um bot é um lutador
+       * de 1,78 m, do tamanho de uma pessoa, e a bola já o trata direito. O que
+       * se pede é outra coisa: **assistência**, porque o adversário de treino
+       * pode ser mais fácil que um humano.
+       *
+       * Sendo assistência e não conserto, o número certo é o menor que resolve.
+       * Medido na faixa da briga (50–85 m), mira com 7° de erro e rumo de fuga
+       * sorteado — acerto contra um bot:
+       *
+       *                          parado   voando (26 m/s)   arranque (64 m/s)
+       *     hoje, sem nada .....  100 %        36 %                6 %
+       *     COM ESTES FATORES ..  100 %        69 %                8 %
+       *     com os do Freeza ...  100 %        75 %               23 %
+       *
+       * A linha do meio é a escolhida, e a coluna que a escolheu é a TERCEIRA.
+       * Contra um bot em voo normal o acerto praticamente dobra (36 → 69 %), que
+       * é o "mais fácil" do pedido; mas quem **se compromete com o arranque
+       * lateral continua escapando** (6 → 8 %, ou seja nada mudou). Os fatores do
+       * boss levariam essa coluna a 23 % — quase quadruplicando —, e aí a
+       * esquiva que o §6.1 do plano protege deixaria de existir contra o
+       * adversário mais comum do modo. O bot ainda tem de ter o que fazer.
+       *
+       * -------------------------------------------- e por que só a MINHA bola
+       *
+       * Ao contrário do ganho do Freeza, este vale **apenas para os tiros do
+       * jogador local** (`this.meu`, em `Bolas.perseguir`). A diferença não é
+       * capricho:
+       *
+       * • o ganho do boss descreve a FÍSICA de um projétil contra um corpo, e
+       *   ela tem de ser a mesma nas quinze telas, senão a esquiva dele lê
+       *   diferente em cada uma;
+       * • este descreve uma ASSISTÊNCIA a quem está com o mouse na mão, e
+       *   assistência é por pessoa, por definição.
+       *
+       * E há uma razão dura junto da razão de desenho. As bolas de um bot são
+       * simuladas no SERVIDOR (`server/namek/bots.js`, que lê este mesmo bloco
+       * sem ganho nenhum) e apenas DESENHADAS aqui. Sem a trava do `meu`, num
+       * cerco de quinze bots toda bola de bot contra bot curvaria mais na tela
+       * do que na sala — o jogador veria acertos que não tiraram vida de
+       * ninguém, que é a versão invertida do defeito que `rajada.velocidade`
+       * proíbe em letras maiúsculas. Com a trava, **a única bola que ganha o
+       * fator é a mesma que declara o próprio acerto**: o que você vê e o que a
+       * sala cobra são, para você, sempre a mesma coisa.
+       *
+       * Contra HUMANOS não vale nada disto, e é o ponto: a marca lida é
+       * `isBot`, que vem do `roster` da sala. */
+
+      /** Multiplica o giro contra um bot. 62 × 1,25 = 77,5°/s. */
+      ganhoNosBots: 1.25,
+
+      /** Multiplica o prazo contra um bot. 0,85 × 1,6 = 1,36 s = 106 m de voo
+       *  perseguindo — cobre o p90 da briga (84 m) com folga. É este, e não o
+       *  giro, que responde pela maior parte dos 36 → 69 %. Faixa: 1 a 3. */
+      duracaoNosBots: 1.6,
+
+      /** Multiplica o cone contra um bot. 53 × 1,1 = 58,3°. Sobe pouco de
+       *  propósito: é o cone que deixa o arranque lateral do bot funcionar, e
+       *  ele é a única resposta que sobra para o bot. Faixa: 1 a 1.4. */
+      coneNosBots: 1.1,
+
+      /** m — o `acquire` que vale quando o candidato é um bot. 140 acompanha os
+       *  106 m que a bola agora persegue: de nada adianta ela poder curvar até
+       *  ali se ela não pôde ESCOLHER alguém dali. Faixa: 50 a 900. */
+      acquireNosBots: 140,
     },
   },
 

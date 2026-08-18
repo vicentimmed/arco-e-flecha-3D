@@ -1912,6 +1912,11 @@ export class NamekGame {
        a bola simplesmente não travava nele e saía reta por definição. Ver
        `NAMEK.blast.homing.acquireNoFreeza`. */
     const alcanceBoss = H.acquireNoFreeza ?? H.acquire;
+    /* E OS BOTS TÊM O DELES, pela mesma razão e em outra escala: a bola
+       persegue um bot por 106 m de voo, e escolher só até 90 deixaria um trecho
+       em que ela pode curvar e não pôde travar. Ver
+       `NAMEK.blast.homing.acquireNosBots`. Contra HUMANOS nada disto vale. */
+    const alcanceBot = H.acquireNosBots ?? H.acquire;
     let melhor = null;
     let melhorCos = cosCone;
     for (const r of this.mirados()) {
@@ -1920,7 +1925,9 @@ export class NamekGame {
       const dy = r.pose.y + NAMEK.fighter.chest - origem.y;
       const dz = r.pose.z - origem.z;
       const d = Math.hypot(dx, dy, dz);
-      if (d > (r.boss === true ? alcanceBoss : H.acquire) || d < 0.001) continue;
+      const alcance =
+        r.boss === true ? alcanceBoss : r.isBot === true ? alcanceBot : H.acquire;
+      if (d > alcance || d < 0.001) continue;
       const cos = (dx * dir.x + dy * dir.y + dz * dir.z) / d;
       if (cos > melhorCos) {
         melhorCos = cos;

@@ -392,9 +392,17 @@ export class RemoteFighters {
           raio: NAMEK.fighter.radius,
           altura: NAMEK.fighter.height,
           vivo: true, invuln: false,
+          /* **É UM BOT?** A bola de ki persegue um pouco mais quem for — ver
+             `NAMEK.blast.homing.ganhoNosBots`. Ela viaja aqui, e não é
+             consultada em `byId` no meio do laço de projéteis, pelo motivo de
+             sempre neste arquivo: aquele laço roda por bola por quadro, e um
+             `Map.get` por bola seria uma busca por quadro para responder uma
+             coisa que não muda durante a partida. */
+          bot: false,
         };
       }
       alvo.id = r.id;
+      alvo.bot = r.isBot === true;
       alvo.x = p.x;
       alvo.y = p.y;
       alvo.z = p.z;

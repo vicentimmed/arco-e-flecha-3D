@@ -153,6 +153,30 @@ const COS_CONE_BOSS = Math.cos(
 const DURACAO_NO_FREEZA =
   NAMEK.blast.homing.duration * (NAMEK.blast.homing.duracaoNoFreeza ?? 1);
 
+/* ------------------------------------------------ e a perseguição nos BOTS ---
+ *
+ * As mesmas três travas, num degrau bem menor e **só para o tiro do jogador
+ * local**. O porquê dos números, o porquê de o cone quase não subir e o porquê
+ * da trava do `meu` estão todos em `NAMEK.blast.homing.ganhoNosBots` — em uma
+ * linha: contra o boss é conserto de geometria e vale em todas as telas; contra
+ * um bot é assistência a quem está com o mouse, e assistência é por pessoa. */
+const GANHO_NOS_BOTS = NAMEK.blast.homing.ganhoNosBots ?? 1;
+const COS_CONE_BOT = Math.cos(
+  (NAMEK.blast.homing.cone * (NAMEK.blast.homing.coneNosBots ?? 1) * Math.PI) / 180,
+);
+const DURACAO_NOS_BOTS =
+  NAMEK.blast.homing.duration * (NAMEK.blast.homing.duracaoNosBots ?? 1);
+
+/** s — o maior prazo que qualquer bola pode ter. É só o PORTÃO do laço de
+ *  quadro: quem decide o prazo de verdade é `perseguir`, que já tem o alvo
+ *  resolvido em mãos e sabe se ele é o boss, um bot ou uma pessoa. Ter o portão
+ *  aqui e a decisão lá evita resolver o alvo duas vezes por bola por quadro. */
+const PRAZO_MAX = Math.max(
+  NAMEK.blast.homing.duration,
+  DURACAO_NO_FREEZA,
+  DURACAO_NOS_BOTS,
+);
+
 const comp = (x, y, z) => Math.sqrt(x * x + y * y + z * z);
 
 /* ------------------------------------------------------------- rascunhos ----
@@ -424,13 +448,12 @@ export class BlastPool {
       }
 
       const i3 = i * 3;
-      /* O PRAZO É POR ALVO, e não do pool: contra o boss ele é outro. Ver
-         `DURACAO_NO_FREEZA` — é a trava que estava vencendo antes de a bola
-         chegar, e a única das três que não dava para corrigir dentro de
-         `perseguir` (lá dentro a bola já teria sido dispensada). */
-      const prazo = this.alvo[i] === ID_FREEZA ? DURACAO_NO_FREEZA : duracaoHoming;
-      if (this.alvo[i] !== null && this.idade[i] <= prazo) {
-        this.perseguir(i, i3, alvos, nAlvos, dt, cosCone, giroMax);
+      /* O PRAZO É POR ALVO — o do boss e o de um bot são maiores que o comum.
+         Aqui vai só o PORTÃO (`PRAZO_MAX`); quem corta pelo prazo certo é
+         `perseguir`, que já resolveu o alvo e sabe contra o que está voando.
+         Cortar aqui exigiria resolver o alvo duas vezes por bola por quadro. */
+      if (this.alvo[i] !== null && this.idade[i] <= PRAZO_MAX) {
+        this.perseguir(i, i3, alvos, nAlvos, dt, cosCone, giroMax, duracaoHoming);
       }
 
       /* O AVANÇO, SUBDIVIDIDO SE PRECISAR.
@@ -586,7 +609,7 @@ export class BlastPool {
    * Bola que troca de alvo no meio do voo lê como bug, e seria também a única
    * coisa deste modo que duas telas não conseguiriam concordar.
    */
-  perseguir(i, i3, alvos, nAlvos, dt, cosCone, giroMax) {
+  perseguir(i, i3, alvos, nAlvos, dt, cosCone, giroMax, prazoComum) {
     const idAlvo = this.alvo[i];
     let a = null;
     for (let k = 0; k < nAlvos; k++) {
@@ -598,6 +621,32 @@ export class BlastPool {
     /* Alvo que morreu, saiu ou nunca existiu nesta tela: a bola segue reta e a
        trava some para não pagar a busca de novo. */
     if (!a || a.vivo === false) {
+      this.alvo[i] = null;
+      return;
+    }
+
+    let prazo = prazoComum;
+    if (idAlvo === ID_FREEZA) {
+      cosCone = COS_CONE_BOSS;
+      giroMax *= GANHO_NO_FREEZA;
+      prazo = DURACAO_NO_FREEZA;
+    } else if (a.bot === true && this.meu[i] === 1) {
+      /* **E SÓ SE A BOLA FOR MINHA.** `meu` é aceso em `spawn` para o tiro do
+         jogador local, que é exatamente o mesmo conjunto de bolas que declara o
+         próprio acerto — ou seja, a bola que ganha o fator é a bola cujo dano
+         quem está olhando vai cobrar. As bolas de bot são simuladas na SALA e
+         só desenhadas aqui; dar o fator a elas faria a tela mostrar curvas que
+         o servidor não fez. Ver `NAMEK.blast.homing.ganhoNosBots`. */
+      cosCone = COS_CONE_BOT;
+      giroMax *= GANHO_NOS_BOTS;
+      prazo = DURACAO_NOS_BOTS;
+    }
+    /* O PRAZO, cobrado assim que se sabe contra o que a bola está voando — o
+       laço de `update` só garantiu que ela está dentro do MAIOR dos três.
+       Vencido o prazo, a trava é APAGADA: a bola segue reta para sempre daqui
+       em diante, e apagar é o que impede este método de ser chamado de novo, a
+       cada quadro, para varrer a lista de alvos e desistir no fim. */
+    if (this.idade[i] > prazo) {
       this.alvo[i] = null;
       return;
     }
@@ -628,11 +677,6 @@ export class BlastPool {
      * a trava viaja na mensagem (`NC2S.BLAST.target`), então a bola de um bot,
      * a de um jogador remoto e a minha perseguem o boss exatamente igual em
      * todas as telas — sem um campo novo no protocolo. */
-    const contraOBoss = idAlvo === ID_FREEZA;
-    if (contraOBoss) {
-      cosCone = COS_CONE_BOSS;
-      giroMax *= GANHO_NO_FREEZA;
-    }
 
     const dx = this.dir[i3];
     const dy = this.dir[i3 + 1];
